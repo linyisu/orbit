@@ -701,7 +701,11 @@ fn rejected_steering_restores_the_draft_without_overwriting_new_input() {
     tab.poll_submissions();
     assert_eq!(tab.state.pending_input.height(), 0);
     assert_eq!(tab.state.input.text, "new draft");
-    assert!(render_screen(&mut tab.state).contains("previous"));
+    assert!(
+        render_screen(&mut tab.state)
+            .replace(' ', "")
+            .contains("请求确认前连接已关闭")
+    );
     assert!(tab.state.info_dialog.is_none());
     assert!(tab.state.transcript.is_empty());
 }
@@ -1431,7 +1435,7 @@ fn local_commands_and_service_reports_do_not_create_a_conversation_on_home() {
     }
     tab.apply(Response::Report(orbit_protocol::Report {
         title: "Context".into(),
-        text: "context report".into(),
+        text: "context report\nbudget details".into(),
     }));
     assert!(tab.state.info_dialog.is_some());
     tab.handle(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)))

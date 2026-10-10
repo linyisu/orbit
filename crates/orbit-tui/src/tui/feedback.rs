@@ -1,14 +1,15 @@
-//! Local operational errors stay visible independently of transcript scrolling.
+//! Local feedback stays visible independently of transcript scrolling.
 //! Bounded, deduplicated notices share the application's surface/detail dialog.
 use crossterm::event::{Event, MouseButton, MouseEventKind};
 use ratatui::{
     Frame,
     layout::Rect,
     style::Style,
-    text::Line,
-    widgets::{BorderType, Paragraph, Wrap},
+    text::{Line, Span},
+    widgets::{BorderType, Paragraph},
 };
 use std::collections::VecDeque;
+use unicode_width::UnicodeWidthStr;
 
 use super::{
     components, icons,
@@ -18,7 +19,9 @@ use super::{
 
 #[derive(Debug)]
 struct Notice {
+    title: String,
     text: String,
+    error: bool,
     count: usize,
 }
 
@@ -33,13 +36,22 @@ pub(super) struct Feedback {
 pub(super) enum Action {
     None,
     Redraw,
-    Details(String),
+    Details { title: String, text: String },
 }
 
 impl Feedback {
     pub fn error(&mut self, text: impl AsRef<str>) {
+        self.push("操作失败", text.as_ref(), true);
+    }
+
+    pub fn info(&mut self, title: &str, text: &str) {
+        self.push(title, text, false);
+    }
+
+    fn push(&mut self, title: &str, text: &str, error: bool) {
         const MAX_CHARS: usize = 8192;
-        let mut chars = text.as_ref().chars();
+        let title = safe_output(title);
+        let mut chars = text.chars();
         let prefix = chars.by_ref().take(MAX_CHARS).collect::<String>();
         let mut text = prefix
             .split('\n')
@@ -47,15 +59,20 @@ impl Feedback {
             .collect::<Vec<_>>()
             .join("\n");
         if chars.next().is_some() {
-            text.push_str("\n…错误详情过长，已截断");
+            text.push_str("\n…详情过长，已截断");
         }
         let count = self
             .notices
             .iter()
-            .position(|n| n.text == text)
+            .position(|n| n.title == title && n.text == text && n.error == error)
             .and_then(|i| self.notices.remove(i))
             .map_or(1, |n| n.count.saturating_add(1));
-        self.notices.push_front(Notice { text, count });
+        self.notices.push_front(Notice {
+            title,
+            text,
+            error,
+            count,
+        });
         self.notices.truncate(8);
         // An asynchronous error must not reuse hit targets from a different card.
         self.area = Rect::default();
@@ -72,15 +89,16 @@ impl Feedback {
         if bounds.is_empty() {
             return;
         }
-        let compact = bounds.width < 20 || bounds.height < 7;
+        let compact = bounds.width < 20 || bounds.height < 6;
         self.area = if compact {
             Rect::new(bounds.x, bounds.y, bounds.width, 1)
         } else {
-            let width = bounds.width.saturating_sub(4).min(64);
-            Rect::new(bounds.right() - width - 2, bounds.y + 2, width, 6)
+            let width = bounds.width.saturating_sub(4).min(48);
+            Rect::new(bounds.right() - width - 2, bounds.y + 1, width, 4)
         };
         let title = format!(
-            "操作失败{}{}",
+            "{}{}{}",
+            notice.title,
             if notice.count > 1 {
                 format!(" · {} 次", notice.count)
             } else {
@@ -123,13 +141,24 @@ impl Feedback {
         } else {
             title
         };
+        let title_width = content.width.saturating_sub(self.close.width) as usize;
+        let hint = if !compact && title_width >= 18 {
+            " · 详情"
+        } else {
+            ""
+        };
         frame.render_widget(
-            Paragraph::new(fit_label(
-                &text,
-                content.width.saturating_sub(self.close.width) as usize,
-                false,
-            ))
-            .style(Style::default().fg(THEME.error)),
+            Paragraph::new(Line::from(vec![
+                Span::styled(
+                    fit_label(&text, title_width.saturating_sub(hint.width()), false),
+                    Style::default().fg(if notice.error {
+                        THEME.error
+                    } else {
+                        THEME.accent
+                    }),
+                ),
+                Span::styled(hint, components::muted()),
+            ])),
             content,
         );
         frame.render_widget(
@@ -138,14 +167,17 @@ impl Feedback {
         );
         if !compact {
             frame.render_widget(
-                Paragraph::new(notice.text.as_str())
-                    .wrap(Wrap { trim: false })
-                    .style(Style::default().fg(THEME.overlay_foreground)),
-                Rect::new(content.x, content.y + 1, content.width, 2),
-            );
-            frame.render_widget(
-                Paragraph::new("点击查看详情").style(components::muted()),
-                Rect::new(content.x, content.bottom() - 1, content.width, 1),
+                Paragraph::new(fit_label(
+                    notice
+                        .text
+                        .lines()
+                        .find(|line| !line.trim().is_empty())
+                        .unwrap_or_default(),
+                    content.width as usize,
+                    false,
+                ))
+                .style(Style::default().fg(THEME.overlay_foreground)),
+                Rect::new(content.x, content.y + 1, content.width, 1),
             );
         }
     }
@@ -171,7 +203,10 @@ impl Feedback {
                 if close {
                     Action::Redraw
                 } else {
-                    Action::Details(notice.text)
+                    Action::Details {
+                        title: notice.title,
+                        text: notice.text,
+                    }
                 }
             }
             _ if inside => Action::Redraw,

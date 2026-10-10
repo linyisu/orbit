@@ -1500,38 +1500,6 @@ fn shortcut_collapses_scrolled_tool_with_clickable_output() {
 }
 
 #[test]
-fn model_change_uses_the_same_result_style_as_other_commands() {
-    let item = TranscriptItem::CommandResult("qwen::old → qwen::new".into());
-    let lines = transcript_lines(&[item], false);
-
-    assert_eq!(lines[0].to_string(), "  qwen::old → qwen::new");
-}
-
-#[test]
-fn command_results_use_a_distinct_result_rail() {
-    let lines = transcript_lines(
-        &[
-            TranscriptItem::CommandResult("状态\n细节".into()),
-            TranscriptItem::CommandError("未知命令：/stauts。是否想输入 /status？".into()),
-        ],
-        false,
-    );
-
-    assert_eq!(lines[0].to_string(), "  状态");
-    assert_eq!(lines[1].to_string(), "  细节");
-    assert!(
-        lines[3]
-            .to_string()
-            .starts_with(&format!("{} 未知命令", icons::CIRCLE))
-    );
-    assert!(
-        lines
-            .iter()
-            .all(|line| !line.to_string().contains("/model asd"))
-    );
-}
-
-#[test]
 fn welcome_commands_and_small_terminal_render() {
     let mut state = UiState::new("mock-model");
     let screen = render(&mut state, 100, 30);
@@ -1650,7 +1618,7 @@ fn connected_workspaces_keep_the_home_screen_until_a_conversation_starts() {
         assert!(render(&mut state, 140, 40).contains("/btw"));
         state.input.set(String::new());
         state.show_output("命令", "首页命令提示".into());
-        assert!(state.info_dialog.is_some());
+        assert!(state.info_dialog.is_none());
         assert!(state.transcript.is_empty());
         state.info_dialog = None;
 

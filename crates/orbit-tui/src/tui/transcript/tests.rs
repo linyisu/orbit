@@ -384,7 +384,7 @@ fn plain_output_and_wrapped_table_cells_keep_their_own_link_targets() {
     use super::super::app::{ToolRow, ToolStatus};
     let items = [
             TranscriptItem::User("中文 https://example.com/user".into()),
-            TranscriptItem::CommandResult("结果 https://example.com/command".into()),
+            TranscriptItem::Notice("结果 https://example.com/command".into()),
             TranscriptItem::Tool(ToolRow {
                 id: "tool".into(), name: "run_command".into(), arguments: "{}".into(),
                 status: ToolStatus::Finished, output: "地址 https://example.com/tool".into(),
@@ -516,20 +516,6 @@ fn streamed_reference_definitions_update_prior_labels_without_reparsing_on_scrol
         assert_eq!(cached.line, rebuilt.line);
         assert_eq!(cached.links, rebuilt.links);
     }
-}
-
-#[test]
-fn command_results_remain_plain_beneath_the_command() {
-    let mut layout = TranscriptLayout::default();
-    layout.update(
-        &[TranscriptItem::CommandResult("状态\n第二行细节".into())],
-        None,
-        32,
-    );
-    let rows = &layout.entries[0].rows;
-
-    assert_eq!(rows[0].line.to_string(), "  状态");
-    assert_eq!(rows[1].line.to_string(), "  第二行细节");
 }
 
 #[test]

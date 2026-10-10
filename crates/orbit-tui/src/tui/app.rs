@@ -78,7 +78,6 @@ pub enum TranscriptItem {
     /// Low-priority lifecycle information rendered as an unobtrusive divider
     /// instead of pretending to be an assistant or command response.
     Maintenance(String),
-    CommandResult(String),
     CommandError(String),
 }
 
@@ -222,21 +221,16 @@ impl UiState {
         super::overlay::active(self).is_some()
     }
 
-    /// Local feedback must not become conversation history on the home screen.
+    /// Operational feedback is separate from agent conversation history.
     pub(super) fn report_local(&mut self, item: TranscriptItem) {
         if let TranscriptItem::Error(text) | TranscriptItem::CommandError(text) = &item {
             self.feedback.error(text);
             return;
         }
-        if self.is_home() {
-            match item {
-                TranscriptItem::Notice(_)
-                | TranscriptItem::Maintenance(_)
-                | TranscriptItem::CommandResult(_) => {}
-                _ => self.transcript.push(item),
-            }
-        } else {
-            self.transcript.push(item);
+        match item {
+            TranscriptItem::Notice(text) => self.feedback.info("提示", &text),
+            TranscriptItem::Maintenance(_) if self.is_home() => {}
+            _ => self.transcript.push(item),
         }
     }
 
@@ -244,18 +238,18 @@ impl UiState {
         match self.feedback.handle(event) {
             super::feedback::Action::None => false,
             super::feedback::Action::Redraw => true,
-            super::feedback::Action::Details(text) => {
-                self.info_dialog = Some(super::dialogs::InfoDialog::new("操作失败", text));
+            super::feedback::Action::Details { title, text } => {
+                self.info_dialog = Some(super::dialogs::InfoDialog::new(&title, text));
                 true
             }
         }
     }
 
     pub(super) fn show_output(&mut self, title: &str, content: String) {
-        if self.is_home() {
+        if content.lines().nth(1).is_some() {
             self.info_dialog = Some(super::dialogs::InfoDialog::new(title, content));
         } else {
-            self.transcript.push(TranscriptItem::CommandResult(content));
+            self.feedback.info(title, &content);
         }
     }
 

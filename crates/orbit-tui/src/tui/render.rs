@@ -1355,17 +1355,6 @@ pub(super) fn transcript_lines_at_width(
                 }
             }
 
-            TranscriptItem::CommandResult(text) => {
-                for line in text.lines() {
-                    lines.push(Line::from(Span::styled(
-                        format!("  {line}"),
-                        Style::default().fg(crate::tui::theme::THEME.detail),
-                    )));
-                }
-
-                lines.push(Line::from(""));
-            }
-
             TranscriptItem::CommandError(text) => {
                 for (index, line) in text.lines().enumerate() {
                     lines.push(Line::from(Span::styled(

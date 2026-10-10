@@ -28,6 +28,77 @@ fn draw(state: &mut UiState, width: u16, height: u16) -> String {
 }
 
 #[test]
+fn short_command_feedback_is_nonblocking_and_opens_its_full_details() {
+    for home in [true, false] {
+        let mut state = UiState::new("model");
+        if !home {
+            state.submit("question".into());
+        }
+        state.input.set("draft".into());
+        state.follow_bottom = false;
+        let history = state.transcript.len();
+        let text = format!("没有发现 Skill。{}", "安装路径说明".repeat(30));
+        state.show_output("Skills", text.clone());
+        let screen = draw(&mut state, 100, 30);
+        assert!(screen.replace(' ', "").contains("没有发现Skill"));
+        assert!(state.feedback.area.height < 6);
+        assert!(state.info_dialog.is_none());
+        assert!(state.ime_cursor.is_some());
+        assert_eq!(state.transcript.len(), history);
+        assert_eq!(state.input.text, "draft");
+        assert!(!state.follow_bottom);
+        let area = state.feedback.area;
+        for kind in [
+            MouseEventKind::Down(MouseButton::Left),
+            MouseEventKind::Up(MouseButton::Left),
+        ] {
+            state.handle_feedback(&mouse(kind, area.x + 2, area.y + 1));
+        }
+        let dialog = state.info_dialog.as_ref().unwrap();
+        assert_eq!(dialog.title, "Skills");
+        assert_eq!(dialog.content, text);
+        assert_eq!(state.transcript.len(), history);
+    }
+}
+
+#[test]
+fn command_reports_and_local_notices_never_pollute_an_active_conversation() {
+    let mut state = UiState::new("model");
+    state.submit("question".into());
+    state.input.set("keep editing".into());
+    let history = state.transcript.len();
+    state.report_local(TranscriptItem::Notice("正在重新连接…".into()));
+    assert!(
+        draw(&mut state, 100, 30)
+            .replace(' ', "")
+            .contains("正在重新连接")
+    );
+    let diagnostics = format!("会话诊断\n{}末条记录", "运行详情\n".repeat(100));
+    state.show_output("诊断记录", diagnostics.clone());
+    draw(&mut state, 100, 30);
+    assert_eq!(state.transcript.len(), history);
+    assert_eq!(state.input.text, "keep editing");
+    let dialog = state.info_dialog.as_ref().unwrap();
+    assert_eq!(dialog.title, "诊断记录");
+    assert_eq!(dialog.content, diagnostics);
+    super::super::dialogs::handle(
+        &mut state,
+        Event::Key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE)),
+    );
+    assert!(
+        draw(&mut state, 100, 30)
+            .replace(' ', "")
+            .contains("末条记录")
+    );
+    super::super::dialogs::handle(
+        &mut state,
+        Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+    );
+    assert!(state.info_dialog.is_none());
+    assert_eq!(state.input.text, "keep editing");
+}
+
+#[test]
 fn errors_stay_visible_without_moving_history_or_interrupting_the_draft() {
     for home in [true, false] {
         let mut state = UiState::new("model");
