@@ -16,7 +16,7 @@ use unicode_width::UnicodeWidthStr;
 use super::{
     Context, Fragment, Prepared, Source, View,
     jobs::PreviewJobs,
-    view::{MAX_ZOOM, MIN_ZOOM, PAN_RANGE, PAN_STEP, Quality, ZOOM_RATIO},
+    view::{Background, MAX_ZOOM, MIN_ZOOM, PAN_RANGE, PAN_STEP, Quality, ZOOM_RATIO},
 };
 use crate::tui::{
     icons,
@@ -52,6 +52,7 @@ enum Control {
     ZoomOut,
     ZoomIn,
     Fit,
+    Background,
 }
 
 #[derive(Debug)]
@@ -178,7 +179,10 @@ impl Preview {
             super::schedule_preview(native, body, self.view);
             return;
         }
-        if let Ok(picture) = self.context.native_picture(&self.jobs, &self.source) {
+        if let Ok(picture) =
+            self.context
+                .native_picture(&self.jobs, &self.source, self.view.background)
+        {
             if let Some(picture) = picture {
                 self.picture = Some(picture);
             }
@@ -264,9 +268,28 @@ impl Preview {
             }
             x += width;
         }
+        if matches!(self.source, Source::Image(_)) {
+            let label = match self.view.background {
+                Background::Light => " 浅底 ",
+                Background::Dark => " 深底 ",
+                Background::Original => " 原样 ",
+            };
+            let width = (label.width() as u16).min(footer.right().saturating_sub(x));
+            let area = Rect::new(x, footer.y, width, footer.height);
+            frame.render_widget(
+                Paragraph::new(label).style(self.control_style(Control::Background)),
+                area,
+            );
+            self.controls.push((area, Control::Background));
+            x += width;
+        }
         frame.render_widget(
             Paragraph::new(fit_label(
-                "  滚轮/± 缩放 · 拖动/方向键移动 · Esc 关闭",
+                if matches!(self.source, Source::Image(_)) {
+                    "  滚轮/± 缩放 · 拖动/方向键移动 · B 背景 · Esc 关闭"
+                } else {
+                    "  滚轮/± 缩放 · 拖动/方向键移动 · Esc 关闭"
+                },
                 usize::from(footer.right().saturating_sub(x)),
                 false,
             ))
@@ -295,10 +318,29 @@ impl Preview {
             Control::ZoomOut => self.zoom(false),
             Control::ZoomIn => self.zoom(true),
             Control::Fit => {
-                self.view = View::default();
+                self.view = View {
+                    background: self.view.background,
+                    ..View::default()
+                };
                 self.drag = None;
                 self.changed_at = Some(Instant::now());
             }
+            Control::Background if matches!(self.source, Source::Image(_)) => {
+                self.view.background = match self.view.background {
+                    Background::Light => Background::Dark,
+                    Background::Dark => Background::Original,
+                    Background::Original => Background::Light,
+                };
+                // A previous native upload must not bypass the new background
+                // request, nor may an in-flight old render replace it later.
+                self.jobs.close();
+                self.jobs = Arc::new(PreviewJobs::default());
+                self.picture = None;
+                self.drag = None;
+                self.changed_at = None;
+                self.requested_quality = None;
+            }
+            Control::Background => {}
         }
         false
     }
@@ -370,6 +412,9 @@ impl Preview {
                     match key.code {
                         KeyCode::Char('+' | '=') => self.zoom(true),
                         KeyCode::Char('-') => self.zoom(false),
+                        KeyCode::Char('b' | 'B') => {
+                            self.activate(Control::Background);
+                        }
                         KeyCode::Char('0') | KeyCode::Home => {
                             self.activate(Control::Fit);
                         }

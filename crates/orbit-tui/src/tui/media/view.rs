@@ -8,6 +8,24 @@ pub(super) const MAX_ZOOM: u16 = 800;
 pub(super) const ZOOM_RATIO: f32 = 1.06;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub(super) enum Background {
+    #[default]
+    Light,
+    Dark,
+    Original,
+}
+
+impl Background {
+    pub fn color(self) -> Option<[u8; 3]> {
+        match self {
+            Self::Light => Some([232, 234, 237]),
+            Self::Dark => Some([35, 40, 48]),
+            Self::Original => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub(super) enum Quality {
     Interactive,
     #[default]
@@ -19,6 +37,7 @@ pub(super) struct View {
     pub zoom: u16,
     pub pan: (i16, i16),
     pub quality: Quality,
+    pub background: Background,
 }
 
 impl Default for View {
@@ -27,6 +46,7 @@ impl Default for View {
             zoom: FIT_ZOOM,
             pan: (0, 0),
             quality: Quality::Full,
+            background: Background::default(),
         }
     }
 }
@@ -145,6 +165,7 @@ mod tests {
                         zoom,
                         pan: (pan, pan),
                         quality,
+                        ..Default::default()
                     }
                     .geometry(100.0, 100.0, 20, 20);
                     assert_eq!((geometry.width, geometry.height), (20, 20));
@@ -181,6 +202,7 @@ mod tests {
             zoom: 200,
             pan: (PAN_RANGE, PAN_RANGE),
             quality: Quality::Interactive,
+            ..Default::default()
         }
         .geometry(8.0, 8.0, 4, 4);
         let cropped = geometry.crop(&image).into_rgba8();
@@ -192,6 +214,7 @@ mod tests {
             zoom: 400,
             pan: (333, 333),
             quality: Quality::Interactive,
+            ..Default::default()
         }
         .geometry(8.0, 8.0, 4, 4);
         let cropped = fractional.crop(&image).into_rgba8();

@@ -12,7 +12,7 @@ use ratex_layout::LayoutOptions;
 use ratex_types::{color::Color, math_style::MathStyle};
 use resvg::{tiny_skia, usvg};
 
-use super::{Key, Network, Prepared, Source, View};
+use super::{Key, Network, Prepared, Source, View, view::Background};
 
 const MAX_SOURCE_BYTES: usize = orbit_model::types::Attachment::MAX_IMAGE_BYTES;
 const MAX_REMOTE_CACHE_BYTES: usize = 2 * MAX_SOURCE_BYTES;
@@ -130,9 +130,10 @@ impl Decoder {
                     if svg {
                         bail!("矢量图片使用媒体重绘预览");
                     }
-                    let pixels = self.assets.raster(&bytes)?;
+                    let mut pixels = self.assets.raster(&bytes)?.to_rgba8();
+                    composite_background(&mut pixels, key.view.unwrap_or_default().background);
                     let native = Arc::new(super::kitty_preview::Image::new(
-                        pixels.as_rgba8().unwrap(),
+                        &pixels,
                         Size::new(cell.width, cell.height),
                     )?);
                     return Ok(Prepared {
@@ -254,6 +255,11 @@ impl Decoder {
             u32::from(size.height) * u32::from(cell.height),
         );
         padded.copy_from(&image.into_rgba8(), 0, 0)?;
+        // Math remains transparent, including baseline/cell padding. Ordinary
+        // images get a matte only in display pixels, never in the source cache.
+        if matches!(key.source, Source::Image(_)) {
+            composite_background(&mut padded, key.view.unwrap_or_default().background);
+        }
         let (selected_protocol, selected_kitty_id) = if key.view.is_none() {
             let (protocol, id) = encode(picker, selected_image(&padded), size)?;
             (Some(protocol), id)
@@ -277,6 +283,25 @@ impl Decoder {
             selected_kitty_id,
             native: None,
         })
+    }
+}
+
+fn composite_background(pixels: &mut RgbaImage, background: Background) {
+    let Some(color) = background.color() else {
+        return;
+    };
+    for pixel in pixels.pixels_mut() {
+        let alpha = u32::from(pixel[3]);
+        if alpha == 255 {
+            continue;
+        }
+        for channel in 0..3 {
+            pixel[channel] = ((u32::from(pixel[channel]) * alpha
+                + u32::from(color[channel]) * (255 - alpha)
+                + 127)
+                / 255) as u8;
+        }
+        pixel[3] = 255;
     }
 }
 

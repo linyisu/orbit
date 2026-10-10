@@ -423,6 +423,7 @@ impl Context {
         &self,
         jobs: &Arc<PreviewJobs>,
         source: &Source,
+        background: view::Background,
     ) -> Result<Option<Arc<Prepared>>, ()> {
         let shared = self.shared.as_ref().ok_or(())?;
         if shared.picker.protocol_type() != ProtocolType::Kitty
@@ -433,6 +434,11 @@ impl Context {
         }
         let mut key = self.key(source, 0, 0, true);
         key.native = true;
+        // Native uploads vary by background, but not by zoom or pan.
+        key.view = Some(View {
+            background,
+            ..View::default()
+        });
         if self.failure(key.clone()).is_some() {
             return Err(());
         }

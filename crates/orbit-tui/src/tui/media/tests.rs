@@ -643,6 +643,83 @@ fn svg_preview_preserves_alpha_and_ignores_external_image_references() {
 }
 
 #[test]
+fn image_display_composites_transparency_without_changing_sources_or_math() {
+    use super::view::Background;
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+
+    fn pixels(picture: &Prepared) -> Vec<[u8; 4]> {
+        let area = Rect::new(0, 0, picture.size.width, 1);
+        let mut buffer = Buffer::empty(area);
+        SlicedImage::new(&picture.protocol, (0, 0).into()).render(area, &mut buffer);
+        let output = buffer
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        let mut bytes = Vec::new();
+        for command in output.split("\x1b_G").skip(1) {
+            let (_, payload) = command.split_once(';').unwrap();
+            bytes.extend(
+                STANDARD
+                    .decode(payload.split_once("\x1b\\").unwrap().0)
+                    .unwrap(),
+            );
+        }
+        bytes.as_chunks::<4>().0.to_vec()
+    }
+
+    let directory = tempfile::tempdir().unwrap();
+    let svg = directory.path().join("circuit.svg");
+    std::fs::write(&svg, br#"<svg xmlns="http://www.w3.org/2000/svg" width="40" height="20"><rect x="10" width="10" height="10" fill="red" fill-opacity=".5"/><rect x="20" width="10" height="10" fill="black"/></svg>"#).unwrap();
+    let png = directory.path().join("circuit.png");
+    decode::raster_svg(&std::fs::read(&svg).unwrap(), 40, 20, None, false)
+        .unwrap()
+        .save(&png)
+        .unwrap();
+    let context = context(ProtocolType::Kitty);
+    let picker = &context.shared.as_ref().unwrap().picker;
+    let mut decoder = decode::Decoder::default();
+    for path in [svg, png] {
+        let original = std::fs::read(&path).unwrap();
+        let source = Source::Image(path.to_string_lossy().into_owned());
+        let key = context.key(&source, 40, 20, false);
+        let default = pixels(&decoder.prepare(&key, picker).unwrap());
+        assert!(default.iter().all(|pixel| pixel[3] == 255));
+        assert!(default.contains(&[232, 234, 237, 255]));
+        assert!(default.contains(&[0, 0, 0, 255]));
+        for background in [Background::Light, Background::Dark, Background::Original] {
+            let mut key = key.clone();
+            key.view = Some(View {
+                background,
+                ..View::default()
+            });
+            let output = pixels(&decoder.prepare(&key, picker).unwrap());
+            match background.color() {
+                Some([r, g, b]) => {
+                    assert!(output.iter().all(|pixel| pixel[3] == 255));
+                    assert!(output.contains(&[r, g, b, 255]));
+                    assert!(output.contains(&[0, 0, 0, 255]));
+                    assert!(output.iter().any(|pixel| pixel[0] > r && pixel[1] < g));
+                }
+                None => {
+                    assert!(output.iter().any(|pixel| pixel[3] == 0));
+                    assert!(output.iter().any(|pixel| (120..=135).contains(&pixel[3])));
+                }
+            }
+        }
+        assert_eq!(std::fs::read(path).unwrap(), original);
+    }
+    let source = Source::Math {
+        tex: "S".into(),
+        display: false,
+    };
+    let key = context.key(&source, 40, 20, false);
+    let output = pixels(&decoder.prepare(&key, picker).unwrap());
+    assert!(output.iter().any(|pixel| pixel[3] == 0));
+    assert!(output.iter().any(|pixel| pixel[3] > 0));
+}
+
+#[test]
 fn parser_attaches_media_only_to_semantic_math_and_images() {
     let source = r"公式 $x^2$、转义 \$ 和代码 `$literal$` ![示意](plot.svg)";
     let lines = markdown::document(source, 80);

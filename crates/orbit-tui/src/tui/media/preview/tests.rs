@@ -108,6 +108,70 @@ fn wait_for_worker(preview: &Preview, deadline: Instant) {
 }
 
 #[test]
+fn background_switches_keep_the_view_and_use_separate_cached_uploads() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("transparent.png");
+    image::RgbaImage::new(200, 200).save(&path).unwrap();
+    for protocol in [
+        ProtocolType::Kitty,
+        ProtocolType::Sixel,
+        ProtocolType::Iterm2,
+        ProtocolType::Halfblocks,
+    ] {
+        let mut picker = Picker::halfblocks();
+        picker.set_protocol_type(protocol);
+        let mut preview = Preview::new(
+            Context::new(picker),
+            Source::Image(path.to_string_lossy().into_owned()),
+        );
+        let mut terminal = Terminal::new(TestBackend::new(90, 30)).unwrap();
+        preview.view.zoom = 200;
+        preview.view.pan = (500, -500);
+        draw_ready(&mut preview, &mut terminal);
+        let light = preview.picture.as_ref().unwrap().clone();
+        let background_button = preview
+            .controls
+            .iter()
+            .find(|(_, control)| *control == Control::Background)
+            .unwrap()
+            .0;
+        preview.handle(&mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            (background_button.x, background_button.y),
+        ));
+        assert_eq!(preview.view.background, Background::Dark);
+        draw_ready(&mut preview, &mut terminal);
+        assert!(!Arc::ptr_eq(&light, preview.picture.as_ref().unwrap()));
+        for background in [Background::Original, Background::Light] {
+            preview.handle(&Event::Key(KeyEvent::new(
+                KeyCode::Char('b'),
+                KeyModifiers::NONE,
+            )));
+            assert_eq!(preview.view.background, background);
+            draw_ready(&mut preview, &mut terminal);
+            assert_eq!(preview.view.zoom, 200);
+            assert_eq!(preview.view.pan, (500, -500));
+        }
+        assert!(Arc::ptr_eq(&light, preview.picture.as_ref().unwrap()));
+        preview.activate(Control::Background);
+        preview.activate(Control::Fit);
+        assert_eq!(preview.view.background, Background::Dark);
+        assert_eq!(preview.view.zoom, 100);
+        assert_eq!(preview.view.pan, (0, 0));
+        super::super::clear_layers();
+    }
+    let mut math = Preview::new(
+        Context::default(),
+        Source::Math {
+            tex: "S".into(),
+            display: false,
+        },
+    );
+    math.activate(Control::Background);
+    assert_eq!(math.view, View::default());
+}
+
+#[test]
 fn image_previews_zoom_pan_reset_and_clip_on_every_protocol() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("quadrants.png");
