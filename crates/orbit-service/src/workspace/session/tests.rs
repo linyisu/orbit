@@ -3,6 +3,8 @@ use orbit_agent::events::AgentEvent;
 #[cfg(test)]
 use orbit_config::test_support::{TestConfig, TestModel, TestProvider};
 
+mod tool_selection_eval;
+
 #[test]
 fn replay_preserves_compaction_and_queued_input_semantics() {
     let compact = orbit_store::types::Run {
