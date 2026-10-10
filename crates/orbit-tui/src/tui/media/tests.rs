@@ -1917,14 +1917,14 @@ fn image_alt_urls_are_not_implicit_navigation_targets() {
 
 #[test]
 fn table_formulas_share_cell_layout_keep_borders_links_and_copy_complete_tex() {
-    let tex = [r"e^{i\pi}", r"\frac{a}{b}"];
+    let tex = [r"e^{i\pi}", r"\frac{a}{b}", "S", "R"];
     let sources = [
         format!(
-            "| 左对齐 | 居中 | 右对齐 |\n| :--- | :---: | ---: |\n| 中文 | [链接](https://orbit.example/docs) | ${}$ |\n| `code` | ${}$ | 42 |\n",
+            "| $S$ | $R$ | 右对齐 |\n| :--- | :---: | ---: |\n| 中文 | [链接](https://orbit.example/docs) | ${}$ |\n| `code` | ${}$ | 42 |\n",
             tex[0], tex[1]
         ),
         format!(
-            "<table><tr><th>左</th><th>右</th></tr><tr><td>中文</td><td align='right'>${}$</td></tr><tr><td colspan='2' align='center'>[链接](https://orbit.example/docs) ${}$</td></tr></table>",
+            "<table><tr><th>$S$</th><th>$R$</th></tr><tr><td>中文</td><td align='right'>${}$</td></tr><tr><td colspan='2' align='center'>[链接](https://orbit.example/docs) ${}$</td></tr></table>",
             tex[0], tex[1]
         ),
     ];
@@ -1955,7 +1955,7 @@ fn table_formulas_share_cell_layout_keep_borders_links_and_copy_complete_tex() {
                     }
                 }
 
-                assert_eq!(requested.len(), 2, "width={width}, {source}");
+                assert_eq!(requested.len(), 4, "width={width}, {source}");
                 let rendered = document
                     .into_iter()
                     .flat_map(|line| layout(line, &context, width))
@@ -1967,7 +1967,10 @@ fn table_formulas_share_cell_layout_keep_borders_links_and_copy_complete_tex() {
                     .join("\n");
 
                 assert!(rendered.iter().any(|line| !line.graphics.is_empty()));
-                assert!(!text.contains(tex[0]) && !text.contains(tex[1]), "{text}");
+                assert!(
+                    tex.iter().all(|tex| !text.contains(&format!("${tex}$"))),
+                    "{text}"
+                );
                 assert!(
                     rendered
                         .iter()
@@ -2018,7 +2021,7 @@ fn table_formulas_share_cell_layout_keep_borders_links_and_copy_complete_tex() {
                     .unwrap();
                 selection.transcript_view(0, &transcript);
                 let copied = selection.text();
-                for formula in tex {
+                for formula in &tex[..2] {
                     assert_eq!(copied.matches(formula).count(), 1, "{copied:?}");
                 }
                 assert!(!copied.contains(['┌', '│', '\x1b']));

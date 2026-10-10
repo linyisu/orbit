@@ -32,7 +32,7 @@ fn layout_with_margin(
         return table.layout(context, width, &linked);
     }
 
-    if linked.media.is_empty() || !context.enabled() || width < 4 {
+    if linked.media.is_empty() || !context.enabled() || width == 0 {
         return plain_rows(linked, width);
     }
     let source = linked.text();

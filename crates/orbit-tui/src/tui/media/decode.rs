@@ -215,6 +215,7 @@ impl Decoder {
                         false,
                     )?;
                     let ratio = image.height() as f64 / f64::from(tree.size().height());
+                    let image = trim_math_sides(image);
                     let baseline_px = baseline_px * ratio;
                     let cell_h = u32::from(cell.height);
                     let offset = ((f64::from(cell_h) * 0.75
@@ -276,6 +277,73 @@ impl Decoder {
             selected_kitty_id,
             native: None,
         })
+    }
+}
+
+// Font advance widths can exceed the painted glyph, particularly for italic
+// variables. Keep vertical metrics (and the baseline) but reserve only the
+// painted horizontal extent plus one transparent pixel on either side.
+fn trim_math_sides(image: DynamicImage) -> DynamicImage {
+    let pixels = image.to_rgba8();
+    let mut left = pixels.width();
+    let mut right = 0;
+    for (x, _, pixel) in pixels.enumerate_pixels() {
+        if pixel[3] != 0 {
+            left = left.min(x);
+            right = right.max(x + 1);
+        }
+    }
+    if left >= right {
+        return image;
+    }
+    let left = left.saturating_sub(1);
+    let right = (right + 1).min(pixels.width());
+    DynamicImage::ImageRgba8(
+        image::imageops::crop_imm(&pixels, left, 0, right - left, pixels.height()).to_image(),
+    )
+}
+
+#[cfg(test)]
+mod math_bounds_tests {
+    use super::*;
+
+    #[test]
+    fn horizontal_crop_preserves_every_painted_pixel_and_vertical_metrics() {
+        for tex in [
+            "S",
+            "R",
+            r"\overline{Q}",
+            r"\frac{a}{b}",
+            r"\int_0^1 x^2 dx",
+        ] {
+            let (svg, _) = math_svg(tex, false, 32, [220, 224, 232]).unwrap();
+            let original = raster_svg(svg.as_bytes(), 1200, 400, None, false).unwrap();
+            let painted = |image: &DynamicImage| {
+                image
+                    .to_rgba8()
+                    .pixels()
+                    .filter(|pixel| pixel[3] != 0)
+                    .count()
+            };
+            let trimmed = trim_math_sides(original.clone());
+            assert_eq!(trimmed.height(), original.height());
+            assert!(trimmed.width() <= original.width());
+            assert_eq!(painted(&trimmed), painted(&original));
+            let pixels = trimmed.to_rgba8();
+            let first = pixels
+                .enumerate_pixels()
+                .filter(|(_, _, pixel)| pixel[3] != 0)
+                .map(|(x, _, _)| x)
+                .min()
+                .unwrap();
+            let last = pixels
+                .enumerate_pixels()
+                .filter(|(_, _, pixel)| pixel[3] != 0)
+                .map(|(x, _, _)| x)
+                .max()
+                .unwrap();
+            assert!(first <= 1 && pixels.width() - last <= 2);
+        }
     }
 }
 
