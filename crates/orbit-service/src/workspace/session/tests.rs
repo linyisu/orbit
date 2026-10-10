@@ -34,6 +34,7 @@ fn replay_preserves_compaction_and_queued_input_semantics() {
 #[test]
 fn idle_and_live_pages_carry_service_clock_without_changing_the_event_cursor() {
     let mut view = View {
+        published: 0,
         user_inputs: Vec::new(),
         planning: Default::default(),
         updates: vec![],
@@ -54,6 +55,62 @@ fn idle_and_live_pages_carry_service_clock_without_changing_the_event_cursor() {
     view.clock = None;
     view.busy = false;
     assert!(view.page(0).unwrap().timing.is_none());
+}
+
+#[test]
+fn dense_streams_coalesce_without_mutating_published_cursors_or_crossing_barriers() {
+    use orbit_model::types::StreamEvent;
+    let mut view = View {
+        published: 0,
+        updates: vec![],
+        busy: true,
+        model: "test".into(),
+        approvals: BTreeMap::new(),
+        clock: None,
+        progress: vec![],
+        user_inputs: vec![],
+        planning: Default::default(),
+    };
+    let text = |value: &str| Update::agent(AgentEvent::Model(StreamEvent::TextDelta(value.into())));
+    for _ in 0..100_000 {
+        view.push(text("中\"\n"));
+    }
+    let fast = view.page(0).unwrap();
+    assert!(fast.updates.len() < 16);
+    for (update, size) in &view.updates {
+        assert_eq!(*size, serde_json::to_vec(update).unwrap().len());
+    }
+    let barrier = AgentEvent::InputReceived {
+        message_id: 42,
+        content: "steering".into(),
+    };
+    view.push(text("after publication"));
+    view.push(Update::agent(barrier));
+    view.push(text("after barrier"));
+    let suffix = view.page(fast.next).unwrap();
+    assert_eq!(suffix.updates.len(), 3);
+    assert!(
+        matches!(&suffix.updates[1], Update::Agent(event) if matches!(event.as_ref(), AgentEvent::InputReceived { message_id: 42, .. }))
+    );
+    let slow = view.page(0).unwrap();
+    let concatenate = |updates: &[Update]| {
+        updates
+            .iter()
+            .filter_map(|update| match update {
+                Update::Agent(event) => match event.as_ref() {
+                    AgentEvent::Model(StreamEvent::TextDelta(text)) => Some(text.as_str()),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect::<String>()
+    };
+    assert_eq!(
+        concatenate(&slow.updates),
+        concatenate(&fast.updates) + &concatenate(&suffix.updates)
+    );
+    assert_eq!(concatenate(&fast.updates), "中\"\n".repeat(100_000));
+    assert!(view.page(suffix.next).unwrap().updates.is_empty());
 }
 
 #[tokio::test]
@@ -265,6 +322,7 @@ async fn switching_to_a_smaller_context_starts_compaction_in_the_service() {
 #[test]
 fn progress_snapshots_are_bounded_and_do_not_hide_ledger_events() {
     let mut view = View {
+        published: 0,
         user_inputs: Vec::new(),
         planning: Default::default(),
         updates: vec![],

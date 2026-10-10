@@ -128,7 +128,7 @@ async fn draft_preferences_stay_in_memory_until_first_message_and_survive_resume
 }
 
 #[tokio::test]
-async fn last_client_releases_only_unstarted_drafts() {
+async fn last_client_discards_drafts_but_retains_running_sessions_until_finish() {
     let fixture = Fixture::new("http://127.0.0.1:1/v1").await;
     let Response::Opened(info) = fixture
         .request(Request::Open {
@@ -193,6 +193,130 @@ async fn last_client_releases_only_unstarted_drafts() {
     assert!(fixture.service.session(&started.id).await.is_ok());
     assert_eq!(fixture.handle.store.list().await.unwrap().len(), 1);
     handle.command(session::Command::Cancel).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            fixture.service.collect_idle_sessions().await;
+            if fixture.service.session(&started.id).await.is_err() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        fixture.handle.store.list_resumable().await.unwrap().len(),
+        1
+    );
+    // Retirement loses only the runtime cache, never durable request receipts.
+    fixture
+        .request(Request::Open {
+            resume: Some(started.id.clone()),
+            model: None,
+            configuration: None,
+            policy: Default::default(),
+        })
+        .await
+        .unwrap();
+    fixture
+        .request(Request::Start {
+            session: started.id.clone(),
+            request_id: "first".into(),
+            prompt: "hello".into(),
+            images: vec![],
+            compact: false,
+            model: None,
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        fixture
+            .handle
+            .store
+            .load(&started.id)
+            .await
+            .unwrap()
+            .runs
+            .len(),
+        1
+    );
+    fixture.service.release_client(vec![started.id], 0).await;
+}
+
+#[tokio::test]
+async fn closing_idle_persisted_sessions_releases_capacity_and_preserves_resume() {
+    let fixture = Fixture::new("http://127.0.0.1:1/v1").await;
+    let store = &fixture.handle.store;
+    let mut ids = Vec::new();
+    for index in 0..MAX_SESSIONS + 2 {
+        let mut writer = store
+            .create(
+                fixture
+                    .service
+                    .options
+                    .initial_directory
+                    .to_string_lossy()
+                    .into_owned(),
+                "test::test".into(),
+            )
+            .await
+            .unwrap();
+        let id = writer.id().to_owned();
+        writer
+            .begin(format!("question {index}"), "test::test".into())
+            .await
+            .unwrap();
+        writer
+            .finish(
+                "completed",
+                vec![],
+                Some(vec![orbit_model::types::ChatMessage::user(format!(
+                    "question {index}"
+                ))]),
+            )
+            .await
+            .unwrap();
+        drop(writer);
+        let Response::Opened(info) = fixture
+            .request(Request::Open {
+                model: None,
+                policy: Default::default(),
+                resume: Some(id.clone()),
+                configuration: None,
+            })
+            .await
+            .unwrap()
+        else {
+            panic!("missing restored session")
+        };
+        assert_eq!(info.id, id);
+        fixture.service.release_client(vec![id.clone()], 0).await;
+        assert!(fixture.service.session(&id).await.is_err());
+        let snapshot = store.load(&id).await.unwrap();
+        assert_eq!(snapshot.runs[0].prompt, format!("question {index}"));
+        ids.push(id);
+    }
+    // Opening a second viewer retains the actor until both viewers disconnect.
+    let id = ids[0].clone();
+    for _ in 0..2 {
+        fixture
+            .request(Request::Open {
+                model: None,
+                policy: Default::default(),
+                resume: Some(id.clone()),
+                configuration: None,
+            })
+            .await
+            .unwrap();
+    }
+    fixture.service.release_client(vec![id.clone()], 0).await;
+    assert!(fixture.service.session(&id).await.is_ok());
+    fixture.service.release_client(vec![id.clone()], 1).await;
+    assert!(fixture.service.session(&id).await.is_err());
+    assert_eq!(
+        store.list_resumable().await.unwrap().len(),
+        MAX_SESSIONS + 2
+    );
 }
 
 #[tokio::test]

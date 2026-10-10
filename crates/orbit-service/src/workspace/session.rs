@@ -19,13 +19,14 @@ pub struct Handle {
     pub(super) clients: std::sync::atomic::AtomicUsize,
     pub policy: orbit_protocol::SessionPolicy,
     pub view: Arc<Mutex<View>>,
+    progress_delivery: Mutex<progress::Deliveries>,
     requests: mpsc::Sender<Envelope>,
     pub workspace: Arc<std::sync::RwLock<orbit_runtime::filesystem::Workspace>>,
     pub store: orbit_store::store::Store,
 }
 
 pub enum Command {
-    DiscardDraft {
+    RetireUnobserved {
         result: oneshot::Sender<bool>,
     },
     Plan {
@@ -87,6 +88,7 @@ struct Envelope {
 
 pub struct View {
     updates: Vec<(Update, usize)>,
+    published: usize,
     pub busy: bool,
     pub model: String,
     approvals: BTreeMap<u64, ApprovalPreview>,
@@ -149,11 +151,39 @@ fn presentation(run: &orbit_store::types::Run) -> orbit_protocol::RunPresentatio
 
 impl View {
     fn push(&mut self, update: Update) {
+        let appended_text_bytes = match &update {
+            Update::Agent(event) => match event.as_ref() {
+                orbit_agent::events::AgentEvent::Model(
+                    orbit_model::types::StreamEvent::TextDelta(text)
+                    | orbit_model::types::StreamEvent::ReasoningDelta(text),
+                ) => serde_json::to_vec(text)
+                    .ok()
+                    .map(|bytes| bytes.len().saturating_sub(2)),
+                _ => None,
+            },
+            _ => None,
+        };
+        // A published entry is immutable: changing it would lose the appended
+        // suffix for clients that already advanced past that cursor.
+        if self.updates.len() > self.published
+            && let Some((Update::Agent(previous), bytes)) = self.updates.last_mut()
+            && let Update::Agent(next) = &update
+            && orbit_agent::events::coalesce(previous, next)
+        {
+            *bytes = appended_text_bytes.map_or_else(
+                || {
+                    serde_json::to_vec(&orbit_protocol::Update::agent(previous.as_ref()))
+                        .map_or(PAGE_BYTES, |bytes| bytes.len())
+                },
+                |added| bytes.saturating_add(added),
+            );
+            return;
+        }
         let bytes = serde_json::to_vec(&update).map_or(PAGE_BYTES, |bytes| bytes.len());
         self.updates.push((update, bytes));
     }
 
-    pub fn page(&self, after: usize) -> Result<Page> {
+    pub fn page(&mut self, after: usize) -> Result<Page> {
         ensure!(
             after <= self.updates.len(),
             "event cursor no longer exists; reopen the session"
@@ -187,6 +217,7 @@ impl View {
             .map(|(update, _)| update.clone())
             .collect();
         let next = after + updates.len();
+        self.published = self.published.max(next);
         Ok(Page {
             planning: self.planning.clone(),
             user_inputs: self.user_inputs.clone(),
@@ -214,6 +245,23 @@ impl View {
 }
 
 impl Handle {
+    pub async fn page(&self, viewer: u64, after: usize) -> Result<Page> {
+        let mut page = self.view.lock().await.page(after)?;
+        let mut delivery = self.progress_delivery.lock().await;
+        delivery.reset_started_tools(viewer, &page.updates);
+        delivery.filter(viewer, &mut page.tool_progress);
+        Ok(page)
+    }
+
+    pub async fn release_viewer(&self, viewer: u64) {
+        self.questions.release(viewer).await;
+        self.reset_progress_delivery(viewer).await;
+    }
+
+    pub(super) async fn reset_progress_delivery(&self, viewer: u64) {
+        self.progress_delivery.lock().await.forget(viewer);
+    }
+
     pub async fn running(&self) -> bool {
         let (result, response) = oneshot::channel();
         if self.command(Command::Activity { result }).await.is_err() {
@@ -227,6 +275,7 @@ impl Handle {
         let snapshot = self.store.load(agent).await?;
         let mut view = View {
             updates: Vec::new(),
+            published: 0,
             busy: snapshot
                 .runs
                 .last()
@@ -275,6 +324,7 @@ impl Handle {
         let policy = setup.resources.policy.clone();
         let mut view = View {
             updates: Vec::new(),
+            published: 0,
             busy: false,
             model: info.model.clone(),
             approvals: BTreeMap::new(),
@@ -316,6 +366,7 @@ impl Handle {
             clients: std::sync::atomic::AtomicUsize::new(0),
             policy,
             view,
+            progress_delivery: Default::default(),
             requests,
             workspace,
             store,

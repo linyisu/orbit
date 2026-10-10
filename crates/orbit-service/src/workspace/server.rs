@@ -164,6 +164,7 @@ pub async fn serve(
             _ = service.stop.cancelled() => break,
             _ = idle.tick() => {
                 let _opening = service.opening.lock().await;
+                service.collect_idle_sessions().await;
                 if service.last_activity.lock().await.elapsed() >= IDLE_TIMEOUT && !service.busy().await {
                     service.closing.store(true, Ordering::Release);
                     break;
@@ -217,7 +218,8 @@ struct Service {
 
 impl Service {
     async fn busy(&self) -> bool {
-        for session in self.sessions.lock().await.values() {
+        let sessions: Vec<_> = self.sessions.lock().await.values().cloned().collect();
+        for session in sessions {
             if session.running().await {
                 return true;
             }
@@ -318,25 +320,39 @@ impl Service {
 
     async fn release_client(&self, opened: Vec<String>, viewer: u64) {
         let _opening = self.opening.lock().await;
-        let mut sessions = self.sessions.lock().await;
+        let sessions = self.sessions.lock().await.clone();
         for handle in sessions.values() {
-            handle.questions.release(viewer).await;
+            handle.release_viewer(viewer).await;
         }
         for id in opened {
             let Some(handle) = sessions.get(&id) else {
                 continue;
             };
-            if handle.clients.fetch_sub(1, Ordering::AcqRel) != 1 {
-                continue;
-            }
+            handle.clients.fetch_sub(1, Ordering::AcqRel);
+        }
+        self.collect_idle_sessions().await;
+    }
+
+    /// The opening lock serializes attachment with retirement. Never wait for an
+    /// actor while holding the session-map lock needed by unrelated clients.
+    async fn collect_idle_sessions(&self) {
+        let candidates: Vec<_> = self
+            .sessions
+            .lock()
+            .await
+            .iter()
+            .filter(|(_, handle)| handle.clients.load(Ordering::Acquire) == 0)
+            .map(|(id, handle)| (id.clone(), handle.clone()))
+            .collect();
+        for (id, handle) in candidates {
             let (result, discarded) = tokio::sync::oneshot::channel();
             if handle
-                .command(session::Command::DiscardDraft { result })
+                .command(session::Command::RetireUnobserved { result })
                 .await
                 .is_ok()
                 && discarded.await.unwrap_or(false)
             {
-                sessions.remove(&id);
+                self.sessions.lock().await.remove(&id);
             }
         }
     }
@@ -390,16 +406,20 @@ impl Service {
                     !self.closing.load(Ordering::Acquire),
                     "workspace service is shutting down"
                 );
-                if let Some(id) = &resume
-                    && let Some(handle) = self.sessions.lock().await.get(id)
-                {
+                let existing = {
+                    let sessions = self.sessions.lock().await;
+                    resume.as_ref().and_then(|id| sessions.get(id).cloned())
+                };
+                if let Some(handle) = existing {
                     ensure!(
                         handle.policy == policy,
                         "open session has a different capability policy"
                     );
                     handle.clients.fetch_add(1, Ordering::AcqRel);
+                    handle.reset_progress_delivery(viewer).await;
                     return Ok(Response::Opened(handle.current_info().await));
                 }
+                self.collect_idle_sessions().await;
                 ensure!(
                     self.sessions.lock().await.len() < MAX_SESSIONS,
                     "workspace session limit reached; reconnect after idle service shutdown"
@@ -643,12 +663,7 @@ impl Service {
                 ))
             }
             Request::Poll { session, after } => Ok(Response::Page(
-                self.session(&session)
-                    .await?
-                    .view
-                    .lock()
-                    .await
-                    .page(after)?,
+                self.session(&session).await?.page(viewer, after).await?,
             )),
             Request::Undo { session, path } => {
                 self.session(&session)

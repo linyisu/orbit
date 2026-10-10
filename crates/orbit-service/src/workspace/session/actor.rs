@@ -51,6 +51,7 @@ struct Actor {
     planning_enabled: bool,
     compact_after_model_switch: bool,
     progress: super::progress::Progress,
+    progress_task: Option<tokio_util::task::AbortOnDropHandle<super::progress::Snapshot>>,
 }
 
 pub(super) async fn run(
@@ -93,6 +94,7 @@ pub(super) async fn run(
         planning_enabled: false,
         compact_after_model_switch: false,
         progress: Default::default(),
+        progress_task: None,
     };
     let mut outputs = tokio::time::interval(Duration::from_millis(50));
     outputs.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -101,10 +103,15 @@ pub(super) async fn run(
         tokio::select! {
             envelope = requests.recv() => {
                 let Some(envelope) = envelope else { break };
-                if let Command::DiscardDraft { result } = envelope.command {
-                    let discard = !actor.setup.session.is_persisted();
-                    let _ = result.send(discard);
-                    if discard {
+                if let Command::RetireUnobserved { result } = envelope.command {
+                    // Drafts have nothing to save. Persisted sessions can release
+                    // their runtime only after execution and metadata work finish.
+                    let retire = !actor.setup.session.is_persisted()
+                        || (!actor.active()
+                            && !actor.questions.running().await
+                            && !actor.setup.session.metadata_pending());
+                    let _ = result.send(retire);
+                    if retire {
                         drop(actor);
                         let _ = envelope.reply.send(Ok(()));
                         return;
@@ -126,7 +133,12 @@ pub(super) async fn run(
             }
             event = async { actor.running.as_mut().unwrap().events.recv().await }, if actor.running.is_some() => {
                 match event {
-                    Some(event) => { actor.progress.record(&event); actor.view.lock().await.push(Update::agent(event)); },
+                    Some(event) => {
+                        actor.progress.record(&event);
+                        let mut view = actor.view.lock().await;
+                        if actor.progress.is_empty() { view.progress.clear(); }
+                        view.push(Update::agent(event));
+                    },
                     None => actor.finish_run().await,
                 }
             }
@@ -140,9 +152,14 @@ pub(super) async fn run(
                 view.push(Update::Report(orbit_protocol::Report { title: "撤销文件写入".into(), text }));
             }
             Some(request) = actor.setup.resources.approvals.recv() => actor.approval(request).await,
-            _ = outputs.tick(), if actor.running.is_some() => {
-                let progress = actor.progress.snapshot(&actor.setup.resources.tools, &actor.setup.session.command_output).await;
-                actor.view.lock().await.progress = progress;
+            _ = outputs.tick(), if actor.running.is_some() && !actor.progress.is_empty() && actor.progress_task.is_none() => {
+                actor.progress_task = Some(actor.progress.start_snapshot(&actor.setup.resources.tools, &actor.setup.session.command_output));
+            }
+            result = async { actor.progress_task.as_mut().unwrap().await }, if actor.progress_task.is_some() => {
+                actor.progress_task = None;
+                if let Ok(snapshot) = result {
+                    actor.view.lock().await.progress = actor.progress.accept(snapshot);
+                }
             }
             _ = flush.tick() => {
                 if actor.running.is_some() && let Err(error) = actor.setup.session.flush_events().await {
@@ -360,7 +377,7 @@ impl Actor {
                 }
                 self.profile().await;
             }
-            Command::Close | Command::DiscardDraft { .. } => {
+            Command::Close | Command::RetireUnobserved { .. } => {
                 unreachable!("close handled by actor loop")
             }
             Command::Action { action, result } => {
@@ -648,6 +665,7 @@ impl Actor {
             view.push(Update::agent(AgentEvent::Failed { error }));
         }
         self.progress.clear();
+        self.progress_task = None;
         view.progress.clear();
         view.clock = None;
         view.push(Update::Finished {

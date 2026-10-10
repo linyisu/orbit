@@ -152,6 +152,10 @@ impl PreparedResume {
 }
 
 impl SessionState {
+    pub(crate) fn metadata_pending(&self) -> bool {
+        self.title_task.is_some()
+    }
+
     pub fn import_image(&self, source: &Path) -> Result<Attachment> {
         orbit_tools::image_assets::ImageAssets::for_database(self.store.path()).import_path(source)
     }

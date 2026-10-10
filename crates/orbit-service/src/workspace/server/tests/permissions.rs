@@ -29,6 +29,21 @@ async fn permission_changes_release_only_eligible_waiters_and_reach_all_observer
     assert_eq!(fixture.handle.current_info().await.mode, Mode::Ask);
     assert!(!inside.exists());
     let first = pending.approvals[0].id;
+    fixture
+        .service
+        .release_client(vec![info.id.clone()], 0)
+        .await;
+    assert!(fixture.service.session(&info.id).await.is_ok());
+    assert_eq!(fixture.page(0).await.approvals[0].id, first);
+    fixture
+        .request(Request::Open {
+            resume: Some(info.id.clone()),
+            model: None,
+            configuration: None,
+            policy: Default::default(),
+        })
+        .await
+        .unwrap();
     fixture.mode(Mode::Auto).await;
     let pending = fixture
         .wait(|page| page.approvals.iter().any(|a| a.id != first))

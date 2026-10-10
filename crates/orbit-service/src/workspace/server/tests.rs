@@ -61,6 +61,7 @@ impl Fixture {
                 write: true,
             });
         let handle = Arc::new(Handle::spawn(setup, None));
+        handle.clients.store(1, Ordering::Release);
         let service = Service {
             options,
             sessions: Mutex::new([(handle.info.id.clone(), handle.clone())].into()),
