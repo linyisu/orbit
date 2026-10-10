@@ -266,7 +266,7 @@ impl Tool for WriteFile {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition::function(
             "write_file",
-            "Create or intentionally replace a whole UTF-8 file; prefer edit_file for localized changes to existing files. Write a file in an existing workspace directory (or outside path granted via request_capability) under the selected approval policy. Auto mode allows workspace-local edits; external writes still require approval. Use relative paths or granted outside paths. Old and new content must each be at most 1 MiB. Internal symlinks are resolved safely; escaping links, hard-linked files and protected metadata are rejected. Changes during approval cause a conflict; never automatically retry a denied write.",
+            "Create a new UTF-8 file, or intentionally replace a whole file when that is the task. content is the entire new file, not a patch; omitted existing content is lost. For a small change to an existing file, read the relevant region and use edit_file instead. Parent directories must exist. Use workspace paths or outside paths granted via request_capability. Auto approves workspace-local writes; external writes require approval. Old and new files are each limited to 1 MiB. Protected metadata, escaping symlinks and hard links are rejected; concurrent changes cause a conflict. Never retry a denied write without a new user request.",
             json!({
                 "type": "object",
                 "properties": {
