@@ -28,6 +28,44 @@ fn draw(state: &mut UiState, width: u16, height: u16) -> String {
 }
 
 #[test]
+fn notifications_expire_without_dismissing_details_or_reusing_pointer_targets() {
+    let mut state = UiState::new("model");
+    state.input.set("draft".into());
+    state.feedback.error("first");
+    let deadline = state.feedback.notices[0].expires_at;
+    assert!(!state.feedback.expire(deadline - Duration::from_millis(1)));
+    draw(&mut state, 100, 30);
+    let area = state.feedback.area;
+    state.handle_feedback(&mouse(
+        MouseEventKind::Down(MouseButton::Left),
+        area.x + 2,
+        area.y + 1,
+    ));
+    assert!(state.feedback.expire(deadline));
+    state.handle_feedback(&mouse(
+        MouseEventKind::Up(MouseButton::Left),
+        area.x + 2,
+        area.y + 1,
+    ));
+    assert!(state.info_dialog.is_none());
+    assert!(state.feedback.notices.is_empty());
+    assert_eq!(state.feedback.area, Rect::default());
+
+    state.show_output("详情", "line one\nline two".into());
+    state.feedback.info("提示", "second");
+    state.feedback.notices[0].expires_at = Instant::now();
+    state.feedback.info("提示", "third");
+    assert_eq!(state.feedback.notices.len(), 1);
+    assert_eq!(state.feedback.notices[0].text, "third");
+    state.feedback.info("提示", "third");
+    assert_eq!(state.feedback.notices[0].count, 2);
+    let renewed = state.feedback.notices[0].expires_at;
+    assert!(state.feedback.expire(renewed));
+    assert!(state.info_dialog.is_some());
+    assert_eq!(state.input.text, "draft");
+}
+
+#[test]
 fn short_command_feedback_is_nonblocking_and_opens_its_full_details() {
     for home in [true, false] {
         let mut state = UiState::new("model");

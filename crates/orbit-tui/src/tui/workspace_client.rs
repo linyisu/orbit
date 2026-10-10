@@ -459,6 +459,7 @@ impl Tab {
 
     pub async fn poll(&mut self) -> bool {
         let mut changed = self.poll_reconnection();
+        changed |= self.state.feedback.expire(std::time::Instant::now());
         if self.commands.is_some()
             && self.model_refresh.is_none()
             && self.model_configuration.is_none()

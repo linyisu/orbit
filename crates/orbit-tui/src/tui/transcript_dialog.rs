@@ -93,12 +93,13 @@ impl TranscriptDialog {
         let hover_changed = tick != self.close_hover_tick;
         self.close_hover_tick = tick;
         let focus_expired = self.ui.expire_footnote_focus();
+        let feedback_expired = self.ui.feedback.expire(Instant::now());
         let preview_changed = self
             .ui
             .media_preview
             .as_ref()
             .is_some_and(|preview| preview.tick());
-        direction != 0 || hover_changed || focus_expired || preview_changed
+        direction != 0 || hover_changed || focus_expired || feedback_expired || preview_changed
     }
 
     pub fn draw(

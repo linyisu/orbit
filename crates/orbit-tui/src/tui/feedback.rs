@@ -8,7 +8,10 @@ use ratatui::{
     text::{Line, Span},
     widgets::{BorderType, Paragraph},
 };
-use std::collections::VecDeque;
+use std::{
+    collections::VecDeque,
+    time::{Duration, Instant},
+};
 use unicode_width::UnicodeWidthStr;
 
 use super::{
@@ -17,12 +20,15 @@ use super::{
     theme::THEME,
 };
 
+const NOTICE_LIFETIME: Duration = Duration::from_secs(10);
+
 #[derive(Debug)]
 struct Notice {
     title: String,
     text: String,
     error: bool,
     count: usize,
+    expires_at: Instant,
 }
 
 #[derive(Debug, Default)]
@@ -50,6 +56,8 @@ impl Feedback {
 
     fn push(&mut self, title: &str, text: &str, error: bool) {
         const MAX_CHARS: usize = 8192;
+        let now = Instant::now();
+        self.expire(now);
         let title = safe_output(title);
         let mut chars = text.chars();
         let prefix = chars.by_ref().take(MAX_CHARS).collect::<String>();
@@ -72,6 +80,7 @@ impl Feedback {
             text,
             error,
             count,
+            expires_at: now + NOTICE_LIFETIME,
         });
         self.notices.truncate(8);
         // An asynchronous error must not reuse hit targets from a different card.
@@ -80,7 +89,20 @@ impl Feedback {
         self.pressed = None;
     }
 
+    pub fn expire(&mut self, now: Instant) -> bool {
+        let previous = self.notices.len();
+        self.notices.retain(|notice| notice.expires_at > now);
+        if self.notices.len() == previous {
+            return false;
+        }
+        self.area = Rect::default();
+        self.close = Rect::default();
+        self.pressed = None;
+        true
+    }
+
     pub fn draw(&mut self, frame: &mut Frame<'_>, bounds: Rect) {
+        self.expire(Instant::now());
         self.area = Rect::default();
         self.close = Rect::default();
         let Some(notice) = self.notices.front() else {
