@@ -52,6 +52,7 @@ const BORDER: Color = THEME.border;
 // Keep every frame within the middle two Braille rows so the animation stays
 // visually centered in a single terminal cell, with equal space above/below.
 const TAB_SPINNER_FRAMES: [&str; 4] = ["⠖", "⠲", "⠴", "⠦"];
+const TAB_SPINNER_FRAME_INTERVAL: std::time::Duration = std::time::Duration::from_millis(200);
 pub(super) const MAX_COMPLETION_ITEMS: usize = 8;
 
 /// Notices paint after selection snapshots, including a frozen transcript.
@@ -839,7 +840,8 @@ fn draw_header(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
         let spinner_prefix = if tab.waiting_approval {
             "待审批 ".into()
         } else if is_running {
-            let idx = (tab.elapsed.as_millis() / 80) as usize % TAB_SPINNER_FRAMES.len();
+            let idx = (tab.elapsed.as_millis() / TAB_SPINNER_FRAME_INTERVAL.as_millis()) as usize
+                % TAB_SPINNER_FRAMES.len();
             format!("{} ", TAB_SPINNER_FRAMES[idx])
         } else {
             String::new()
