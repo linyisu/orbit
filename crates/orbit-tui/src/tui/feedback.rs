@@ -210,6 +210,8 @@ impl Feedback {
         };
         let inside = self.area.contains((mouse.column, mouse.row).into());
         match mouse.kind {
+            // A passive notice must not block scrolling the surface beneath it.
+            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => Action::None,
             MouseEventKind::Down(MouseButton::Left) if inside => {
                 self.pressed = Some(self.close.contains((mouse.column, mouse.row).into()));
                 Action::Redraw

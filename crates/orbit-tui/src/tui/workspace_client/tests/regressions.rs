@@ -9,6 +9,51 @@ fn mouse(kind: MouseEventKind, x: u16, y: u16) -> Event {
         modifiers: KeyModifiers::NONE,
     })
 }
+
+#[test]
+fn report_dialog_scrolls_through_real_input_even_under_a_notification() {
+    let (mut tab, _requests) = tab("本地");
+    tab.state.submit("existing conversation".into());
+    tab.state.input.set("keep this draft".into());
+    let history_len = tab.state.transcript.len();
+    let chat_scroll = tab.state.scroll;
+    tab.apply(Response::Report(orbit_protocol::Report {
+        title: "诊断记录".into(),
+        text: (0..100).map(|i| format!("record-{i:03}\n")).collect(),
+    }));
+    tab.state
+        .feedback
+        .info("提示", "a notification over the dialog");
+    let initial = render_screen(&mut tab.state);
+    assert!(initial.contains("record-000"));
+
+    // The notification covers this point. It must not intercept the wheel.
+    tab.handle(mouse(MouseEventKind::ScrollDown, 70, 3))
+        .unwrap();
+    let scrolled = render_screen(&mut tab.state);
+    assert!(!scrolled.contains("record-000"));
+    assert!(scrolled.contains("record-008"));
+    tab.handle(mouse(MouseEventKind::ScrollUp, 70, 3)).unwrap();
+    assert!(render_screen(&mut tab.state).contains("record-000"));
+
+    for (key, first_visible, last_visible) in [
+        (KeyCode::PageDown, false, false),
+        (KeyCode::End, false, true),
+        (KeyCode::Home, true, false),
+    ] {
+        tab.handle(Event::Key(KeyEvent::new(key, KeyModifiers::NONE)))
+            .unwrap();
+        let screen = render_screen(&mut tab.state);
+        assert_eq!(screen.contains("record-000"), first_visible);
+        assert_eq!(screen.contains("record-099"), last_visible);
+    }
+    tab.handle(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)))
+        .unwrap();
+    assert!(tab.state.info_dialog.is_none());
+    assert_eq!(tab.state.input.text, "keep this draft");
+    assert_eq!(tab.state.transcript.len(), history_len);
+    assert_eq!(tab.state.scroll, chat_scroll);
+}
 fn image() -> orbit_model::types::Attachment {
     orbit_model::types::Attachment::Image {
         lease: None,

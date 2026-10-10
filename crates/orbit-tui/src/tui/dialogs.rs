@@ -5,7 +5,7 @@ use ratatui::{
     layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Paragraph, Wrap},
+    widgets::{Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap},
 };
 
 use super::{ModelOption, app::UiState, commands::COMMANDS, icons};
@@ -1030,7 +1030,13 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
             title.x,
             title.bottom().saturating_add(1).min(inner.bottom()),
             title.width,
-            inner.height.saturating_sub(2),
+            inner.height.saturating_sub(4),
+        );
+        let footer = Rect::new(
+            title.x,
+            inner.bottom().saturating_sub(1),
+            title.width,
+            1.min(inner.height),
         );
 
         frame.render_widget(
@@ -1049,12 +1055,45 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
             .collect::<Vec<_>>();
         let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
         dialog.page_rows = usize::from(body.height).max(1);
-        dialog.max_scroll = paragraph
-            .line_count(body.width)
+        let rows = paragraph.line_count(body.width);
+        dialog.max_scroll = rows
             .saturating_sub(body.height as usize)
             .min(u16::MAX as usize);
         dialog.scroll = dialog.scroll.min(dialog.max_scroll);
         frame.render_widget(paragraph.scroll((dialog.scroll as u16, 0)), body);
+        if dialog.max_scroll > 0 && !body.is_empty() {
+            let mut scrollbar = ScrollbarState::new(rows)
+                .position(dialog.scroll)
+                .viewport_content_length(body.height as usize);
+            frame.render_stateful_widget(
+                Scrollbar::new(ScrollbarOrientation::VerticalRight)
+                    .begin_symbol(None)
+                    .end_symbol(None)
+                    .thumb_style(super::components::accent())
+                    .track_style(super::components::muted()),
+                Rect::new(inner.right().saturating_sub(1), body.y, 1, body.height),
+                &mut scrollbar,
+            );
+        }
+        let hint = format!(
+            "{}–{} / {} · 滚轮/↑↓ 滚动 · PgUp/PgDn 翻页 · Esc 关闭",
+            if rows == 0 || body.is_empty() {
+                0
+            } else {
+                dialog.scroll + 1
+            },
+            dialog.scroll.saturating_add(body.height as usize).min(rows),
+            rows,
+        );
+        frame.render_widget(
+            Paragraph::new(super::render::fit_label(
+                &hint,
+                footer.width as usize,
+                false,
+            ))
+            .style(super::components::muted()),
+            footer,
+        );
         return;
     }
 
