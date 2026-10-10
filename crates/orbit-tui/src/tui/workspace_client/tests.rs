@@ -30,6 +30,71 @@ fn render_screen(state: &mut UiState) -> String {
         .collect()
 }
 
+#[tokio::test]
+async fn usage_pages_scroll_during_a_run_without_changing_history_or_draft_and_close_discards_late_results()
+ {
+    use orbit_protocol::usage::{Account, Limit, Snapshot};
+    let (mut tab, mut requests) = tab("本地");
+    tab.state.submit("existing task".into());
+    tab.state.input.set("keep this draft".into());
+    let history = tab.state.transcript.len();
+    let snapshot = Snapshot {
+        account: Account {
+            provider: "Gemini CLI".into(),
+            name: "main".into(),
+            limits: (0..40)
+                .map(|index| Limit {
+                    label: format!("model-{index:02}"),
+                    remaining_fraction: Some(0.5),
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    tab.state.usage.receive(snapshot.clone());
+    tab.submit("/usage".into()).unwrap();
+    assert!(render_screen(&mut tab.state).contains("model-00"));
+    tab.handle(Event::Key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE)))
+        .unwrap();
+    assert!(render_screen(&mut tab.state).contains("model-39"));
+    tab.handle(Event::Key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)))
+        .unwrap();
+    assert!(render_screen(&mut tab.state).contains("Token"));
+    assert!(
+        tab.state
+            .info_dialog
+            .as_ref()
+            .unwrap()
+            .content
+            .contains("模型请求")
+    );
+    tab.handle(Event::Key(KeyEvent::new(
+        KeyCode::BackTab,
+        KeyModifiers::NONE,
+    )))
+    .unwrap();
+    assert!(render_screen(&mut tab.state).contains("model-00"));
+    tab.handle(Event::Key(KeyEvent::new(
+        KeyCode::Char('r'),
+        KeyModifiers::NONE,
+    )))
+    .unwrap();
+    assert!(tab.state.info_dialog.as_ref().unwrap().refresh_requested);
+    tab.usage_task = Some(AbortOnDropHandle::new(tokio::spawn(
+        async move { Ok(snapshot) },
+    )));
+    tab.handle(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)))
+        .unwrap();
+    tab.poll_usage().await;
+    assert!(tab.state.info_dialog.is_none());
+    assert!(tab.usage_task.is_none());
+    assert_eq!(tab.state.input.text, "keep this draft");
+    assert_eq!(tab.state.transcript.len(), history);
+    assert!(requests.try_recv().is_err());
+}
+
 #[test]
 fn help_is_discoverable_and_opens_the_same_dialog_on_home_and_during_a_run() {
     for label in ["本地", "SSH dev", "WSL Ubuntu"] {

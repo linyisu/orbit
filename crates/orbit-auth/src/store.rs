@@ -152,6 +152,27 @@ impl AuthStore {
         self.write(name, credential)
     }
 
+    pub async fn resolve_usage(&self, name: &str) -> Result<Option<crate::UsageAuthorization>> {
+        let snapshot = self.snapshot(name).await?;
+        let credential = &snapshot.0;
+        let Some((provider, target)) =
+            crate::UsageProvider::select(credential.kind, &credential.endpoint)?
+        else {
+            return Ok(None);
+        };
+        let auth = self
+            .resolve(name, &endpoint_scope(&credential.endpoint)?, target)
+            .await?;
+        if auth.kind != credential.kind {
+            return Err(AuthError::Scope);
+        }
+        Ok(Some(crate::UsageAuthorization {
+            provider,
+            account: credential.account.clone().unwrap_or_else(|| name.into()),
+            auth,
+        }))
+    }
+
     fn path(&self, name: &str) -> PathBuf {
         self.directory.join(format!("{name}.json"))
     }

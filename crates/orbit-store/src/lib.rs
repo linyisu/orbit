@@ -14,6 +14,7 @@ pub mod store;
 pub mod transcript;
 pub mod tui_sessions;
 pub mod types;
+mod usage;
 mod workspace_history;
 
 pub mod tui_windows;

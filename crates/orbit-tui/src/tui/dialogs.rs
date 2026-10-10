@@ -464,12 +464,28 @@ fn fit_hit_rows(rows: &mut [(Rect, usize)], lines: &[Line<'_>], body: Rect) {
 }
 
 #[derive(Debug)]
+pub(super) enum ReportSource {
+    Usage,
+}
+
+#[derive(Debug)]
+pub(super) struct ReportPage {
+    pub label: String,
+    pub content: String,
+}
+
+#[derive(Debug)]
 pub struct InfoDialog {
     pub title: String,
     pub content: String,
     scroll: usize,
     max_scroll: usize,
     page_rows: usize,
+    pub(super) source: Option<ReportSource>,
+    pub(super) refresh_requested: bool,
+    pages: Vec<ReportPage>,
+    selected_page: usize,
+    page_areas: Vec<(Rect, usize)>,
 }
 
 impl InfoDialog {
@@ -480,6 +496,29 @@ impl InfoDialog {
             scroll: 0,
             max_scroll: 0,
             page_rows: 1,
+            source: None,
+            refresh_requested: false,
+            pages: Vec::new(),
+            selected_page: 0,
+            page_areas: Vec::new(),
+        }
+    }
+
+    pub(super) fn pages(&mut self, pages: Vec<ReportPage>) {
+        self.selected_page = self.selected_page.min(pages.len().saturating_sub(1));
+        self.content = pages
+            .get(self.selected_page)
+            .map(|page| page.content.clone())
+            .unwrap_or_default();
+        self.pages = pages;
+    }
+
+    fn select_page(&mut self, index: usize) {
+        if let Some(page) = self.pages.get(index) {
+            self.selected_page = index;
+            self.content = page.content.clone();
+            self.scroll = 0;
+            self.max_scroll = 0;
         }
     }
 
@@ -494,10 +533,28 @@ impl InfoDialog {
                 KeyCode::PageDown => self.scroll = self.scroll.saturating_add(self.page_rows),
                 KeyCode::Home => self.scroll = 0,
                 KeyCode::End => self.scroll = self.max_scroll,
+                KeyCode::Tab | KeyCode::Right if !self.pages.is_empty() => {
+                    self.select_page((self.selected_page + 1) % self.pages.len())
+                }
+                KeyCode::BackTab | KeyCode::Left if !self.pages.is_empty() => {
+                    self.select_page((self.selected_page + self.pages.len() - 1) % self.pages.len())
+                }
+                KeyCode::Char('r' | 'R') | KeyCode::F(5) if self.source.is_some() => {
+                    self.refresh_requested = true
+                }
                 _ => {}
             },
 
             Event::Mouse(mouse) => match mouse.kind {
+                MouseEventKind::Down(crossterm::event::MouseButton::Left) => {
+                    if let Some((_, index)) = self
+                        .page_areas
+                        .iter()
+                        .find(|(area, _)| area.contains((mouse.column, mouse.row).into()))
+                    {
+                        self.select_page(*index);
+                    }
+                }
                 MouseEventKind::ScrollUp => {
                     self.scroll = self.scroll.saturating_sub(super::wheel::LINES)
                 }
@@ -1020,6 +1077,8 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
 
     if let Some(dialog) = &mut state.info_dialog {
         state.ime_cursor = None;
+        dialog.page_areas.clear();
+        let page_header_rows = u16::from(!dialog.pages.is_empty());
         let title = Rect::new(
             inner.x + 1,
             inner.y,
@@ -1028,9 +1087,12 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
         );
         let body = Rect::new(
             title.x,
-            title.bottom().saturating_add(1).min(inner.bottom()),
+            title
+                .bottom()
+                .saturating_add(1 + page_header_rows)
+                .min(inner.bottom()),
             title.width,
-            inner.height.saturating_sub(4),
+            inner.height.saturating_sub(4 + page_header_rows),
         );
         let footer = Rect::new(
             title.x,
@@ -1048,6 +1110,23 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
             )),
             title,
         );
+        if page_header_rows > 0 && title.bottom() < inner.bottom() {
+            let mut x = title.x;
+            for (index, page) in dialog.pages.iter().enumerate() {
+                let label = format!(" {} ", clean(&page.label));
+                let width = (unicode_width::UnicodeWidthStr::width(label.as_str()) as u16)
+                    .min(title.right().saturating_sub(x));
+                let area = Rect::new(x, title.bottom(), width, 1);
+                let style = if index == dialog.selected_page {
+                    super::components::highlighted()
+                } else {
+                    super::components::muted()
+                };
+                frame.render_widget(Paragraph::new(label).style(style), area);
+                dialog.page_areas.push((area, index));
+                x = x.saturating_add(width + 2).min(title.right());
+            }
+        }
         let lines = dialog
             .content
             .lines()
@@ -1075,8 +1154,13 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
                 &mut scrollbar,
             );
         }
+        let actions = if dialog.source.is_some() {
+            "Tab 切页 · R 刷新 · Esc 关闭"
+        } else {
+            "PgUp/PgDn 翻页 · Esc 关闭"
+        };
         let hint = format!(
-            "{}–{} / {} · 滚轮/↑↓ 滚动 · PgUp/PgDn 翻页 · Esc 关闭",
+            "{}–{} / {} · 滚轮/↑↓ 滚动 · {actions}",
             if rows == 0 || body.is_empty() {
                 0
             } else {

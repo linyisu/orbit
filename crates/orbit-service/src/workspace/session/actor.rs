@@ -285,6 +285,12 @@ impl Actor {
             Command::Activity { result } => {
                 let _ = result.send(self.active() || self.questions.running().await);
             }
+            Command::UsageContext { result } => {
+                let _ = result.send((
+                    self.setup.resources.model.config().clone(),
+                    self.setup.session.is_persisted(),
+                ));
+            }
             Command::SendSubagent { agent, message } => {
                 let message = message.trim().to_owned();
                 self.setup

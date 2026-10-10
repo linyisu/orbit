@@ -6,6 +6,7 @@ mod input;
 mod project;
 mod reconnection;
 mod submissions;
+mod usage;
 use crate::workspace::pump;
 mod standalone;
 mod subagents;
@@ -82,6 +83,7 @@ pub(super) struct Tab {
     next_completion: std::time::Instant,
     next_questions: std::time::Instant,
     model_refresh: Option<AbortOnDropHandle<Result<ModelRefresh>>>,
+    usage_task: Option<AbortOnDropHandle<Result<orbit_protocol::usage::Snapshot>>>,
     model_watcher: Option<workspace::configuration::Watcher>,
     model_configuration: Option<orbit_protocol::Configuration>,
     attachment_task: Option<AbortOnDropHandle<Result<Vec<orbit_model::types::Attachment>>>>,
@@ -243,6 +245,7 @@ impl Tab {
             next_questions: std::time::Instant::now(),
             attachment_task: None,
             model_refresh: None,
+            usage_task: None,
             model_watcher: None,
             model_configuration: None,
         }
@@ -357,6 +360,7 @@ impl Tab {
         };
         let media = self.state.media.clone();
         let cursor_trail = self.state.cursor_motion.enabled;
+        self.usage_task = None;
         self.state = UiState::new(&opened.info.model);
         self.state.pending_input = pending_input;
         self.state.media = media;
@@ -408,6 +412,9 @@ impl Tab {
     }
 
     fn profile(&mut self, info: &SessionInfo) {
+        if self.state.model != info.model {
+            self.invalidate_usage();
+        }
         self.persisted = info.persisted;
         if self.state.workspace != info.workspace {
             self.state.workspace = info.workspace.clone();
@@ -459,6 +466,7 @@ impl Tab {
 
     pub async fn poll(&mut self) -> bool {
         let mut changed = self.poll_reconnection();
+        changed |= self.poll_usage().await;
         changed |= self.state.feedback.expire(std::time::Instant::now());
         if self.commands.is_some()
             && self.model_refresh.is_none()
@@ -524,6 +532,7 @@ impl Tab {
                 .as_ref()
                 .is_none_or(|watcher| watcher.unchanged())
         {
+            self.invalidate_usage();
             changed |= self.send(Request::ConfigureModels {
                 session: self.id.clone().unwrap_or_default(),
                 configuration: if self.connection.as_ref().is_some_and(|connection| {
@@ -737,6 +746,9 @@ impl Tab {
                     });
                 }
                 self.busy = page.busy;
+                if self.state.model != page.model {
+                    self.invalidate_usage();
+                }
                 self.state.model = page.model;
                 for update in page.updates {
                     match update {

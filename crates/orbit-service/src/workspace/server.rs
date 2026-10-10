@@ -592,6 +592,14 @@ impl Service {
                     Response::Report(report)
                 })
             }
+            Request::Usage { session } => {
+                let handle = self.session(&session).await?;
+                let (config, persisted) = handle.usage_context().await?;
+                // Account HTTP and database reads run outside the session actor.
+                Ok(Response::Usage(
+                    super::usage::snapshot(&config, &handle.store, &session, persisted).await,
+                ))
+            }
             Request::ConfigureModels {
                 session,
                 configuration,

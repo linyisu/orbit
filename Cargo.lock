@@ -3280,6 +3280,7 @@ dependencies = [
  "orbit-runtime",
  "orbit-store",
  "orbit-tools",
+ "reqwest",
  "rusqlite",
  "serde",
  "serde_json",

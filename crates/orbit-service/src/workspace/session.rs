@@ -28,6 +28,9 @@ pub struct Handle {
 }
 
 pub enum Command {
+    UsageContext {
+        result: oneshot::Sender<(orbit_model::types::ModelConfig, bool)>,
+    },
     RetireUnobserved {
         result: oneshot::Sender<bool>,
     },
@@ -377,6 +380,12 @@ impl Handle {
         let (result, response) = oneshot::channel();
         self.command(Command::Action { action, result }).await?;
         response.await?
+    }
+
+    pub async fn usage_context(&self) -> Result<(orbit_model::types::ModelConfig, bool)> {
+        let (result, response) = oneshot::channel();
+        self.command(Command::UsageContext { result }).await?;
+        Ok(response.await?)
     }
 
     pub async fn command(&self, command: Command) -> Result<()> {

@@ -3,6 +3,7 @@ pub mod plan;
 pub mod plugins;
 pub mod project;
 pub mod search;
+pub mod usage;
 pub mod user_input;
 
 use std::io;
@@ -10,7 +11,7 @@ use std::io;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
-pub const VERSION: u32 = 15;
+pub const VERSION: u32 = 16;
 // Steering receipts identify the durable input independently of its consumption.
 pub const MIN_COMPATIBLE_VERSION: u32 = 15;
 
@@ -45,6 +46,9 @@ pub async fn read_preamble(reader: &mut (impl AsyncRead + Unpin)) -> io::Result<
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "method", rename_all = "snake_case")]
 pub enum Request {
+    Usage {
+        session: String,
+    },
     RestoreSessions,
     Complete {
         session: String,
@@ -317,6 +321,7 @@ pub struct Page<E, A> {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type", content = "value", rename_all = "snake_case")]
 pub enum Response<E, A> {
+    Usage(usage::Snapshot),
     Completions {
         input: String,
         entries: Vec<Completion>,

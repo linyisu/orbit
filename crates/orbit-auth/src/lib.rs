@@ -13,6 +13,8 @@ mod google;
 mod http;
 mod oauth;
 mod store;
+mod usage;
+pub use usage::{UsageAuthorization, UsageProvider, usage_api_key};
 
 pub use anthropic::AnthropicLogin;
 pub use api_key::{ApiKeyProvider, DEEPSEEK_BASE, ZHIPU_CODING_BASE, verify_deepseek};

@@ -128,6 +128,33 @@ impl Fixture {
 }
 
 #[tokio::test]
+async fn usage_request_inspects_the_current_model_without_persisting_or_starting_a_draft() {
+    let fixture = Fixture::new("https://example.com/v1").await;
+    let before = fixture.page(0).await;
+    let Response::Usage(snapshot) = fixture
+        .request(Request::Usage {
+            session: fixture.handle.info.id.clone(),
+        })
+        .await
+        .unwrap()
+    else {
+        panic!("missing usage snapshot");
+    };
+    assert_eq!(snapshot.model, "test");
+    assert!(snapshot.account.note.is_some());
+    assert_eq!(snapshot.session.runs, 0);
+    assert!(fixture.handle.store.list().await.unwrap().is_empty());
+    let after = fixture.page(0).await;
+    assert_eq!(after.next, before.next);
+    assert!(!after.busy);
+    fixture
+        .handle
+        .command(session::Command::Close)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
 async fn steering_receipt_confirms_persistence_while_the_model_is_still_waiting() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let fixture = Fixture::new(&format!("http://{}/v1", listener.local_addr().unwrap())).await;

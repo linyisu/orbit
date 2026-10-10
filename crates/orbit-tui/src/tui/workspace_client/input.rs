@@ -579,6 +579,7 @@ impl Tab {
             "/skills" => self.inspect(orbit_protocol::Inspection::Skills),
             "/mcp" => self.inspect(orbit_protocol::Inspection::Mcp),
             "/diagnostics" => self.inspect(orbit_protocol::Inspection::Diagnostics),
+            "/usage" => self.show_usage(),
             "/changes" => self.inspect(orbit_protocol::Inspection::Changes),
             "/diff" => self.inspect(orbit_protocol::Inspection::Diff { path: None }),
             text if text.starts_with("/diff ") => self.inspect(orbit_protocol::Inspection::Diff {

@@ -41,6 +41,7 @@ mod tool_display;
 mod tool_groups;
 mod transcript;
 mod transcript_dialog;
+mod usage;
 mod wheel;
 mod workspace_client;
 

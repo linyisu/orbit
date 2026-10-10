@@ -427,7 +427,13 @@ fn footer_layout(state: &UiState, width: usize) -> FooterLayout {
     };
 
     let right = fit_label(&right, available, false);
-    let path_width = available.saturating_sub(right.width() + 2);
+    let quota = state
+        .usage
+        .summary()
+        .filter(|summary| summary.width() + right.width() + 26 <= available)
+        .map(|summary| format!("{summary}  "))
+        .unwrap_or_default();
+    let path_width = available.saturating_sub(right.width() + quota.width() + 2);
     let project = std::path::Path::new(&state.workspace)
         .file_name()
         .and_then(|name| name.to_str())
@@ -457,13 +463,15 @@ fn footer_layout(state: &UiState, width: usize) -> FooterLayout {
         )
     };
 
-    let gap = available.saturating_sub(left_width + right.width());
-    let context_offset = (!right.is_empty()).then_some((2 + left_width + gap) as u16);
+    let gap = available.saturating_sub(left_width + right.width() + quota.width());
+    let context_offset =
+        (!right.is_empty()).then_some((2 + left_width + gap + quota.width()) as u16);
     let context_width = right.width() as u16;
 
     let mut line_spans = vec![Span::raw("  ")];
     line_spans.extend(left_spans);
     line_spans.push(Span::raw(" ".repeat(gap)));
+    line_spans.push(Span::styled(quota, super::components::muted()));
     line_spans.push(Span::styled(
         right,
         Style::default().fg(context_indicator_color(context_percent(state))),

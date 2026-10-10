@@ -12,6 +12,7 @@ mod run;
 mod server;
 mod session;
 pub mod setup;
+mod usage;
 
 pub use orbit_protocol::request_id;
 pub use server::{runtime_directory, serve};
