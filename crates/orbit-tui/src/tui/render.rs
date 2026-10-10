@@ -49,6 +49,9 @@ const TOOL_FAILED: Color = THEME.tool_failed;
 // Reserve subdued colors for borders and decorative artwork.
 const MUTED: Color = Color::Reset;
 const BORDER: Color = THEME.border;
+// Keep every frame within the middle two Braille rows so the animation stays
+// visually centered in a single terminal cell, with equal space above/below.
+const TAB_SPINNER_FRAMES: [&str; 4] = ["⠖", "⠲", "⠴", "⠦"];
 pub(super) const MAX_COMPLETION_ITEMS: usize = 8;
 
 /// Notices paint after selection snapshots, including a frozen transcript.
@@ -833,12 +836,11 @@ fn draw_header(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
         let width = widths[index].min(available) as u16;
         let is_running =
             (tab.active && state.status == RunStatus::Running) || tab.status == RunStatus::Running;
-        let spinner_frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
         let spinner_prefix = if tab.waiting_approval {
             "待审批 ".into()
         } else if is_running {
-            let idx = (tab.elapsed.as_millis() / 80) as usize % spinner_frames.len();
-            format!("{} ", spinner_frames[idx])
+            let idx = (tab.elapsed.as_millis() / 80) as usize % TAB_SPINNER_FRAMES.len();
+            format!("{} ", TAB_SPINNER_FRAMES[idx])
         } else {
             String::new()
         };
