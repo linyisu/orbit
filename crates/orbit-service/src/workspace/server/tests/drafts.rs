@@ -1,6 +1,110 @@
 use super::*;
 
 #[tokio::test]
+async fn resumed_transcript_pages_join_live_updates_without_reordering_or_losing_reconnect_history()
+{
+    use orbit_agent::events::AgentEvent;
+    use orbit_model::types::StreamEvent;
+    let fixture = Fixture::new("http://127.0.0.1:1/v1").await;
+    let store = &fixture.handle.store;
+    let mut writer = store
+        .create(
+            fixture
+                .service
+                .options
+                .initial_directory
+                .display()
+                .to_string(),
+            "test::test".into(),
+        )
+        .await
+        .unwrap();
+    let id = writer.id().to_owned();
+    for run in 0..2 {
+        writer
+            .begin(format!("question {run}"), "test::test".into())
+            .await
+            .unwrap();
+        let journal = writer.execution_journal().unwrap();
+        for event in 0..150 {
+            journal.record(AgentEvent::ReasoningFinished { elapsed_ms: event });
+            journal.record(AgentEvent::Model(StreamEvent::TextDelta(format!(
+                "{run}/{event}"
+            ))));
+        }
+        journal.flush().await.unwrap();
+        writer
+            .finish(
+                "completed",
+                vec![],
+                Some(vec![orbit_model::types::ChatMessage::user(format!(
+                    "question {run}"
+                ))]),
+            )
+            .await
+            .unwrap();
+    }
+    drop(writer);
+    fixture
+        .request(Request::Open {
+            model: None,
+            policy: Default::default(),
+            resume: Some(id.clone()),
+            configuration: None,
+        })
+        .await
+        .unwrap();
+    let handle = fixture.service.session(&id).await.unwrap();
+    let mut after = 0;
+    let mut received = Vec::new();
+    loop {
+        let page = handle.page(0, after).await.unwrap();
+        assert!(page.next >= after && page.updates.len() <= protocol::PAGE_EVENTS);
+        after = page.next;
+        received.extend(page.updates);
+        if !page.more {
+            break;
+        }
+    }
+    assert_eq!(
+        received
+            .iter()
+            .filter(|event| matches!(event, protocol::Update::Started { .. }))
+            .count(),
+        2
+    );
+    assert_eq!(
+        received
+            .iter()
+            .filter(|event| matches!(event, protocol::Update::Agent(_)))
+            .count(),
+        600
+    );
+    let initial = after;
+    handle
+        .command(session::Command::SetMode { mode: Mode::Yolo })
+        .await
+        .unwrap();
+    let tail = handle.page(0, after).await.unwrap();
+    assert_eq!(tail.next, initial + 1);
+    assert!(
+        matches!(&tail.updates[..], [protocol::Update::Profile(info)] if info.mode == Mode::Yolo)
+    );
+    let mut replay = Vec::new();
+    let mut cursor = 0;
+    while cursor < initial {
+        let page = handle.page(1, cursor).await.unwrap();
+        cursor = page.next;
+        replay.extend(page.updates);
+    }
+    assert_eq!(
+        serde_json::to_value(&replay[..received.len()]).unwrap(),
+        serde_json::to_value(received).unwrap()
+    );
+    assert!(handle.page(1, tail.next + 1).await.is_err());
+}
+
+#[tokio::test]
 async fn draft_preferences_stay_in_memory_until_first_message_and_survive_resume() {
     use orbit_protocol::{Inspection, SessionAction, plan};
     let fixture = Fixture::new("http://127.0.0.1:1/v1").await;

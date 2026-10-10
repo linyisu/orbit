@@ -79,9 +79,7 @@ pub async fn start(
     let token = cancellation.clone();
     let tools = tools.clone();
     let backend = ModelClientBackend::new(model.clone());
-    let files = orbit_agent::memory::FileActivity::from_events(
-        session.snapshot.runs.iter().flat_map(|run| &run.events),
-    );
+    let files = session.snapshot.files.clone();
     let config = AgentConfig {
         context_tokens: options.config.context_tokens,
         max_turns: options.config.max_turns,

@@ -60,7 +60,7 @@ impl Fixture {
                 read: true,
                 write: true,
             });
-        let handle = Arc::new(Handle::spawn(setup, None));
+        let handle = Arc::new(Handle::spawn(setup, None).await.unwrap());
         handle.clients.store(1, Ordering::Release);
         let service = Service {
             options,
@@ -215,7 +215,7 @@ async fn sent_images_are_readable_only_through_the_owning_session() {
         let setup = crate::workspace::setup::prepare_workspace(&options, &workspace, None)
             .await
             .unwrap();
-        handles.push(Arc::new(Handle::spawn(setup, None)));
+        handles.push(Arc::new(Handle::spawn(setup, None).await.unwrap()));
     }
     let owner = handles[0].clone();
     let other = handles[1].clone();

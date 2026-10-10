@@ -3,13 +3,12 @@ mod title;
 use std::{path::Path, path::PathBuf};
 
 use anyhow::{Context, Result, ensure};
-use orbit_agent::events::AgentEvent;
 use orbit_model::types::Attachment;
 use orbit_model::types::ChatMessage;
 use orbit_model::types::ReasoningEffort;
 use orbit_store::{
     store::{SessionWriter, Store},
-    types::Snapshot,
+    types::{RuntimeSnapshot, Snapshot},
 };
 
 pub fn database_path(explicit: Option<PathBuf>) -> Result<PathBuf> {
@@ -92,7 +91,7 @@ pub struct SessionState {
     pub store: Store,
     writer: Option<SessionWriter>,
     persisted: bool,
-    pub snapshot: Snapshot,
+    pub snapshot: RuntimeSnapshot,
     pub command_output: orbit_runtime::execution::output::CommandOutputs,
     output_run: Option<orbit_runtime::execution::output::OutputRun>,
     pub git_baseline: Option<serde_json::Value>,
@@ -134,7 +133,7 @@ pub struct PreparedResume {
     title_task: Option<crate::session::title::TitleTask>,
     writer: Option<SessionWriter>,
     persisted: bool,
-    pub snapshot: Snapshot,
+    pub snapshot: RuntimeSnapshot,
     git_baseline: Option<serde_json::Value>,
 }
 
@@ -225,7 +224,7 @@ impl SessionState {
                 Some(store.acquire(&id).await?)
             };
             (
-                store.load(&id).await?,
+                store.load_runtime(&id).await?,
                 writer,
                 store.git_baseline(&id).await?,
             )
@@ -237,7 +236,8 @@ impl SessionState {
                     history: Vec::new(),
                     runs: Vec::new(),
                     recovery: None,
-                },
+                }
+                .into(),
                 None,
                 None,
             )
@@ -340,25 +340,11 @@ impl SessionState {
     }
 
     pub fn calibration(&self, profile: &str) -> orbit_agent::calibration::TokenCalibration {
-        let mut result = orbit_agent::calibration::TokenCalibration::default();
-
-        for event in self.snapshot.runs.iter().flat_map(|r| &r.events) {
-            if let AgentEvent::RequestMetrics {
-                profile: key,
-                estimated_input,
-                usage,
-                ..
-            } = event
-                && key == profile
-            {
-                result.observe(
-                    *estimated_input,
-                    usage.as_ref().and_then(|u| u.prompt_tokens),
-                );
-            }
-        }
-
-        result
+        self.snapshot
+            .calibration
+            .get(profile)
+            .cloned()
+            .unwrap_or_default()
     }
 
     pub fn id(&self) -> &str {
@@ -419,7 +405,7 @@ impl SessionState {
         let result = self.writer.as_ref().unwrap().append_context(message).await;
         self.release_idle_writer();
         result?;
-        self.store.refresh(&mut self.snapshot).await?;
+        self.store.refresh_runtime(&mut self.snapshot).await?;
         Ok(())
     }
 
@@ -525,7 +511,7 @@ impl SessionState {
             .await?;
         self.active = false;
         self.journal = None;
-        self.store.refresh(&mut self.snapshot).await?;
+        self.store.refresh_runtime(&mut self.snapshot).await?;
         self.release_idle_writer();
 
         Ok(())
@@ -597,7 +583,7 @@ impl SessionState {
         );
 
         let writer = store.acquire(&id).await?;
-        let snapshot = store.load(&id).await?;
+        let snapshot = store.load_runtime(&id).await?;
         let git_baseline = store.git_baseline(&id).await?;
 
         Ok(PreparedResume {
@@ -620,7 +606,7 @@ impl SessionState {
         _project: String,
         id: String,
     ) -> Result<PreparedResume> {
-        let snapshot = store.load(&id).await?;
+        let snapshot = store.load_runtime(&id).await?;
         let git_baseline = store.git_baseline(&id).await?;
         Ok(PreparedResume {
             store,
@@ -733,7 +719,8 @@ impl SessionState {
                 history: Vec::new(),
                 runs: Vec::new(),
                 recovery: None,
-            },
+            }
+            .into(),
             git_baseline: None,
         })
     }

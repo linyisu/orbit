@@ -200,14 +200,44 @@ impl Store {
     }
 
     pub async fn load(&self, id: &str) -> Result<Snapshot> {
-        Ok(self.load_from(id, 0).await?.0)
+        Ok(self.load_from(id, 0, false).await?.0)
+    }
+
+    /// Load model context and compact execution evidence, leaving presentation
+    /// payloads in the transcript ledger for paged reads.
+    pub async fn load_runtime(&self, id: &str) -> Result<crate::types::RuntimeSnapshot> {
+        let (snapshot, _, evidence) = self.load_from(id, 0, true).await?;
+        let mut runtime: crate::types::RuntimeSnapshot = snapshot.into();
+        runtime.absorb(evidence);
+        Ok(runtime)
     }
 
     /// Refresh the mutable projection and append only newly committed runs.
     /// Existing run receipts are immutable while the caller owns its writer.
     pub async fn refresh(&self, snapshot: &mut Snapshot) -> Result<()> {
-        let (mut latest, count) = self
-            .load_from(&snapshot.session.id, snapshot.runs.len())
+        self.refresh_from(snapshot, false).await
+    }
+
+    pub async fn refresh_runtime(
+        &self,
+        snapshot: &mut crate::types::RuntimeSnapshot,
+    ) -> Result<()> {
+        let (newer, count, evidence) = self
+            .load_from(&snapshot.session.id, snapshot.runs.len(), true)
+            .await?;
+        ensure!(
+            count == snapshot.runs.len() + newer.runs.len(),
+            "session history changed; reload the session"
+        );
+        let mut newer: crate::types::RuntimeSnapshot = newer.into();
+        newer.absorb(evidence);
+        snapshot.append(newer);
+        Ok(())
+    }
+
+    async fn refresh_from(&self, snapshot: &mut Snapshot, runtime: bool) -> Result<()> {
+        let (mut latest, count, _) = self
+            .load_from(&snapshot.session.id, snapshot.runs.len(), runtime)
             .await?;
         ensure!(
             count == snapshot.runs.len() + latest.runs.len(),
@@ -223,8 +253,8 @@ impl Store {
     /// Check a writer's optimistic precondition without decoding historical tool
     /// receipts. Recovery uses the same checkpoint projection as a full load.
     pub async fn matches_snapshot(&self, snapshot: &Snapshot) -> Result<bool> {
-        let (latest, count) = self
-            .load_from(&snapshot.session.id, snapshot.runs.len())
+        let (latest, count, _) = self
+            .load_from(&snapshot.session.id, snapshot.runs.len(), true)
             .await?;
         Ok(count == snapshot.runs.len()
             && latest.session.workspace == snapshot.session.workspace
@@ -233,7 +263,12 @@ impl Store {
             && latest.history == snapshot.history)
     }
 
-    async fn load_from(&self, id: &str, skip_runs: usize) -> Result<(Snapshot, usize)> {
+    async fn load_from(
+        &self,
+        id: &str,
+        skip_runs: usize,
+        runtime: bool,
+    ) -> Result<(Snapshot, usize, crate::event_log::Evidence)> {
         let id = id.to_owned();
 
         self.read_access(move |conn| async move {
@@ -263,12 +298,18 @@ impl Store {
                 .one(&transaction)
                 .await?
                 .map_or(0, |run| run.id);
-            let mut run_events = if let Some(first) = rows.first() {
-                crate::event_log::load_by_session(&transaction, &id, first.id).await?
+            let (mut run_events, evidence) = if let Some(first) = rows.first() {
+                crate::event_log::load_by_session(
+                    &transaction,
+                    &id,
+                    first.id,
+                    runtime.then_some(last_completed),
+                )
+                .await?
             } else {
                 Default::default()
             };
-            let mut first_messages = if let Some(first) = rows.first() {
+            let mut first_messages = if let Some(first) = rows.first().filter(|_| !runtime) {
                 session_messages::Entity::find()
                     .filter(session_messages::Column::SessionId.eq(&id))
                     .filter(session_messages::Column::Ordinal.eq(0))
@@ -360,6 +401,7 @@ impl Store {
                     recovery,
                 },
                 count,
+                evidence,
             ))
         })
         .await

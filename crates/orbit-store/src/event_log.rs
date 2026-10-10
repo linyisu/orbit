@@ -9,23 +9,79 @@ use sea_orm::*;
 
 use crate::entities::{events, runs};
 
+#[derive(Default)]
+pub(crate) struct Evidence {
+    pub files: orbit_agent::memory::FileActivity,
+    pub calibration: std::collections::BTreeMap<String, orbit_agent::calibration::TokenCalibration>,
+}
+
 pub(crate) async fn load_by_session(
     tx: &DatabaseTransaction,
     session: &str,
     first_run: i64,
-) -> Result<std::collections::HashMap<i64, Vec<events::Model>>> {
+    runtime: Option<i64>,
+) -> Result<(std::collections::HashMap<i64, Vec<events::Model>>, Evidence)> {
     let mut grouped = std::collections::HashMap::<i64, Vec<_>>::new();
-    for event in events::Entity::find()
+    let mut evidence = Evidence::default();
+    let mut query = events::Entity::find()
         .join(JoinType::InnerJoin, events::Relation::Run.def())
         .filter(runs::Column::SessionId.eq(session))
         .filter(events::Column::RunId.gte(first_run))
-        .order_by_asc(events::Column::Id)
-        .all(tx)
-        .await?
-    {
-        grouped.entry(event.run_id).or_default().push(event);
+        .order_by_asc(events::Column::Id);
+    if runtime.is_some() {
+        query = query.filter(
+            Condition::any()
+                .add(events::Column::Payload.starts_with("{\"RequestMetrics\":"))
+                .add(events::Column::Payload.starts_with("{\"ToolFinished\":"))
+                .add(events::Column::Payload.starts_with("{\"CompactionRecorded\":")),
+        );
     }
-    Ok(grouped)
+    let mut after = 0;
+    loop {
+        let page = query
+            .clone()
+            .filter(events::Column::Id.gt(after))
+            .limit(32)
+            .all(tx)
+            .await?;
+        let Some(last) = page.last() else {
+            break;
+        };
+        after = last.id;
+        for event in page {
+            if let Some(last_completed) = runtime {
+                let receipt: AgentEvent = serde_json::from_str(&event.payload)?;
+                match receipt {
+                    AgentEvent::ToolFinished { call, content, .. } => {
+                        evidence.files.observe(&call, &content);
+                        continue;
+                    }
+                    AgentEvent::RequestMetrics {
+                        profile,
+                        estimated_input,
+                        usage,
+                        ..
+                    } => {
+                        evidence
+                            .calibration
+                            .entry(profile)
+                            .or_default()
+                            .observe(estimated_input, usage.and_then(|usage| usage.prompt_tokens));
+                        continue;
+                    }
+                    AgentEvent::CompactionRecorded { record } => {
+                        evidence.files.merge(&record.files);
+                        if event.run_id != last_completed {
+                            continue;
+                        }
+                    }
+                    _ => continue,
+                }
+            }
+            grouped.entry(event.run_id).or_default().push(event);
+        }
+    }
+    Ok((grouped, evidence))
 }
 
 pub(crate) async fn append(

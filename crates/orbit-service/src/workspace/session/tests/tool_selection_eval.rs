@@ -126,7 +126,7 @@ async fn evaluate(settings: &Settings, case: Case, repetition: usize) -> Result<
     setup.resources.budget.max_turns = 8;
     setup.resources.budget.max_tool_calls = 16;
     setup.resources.budget.max_output_tokens = setup.resources.budget.max_output_tokens.min(4096);
-    let handle = Handle::spawn(setup, None);
+    let handle = Handle::spawn(setup, None).await.unwrap();
     handle
         .command(Command::SetMode {
             mode: orbit_protocol::Mode::Auto,

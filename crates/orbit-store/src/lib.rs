@@ -11,6 +11,7 @@ pub mod projects;
 pub mod session_log;
 mod storage_usage;
 pub mod store;
+pub mod transcript;
 pub mod tui_sessions;
 pub mod types;
 mod workspace_history;

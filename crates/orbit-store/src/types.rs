@@ -26,6 +26,97 @@ pub struct Snapshot {
     pub recovery: Option<RecoveryInfo>,
 }
 
+/// Runtime projection, distinct from the complete audit snapshot. File activity
+/// and calibration have dedicated state instead of retaining tool output bodies.
+#[derive(Clone, Debug)]
+pub struct RuntimeSnapshot {
+    snapshot: Snapshot,
+    pub files: orbit_agent::memory::FileActivity,
+    pub calibration: std::collections::BTreeMap<String, orbit_agent::calibration::TokenCalibration>,
+}
+
+impl From<Snapshot> for RuntimeSnapshot {
+    fn from(mut snapshot: Snapshot) -> Self {
+        let files = orbit_agent::memory::FileActivity::from_events(
+            snapshot.runs.iter().flat_map(|run| &run.events),
+        );
+        let mut calibration =
+            std::collections::BTreeMap::<String, orbit_agent::calibration::TokenCalibration>::new();
+        for event in snapshot.runs.iter().flat_map(|run| &run.events) {
+            if let AgentEvent::RequestMetrics {
+                profile,
+                estimated_input,
+                usage,
+                ..
+            } = event
+            {
+                calibration.entry(profile.clone()).or_default().observe(
+                    *estimated_input,
+                    usage.as_ref().and_then(|usage| usage.prompt_tokens),
+                );
+            }
+        }
+        let last_completed = snapshot
+            .runs
+            .iter()
+            .rposition(|run| run.status == "completed");
+        for (index, run) in snapshot.runs.iter_mut().enumerate() {
+            run.events.retain(|event| {
+                Some(index) == last_completed
+                    && matches!(event, AgentEvent::CompactionRecorded { .. })
+            });
+        }
+        Self {
+            snapshot,
+            files,
+            calibration,
+        }
+    }
+}
+
+impl RuntimeSnapshot {
+    pub(crate) fn absorb(&mut self, evidence: crate::event_log::Evidence) {
+        self.files.merge(&evidence.files);
+        for (profile, samples) in evidence.calibration {
+            self.calibration.entry(profile).or_default().merge(&samples);
+        }
+    }
+
+    pub(crate) fn append(&mut self, mut newer: Self) {
+        newer.files.merge(&self.files);
+        let mut calibration = std::mem::take(&mut self.calibration);
+        for (profile, samples) in &newer.calibration {
+            calibration
+                .entry(profile.clone())
+                .or_default()
+                .merge(samples);
+        }
+        newer.calibration = calibration;
+        let mut runs = std::mem::take(&mut self.snapshot.runs);
+        if newer.runs.iter().any(|run| run.status == "completed") {
+            for run in &mut runs {
+                run.events.clear();
+            }
+        }
+        runs.append(&mut newer.snapshot.runs);
+        newer.snapshot.runs = runs;
+        *self = newer;
+    }
+}
+
+impl std::ops::Deref for RuntimeSnapshot {
+    type Target = Snapshot;
+    fn deref(&self) -> &Snapshot {
+        &self.snapshot
+    }
+}
+
+impl std::ops::DerefMut for RuntimeSnapshot {
+    fn deref_mut(&mut self) -> &mut Snapshot {
+        &mut self.snapshot
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RecoveryInfo {
     pub turns: usize,

@@ -9,6 +9,7 @@ use super::protocol::{Approval, Mode, PAGE_BYTES, PAGE_EVENTS, Page, SessionInfo
 
 mod actor;
 mod progress;
+mod replay;
 
 const COMMAND_CAPACITY: usize = 16;
 
@@ -20,6 +21,7 @@ pub struct Handle {
     pub policy: orbit_protocol::SessionPolicy,
     pub view: Arc<Mutex<View>>,
     progress_delivery: Mutex<progress::Deliveries>,
+    history: Vec<orbit_store::transcript::RunIndex>,
     requests: mpsc::Sender<Envelope>,
     pub workspace: Arc<std::sync::RwLock<orbit_runtime::filesystem::Workspace>>,
     pub store: orbit_store::store::Store,
@@ -87,8 +89,10 @@ struct Envelope {
 }
 
 pub struct View {
-    updates: Vec<(Update, usize)>,
+    updates: replay::Log,
     published: usize,
+    profile: Option<SessionInfo>,
+    images: std::collections::BTreeSet<String>,
     pub busy: bool,
     pub model: String,
     approvals: BTreeMap<u64, ApprovalPreview>,
@@ -133,6 +137,7 @@ impl Clock {
     }
 }
 
+#[cfg(test)]
 fn presentation(run: &orbit_store::types::Run) -> orbit_protocol::RunPresentation {
     orbit_protocol::RunPresentation {
         replayed: true,
@@ -151,43 +156,29 @@ fn presentation(run: &orbit_store::types::Run) -> orbit_protocol::RunPresentatio
 
 impl View {
     fn push(&mut self, update: Update) {
-        let appended_text_bytes = match &update {
-            Update::Agent(event) => match event.as_ref() {
-                orbit_agent::events::AgentEvent::Model(
-                    orbit_model::types::StreamEvent::TextDelta(text)
-                    | orbit_model::types::StreamEvent::ReasoningDelta(text),
-                ) => serde_json::to_vec(text)
-                    .ok()
-                    .map(|bytes| bytes.len().saturating_sub(2)),
-                _ => None,
-            },
-            _ => None,
-        };
-        // A published entry is immutable: changing it would lose the appended
-        // suffix for clients that already advanced past that cursor.
-        if self.updates.len() > self.published
-            && let Some((Update::Agent(previous), bytes)) = self.updates.last_mut()
-            && let Update::Agent(next) = &update
-            && orbit_agent::events::coalesce(previous, next)
-        {
-            *bytes = appended_text_bytes.map_or_else(
-                || {
-                    serde_json::to_vec(&orbit_protocol::Update::agent(previous.as_ref()))
-                        .map_or(PAGE_BYTES, |bytes| bytes.len())
-                },
-                |added| bytes.saturating_add(added),
-            );
-            return;
+        if let Update::Profile(info) = &update {
+            self.profile = Some((**info).clone());
         }
-        let bytes = serde_json::to_vec(&update).map_or(PAGE_BYTES, |bytes| bytes.len());
-        self.updates.push((update, bytes));
+        if let Update::Started { presentation, .. } = &update {
+            // Uploads are visible before their first execution checkpoint is
+            // flushed. Retain this run's ownership through that small window.
+            self.images = presentation
+                .image_assets
+                .iter()
+                .map(|image| image.path.clone())
+                .collect();
+        }
+        self.updates.push(update, self.published);
     }
 
+    #[cfg(test)]
     pub fn page(&mut self, after: usize) -> Result<Page> {
-        ensure!(
-            after <= self.updates.len(),
-            "event cursor no longer exists; reopen the session"
-        );
+        let updates = self.updates.page(after)?;
+        self.published = self.published.max(after + updates.len());
+        Ok(self.page_state(after, updates, self.updates.len()))
+    }
+
+    fn page_state(&self, after: usize, updates: Vec<Update>, total: usize) -> Page {
         let mut progress_bytes = 0;
         let progress: Vec<_> = self
             .progress
@@ -202,33 +193,14 @@ impl View {
             })
             .cloned()
             .collect();
-        let limit = PAGE_BYTES.saturating_sub(progress_bytes);
-        let mut bytes = 0;
-        let updates: Vec<_> = self.updates[after..]
-            .iter()
-            .take(PAGE_EVENTS)
-            .take_while(|(_, size)| {
-                if bytes > 0 && bytes + size > limit {
-                    return false;
-                }
-                bytes += size;
-                true
-            })
-            .map(|(update, _)| update.clone())
-            .collect();
         let next = after + updates.len();
-        self.published = self.published.max(next);
-        Ok(Page {
+        Page {
             planning: self.planning.clone(),
             user_inputs: self.user_inputs.clone(),
-            tool_progress: if next == self.updates.len() {
-                progress
-            } else {
-                Vec::new()
-            },
+            tool_progress: if next == total { progress } else { Vec::new() },
             timing: self.clock.as_ref().map(Clock::snapshot),
             next,
-            more: next < self.updates.len(),
+            more: next < total,
             busy: self.busy,
             model: self.model.clone(),
             updates,
@@ -240,13 +212,29 @@ impl View {
                     preview: preview.clone(),
                 })
                 .collect(),
-        })
+        }
     }
 }
 
 impl Handle {
     pub async fn page(&self, viewer: u64, after: usize) -> Result<Page> {
-        let mut page = self.view.lock().await.page(after)?;
+        let prefix = self.history.last().map_or(0, |run| run.end());
+        let updates = if after < prefix {
+            history_page(&self.store, &self.info.id, &self.history, after).await?
+        } else {
+            let reader = {
+                let mut view = self.view.lock().await;
+                let reader = view.updates.reader(after - prefix)?;
+                // Freeze even a partially returned page before releasing the
+                // lock. A concurrent append cannot change its last fragment.
+                view.published = view.published.max(view.updates.len());
+                reader
+            };
+            tokio::task::spawn_blocking(move || reader.read(PAGE_BYTES / 2)).await??
+        };
+        let view = self.view.lock().await;
+        let mut page = view.page_state(after, updates, prefix + view.updates.len());
+        drop(view);
         let mut delivery = self.progress_delivery.lock().await;
         delivery.reset_started_tools(viewer, &page.updates);
         delivery.filter(viewer, &mut page.tool_progress);
@@ -272,37 +260,27 @@ impl Handle {
 
     pub async fn subagent_page(&self, agent: &str, after: usize) -> Result<Page> {
         self.authorize_subagent(agent).await?;
-        let snapshot = self.store.load(agent).await?;
-        let mut view = View {
-            updates: Vec::new(),
+        let history = self.store.transcript_index(agent).await?;
+        let total = history.last().map_or(0, |run| run.end());
+        ensure!(
+            after <= total,
+            "event cursor no longer exists; reopen the session"
+        );
+        let updates = history_page(&self.store, agent, &history, after).await?;
+        let view = View {
+            updates: Default::default(),
             published: 0,
-            busy: snapshot
-                .runs
-                .last()
-                .is_some_and(|run| run.status == "running"),
-            model: snapshot.session.model,
+            profile: None,
+            images: Default::default(),
+            busy: history.last().is_some_and(|run| !run.finished),
+            model: self.store.session(agent).await?.model,
             approvals: BTreeMap::new(),
             clock: None,
             progress: Vec::new(),
             user_inputs: Vec::new(),
             planning: Default::default(),
         };
-        for run in snapshot.runs {
-            view.push(Update::Started {
-                presentation: presentation(&run),
-                prompt: run.prompt,
-            });
-            for event in run.events {
-                view.push(Update::agent(event));
-            }
-            if run.status != "running" {
-                view.push(Update::Finished {
-                    elapsed_ms: run.elapsed_ms,
-                    status: run.status,
-                });
-            }
-        }
-        view.page(after)
+        Ok(view.page_state(after, updates, total))
     }
 
     pub async fn authorize_subagent(&self, agent: &str) -> Result<()> {
@@ -313,18 +291,29 @@ impl Handle {
         Ok(())
     }
 
-    pub fn spawn(
+    pub async fn spawn(
         setup: crate::PreparedWorkspace,
         configuration: Option<super::configuration::Installed>,
-    ) -> Self {
+    ) -> Result<Self> {
         for diagnostic in &setup.resources.diagnostics {
             eprintln!("{diagnostic}");
         }
         let info = super::profile::describe(&setup);
         let policy = setup.resources.policy.clone();
+        let history = if setup.session.is_persisted() {
+            setup
+                .session
+                .store
+                .transcript_index(setup.session.id())
+                .await?
+        } else {
+            Vec::new()
+        };
         let mut view = View {
-            updates: Vec::new(),
+            updates: Default::default(),
             published: 0,
+            profile: None,
+            images: Default::default(),
             busy: false,
             model: info.model.clone(),
             approvals: BTreeMap::new(),
@@ -333,19 +322,6 @@ impl Handle {
             user_inputs: Vec::new(),
             planning: Default::default(),
         };
-        for run in &setup.session.snapshot.runs {
-            view.push(Update::Started {
-                presentation: presentation(run),
-                prompt: run.prompt.clone(),
-            });
-            for event in &run.events {
-                view.push(Update::agent(event.clone()));
-            }
-            view.push(Update::Finished {
-                elapsed_ms: run.elapsed_ms,
-                status: run.status.clone(),
-            });
-        }
         view.push(Update::Profile(Box::new(info.clone())));
         let view = Arc::new(Mutex::new(view));
         let (requests, envelopes) = mpsc::channel::<Envelope>(COMMAND_CAPACITY);
@@ -359,7 +335,7 @@ impl Handle {
             workspace.clone(),
             envelopes,
         ));
-        Self {
+        Ok(Self {
             questions,
             _configuration: configuration,
             info,
@@ -367,31 +343,30 @@ impl Handle {
             policy,
             view,
             progress_delivery: Default::default(),
+            history,
             requests,
             workspace,
             store,
-        }
+        })
     }
 
     /// Only expose attachments published in this session's transcript.
     pub async fn has_image(&self, path: &str) -> bool {
-        self.view.lock().await.updates.iter().any(|(update, _)| {
-            matches!(update, Update::Started { presentation, .. }
-                if presentation.image_assets.iter().any(|image| image.path == path))
-        })
+        if self.view.lock().await.images.contains(path) {
+            return true;
+        }
+        self.store
+            .session_has_attachment(&self.info.id, path)
+            .await
+            .unwrap_or(false)
     }
 
     pub async fn current_info(&self) -> SessionInfo {
         self.view
             .lock()
             .await
-            .updates
-            .iter()
-            .rev()
-            .find_map(|(update, _)| match update {
-                Update::Profile(info) => Some((**info).clone()),
-                _ => None,
-            })
+            .profile
+            .clone()
             .unwrap_or_else(|| self.info.clone())
     }
 
@@ -412,6 +387,34 @@ impl Handle {
             .map_err(|_| anyhow::anyhow!("workspace session stopped"))?;
         response.await?
     }
+}
+
+async fn history_page(
+    store: &orbit_store::store::Store,
+    session: &str,
+    history: &[orbit_store::transcript::RunIndex],
+    after: usize,
+) -> Result<Vec<Update>> {
+    let mut updates = Vec::new();
+    let mut bytes = 0;
+    for run in &history[history.partition_point(|run| run.end() <= after)..] {
+        let position = after + updates.len();
+        let page = store
+            .transcript_run_page(session, run, position, PAGE_EVENTS - updates.len())
+            .await?;
+        for update in page {
+            let size = serde_json::to_vec(&update)?.len();
+            if bytes > 0 && bytes + size > PAGE_BYTES / 2 {
+                return Ok(updates);
+            }
+            bytes += size;
+            updates.push(update);
+        }
+        if updates.len() == PAGE_EVENTS || after + updates.len() < run.end() {
+            break;
+        }
+    }
+    Ok(updates)
 }
 
 fn approval_key(preview: &ApprovalPreview, workspace: &Path) -> Option<String> {

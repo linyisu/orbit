@@ -5,6 +5,12 @@ pub struct TokenCalibration {
 }
 
 impl TokenCalibration {
+    pub fn merge(&mut self, newer: &Self) {
+        for (estimated, actual) in &newer.samples {
+            self.observe(*estimated, Some(*actual));
+        }
+    }
+
     pub fn observe(&mut self, estimated: usize, actual: Option<u64>) {
         if estimated == 0 {
             return;

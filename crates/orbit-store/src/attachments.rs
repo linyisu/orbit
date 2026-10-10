@@ -64,6 +64,24 @@ pub(crate) fn in_messages(messages: &[ChatMessage]) -> impl Iterator<Item = &Att
 }
 
 impl Store {
+    /// Authorization survives presentation-cache eviction and lazy replay.
+    pub async fn session_has_attachment(&self, session: &str, path: &str) -> Result<bool> {
+        let Some(name) = AssetDirectory::for_database(self.path()).file_name(Path::new(path))
+        else {
+            return Ok(false);
+        };
+        let session = session.to_owned();
+        self.read_access(move |conn| async move {
+            Ok(session_attachments::Entity::find()
+                .filter(session_attachments::Column::SessionId.eq(session))
+                .filter(session_attachments::Column::FileName.eq(name))
+                .count(&conn)
+                .await?
+                > 0)
+        })
+        .await
+    }
+
     // Backfill before any collection. The durable marker makes reopening cheap;
     // a failed index transaction cannot authorize deletion of older attachments.
     pub(crate) async fn ensure_attachment_index(&self) -> Result<()> {

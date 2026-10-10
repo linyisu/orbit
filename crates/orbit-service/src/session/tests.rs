@@ -1,4 +1,5 @@
 use super::*;
+use orbit_agent::events::AgentEvent;
 use std::time::Duration;
 
 #[tokio::test]

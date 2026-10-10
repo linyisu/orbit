@@ -438,7 +438,7 @@ impl Service {
                 options.model = model;
                 let setup =
                     super::setup::prepare_service_with_policy(&options, resume, policy).await?;
-                let handle = Arc::new(Handle::spawn(setup, configuration));
+                let handle = Arc::new(Handle::spawn(setup, configuration).await?);
                 let info = handle.info.clone();
                 handle.clients.fetch_add(1, Ordering::AcqRel);
                 self.sessions.lock().await.insert(info.id.clone(), handle);

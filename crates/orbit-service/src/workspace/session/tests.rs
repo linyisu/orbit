@@ -35,9 +35,11 @@ fn replay_preserves_compaction_and_queued_input_semantics() {
 fn idle_and_live_pages_carry_service_clock_without_changing_the_event_cursor() {
     let mut view = View {
         published: 0,
+        profile: None,
+        images: Default::default(),
         user_inputs: Vec::new(),
         planning: Default::default(),
-        updates: vec![],
+        updates: Default::default(),
         busy: true,
         model: "test".into(),
         approvals: BTreeMap::new(),
@@ -62,7 +64,9 @@ fn dense_streams_coalesce_without_mutating_published_cursors_or_crossing_barrier
     use orbit_model::types::StreamEvent;
     let mut view = View {
         published: 0,
-        updates: vec![],
+        profile: None,
+        images: Default::default(),
+        updates: Default::default(),
         busy: true,
         model: "test".into(),
         approvals: BTreeMap::new(),
@@ -77,7 +81,7 @@ fn dense_streams_coalesce_without_mutating_published_cursors_or_crossing_barrier
     }
     let fast = view.page(0).unwrap();
     assert!(fast.updates.len() < 16);
-    for (update, size) in &view.updates {
+    for (update, size) in view.updates.cached() {
         assert_eq!(*size, serde_json::to_vec(update).unwrap().len());
     }
     let barrier = AgentEvent::InputReceived {
@@ -146,7 +150,7 @@ async fn image_only_submission_reaches_the_service_and_its_attachment_is_present
     let setup = crate::workspace::setup::prepare_workspace(&options, root, None)
         .await
         .unwrap();
-    let handle = Handle::spawn(setup, None);
+    let handle = Handle::spawn(setup, None).await.unwrap();
     let mut png = std::io::Cursor::new(Vec::new());
     image::DynamicImage::new_rgb8(1, 1)
         .write_to(&mut png, image::ImageFormat::Png)
@@ -302,7 +306,7 @@ async fn switching_to_a_smaller_context_starts_compaction_in_the_service() {
         .await
         .unwrap();
     assert!(setup.resources.budget.auto_compact);
-    let handle = Handle::spawn(setup, None);
+    let handle = Handle::spawn(setup, None).await.unwrap();
     handle
         .command(Command::SetModel {
             model: "test::small".into(),
@@ -323,9 +327,11 @@ async fn switching_to_a_smaller_context_starts_compaction_in_the_service() {
 fn progress_snapshots_are_bounded_and_do_not_hide_ledger_events() {
     let mut view = View {
         published: 0,
+        profile: None,
+        images: Default::default(),
         user_inputs: Vec::new(),
         planning: Default::default(),
-        updates: vec![],
+        updates: Default::default(),
         busy: true,
         model: "test".into(),
         approvals: BTreeMap::new(),
@@ -389,7 +395,7 @@ async fn user_input_shared_session_pages_wait_for_explicit_answer_in_yolo() {
         .unwrap();
     setup.start_session().await.unwrap();
     let tools = setup.resources.tools.clone();
-    let handle = Handle::spawn(setup, None);
+    let handle = Handle::spawn(setup, None).await.unwrap();
     handle
         .command(Command::SetMode { mode: Mode::Yolo })
         .await
@@ -488,7 +494,7 @@ async fn planning_tool_review_and_client_decisions_share_authoritative_session_s
         .unwrap();
     setup.start_session().await.unwrap();
     let tools = setup.resources.tools.clone();
-    let handle = Handle::spawn(setup, None);
+    let handle = Handle::spawn(setup, None).await.unwrap();
     handle
         .command(Command::Plan {
             action: Action::Enable,
