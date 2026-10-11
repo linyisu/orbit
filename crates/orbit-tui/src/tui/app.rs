@@ -792,6 +792,7 @@ impl UiState {
             || self.ssh_prompt.is_some()
             || self.dialog_open()
             || self.restore_picker.is_some()
+            || self.attachment_cursor.is_some()
             || self.menu_dismissed
             || self.resume_loading.is_some()
         {

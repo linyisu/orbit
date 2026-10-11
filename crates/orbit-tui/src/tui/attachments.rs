@@ -122,8 +122,62 @@ pub(super) fn focus_attachment_at(state: &mut UiState, x: u16, y: u16) -> bool {
     };
 
     state.attachment_cursor = Some(index);
+    state.input.clear_selection();
+    state.input_dragging = false;
+    state.selection.clear();
 
     true
+}
+
+pub(super) fn thumbnails(state: &UiState, width: u16) -> super::media::thumbnails::Strip {
+    let mut media = state.media.clone();
+    media.files = None;
+    super::media::thumbnails::Strip::composer(
+        &media,
+        state.attachments.iter().map(|attachment| {
+            let path = attachment.path().to_string_lossy().into_owned();
+            (super::media::Source::Image(path), String::new())
+        }),
+        width,
+    )
+}
+
+pub(super) fn move_attachment_vertical(state: &mut UiState, down: bool) {
+    let strip = thumbnails(state, (state.input_width as u16).saturating_add(2));
+    let current = state
+        .attachment_cursor
+        .and_then(|index| strip.areas.get(index));
+    let row = match current {
+        Some(current) => strip
+            .areas
+            .iter()
+            .filter(|area| {
+                if down {
+                    area.y > current.y
+                } else {
+                    area.y < current.y
+                }
+            })
+            .min_by_key(|area| area.y.abs_diff(current.y))
+            .map(|area| area.y),
+        None => strip.areas.last().map(|area| area.y),
+    };
+    let column = current.map_or_else(
+        || state.input.visual_lines(state.input_width).1.column as u16 + 2,
+        |area| area.x + area.width / 2,
+    );
+    if let Some(row) = row {
+        state.attachment_cursor = strip
+            .areas
+            .iter()
+            .enumerate()
+            .filter(|(_, area)| area.y == row)
+            .min_by_key(|(_, area)| (area.x + area.width / 2).abs_diff(column))
+            .map(|(index, _)| index);
+        state.input.clear_selection();
+    } else if down {
+        state.attachment_cursor = None;
+    }
 }
 
 pub(super) fn remove_focused_attachment(state: &mut UiState, backwards: bool) -> bool {

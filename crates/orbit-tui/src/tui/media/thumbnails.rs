@@ -11,27 +11,12 @@ use crate::tui::{icons, markdown::LinkedLine};
 
 pub(in crate::tui) const COMPOSER_SIZE: Size = Size::new(16, 4);
 pub(in crate::tui) const MESSAGE_SIZE: Size = Size::new(16, 3);
-const COLUMN_GAP: u16 = 2;
+const COLUMN_GAP: u16 = 1;
 const ROW_GAP: u16 = 1;
 
 pub(in crate::tui) struct Strip {
     pub rows: Vec<LinkedLine>,
     pub areas: Vec<Rect>,
-}
-
-fn columns(width: u16, size: Size) -> usize {
-    usize::from(width.saturating_add(COLUMN_GAP) / (size.width + COLUMN_GAP)).max(1)
-}
-
-pub(in crate::tui) fn height(count: usize, width: u16, size: Size) -> u16 {
-    if count == 0 || width == 0 {
-        return 0;
-    }
-    count
-        .div_ceil(columns(width, size))
-        .saturating_mul(usize::from(size.height + ROW_GAP))
-        .saturating_sub(usize::from(ROW_GAP))
-        .min(usize::from(u16::MAX)) as u16
 }
 
 impl Strip {
@@ -41,39 +26,63 @@ impl Strip {
         width: u16,
         size: Size,
     ) -> Self {
-        let images = images.into_iter().collect::<Vec<_>>();
-        let height = height(images.len(), width, size);
+        Self::layout(context, images, width, size, COLUMN_GAP)
+    }
+
+    pub fn composer(
+        context: &Context,
+        images: impl IntoIterator<Item = (Source, String)>,
+        width: u16,
+    ) -> Self {
+        Self::layout(context, images, width, COMPOSER_SIZE, COLUMN_GAP)
+    }
+
+    fn layout(
+        context: &Context,
+        images: impl IntoIterator<Item = (Source, String)>,
+        width: u16,
+        size: Size,
+        column_gap: u16,
+    ) -> Self {
         let mut strip = Self {
-            rows: (0..height)
-                .map(|_| LinkedLine::chrome(Line::from(" ".repeat(usize::from(width)))))
-                .collect(),
+            rows: Vec::new(),
             areas: Vec::new(),
         };
         if width == 0 {
             return strip;
         }
-        let columns = columns(width, size);
-        for (index, (source, label)) in images.into_iter().enumerate() {
-            let x = (index % columns) as u16 * (size.width + COLUMN_GAP);
-            let y = (index / columns).saturating_mul(usize::from(size.height + ROW_GAP));
-            if y + usize::from(size.height) > strip.rows.len() {
+        let bounds = Size::new(size.width.min(width), size.height);
+        let mut next_x: u16 = 0;
+        let mut next_y = 0;
+        for (source, label) in images {
+            let picture = context.cached_picture(&source, bounds.width, bounds.height);
+            let item_width = picture.as_ref().map_or(bounds.width, |p| p.size.width);
+            if next_x > 0 && next_x.saturating_add(item_width) > width {
+                next_x = 0;
+                next_y += usize::from(size.height + ROW_GAP);
+            }
+            let (x, y) = (next_x, next_y);
+            next_x = next_x.saturating_add(item_width + column_gap);
+            if y + usize::from(size.height) > usize::from(u16::MAX) {
                 break;
             }
-            let area = Rect::new(x, y as u16, size.width.min(width), size.height);
+            strip.rows.resize_with(y + usize::from(size.height), || {
+                LinkedLine::chrome(Line::from(" ".repeat(usize::from(width))))
+            });
+            let area = Rect::new(x, y as u16, item_width, size.height);
             strip.areas.push(area);
-            let picture = context.cached_picture(&source, area.width, area.height);
             if context.enabled() {
                 // Every slice can independently become visible after scrolling.
                 for row in &mut strip.rows[y..y + usize::from(area.height)] {
                     row.media_requests.push(Request {
                         source: source.clone(),
-                        width: area.width,
-                        height: area.height,
+                        width: bounds.width,
+                        height: bounds.height,
                     });
                 }
             }
             if let Some(picture) = picture {
-                let left = x + area.width.saturating_sub(picture.size.width) / 2;
+                let left = x;
                 let top = y + usize::from(area.height.saturating_sub(picture.size.height) / 2);
                 let text: Arc<str> = label.into();
                 for row in 0..picture.size.height {

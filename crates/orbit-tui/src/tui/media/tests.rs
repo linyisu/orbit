@@ -2256,11 +2256,21 @@ fn composer_thumbnails_use_the_attachment_area_without_labels() {
 
     let chip = state.attachment_areas[0];
     assert_eq!(chip.height, thumbnails::COMPOSER_SIZE.height);
-    assert_eq!(chip.width, thumbnails::COMPOSER_SIZE.width);
+    assert!(chip.width <= thumbnails::COMPOSER_SIZE.width);
+    assert_eq!(chip.x + 2, state.input_area.x);
+    let picture = state
+        .media
+        .cached_picture(
+            &Source::Image(state.attachments[0].path().to_string_lossy().into_owned()),
+            thumbnails::COMPOSER_SIZE.width,
+            thumbnails::COMPOSER_SIZE.height,
+        )
+        .unwrap();
+    assert_eq!(chip.width, picture.size.width);
     assert!(state.input_area.y > chip.bottom());
     let next = state.attachment_areas[1];
     assert_eq!(chip.y, next.y);
-    assert!(next.x >= chip.right() + 2);
+    assert_eq!(next.x, chip.right() + 1);
     assert!(!crate::tui::attachments::focus_attachment_at(
         &mut state,
         chip.right(),
@@ -2269,6 +2279,17 @@ fn composer_thumbnails_use_the_attachment_area_without_labels() {
     assert!(crate::tui::attachments::focus_attachment_at(
         &mut state, next.x, next.y
     ));
+    draw_ui(&mut state, &mut terminal);
+    LAYER.with(|layer| {
+        let layer = layer.borrow();
+        assert!(layer.current.iter().any(|p| p.selected));
+        for placement in &layer.current {
+            assert_eq!(
+                placement.selected,
+                next.contains((placement.area.x, placement.area.y).into())
+            );
+        }
+    });
     assert!(crate::tui::attachments::remove_focused_attachment(
         &mut state, false
     ));
@@ -2314,7 +2335,11 @@ fn message_thumbnails_are_spaced_above_text_and_remain_individually_previewable(
             Source::Image(path.to_string_lossy().into_owned())
         },
     );
-    for width in [80, 30] {
+    for (width, selected) in [80, 30].into_iter().flat_map(|width| {
+        [&sources[..1], &sources[1..], &sources[..]]
+            .into_iter()
+            .map(move |selected| (width, selected))
+    }) {
         let mut state = UiState::new("mock");
         state.media = context(ProtocolType::Kitty);
         for source in &sources {
@@ -2327,7 +2352,7 @@ fn message_thumbnails_are_spaced_above_text_and_remain_individually_previewable(
         }
         state.transcript.push(TranscriptItem::UserWithImages {
             text: "message text".into(),
-            images: sources
+            images: selected
                 .iter()
                 .map(|source| {
                     let Source::Image(path) = source else {
@@ -2344,7 +2369,7 @@ fn message_thumbnails_are_spaced_above_text_and_remain_individually_previewable(
         draw_ui(&mut state, &mut terminal);
         let area = state.selection.viewport;
         let mut bounds = Vec::new();
-        for source in &sources {
+        for source in selected {
             let point = (area.y..area.bottom())
                 .find_map(|y| {
                     (area.x..area.right()).find_map(|x| {
@@ -2377,10 +2402,16 @@ fn message_thumbnails_are_spaced_above_text_and_remain_individually_previewable(
                 line.contains("message text")
             })
             .unwrap();
+        let text_x = (area.x..area.right())
+            .find(|&x| terminal.backend().buffer()[(x, text_y)].symbol() == "m")
+            .unwrap();
+        assert_eq!(
+            bounds[0].x, text_x,
+            "single and multiple images align with the caption"
+        );
         assert!(bounds.iter().all(|image| image.bottom() < text_y));
-        if width == 80 {
-            assert!(bounds[1].x >= bounds[0].right() + 2);
-            assert!(bounds[1].y < bounds[0].bottom());
+        if bounds.len() == 2 && bounds[1].y < bounds[0].bottom() {
+            assert_eq!(bounds[1].x, bounds[0].right() + 1);
             let gap = (bounds[0].right(), bounds[0].y);
             assert!(
                 state
@@ -2388,8 +2419,9 @@ fn message_thumbnails_are_spaced_above_text_and_remain_individually_previewable(
                     .media_at(area, state.max_scroll, gap)
                     .is_none()
             );
-        } else {
+        } else if bounds.len() == 2 {
             assert!(bounds[1].y > bounds[0].bottom());
+            assert_eq!(bounds[1].x, text_x);
         }
         clear_layers();
     }

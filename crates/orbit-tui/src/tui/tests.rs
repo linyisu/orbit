@@ -464,6 +464,33 @@ fn attachment_click_focuses_it_and_image_only_messages_can_submit() {
 }
 
 #[test]
+fn vertical_attachment_navigation_crosses_wrapped_rows_and_returns_to_the_draft() {
+    let mut state = UiState::new("mock");
+    state.input_width = 18;
+    state.attachments = vec![image("first.png"), image("second.png"), image("third.png")];
+    state.input.set("first line\nsecond line".into());
+    press(&mut state, KeyCode::Up, KeyModifiers::NONE, false);
+    assert!(state.attachment_cursor.is_none());
+    assert_eq!(state.input.visual_lines(state.input_width).1.row, 0);
+    let cursor = state.input.cursor;
+    for index in [2, 1, 0] {
+        press(&mut state, KeyCode::Up, KeyModifiers::NONE, false);
+        assert_eq!(state.attachment_cursor, Some(index));
+    }
+    for index in [Some(1), Some(2), None] {
+        press(&mut state, KeyCode::Down, KeyModifiers::NONE, false);
+        assert_eq!(state.attachment_cursor, index);
+    }
+    assert_eq!(state.input.cursor, cursor);
+    assert_eq!(state.input.text, "first line\nsecond line");
+    state.input.set("/mo".into());
+    state.attachment_cursor = Some(1);
+    assert!(state.menu().is_empty());
+    press(&mut state, KeyCode::Down, KeyModifiers::NONE, false);
+    assert_eq!(state.attachment_cursor, Some(2));
+}
+
+#[test]
 fn text_only_model_rejects_image_queue() {
     let mut state = UiState::new("mock");
     state.supports_vision = false;

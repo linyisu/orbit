@@ -585,6 +585,10 @@ fn schedule_preview(image: Arc<kitty_preview::Image>, body: Rect, view: View) {
 }
 
 pub(super) fn schedule(fragment: &Fragment, area: Rect) {
+    schedule_selected(fragment, area, false);
+}
+
+pub(super) fn schedule_selected(fragment: &Fragment, area: Rect, selected: bool) {
     if !area.is_empty() {
         LAYER.with(|l| {
             let mut layer = l.borrow_mut();
@@ -594,7 +598,7 @@ pub(super) fn schedule(fragment: &Fragment, area: Rect) {
             layer.current.push(Placement {
                 fragment: fragment.clone(),
                 area,
-                selected: false,
+                selected,
             })
         });
     }

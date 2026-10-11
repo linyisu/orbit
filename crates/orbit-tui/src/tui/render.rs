@@ -162,7 +162,9 @@ fn draw_contents(frame: &mut Frame<'_>, state: &mut UiState) {
         .len()
         .clamp(1, 6)
         .min(area.height.saturating_sub(8) as usize) as u16;
-    let attachment_height = attachment_height(state, width as u16);
+    let thumbnails = super::attachments::thumbnails(state, content_width.saturating_sub(4));
+    let attachment_height =
+        (thumbnails.rows.len() as u16).saturating_add(u16::from(!thumbnails.rows.is_empty()));
     let details_height = composer_details(state, width).len() as u16;
     let input_height = if home {
         input_height.min(
@@ -294,7 +296,7 @@ fn draw_contents(frame: &mut Frame<'_>, state: &mut UiState) {
         super::subagents::draw_parent(frame, state, parent_area);
     }
     draw_panel(frame, state, areas[3]);
-    draw_composer(frame, state, areas[4], input_lines, cursor);
+    draw_composer(frame, state, areas[4], input_lines, cursor, thumbnails);
     draw_status(frame, state, areas[5]);
     let footer = footer_layout(state, areas[6].width as usize);
     state.context_details_visible = footer.context_details_visible;
@@ -1457,6 +1459,7 @@ fn draw_composer(
     area: Rect,
     lines: Vec<String>,
     cursor: super::input::InputPosition,
+    strip: super::media::thumbnails::Strip,
 ) {
     let area = Rect {
         x: area.x + 2,
@@ -1489,9 +1492,10 @@ fn draw_composer(
         height: inner.height.saturating_sub(1 + details_height),
         ..inner
     };
-    let thumbnail_width = inner.width.saturating_sub(2);
-    let attachment_height =
-        attachment_height(state, thumbnail_width).min(inner.height.saturating_sub(1));
+    let thumbnail_width = inner.width;
+    let attachment_height = (strip.rows.len() as u16)
+        .saturating_add(u16::from(!strip.rows.is_empty()))
+        .min(inner.height.saturating_sub(1));
 
     if attachment_height > 0 {
         if state
@@ -1503,16 +1507,7 @@ fn draw_composer(
 
         let mut composer_media = state.media.clone();
         composer_media.files = None;
-        let strip = super::media::thumbnails::Strip::new(
-            &composer_media,
-            state.attachments.iter().map(|attachment| {
-                let path = attachment.path().to_string_lossy().into_owned();
-                (super::media::Source::Image(path), String::new())
-            }),
-            thumbnail_width,
-            super::media::thumbnails::COMPOSER_SIZE,
-        );
-        let origin = (inner.x + 2, inner.y);
+        let origin = (inner.x, inner.y);
         // When a short terminal cannot fit every row, keep the focused image visible.
         let selected_y = state
             .attachment_cursor
@@ -1561,10 +1556,12 @@ fn draw_composer(
                 composer_media.picture(&request.source, request.width, request.height, false);
             }
             for fragment in &line.graphics {
-                super::media::schedule(
-                    fragment,
-                    Rect::new(origin.0 + fragment.x, y, fragment.picture.size.width, 1),
-                );
+                let area = Rect::new(origin.0 + fragment.x, y, fragment.picture.size.width, 1);
+                let focused = state
+                    .attachment_cursor
+                    .and_then(|index| state.attachment_areas.get(index))
+                    .is_some_and(|chip| chip.contains((area.x, area.y).into()));
+                super::media::schedule_selected(fragment, area, focused);
             }
         }
     }
@@ -1576,19 +1573,6 @@ fn draw_composer(
     };
 
     draw_prompt(frame, state, prompt_area, lines, cursor);
-}
-
-fn attachment_height(state: &UiState, width: u16) -> u16 {
-    if state.attachments.is_empty() {
-        0
-    } else {
-        super::media::thumbnails::height(
-            state.attachments.len(),
-            width,
-            super::media::thumbnails::COMPOSER_SIZE,
-        )
-        .saturating_add(1)
-    }
 }
 
 pub(super) fn draw_prompt(

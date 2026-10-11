@@ -422,7 +422,13 @@ pub(super) fn keyboard_action(state: &mut UiState, event: Event, busy: bool) -> 
         }
 
         KeyCode::Up => {
-            if state.attachment_cursor.is_none() {
+            if state.attachment_cursor.is_some()
+                || (!state.attachments.is_empty()
+                    && state.input.selection().is_none()
+                    && state.input.visual_lines(state.input_width).1.row == 0)
+            {
+                attachments::move_attachment_vertical(state, false);
+            } else {
                 state
                     .input
                     .navigate(input::Motion::Up, state.input_width, false);
@@ -430,8 +436,8 @@ pub(super) fn keyboard_action(state: &mut UiState, event: Event, busy: bool) -> 
         }
 
         KeyCode::Down => {
-            if state.attachment_cursor.take().is_some() {
-                state.input.set_cursor(0);
+            if state.attachment_cursor.is_some() {
+                attachments::move_attachment_vertical(state, true);
             } else {
                 state
                     .input

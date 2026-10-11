@@ -172,6 +172,53 @@ fn control_d_with_image_draft() {
 }
 
 #[test]
+fn pending_image_mouse_and_keyboard_focus_preserve_the_caption() {
+    let (mut tab, _requests) = tab("本地");
+    tab.state.submit("existing conversation".into());
+    tab.state.attachments = vec![image(), image()];
+    tab.state.input.set("caption".into());
+    render_screen(&mut tab.state);
+    let second = tab.state.attachment_areas[1];
+    assert!(matches!(
+        tab.handle(mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            second.x,
+            second.y
+        ))
+        .unwrap(),
+        Action::Redraw
+    ));
+    assert_eq!(tab.state.attachment_cursor, Some(1));
+    assert!(!tab.state.input_dragging);
+    for (key, focused) in [
+        (KeyCode::Left, Some(0)),
+        (KeyCode::Down, None),
+        (KeyCode::Up, Some(0)),
+    ] {
+        tab.handle(Event::Key(KeyEvent::new(key, KeyModifiers::NONE)))
+            .unwrap();
+        assert_eq!(tab.state.attachment_cursor, focused);
+        render_screen(&mut tab.state);
+    }
+    tab.handle(Event::Key(KeyEvent::new(
+        KeyCode::Delete,
+        KeyModifiers::NONE,
+    )))
+    .unwrap();
+    assert_eq!(tab.state.attachments.len(), 1);
+    render_screen(&mut tab.state);
+    let input = tab.state.input_area;
+    tab.handle(mouse(
+        MouseEventKind::Down(MouseButton::Left),
+        input.x,
+        input.y,
+    ))
+    .unwrap();
+    assert!(tab.state.attachment_cursor.is_none());
+    assert_eq!(tab.state.input.text, "caption");
+}
+
+#[test]
 fn bare_model_name_is_accepted() {
     let (mut tab, mut rx) = tab("本地");
     tab.state.model = "mock::previous".into();
