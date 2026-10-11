@@ -1,6 +1,6 @@
 use anyhow::{Result, ensure};
 use orbit_auth::UsageProvider;
-use orbit_protocol::usage::{Account, Limit};
+use orbit_protocol::usage::{Account, Limit, Scope};
 use serde_json::Value;
 
 const MAX_LIMITS: usize = 128;
@@ -80,6 +80,11 @@ pub(super) fn parse(provider: UsageProvider, payload: &Value, account: &mut Acco
                 if bucket.is_object() {
                     account.limits.push(Limit {
                         label: label.into(),
+                        scope: if key.ends_with("_opus") || key.ends_with("_sonnet") {
+                            Scope::Model
+                        } else {
+                            Scope::Account
+                        },
                         remaining_fraction: remaining_percent(&bucket["utilization"]),
                         resets_at: text(&bucket["resets_at"]),
                         ..Default::default()
@@ -105,6 +110,11 @@ pub(super) fn parse(provider: UsageProvider, payload: &Value, account: &mut Acco
                     };
                     let model = text(&entry["scope"]["model"]["display_name"]);
                     account.limits.push(Limit {
+                        scope: if model.is_some() {
+                            Scope::Model
+                        } else {
+                            Scope::Account
+                        },
                         label: model
                             .map(|m| format!("{m} · {label}"))
                             .unwrap_or_else(|| label.into()),
@@ -128,9 +138,15 @@ pub(super) fn parse(provider: UsageProvider, payload: &Value, account: &mut Acco
         UsageProvider::Gemini => {
             if let Some(buckets) = payload["buckets"].as_array() {
                 for bucket in buckets {
+                    let scope = if text(&bucket["modelId"]).is_some() {
+                        Scope::Model
+                    } else {
+                        Scope::Account
+                    };
                     let model = text(&bucket["modelId"]).unwrap_or_else(|| "共享额度".into());
                     let kind = text(&bucket["tokenType"]);
                     account.limits.push(Limit {
+                        scope,
                         label: kind
                             .map(|kind| format!("{model} · {kind}"))
                             .unwrap_or(model),
@@ -151,13 +167,16 @@ pub(super) fn parse(provider: UsageProvider, payload: &Value, account: &mut Acco
                     antigravity_buckets(group, &format!("{name} · "), &mut account.limits);
                 }
             }
-            if let Some(models) = payload["models"].as_object() {
+            if account.limits.is_empty()
+                && let Some(models) = payload["models"].as_object()
+            {
                 for (name, model) in models {
                     let quota = &model["quotaInfo"];
                     if !quota.is_object() {
                         continue;
                     }
                     account.limits.push(Limit {
+                        scope: Scope::Model,
                         label: format!(
                             "模型 · {}",
                             text(&model["displayName"]).unwrap_or_else(|| name.clone())
@@ -235,6 +254,7 @@ pub(super) fn parse(provider: UsageProvider, payload: &Value, account: &mut Acco
                         total: text(&limit["usage"]),
                         unit: Some(unit.into()),
                         resets_at: reset,
+                        ..Default::default()
                     });
                 }
             }
@@ -319,11 +339,38 @@ mod tests {
         assert_eq!(account.limits[0].remaining_fraction, Some(0.0));
         assert_eq!(account.limits[1].remaining_fraction, None);
         assert_eq!(account.limits[1].remaining.as_deref(), Some("300"));
+        assert!(
+            account
+                .limits
+                .iter()
+                .all(|limit| limit.scope == Scope::Model)
+        );
         let account = parse_fixture(
             UsageProvider::Antigravity,
             json!({"groups":[{"displayName":"Claude","buckets":[{"bucketId":"weekly","remainingFraction":0.6,"resetTime":"2026-10-11T00:00:00Z"}]}]}),
         );
         assert_eq!(account.limits[0].label, "Claude · weekly");
+    }
+    #[test]
+    fn antigravity_shared_quota_takes_precedence_over_model_catalog() {
+        let models = json!({"gemini-pro":{"displayName":"Gemini Pro","quotaInfo":{"remainingFraction":0.6}}});
+        let shared = parse_fixture(
+            UsageProvider::Antigravity,
+            json!({
+                "summary":{"groups":[{"displayName":"Gemini Models","buckets":[{"displayName":"Weekly Limit Remaining","window":"weekly","remainingFraction":0.59}]}]},
+                "models":models
+            }),
+        );
+        assert_eq!(shared.limits.len(), 1);
+        assert_eq!(shared.limits[0].scope, Scope::Account);
+        assert_eq!(shared.limits[0].remaining_fraction, Some(0.59));
+        let fallback = parse_fixture(
+            UsageProvider::Antigravity,
+            json!({"summary":null,"models":models}),
+        );
+        assert_eq!(fallback.limits.len(), 1);
+        assert_eq!(fallback.limits[0].scope, Scope::Model);
+        assert_eq!(fallback.limits[0].remaining_fraction, Some(0.6));
     }
     #[test]
     fn money_preserves_precision_and_currency() {

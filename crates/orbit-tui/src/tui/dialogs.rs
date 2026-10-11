@@ -4,7 +4,7 @@ use ratatui::{
     Frame,
     layout::Rect,
     style::{Modifier, Style},
-    text::{Line, Span},
+    text::{Line, Span, Text},
     widgets::{Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap},
 };
 
@@ -471,7 +471,7 @@ pub(super) enum ReportSource {
 #[derive(Debug)]
 pub(super) struct ReportPage {
     pub label: String,
-    pub content: String,
+    pub content: Text<'static>,
 }
 
 #[derive(Debug)]
@@ -508,7 +508,7 @@ impl InfoDialog {
         self.selected_page = self.selected_page.min(pages.len().saturating_sub(1));
         self.content = pages
             .get(self.selected_page)
-            .map(|page| page.content.clone())
+            .map(|page| page.content.to_string())
             .unwrap_or_default();
         self.pages = pages;
     }
@@ -516,7 +516,7 @@ impl InfoDialog {
     fn select_page(&mut self, index: usize) {
         if let Some(page) = self.pages.get(index) {
             self.selected_page = index;
-            self.content = page.content.clone();
+            self.content = page.content.to_string();
             self.scroll = 0;
             self.max_scroll = 0;
         }
@@ -1127,12 +1127,17 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
                 x = x.saturating_add(width + 2).min(title.right());
             }
         }
-        let lines = dialog
-            .content
-            .lines()
-            .map(|line| Line::from(super::render::safe_output(line)))
-            .collect::<Vec<_>>();
-        let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
+        let mut text = dialog
+            .pages
+            .get(dialog.selected_page)
+            .map(|page| page.content.clone())
+            .unwrap_or_else(|| Text::from(dialog.content.clone()));
+        for line in &mut text.lines {
+            for span in &mut line.spans {
+                span.content = super::render::safe_output(&span.content).into();
+            }
+        }
+        let paragraph = Paragraph::new(text).wrap(Wrap { trim: false });
         dialog.page_rows = usize::from(body.height).max(1);
         let rows = paragraph.line_count(body.width);
         dialog.max_scroll = rows

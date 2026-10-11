@@ -4,7 +4,7 @@ use ratatui::{
     layout::{Alignment, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph},
+    widgets::{Block, BorderType, Borders, Paragraph, Wrap},
 };
 use unicode_width::UnicodeWidthStr;
 
@@ -14,6 +14,43 @@ mod interaction;
 pub(super) use interaction::Pointer;
 
 pub(super) const ROW_PADDING: u16 = 2;
+
+/// Footer hints share wrapping, clamping and the same overlay surface.
+pub(super) fn hint_above(frame: &mut Frame<'_>, anchor: Rect, text: &str) {
+    let bounds = frame.area();
+    let width = text
+        .lines()
+        .map(UnicodeWidthStr::width)
+        .max()
+        .unwrap_or(0)
+        .saturating_add(4)
+        .min(72)
+        .min(bounds.width as usize) as u16;
+    if width < 3 || anchor.y.saturating_sub(bounds.y) < 3 {
+        return;
+    }
+    let paragraph = Paragraph::new(text).wrap(Wrap { trim: false }).style(
+        Style::default()
+            .fg(THEME.overlay_foreground)
+            .bg(THEME.overlay_background),
+    );
+    let height = paragraph
+        .line_count(width - 2)
+        .saturating_add(2)
+        .min(anchor.y.saturating_sub(bounds.y) as usize) as u16;
+    let x = anchor
+        .right()
+        .saturating_sub(width)
+        .clamp(bounds.x, bounds.right() - width);
+    let area = Rect::new(x, anchor.y - height, width, height);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(THEME.border))
+        .style(Style::default().bg(THEME.overlay_background));
+    let inner = surface(frame, area, block);
+    frame.render_widget(paragraph, inner);
+}
 
 pub(super) fn centered(bounds: Rect, width: u16, height: u16) -> Rect {
     let width = bounds.width.saturating_sub(4).min(width);

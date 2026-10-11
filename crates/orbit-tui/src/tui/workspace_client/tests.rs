@@ -31,9 +31,60 @@ fn render_screen(state: &mut UiState) -> String {
 }
 
 #[tokio::test]
-async fn usage_pages_scroll_during_a_run_without_changing_history_or_draft_and_close_discards_late_results()
- {
-    use orbit_protocol::usage::{Account, Limit, Snapshot};
+async fn usage_entry_is_visible_before_query_and_hover_and_click_preserve_draft() {
+    use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+    let (mut tab, mut requests) = tab("local");
+    tab.state
+        .transcript
+        .push(TranscriptItem::User("existing question".into()));
+    tab.state.input.set("keep this draft".into());
+    for width in [30, 100] {
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, 24)).unwrap();
+        terminal
+            .draw(|frame| crate::tui::render::draw_frame(frame, &mut tab.state))
+            .unwrap();
+        assert!(!tab.state.usage_indicator_area.is_empty());
+    }
+    let anchor = tab.state.usage_indicator_area;
+    let mouse = |kind| {
+        Event::Mouse(MouseEvent {
+            kind,
+            column: anchor.x,
+            row: anchor.y,
+            modifiers: KeyModifiers::NONE,
+        })
+    };
+    assert!(matches!(
+        tab.handle(mouse(MouseEventKind::Moved)).unwrap(),
+        Action::Redraw
+    ));
+    assert!(
+        render_screen(&mut tab.state)
+            .replace(' ', "")
+            .contains("连接后将自动查询账号额度")
+    );
+    assert!(tab.usage_task.is_none());
+    let anchor = tab.state.usage_indicator_area;
+    assert!(matches!(
+        tab.handle(Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: anchor.x,
+            row: anchor.y,
+            modifiers: KeyModifiers::NONE,
+        }))
+        .unwrap(),
+        Action::Redraw
+    ));
+    assert!(crate::tui::usage::is_open(&tab.state.info_dialog));
+    assert_eq!(tab.state.input.text, "keep this draft");
+    assert_eq!(tab.state.transcript.len(), 1);
+    assert!(requests.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn usage_pages_scroll_during_a_run_and_closing_keeps_background_results() {
+    use orbit_protocol::usage::{Account, Limit, Scope, Snapshot};
     let (mut tab, mut requests) = tab("本地");
     tab.state.submit("existing task".into());
     tab.state.input.set("keep this draft".into());
@@ -42,9 +93,16 @@ async fn usage_pages_scroll_during_a_run_without_changing_history_or_draft_and_c
         account: Account {
             provider: "Gemini CLI".into(),
             name: "main".into(),
+            fetched_at: Some(
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs(),
+            ),
             limits: (0..40)
                 .map(|index| Limit {
                     label: format!("model-{index:02}"),
+                    scope: Scope::Model,
                     remaining_fraction: Some(0.5),
                     ..Default::default()
                 })
@@ -55,10 +113,23 @@ async fn usage_pages_scroll_during_a_run_without_changing_history_or_draft_and_c
     };
     tab.state.usage.receive(snapshot.clone());
     tab.submit("/usage".into()).unwrap();
-    assert!(render_screen(&mut tab.state).contains("model-00"));
-    tab.handle(Event::Key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE)))
-        .unwrap();
-    assert!(render_screen(&mut tab.state).contains("model-39"));
+    assert!(!render_screen(&mut tab.state).contains("model-00"));
+    let before = tab.state.info_dialog.as_ref().unwrap().content.clone();
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    assert!(tab.poll_usage().await);
+    assert_ne!(tab.state.info_dialog.as_ref().unwrap().content, before);
+    assert_eq!(
+        tab.state
+            .usage
+            .snapshot
+            .as_ref()
+            .unwrap()
+            .account
+            .fetched_at,
+        snapshot.account.fetched_at
+    );
+    assert!(tab.usage_task.is_none());
+    assert!(requests.try_recv().is_err());
     tab.handle(Event::Key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)))
         .unwrap();
     assert!(render_screen(&mut tab.state).contains("Token"));
@@ -70,29 +141,91 @@ async fn usage_pages_scroll_during_a_run_without_changing_history_or_draft_and_c
             .content
             .contains("模型请求")
     );
+    tab.handle(Event::Key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)))
+        .unwrap();
+    assert!(render_screen(&mut tab.state).contains("model-00"));
+    tab.handle(Event::Key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE)))
+        .unwrap();
+    assert!(render_screen(&mut tab.state).contains("model-39"));
     tab.handle(Event::Key(KeyEvent::new(
         KeyCode::BackTab,
         KeyModifiers::NONE,
     )))
     .unwrap();
-    assert!(render_screen(&mut tab.state).contains("model-00"));
+    assert!(render_screen(&mut tab.state).contains("Token"));
+    tab.handle(Event::Key(KeyEvent::new(
+        KeyCode::BackTab,
+        KeyModifiers::NONE,
+    )))
+    .unwrap();
+    assert!(!render_screen(&mut tab.state).contains("model-00"));
     tab.handle(Event::Key(KeyEvent::new(
         KeyCode::Char('r'),
         KeyModifiers::NONE,
     )))
     .unwrap();
     assert!(tab.state.info_dialog.as_ref().unwrap().refresh_requested);
+    let mut snapshot = snapshot;
+    snapshot.model = "updated model".into();
     tab.usage_task = Some(AbortOnDropHandle::new(tokio::spawn(
         async move { Ok(snapshot) },
     )));
     tab.handle(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)))
         .unwrap();
+    tokio::task::yield_now().await;
     tab.poll_usage().await;
     assert!(tab.state.info_dialog.is_none());
     assert!(tab.usage_task.is_none());
+    assert_eq!(
+        tab.state.usage.snapshot.as_ref().unwrap().model,
+        "updated model"
+    );
     assert_eq!(tab.state.input.text, "keep this draft");
     assert_eq!(tab.state.transcript.len(), history);
     assert!(requests.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn home_queries_usage_without_a_dialog_and_requeries_after_invalidation() {
+    use orbit_protocol::usage::{Account, Limit, Snapshot};
+    let mut tab = connected_tab(workspace::transport::Target::Local);
+    tab.persisted = false;
+    assert!(tab.state.is_home());
+    assert!(tab.poll_usage().await);
+    assert!(tab.usage_task.is_some());
+    assert!(tab.state.usage.loading);
+    assert!(!tab.poll_usage().await);
+    assert!(tab.usage_task.is_some());
+
+    tab.usage_task = Some(AbortOnDropHandle::new(tokio::spawn(async {
+        Ok(Snapshot {
+            account: Account {
+                limits: vec![Limit {
+                    label: "Weekly".into(),
+                    remaining_fraction: Some(0.59),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+    })));
+    tokio::task::yield_now().await;
+    assert!(tab.poll_usage().await);
+    assert!(tab.state.is_home());
+    assert!(!tab.persisted);
+    assert!(tab.state.info_dialog.is_none());
+    assert!(render_screen(&mut tab.state).contains("59%"));
+    assert!(!tab.poll_usage().await);
+    assert!(tab.usage_task.is_none());
+
+    tab.invalidate_usage();
+    assert!(tab.poll_usage().await);
+    assert!(tab.usage_task.is_some());
+    tab.offline = true;
+    tab.invalidate_usage();
+    assert!(!tab.poll_usage().await);
+    assert!(tab.usage_task.is_none());
 }
 
 #[test]

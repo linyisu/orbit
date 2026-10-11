@@ -1,4 +1,4 @@
-//! On-demand inspection. No polling, persistence, or session-actor HTTP waits.
+//! Read-only usage inspection without persistence or session-actor HTTP waits.
 mod providers;
 
 use anyhow::{Context, Result, bail, ensure};
@@ -95,14 +95,21 @@ async fn fetch(authorization: &UsageAuthorization) -> Result<Value> {
         .build()
         .context("无法初始化额度查询")?;
     if authorization.provider == UsageProvider::Antigravity {
-        let (summary, catalog) = tokio::join!(
-            query(&client, authorization, authorization.provider.endpoint()),
-            query(
-                &client,
-                authorization,
-                "https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels"
-            )
-        );
+        let summary = query(&client, authorization, authorization.provider.endpoint()).await;
+        if let Ok(payload) = &summary
+            && providers::parse(UsageProvider::Antigravity, payload, &mut Account::default())
+                .is_ok()
+        {
+            return Ok(payload.clone());
+        }
+        // The model catalog is only a fallback when shared quota is unavailable.
+        // Its per-model counters must not be presented as additional plan limits.
+        let catalog = query(
+            &client,
+            authorization,
+            "https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels",
+        )
+        .await;
         ensure!(
             summary.is_ok() || catalog.is_ok(),
             "Antigravity 额度服务暂不可用，请稍后刷新"

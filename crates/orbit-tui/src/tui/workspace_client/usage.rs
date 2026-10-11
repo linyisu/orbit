@@ -24,8 +24,7 @@ impl Tab {
             self.update_usage_dialog();
             return;
         };
-        self.state.usage.loading = true;
-        self.state.usage.error = None;
+        self.state.usage.begin_refresh();
         self.update_usage_dialog();
         // A slow quota endpoint must not occupy the conversation's transport
         // queue. The separate connection attaches to the same running service.
@@ -55,35 +54,50 @@ impl Tab {
     }
 
     pub(super) async fn poll_usage(&mut self) -> bool {
-        if !usage::is_open(&self.state.info_dialog) {
-            self.usage_task = None;
-            self.state.usage.loading = false;
-            return false;
-        }
-        if self
-            .state
-            .info_dialog
-            .as_mut()
-            .is_some_and(|dialog| std::mem::take(&mut dialog.refresh_requested))
+        if usage::is_open(&self.state.info_dialog)
+            && self
+                .state
+                .info_dialog
+                .as_mut()
+                .is_some_and(|dialog| std::mem::take(&mut dialog.refresh_requested))
         {
             self.refresh_usage();
             return true;
         }
-        if !self
+        let mut changed = self
+            .state
+            .usage
+            .tick(usage::is_open(&self.state.info_dialog));
+        if changed {
+            self.update_usage_dialog();
+        }
+        if self
             .usage_task
             .as_ref()
             .is_some_and(|task| task.is_finished())
         {
-            return false;
-        }
-        match self.usage_task.take().unwrap().await {
-            Ok(Ok(snapshot)) => self.state.usage.receive(snapshot),
-            _ => {
-                self.state.usage.loading = false;
-                self.state.usage.error = Some("无法查询用量，请检查连接后按 R 重试".into());
+            match self.usage_task.take().unwrap().await {
+                Ok(Ok(snapshot)) => self.state.usage.receive(snapshot),
+                _ => {
+                    self.state.usage.loading = false;
+                    self.state.usage.error =
+                        Some("无法查询用量，将自动重试；可打开 /usage 按 R 刷新".into());
+                }
             }
+            self.update_usage_dialog();
+            changed = true;
         }
-        self.update_usage_dialog();
-        true
+        if self.usage_task.is_none()
+            && !self.offline
+            && self.connecting.is_none()
+            && self.commands.is_some()
+            && self.connection.is_some()
+            && self.id.is_some()
+            && self.state.usage.refresh_due()
+        {
+            self.refresh_usage();
+            changed = true;
+        }
+        changed
     }
 }

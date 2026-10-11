@@ -116,6 +116,8 @@ pub struct UiState {
     pub context_indicator_area: ratatui::layout::Rect,
     pub context_hovered: bool,
     pub context_details_visible: bool,
+    pub usage_indicator_area: ratatui::layout::Rect,
+    pub usage_hovered: bool,
     /// Pointer position while it rests on a clickable transcript link.
     pub link_hovered: Option<(u16, u16)>,
     pub(super) footnote_focus: Option<super::markdown::footnotes::Focus>,
@@ -429,6 +431,8 @@ impl UiState {
             context_indicator_area: ratatui::layout::Rect::default(),
             context_hovered: false,
             context_details_visible: false,
+            usage_indicator_area: ratatui::layout::Rect::default(),
+            usage_hovered: false,
             link_hovered: None,
             footnote_focus: None,
             thinking_hover_started: None,

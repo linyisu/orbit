@@ -48,7 +48,6 @@ const TOOL_FAILED: Color = THEME.tool_failed;
 // Use the terminal foreground for readable text on both light and dark themes.
 // Reserve subdued colors for borders and decorative artwork.
 const MUTED: Color = Color::Reset;
-const BORDER: Color = THEME.border;
 // Keep every frame within the middle two Braille rows so the animation stays
 // visually centered in a single terminal cell, with equal space above/below.
 const TAB_SPINNER_FRAMES: [&str; 4] = ["⠖", "⠲", "⠴", "⠦"];
@@ -141,6 +140,7 @@ fn draw_contents(frame: &mut Frame<'_>, state: &mut UiState) {
     state.selection.footer = Rect::default();
     state.selection.approval = Rect::default();
     state.context_indicator_area = Rect::default();
+    state.usage_indicator_area = Rect::default();
     state.ime_cursor = None;
     state.input_area = Rect::default();
     state.menu_area = Rect::default();
@@ -190,6 +190,7 @@ fn draw_contents(frame: &mut Frame<'_>, state: &mut UiState) {
         state.navigation.clear_hover();
         state.tab_hover = None;
         state.context_hovered = false;
+        state.usage_hovered = false;
         state.link_hovered = None;
         state.transcript_pointer = None;
     }
@@ -311,10 +312,24 @@ fn draw_contents(frame: &mut Frame<'_>, state: &mut UiState) {
         state.context_indicator_area =
             Rect::new(areas[6].x + offset, areas[6].y, footer.context_width, 1);
     }
+    if let Some(offset) = footer.usage_offset {
+        state.usage_indicator_area =
+            Rect::new(areas[6].x + offset, areas[6].y, footer.usage_width, 1);
+    }
 
     frame.render_widget(Paragraph::new(footer.line), areas[6]);
     state.selection.footer = areas[6];
     draw_context_tooltip(frame, state);
+    if state.usage_hovered
+        && !state.usage_indicator_area.is_empty()
+        && let Some(text) = state.usage.tooltip()
+    {
+        super::components::hint_above(
+            frame,
+            state.usage_indicator_area,
+            &safe_multiline_output(&text),
+        );
+    }
     state.planning.draw_badge(frame);
     if state.info_dialog.is_none() && state.planning.visible() {
         state.ime_cursor = state.planning.draw(frame);
@@ -376,6 +391,8 @@ struct FooterLayout {
     context_offset: Option<u16>,
     context_width: u16,
     context_details_visible: bool,
+    usage_offset: Option<u16>,
+    usage_width: u16,
 }
 
 #[cfg(test)]
@@ -438,10 +455,14 @@ fn footer_layout(state: &UiState, width: usize) -> FooterLayout {
     let quota = state
         .usage
         .summary()
+        .map(|summary| safe_output(&summary))
+        .map(|summary| format!("用量 · {summary}"))
         .filter(|summary| summary.width() + right.width() + 26 <= available)
-        .map(|summary| format!("{summary}  "))
+        .or_else(|| (right.width() + "用量".width() + 8 <= available).then(|| "用量".to_owned()))
         .unwrap_or_default();
-    let path_width = available.saturating_sub(right.width() + quota.width() + 2);
+    let quota_gap = if quota.is_empty() { "" } else { "  " };
+    let quota_width = quota.width() + quota_gap.width();
+    let path_width = available.saturating_sub(right.width() + quota_width + 2);
     let project = std::path::Path::new(&state.workspace)
         .file_name()
         .and_then(|name| name.to_str())
@@ -471,15 +492,24 @@ fn footer_layout(state: &UiState, width: usize) -> FooterLayout {
         )
     };
 
-    let gap = available.saturating_sub(left_width + right.width() + quota.width());
-    let context_offset =
-        (!right.is_empty()).then_some((2 + left_width + gap + quota.width()) as u16);
+    let gap = available.saturating_sub(left_width + right.width() + quota_width);
+    let context_offset = (!right.is_empty()).then_some((2 + left_width + gap + quota_width) as u16);
     let context_width = right.width() as u16;
+    let usage_offset = (!quota.is_empty()).then_some((2 + left_width + gap) as u16);
+    let usage_width = quota.width() as u16;
 
     let mut line_spans = vec![Span::raw("  ")];
     line_spans.extend(left_spans);
     line_spans.push(Span::raw(" ".repeat(gap)));
-    line_spans.push(Span::styled(quota, super::components::muted()));
+    line_spans.push(Span::styled(
+        quota,
+        if state.usage_hovered {
+            super::components::accent().add_modifier(Modifier::UNDERLINED)
+        } else {
+            super::components::accent()
+        },
+    ));
+    line_spans.push(Span::raw(quota_gap));
     line_spans.push(Span::styled(
         right,
         Style::default().fg(context_indicator_color(context_percent(state))),
@@ -491,6 +521,8 @@ fn footer_layout(state: &UiState, width: usize) -> FooterLayout {
         context_offset,
         context_width,
         context_details_visible,
+        usage_offset,
+        usage_width,
     }
 }
 
@@ -614,8 +646,12 @@ pub(super) fn handle_context_hover(
     let hovered = state
         .context_indicator_area
         .contains((mouse.column, mouse.row).into());
-    let changed = state.context_hovered != hovered;
+    let usage_hovered = state
+        .usage_indicator_area
+        .contains((mouse.column, mouse.row).into());
+    let changed = state.context_hovered != hovered || state.usage_hovered != usage_hovered;
     state.context_hovered = hovered;
+    state.usage_hovered = usage_hovered;
 
     Some(changed)
 }
@@ -717,39 +753,7 @@ fn draw_context_tooltip(frame: &mut Frame<'_>, state: &UiState) {
         ),
     ];
 
-    let width = lines
-        .iter()
-        .map(|line| line.width())
-        .max()
-        .unwrap_or(0)
-        .saturating_add(4)
-        .min(frame.area().width as usize) as u16;
-    let height = 7;
-    let x = state
-        .context_indicator_area
-        .x
-        .saturating_sub(width.saturating_sub(1))
-        .min(frame.area().right().saturating_sub(width));
-    let y = state.context_indicator_area.y.saturating_sub(height);
-    let area = Rect::new(x, y, width, height);
-    super::overlay::clear(frame, area);
-
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(BORDER))
-        .style(Style::default().bg(crate::tui::theme::THEME.overlay_background));
-    let inner = block.inner(area);
-
-    frame.render_widget(block, area);
-    frame.render_widget(
-        Paragraph::new(lines.join("\n")).style(
-            Style::default()
-                .fg(crate::tui::theme::THEME.overlay_foreground)
-                .bg(crate::tui::theme::THEME.overlay_background),
-        ),
-        inner,
-    );
+    super::components::hint_above(frame, state.context_indicator_area, &lines.join("\n"));
 }
 
 pub(super) fn scrolling_title(

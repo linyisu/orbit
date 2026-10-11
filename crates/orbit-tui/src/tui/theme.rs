@@ -238,6 +238,30 @@ pub(super) fn selection_style(style: Style) -> Style {
 
 const ACTIVITY_SWEEP_SECONDS: f32 = 2.4;
 
+/// A meter ramp that starts with warmer colors when remaining quota is low.
+pub(super) fn quota_color(remaining: f64, position: f32) -> Color {
+    let stops = if remaining <= 0.1 {
+        [THEME.danger, THEME.tab_error, THEME.accent]
+    } else if remaining <= 0.25 {
+        [THEME.md_mark, THEME.accent, THEME.danger]
+    } else {
+        [THEME.success, THEME.md_mark, THEME.tab_error]
+    };
+    let position = position.clamp(0.0, 1.0) * 2.0;
+    let segment = (position.floor() as usize).min(1);
+    let amount = position - segment as f32;
+    let Some((r, g, b)) = color_rgb(stops[segment]) else {
+        return stops[segment];
+    };
+    let Some((end_r, end_g, end_b)) = color_rgb(stops[segment + 1]) else {
+        return stops[segment];
+    };
+    let mix = |start: u8, end: u8| {
+        (f32::from(start) + (f32::from(end) - f32::from(start)) * amount).round() as u8
+    };
+    Color::Rgb(mix(r, end_r), mix(g, end_g), mix(b, end_b))
+}
+
 pub(super) fn activity_color(
     base: Color,
     elapsed: std::time::Duration,

@@ -22,6 +22,8 @@ pub struct Account {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Limit {
     pub label: String,
+    #[serde(default)]
+    pub scope: Scope,
     /// Fraction remaining. Missing is distinct from exhausted.
     pub remaining_fraction: Option<f64>,
     /// Preserve decimal amounts/currencies instead of converting to tokens.
@@ -31,6 +33,13 @@ pub struct Limit {
     pub unit: Option<String>,
     /// Server's absolute timestamp (Unix seconds or ISO 8601).
     pub resets_at: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Scope {
+    #[default]
+    Account,
+    Model,
 }
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Session {

@@ -278,8 +278,21 @@ impl Tab {
             };
             event = Event::Key(crossterm::event::KeyEvent::new(code, KeyModifiers::NONE));
         }
+        let mut footer_changed = false;
+        if let Event::Mouse(mouse) = &event
+            && mouse.kind == MouseEventKind::Down(MouseButton::Left)
+            && mouse.modifiers.is_empty()
+            && self
+                .state
+                .usage_indicator_area
+                .contains((mouse.column, mouse.row).into())
+        {
+            self.state.selection.clear();
+            self.show_usage();
+            return Ok(Action::Redraw);
+        }
         if !self.state.selection.dragging() {
-            render::handle_context_hover(&mut self.state, &event);
+            footer_changed = render::handle_context_hover(&mut self.state, &event) == Some(true);
             tui::handle_list_hover(&mut self.state, &event);
             render::handle_link_hover(&mut self.state, &event);
             render::handle_transcript_hover(&mut self.state, &event);
@@ -290,7 +303,11 @@ impl Tab {
         if matches!(&event, Event::Mouse(mouse) if mouse.kind == MouseEventKind::Moved)
             || tui::handle_input_mouse(&mut self.state, &event)
         {
-            return Ok(Action::None);
+            return Ok(if footer_changed {
+                Action::Redraw
+            } else {
+                Action::None
+            });
         }
         if let Event::Mouse(mouse) = &event
             && mouse.kind == MouseEventKind::Down(MouseButton::Left)

@@ -2146,6 +2146,83 @@ fn footer_keeps_project_and_context_with_unicode_paths() {
 }
 
 #[test]
+fn usage_footer_reveals_details_only_while_hovered_and_fits_narrow_screens() {
+    use crossterm::event::{Event, KeyModifiers, MouseEvent, MouseEventKind};
+    use orbit_protocol::usage::{Account, Limit, Snapshot};
+    let mut state = UiState::new("model");
+    state
+        .transcript
+        .push(TranscriptItem::User("existing message".into()));
+    state.input.set("unsent draft".into());
+    state.usage.receive(Snapshot {
+        account: Account {
+            provider: "Antigravity".into(),
+            name: "main".into(),
+            limits: vec![Limit {
+                label: "Gemini Models · Weekly Limit Remaining · weekly".into(),
+                remaining_fraction: Some(0.59),
+                ..Default::default()
+            }],
+            ..Default::default()
+        },
+        ..Default::default()
+    });
+    let normal = render(&mut state, 100, 24);
+    assert!(normal.contains("59%"));
+    assert!(!normal.contains("Weekly Limit Remaining"));
+    let anchor = state.usage_indicator_area;
+    assert!(!anchor.is_empty());
+    assert!(anchor.right() < state.context_indicator_area.x);
+    let motion = |column, row| {
+        Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Moved,
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        })
+    };
+    assert_eq!(
+        handle_context_hover(&mut state, &motion(anchor.x, anchor.y)),
+        Some(true)
+    );
+    let hovered = render(&mut state, 100, 24);
+    assert!(hovered.contains("Gemini 周"));
+    assert!(!hovered.contains("Limit Remaining"));
+    assert!(hovered.contains("/usage"));
+    assert!(!state.context_hovered);
+    let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
+    terminal
+        .draw(|frame| draw_frame(frame, &mut state))
+        .unwrap();
+    let anchor = state.usage_indicator_area;
+    let buffer = terminal.backend().buffer();
+    assert!(
+        buffer[(anchor.x, anchor.y)]
+            .modifier
+            .contains(Modifier::UNDERLINED)
+    );
+    for column in anchor.right()..state.context_indicator_area.x {
+        assert_eq!(buffer[(column, anchor.y)].symbol(), " ");
+        assert!(
+            !buffer[(column, anchor.y)]
+                .modifier
+                .contains(Modifier::UNDERLINED)
+        );
+    }
+    assert_eq!(handle_context_hover(&mut state, &motion(0, 0)), Some(true));
+    assert!(!render(&mut state, 100, 24).contains("Gemini 周"));
+    for width in [12, 30, 60] {
+        assert!(footer(&state, width).width() <= width);
+        render(&mut state, width as u16, 12);
+        if width >= 30 {
+            assert!(!state.usage_indicator_area.is_empty());
+        }
+    }
+    assert_eq!(state.input.text, "unsent draft");
+    assert_eq!(state.transcript.len(), 1);
+}
+
+#[test]
 fn context_indicator_reveals_its_budget_on_hover() {
     use crossterm::event::{Event, KeyModifiers, MouseEvent, MouseEventKind};
 
