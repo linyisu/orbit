@@ -31,8 +31,9 @@ fn render_screen(state: &mut UiState) -> String {
 }
 
 #[tokio::test]
-async fn usage_entry_is_visible_before_query_and_hover_and_click_preserve_draft() {
+async fn usage_entry_is_visible_before_query_and_only_click_opens_details() {
     use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+    use orbit_protocol::usage::{Account, Limit, Snapshot};
     let (mut tab, mut requests) = tab("local");
     tab.state
         .transcript
@@ -55,15 +56,9 @@ async fn usage_entry_is_visible_before_query_and_hover_and_click_preserve_draft(
             modifiers: KeyModifiers::NONE,
         })
     };
-    assert!(matches!(
-        tab.handle(mouse(MouseEventKind::Moved)).unwrap(),
-        Action::Redraw
-    ));
-    assert!(
-        render_screen(&mut tab.state)
-            .replace(' ', "")
-            .contains("连接后将自动查询账号额度")
-    );
+    tab.handle(mouse(MouseEventKind::Moved)).unwrap();
+    assert!(!render_screen(&mut tab.state).contains("/usage"));
+    assert!(tab.state.info_dialog.is_none());
     assert!(tab.usage_task.is_none());
     let anchor = tab.state.usage_indicator_area;
     assert!(matches!(
@@ -76,6 +71,32 @@ async fn usage_entry_is_visible_before_query_and_hover_and_click_preserve_draft(
         .unwrap(),
         Action::Redraw
     ));
+    assert!(crate::tui::usage::is_open(&tab.state.info_dialog));
+    tab.handle(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)))
+        .unwrap();
+    tab.state.usage.receive(Snapshot {
+        account: Account {
+            limits: ["weekly", "5h"]
+                .map(|label| Limit {
+                    label: label.into(),
+                    remaining_fraction: Some(0.9),
+                    ..Default::default()
+                })
+                .into(),
+            ..Default::default()
+        },
+        ..Default::default()
+    });
+    let screen = render_screen(&mut tab.state);
+    assert!(screen.contains("90%"));
+    let anchor = tab.state.usage_indicator_area;
+    tab.handle(Event::Mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: anchor.right() - 1,
+        row: anchor.y,
+        modifiers: KeyModifiers::NONE,
+    }))
+    .unwrap();
     assert!(crate::tui::usage::is_open(&tab.state.info_dialog));
     assert_eq!(tab.state.input.text, "keep this draft");
     assert_eq!(tab.state.transcript.len(), 1);

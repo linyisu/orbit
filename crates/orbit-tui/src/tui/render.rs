@@ -190,7 +190,6 @@ fn draw_contents(frame: &mut Frame<'_>, state: &mut UiState) {
         state.navigation.clear_hover();
         state.tab_hover = None;
         state.context_hovered = false;
-        state.usage_hovered = false;
         state.link_hovered = None;
         state.transcript_pointer = None;
     }
@@ -320,16 +319,6 @@ fn draw_contents(frame: &mut Frame<'_>, state: &mut UiState) {
     frame.render_widget(Paragraph::new(footer.line), areas[6]);
     state.selection.footer = areas[6];
     draw_context_tooltip(frame, state);
-    if state.usage_hovered
-        && !state.usage_indicator_area.is_empty()
-        && let Some(text) = state.usage.tooltip()
-    {
-        super::components::hint_above(
-            frame,
-            state.usage_indicator_area,
-            &safe_multiline_output(&text),
-        );
-    }
     state.planning.draw_badge(frame);
     if state.info_dialog.is_none() && state.planning.visible() {
         state.ime_cursor = state.planning.draw(frame);
@@ -452,15 +441,14 @@ fn footer_layout(state: &UiState, width: usize) -> FooterLayout {
     };
 
     let right = fit_label(&right, available, false);
-    let quota = state
-        .usage
-        .summary()
-        .map(|summary| safe_output(&summary))
-        .map(|summary| format!("用量 · {summary}"))
-        .filter(|summary| summary.width() + right.width() + 26 <= available)
-        .or_else(|| (right.width() + "用量".width() + 8 <= available).then(|| "用量".to_owned()))
-        .unwrap_or_default();
-    let quota_gap = if quota.is_empty() { "" } else { "  " };
+    let quota = if right.width() + "用量".width() + 8 <= available {
+        state
+            .usage
+            .indicator(available.saturating_sub(right.width() + 12))
+    } else {
+        Line::default()
+    };
+    let quota_gap = if quota.width() == 0 { "" } else { "  " };
     let quota_width = quota.width() + quota_gap.width();
     let path_width = available.saturating_sub(right.width() + quota_width + 2);
     let project = std::path::Path::new(&state.workspace)
@@ -495,20 +483,13 @@ fn footer_layout(state: &UiState, width: usize) -> FooterLayout {
     let gap = available.saturating_sub(left_width + right.width() + quota_width);
     let context_offset = (!right.is_empty()).then_some((2 + left_width + gap + quota_width) as u16);
     let context_width = right.width() as u16;
-    let usage_offset = (!quota.is_empty()).then_some((2 + left_width + gap) as u16);
+    let usage_offset = (quota.width() > 0).then_some((2 + left_width + gap) as u16);
     let usage_width = quota.width() as u16;
 
     let mut line_spans = vec![Span::raw("  ")];
     line_spans.extend(left_spans);
     line_spans.push(Span::raw(" ".repeat(gap)));
-    line_spans.push(Span::styled(
-        quota,
-        if state.usage_hovered {
-            super::components::accent().add_modifier(Modifier::UNDERLINED)
-        } else {
-            super::components::accent()
-        },
-    ));
+    line_spans.extend(quota.spans);
     line_spans.push(Span::raw(quota_gap));
     line_spans.push(Span::styled(
         right,
@@ -646,12 +627,8 @@ pub(super) fn handle_context_hover(
     let hovered = state
         .context_indicator_area
         .contains((mouse.column, mouse.row).into());
-    let usage_hovered = state
-        .usage_indicator_area
-        .contains((mouse.column, mouse.row).into());
-    let changed = state.context_hovered != hovered || state.usage_hovered != usage_hovered;
+    let changed = state.context_hovered != hovered;
     state.context_hovered = hovered;
-    state.usage_hovered = usage_hovered;
 
     Some(changed)
 }

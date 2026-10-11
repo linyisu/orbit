@@ -161,118 +161,71 @@ impl State {
         }
         dialog.pages(pages);
     }
-    pub fn summary(&self) -> Option<String> {
-        let account = &self.snapshot.as_ref()?.account;
-        let shared: Vec<_> = account
-            .limits
-            .iter()
-            .filter(|limit| limit.scope == Scope::Account)
-            .collect();
-        if shared.is_empty() {
-            return (!account.limits.is_empty())
-                .then(|| format!("模型额度 {}项{}", account.limits.len(), self.stale_label()));
-        }
-        let limit = shared[0];
-        let value = if let Some(fraction) = limit.remaining_fraction {
-            let mut values = vec![window_summary(limit, fraction, now())];
-            if let Some(second) = shared.get(1)
-                && let Some(fraction) = second.remaining_fraction
-            {
-                values.push(window_summary(second, fraction, now()));
-            }
-            values.join(" | ")
-        } else {
-            format!(
-                "剩余 {} {}",
-                limit.remaining.as_deref()?,
-                limit.unit.as_deref().unwrap_or("")
-            )
-            .trim()
-            .to_owned()
-        };
-        Some(format!("{value}{}", self.stale_label()))
-    }
-
-    fn stale_label(&self) -> &'static str {
-        let account = self.snapshot.as_ref().map(|snapshot| &snapshot.account);
-        if account.is_some_and(|account| account.error.is_some()) || self.error.is_some() {
-            " · 旧数据"
-        } else {
-            ""
-        }
-    }
-
-    pub fn tooltip(&self) -> Option<String> {
+    pub fn indicator(&self, max_width: usize) -> Line<'static> {
+        let fallback = || Line::from(Span::styled("用量", super::components::accent()));
         let Some(snapshot) = &self.snapshot else {
-            let status = if self.loading {
-                "正在查询账号额度…"
-            } else {
-                self.error
-                    .as_deref()
-                    .unwrap_or("连接后将自动查询账号额度。")
-            };
-            return Some(format!("用量\n{status}\n点击查看详情 · /usage"));
+            return fallback();
         };
-        let account = &snapshot.account;
-        let mut rows = vec![format!(
-            "{} · {}{}",
-            account.provider,
-            account.name,
-            self.stale_label()
-        )];
-        if let Some(plan) = &account.plan {
-            rows.push(format!("套餐：{plan}"));
-        }
-        let shared: Vec<_> = account
+        let limits: Vec<_> = snapshot
+            .account
             .limits
             .iter()
             .filter(|limit| limit.scope == Scope::Account)
+            .take(2)
             .collect();
-        for limit in shared.iter().take(4) {
-            let value = if let Some(fraction) = limit.remaining_fraction {
-                format!("剩{:.0}%", fraction * 100.0)
-            } else {
-                format!(
-                    "剩{} {}",
-                    limit.remaining.as_deref().unwrap_or("未提供"),
-                    limit.unit.as_deref().unwrap_or("")
-                )
-            };
-            let reset = limit
-                .resets_at
-                .as_deref()
-                .and_then(|reset| reset_countdown(reset, now()))
-                .map(|reset| format!(" · {}", compact_reset(&reset)))
-                .unwrap_or_default();
-            rows.push(format!("{}：{value}{reset}", quota_label(&limit.label)));
+        if limits.is_empty() {
+            return fallback();
         }
-        if shared.len() > 4 {
-            rows.push(format!("另有 {} 项额度", shared.len() - 4));
+        let time = now();
+        for width in [12, 8] {
+            let mut line = Line::default();
+            for (index, limit) in limits.iter().enumerate() {
+                if index > 0 {
+                    line.spans.push(Span::raw("  "));
+                }
+                line.spans.extend(footer_limit(limit, width, time).spans);
+            }
+            if snapshot.account.error.is_some() || self.error.is_some() {
+                line.spans
+                    .push(Span::styled(" · 旧数据", super::components::muted()));
+            }
+            if line.width() <= max_width {
+                return line;
+            }
         }
-        if let Some(note) = &account.note {
-            rows.push(note.clone());
-        }
-        if shared.is_empty() && !account.limits.is_empty() {
-            rows.push("服务仅返回模型额度，未提供共享套餐总额度。".into());
-        }
-        if let Some(error) = self.error.as_ref().or(account.error.as_ref()) {
-            rows.push(format!("查询失败：{error}"));
-        }
-        rows.push("点击查看详情 · /usage".into());
-        Some(rows.join("\n"))
+        fallback()
     }
 }
 
-fn window_summary(limit: &Limit, fraction: f64, time: u64) -> String {
-    let mut summary = format!("{} 剩{:.0}%", compact_label(&limit.label), fraction * 100.0);
+fn footer_limit(limit: &Limit, width: usize, time: u64) -> Line<'static> {
+    let mut line = Line::from(vec![Span::styled(
+        format!("{} ", compact_label(&limit.label)),
+        super::components::accent(),
+    )]);
+    if let Some(fraction) = limit.remaining_fraction {
+        line.spans.extend(quota_bar(fraction, width).spans);
+    } else {
+        line.spans.push(Span::raw(super::render::safe_output(
+            format!(
+                "{} {}",
+                limit.remaining.as_deref().unwrap_or("—"),
+                limit.unit.as_deref().unwrap_or(""),
+            )
+            .trim(),
+        )));
+    }
     if let Some(reset) = limit
         .resets_at
         .as_deref()
         .and_then(|reset| reset_countdown(reset, time))
     {
-        summary.push_str(&format!(" · {}", compact_reset(&reset)));
+        let reset = compact_reset(&reset);
+        line.spans.push(Span::styled(
+            format!(" ({})", reset.trim_end_matches("后重置")),
+            super::components::muted(),
+        ));
     }
-    summary
+    line
 }
 
 fn compact_reset(reset: &str) -> String {
@@ -316,7 +269,7 @@ fn compact_label(label: &str) -> &str {
     }
 }
 
-fn quota_bar(fraction: f64) -> Line<'static> {
+fn quota_bar(fraction: f64, width: usize) -> Line<'static> {
     use super::theme::THEME;
     let fraction = fraction.clamp(0.0, 1.0);
     let color = if fraction <= 0.1 {
@@ -326,17 +279,17 @@ fn quota_bar(fraction: f64) -> Line<'static> {
     } else {
         THEME.success
     };
-    // Gauge owns the fill and centered label geometry. Style its cells as a
-    // thin segmented meter so adjacent rows never merge into a solid slab.
-    let area = Rect::new(0, 0, BAR_WIDTH as u16, 1);
+    // Center the actual percentage with one clear cell on each side. Padding
+    // the value to a fixed width would put extra whitespace on just one side.
+    let area = Rect::new(0, 0, width as u16, 1);
     let mut buffer = Buffer::empty(area);
     let label = format!(" {:.0}% ", fraction * 100.0);
-    let label_start = (BAR_WIDTH - label.len()) / 2;
+    let label_start = (width - label.len()) / 2;
     let label_range = label_start..label_start + label.len();
     Gauge::default()
         .ratio(fraction)
         .use_unicode(true)
-        .label(label)
+        .label("")
         .gauge_style(Style::default().fg(color))
         .render(area, &mut buffer);
     let spans = buffer
@@ -344,8 +297,6 @@ fn quota_bar(fraction: f64) -> Line<'static> {
         .iter()
         .enumerate()
         .map(|(index, cell)| {
-            // Include the label's clear gutters: a block glyph can overhang
-            // its cell in some terminal fonts and collide with the first digit.
             if label_range.contains(&index) {
                 let foreground = if fraction <= 0.25 {
                     color
@@ -353,20 +304,20 @@ fn quota_bar(fraction: f64) -> Line<'static> {
                     THEME.strong
                 };
                 Span::styled(
-                    cell.symbol().to_owned(),
+                    label[index - label_start..index - label_start + 1].to_owned(),
                     Style::default()
                         .fg(foreground)
                         .bg(Color::Reset)
                         .add_modifier(Modifier::BOLD),
                 )
             } else if cell.symbol() == " " && cell.bg != color {
-                Span::styled("▰", Style::default().fg(THEME.border_muted))
+                Span::styled("━", Style::default().fg(THEME.border_muted))
             } else {
                 Span::styled(
-                    "▰",
+                    "━",
                     Style::default().fg(super::theme::quota_color(
                         fraction,
-                        index as f32 / (BAR_WIDTH - 1) as f32,
+                        index as f32 / (width - 1) as f32,
                     )),
                 )
             }
@@ -430,7 +381,7 @@ fn account_content(account: &Account, scope: Scope) -> Text<'static> {
         ]);
         let unit = limit.unit.as_deref().unwrap_or("");
         if let Some(fraction) = limit.remaining_fraction {
-            row.spans.extend(quota_bar(fraction).spans);
+            row.spans.extend(quota_bar(fraction, BAR_WIDTH).spans);
         }
         if let Some(value) = &limit.remaining {
             row.spans.push(Span::raw(format!("  剩余 {value} {unit}")));
@@ -527,16 +478,52 @@ mod tests {
 
     #[test]
     fn usage_separates_model_counters_and_keeps_shared_summary_compact() {
-        let full = quota_bar(1.0);
-        let empty = quota_bar(0.0);
-        assert!(full.to_string().contains(" 100% "));
-        assert!(empty.to_string().contains(" 0% "));
+        let full = quota_bar(1.0, BAR_WIDTH);
+        let empty = quota_bar(0.0, BAR_WIDTH);
+        assert!(full.to_string().contains("100%"));
+        assert!(empty.to_string().contains("0%"));
+        for width in [8, 12, BAR_WIDTH] {
+            for fraction in [0.0, 0.09, 0.73, 0.89, 1.0] {
+                let bar = quota_bar(fraction, width);
+                assert_eq!(bar.width(), width);
+                let text = bar.to_string();
+                let value = format!("{:.0}%", fraction * 100.0);
+                let start = text.chars().position(|ch| ch.is_ascii_digit()).unwrap();
+                let end = text.chars().position(|ch| ch == '%').unwrap() + 1;
+                assert_eq!(
+                    text.chars()
+                        .skip(start)
+                        .take(end - start)
+                        .collect::<String>(),
+                    value
+                );
+                assert_eq!(text.chars().nth(start - 1), Some(' '));
+                assert_eq!(text.chars().nth(end), Some(' '));
+                assert_ne!(text.chars().nth(start - 2), Some(' '));
+                assert_ne!(text.chars().nth(end + 1), Some(' '));
+                // Whole-cell positioning can differ from the exact midpoint
+                // by half a cell when the percentage has an odd width.
+                assert!(start.abs_diff(width - end) <= 1);
+                let gap = bar
+                    .spans
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, span)| {
+                        span.style
+                            .add_modifier
+                            .contains(Modifier::BOLD)
+                            .then_some(index)
+                    })
+                    .collect::<Vec<_>>();
+                assert_eq!(gap, (start - 1..end + 1).collect::<Vec<_>>());
+            }
+        }
         assert_eq!(
             empty.spans[9].style.fg,
             Some(super::super::theme::THEME.danger)
         );
         assert_eq!(
-            quota_bar(0.2).spans[0].style.fg,
+            quota_bar(0.2, BAR_WIDTH).spans[0].style.fg,
             Some(super::super::theme::THEME.md_mark)
         );
         assert_eq!(
@@ -582,10 +569,13 @@ mod tests {
             },
             ..Default::default()
         });
-        assert_eq!(state.summary().as_deref(), Some("周 剩59% | 5h 剩96%"));
-        assert!(state.tooltip().unwrap().contains("Gemini 周：剩59%"));
-        assert!(!state.tooltip().unwrap().contains("Limit Remaining"));
-        assert!(!state.tooltip().unwrap().contains("Gemini Pro"));
+        let indicator = state.indicator(80).to_string();
+        assert!(indicator.contains("59%") && indicator.contains("96%"));
+        assert_eq!(indicator.matches('%').count(), 2);
+        assert!(!indicator.contains("Limit Remaining"));
+        assert!(!indicator.contains("Gemini Pro"));
+        assert!(!indicator.contains('('));
+        assert_eq!(state.indicator(8).to_string(), "用量");
         let mut dialog = InfoDialog::new("用量", String::new());
         state.update_dialog(&mut dialog);
         assert!(!dialog.content.contains("Gemini Pro"));
@@ -630,8 +620,7 @@ mod tests {
             .account
             .limits
             .retain(|limit| limit.scope == Scope::Model);
-        assert_eq!(state.summary().as_deref(), Some("模型额度 1项"));
-        assert!(state.tooltip().unwrap().contains("未提供共享套餐总额度"));
+        assert_eq!(state.indicator(80).to_string(), "用量");
     }
     #[test]
     fn quota_countdown_accepts_server_timestamps_and_never_guesses_missing_times() {
@@ -656,13 +645,15 @@ mod tests {
         assert!(reset_countdown("0", current).is_none());
         let limit = Limit {
             label: "5小时".into(),
+            remaining_fraction: Some(0.96),
             resets_at: Some("12600".into()),
             ..Default::default()
         };
-        assert_eq!(
-            window_summary(&limit, 0.96, 3600),
-            "5h 剩96% · 2时30分后重置"
-        );
+        let indicator = footer_limit(&limit, 12, 3600).to_string();
+        assert!(indicator.starts_with("5h "));
+        assert!(indicator.contains("96%"));
+        assert!(indicator.ends_with(" (2时30分)"));
+        assert!(!indicator.contains("后重置"));
         assert_eq!(
             quota_label("Claude and GPT models · Weekly Limit Remaining · weekly"),
             "Claude / GPT 周"
@@ -694,8 +685,8 @@ mod tests {
         snapshot.account.fetched_at = None;
         snapshot.account.error = Some("网络错误".into());
         state.receive(snapshot);
-        let summary = state.summary().unwrap();
-        assert!(summary.contains("剩40%"));
+        let summary = state.indicator(80).to_string();
+        assert!(summary.contains("40%"));
         assert!(summary.ends_with(" · 旧数据"));
         assert!(
             account_content(&state.snapshot.as_ref().unwrap().account, Scope::Account)
@@ -706,6 +697,6 @@ mod tests {
         other.account.identity = "source-b".into();
         other.account.error = Some("另一个账号不可用".into());
         state.receive(other);
-        assert!(state.summary().is_none());
+        assert_eq!(state.indicator(80).to_string(), "用量");
     }
 }
