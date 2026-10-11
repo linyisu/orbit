@@ -647,10 +647,10 @@ fn image_display_composites_transparency_without_changing_sources_or_math() {
     use super::view::Background;
     use base64::{Engine as _, engine::general_purpose::STANDARD};
 
-    fn pixels(picture: &Prepared) -> Vec<[u8; 4]> {
-        let area = Rect::new(0, 0, picture.size.width, 1);
+    fn pixels(protocol: &SlicedProtocol, size: Size) -> Vec<[u8; 4]> {
+        let area = Rect::new(0, 0, size.width, 1);
         let mut buffer = Buffer::empty(area);
-        SlicedImage::new(&picture.protocol, (0, 0).into()).render(area, &mut buffer);
+        SlicedImage::new(protocol, (0, 0).into()).render(area, &mut buffer);
         let output = buffer
             .content
             .iter()
@@ -683,7 +683,8 @@ fn image_display_composites_transparency_without_changing_sources_or_math() {
         let original = std::fs::read(&path).unwrap();
         let source = Source::Image(path.to_string_lossy().into_owned());
         let key = context.key(&source, 40, 20, false);
-        let default = pixels(&decoder.prepare(&key, picker).unwrap());
+        let picture = decoder.prepare(&key, picker).unwrap();
+        let default = pixels(&picture.protocol, picture.size);
         assert!(default.iter().all(|pixel| pixel[3] == 255));
         assert!(default.contains(&[232, 234, 237, 255]));
         assert!(default.contains(&[0, 0, 0, 255]));
@@ -693,7 +694,8 @@ fn image_display_composites_transparency_without_changing_sources_or_math() {
                 background,
                 ..View::default()
             });
-            let output = pixels(&decoder.prepare(&key, picker).unwrap());
+            let picture = decoder.prepare(&key, picker).unwrap();
+            let output = pixels(&picture.protocol, picture.size);
             match background.color() {
                 Some([r, g, b]) => {
                     assert!(output.iter().all(|pixel| pixel[3] == 255));
@@ -709,14 +711,39 @@ fn image_display_composites_transparency_without_changing_sources_or_math() {
         }
         assert_eq!(std::fs::read(path).unwrap(), original);
     }
-    let source = Source::Math {
-        tex: "S".into(),
-        display: false,
-    };
-    let key = context.key(&source, 40, 20, false);
-    let output = pixels(&decoder.prepare(&key, picker).unwrap());
-    assert!(output.iter().any(|pixel| pixel[3] == 0));
-    assert!(output.iter().any(|pixel| pixel[3] > 0));
+    for tex in [
+        "S",
+        "WE = 1",
+        r"\overline{Q}",
+        r"\frac{a}{b}",
+        r"\overline{S}=1,\overline{R}=1",
+    ] {
+        let source = Source::Math {
+            tex: tex.into(),
+            display: false,
+        };
+        let key = context.key(&source, 40, 20, false);
+        let picture = decoder.prepare(&key, picker).unwrap();
+        let output = pixels(&picture.protocol, picture.size);
+        let selected = pixels(picture.selected_protocol.as_ref().unwrap(), picture.size);
+        let width = usize::from(picture.size.width * picker.font_size().width);
+        let ink_right = output
+            .iter()
+            .enumerate()
+            .filter(|(_, pixel)| pixel[3] != 0)
+            .map(|(index, _)| index % width)
+            .max()
+            .unwrap();
+        assert!(
+            width - ink_right <= 3,
+            "{tex}: formula must fill its allocated width"
+        );
+        assert!(output.iter().any(|pixel| pixel[3] == 0));
+        assert!(
+            selected.iter().all(|pixel| pixel[3] == 255),
+            "{tex}: selection must remain continuous"
+        );
+    }
 }
 
 #[test]
@@ -1134,55 +1161,94 @@ fn clipped_media_copies_its_source_even_when_the_baseline_is_offscreen() {
 
 #[test]
 fn selecting_an_inline_formula_preserves_the_surrounding_text_and_other_formula() {
-    let context = context(ProtocolType::Kitty);
-    let source = "前 $\\frac{a}{b}$ 中 $\\frac{a}{b}$ 后";
-    let line = markdown::document(source, 80).remove(0);
-    let request = requests(&line, 80).remove(0);
-    ready(&context, request.source, request.width, request.height);
-    let mut layout = TranscriptLayout::default();
-    layout.set_media(context);
-    layout.update(&[TranscriptItem::Assistant(source.into())], None, 80);
-    let area = Rect::new(2, 1, 80, layout.height() as u16);
-    let mut selection = Selection::default();
-    selection.viewport = area;
-    let mut terminal = Terminal::new(TestBackend::new(84, area.bottom() + 2)).unwrap();
-    begin_frame();
-    terminal
-        .draw(|f| {
-            selection.transcript_view(0, &layout);
-            layout.draw(f, area, 0);
-            selection.paint(f);
-            paint(f.buffer_mut());
-        })
-        .unwrap();
-    let (row, copy) = (0..layout.height())
-        .find_map(|row| {
-            let copy = layout.selection_metadata(row)?.copy.get(1)?;
-            (copy.row == 0).then_some((row, copy))
-        })
-        .unwrap();
-    let x = area.x + copy.columns.start as u16;
-    let y = area.y + row as u16;
-    selection
-        .handle(&mouse(MouseEventKind::Down(MouseButton::Left), x, y))
-        .unwrap();
-    selection
-        .handle(&mouse(MouseEventKind::Drag(MouseButton::Left), x + 1, y))
-        .unwrap();
-    begin_frame();
-    terminal
-        .draw(|f| {
-            assert!(selection.draw_frozen(f));
-            LAYER.with(|layer| {
-                for p in &layer.borrow().current {
-                    assert_eq!(p.selected, p.area.x == x);
+    for tex in ["WE = 1", r"\frac{a}{b}", r"\overline{S}=1,\overline{R}=1"] {
+        let context = context(ProtocolType::Kitty);
+        let source = format!("前（${tex}$）中（${tex}$）后");
+        let line = markdown::document(&source, 80).remove(0);
+        let request = requests(&line, 80).remove(0);
+        ready(&context, request.source, request.width, request.height);
+        let mut layout = TranscriptLayout::default();
+        layout.set_media(context);
+        layout.update(&[TranscriptItem::Assistant(source)], None, 80);
+        let area = Rect::new(2, 1, 80, layout.height() as u16);
+        let mut selection = Selection::default();
+        selection.viewport = area;
+        let mut terminal = Terminal::new(TestBackend::new(84, area.bottom() + 2)).unwrap();
+        begin_frame();
+        terminal
+            .draw(|f| {
+                selection.transcript_view(0, &layout);
+                layout.draw(f, area, 0);
+                selection.paint(f);
+                paint(f.buffer_mut());
+            })
+            .unwrap();
+        let before = terminal.backend().buffer().clone();
+        let (row, copy) = (0..layout.height())
+            .find_map(|row| {
+                let copy = layout.selection_metadata(row)?.copy.get(1)?;
+                (copy.row == 0).then_some((row, copy))
+            })
+            .unwrap();
+        let x = area.x + copy.columns.start as u16;
+        let y = area.y + row as u16;
+        let end = area.x + copy.columns.end as u16;
+        selection
+            .handle(&mouse(MouseEventKind::Down(MouseButton::Left), x, y))
+            .unwrap();
+        selection
+            .handle(&mouse(MouseEventKind::Drag(MouseButton::Left), x + 1, y))
+            .unwrap();
+        selection
+            .handle(&mouse(MouseEventKind::Drag(MouseButton::Left), x, y))
+            .unwrap();
+        begin_frame();
+        terminal
+            .draw(|f| {
+                assert!(selection.draw_frozen(f));
+                LAYER.with(|layer| {
+                    for p in &layer.borrow().current {
+                        assert_eq!(p.selected, p.area.x == x);
+                        for column in p.area.x..p.area.right() {
+                            assert_eq!(
+                                f.buffer_mut()[(column, p.area.y)].bg,
+                                if p.selected {
+                                    crate::tui::theme::THEME.selection
+                                } else {
+                                    before[(column, p.area.y)].bg
+                                }
+                            );
+                        }
+                    }
+                });
+                paint(f.buffer_mut());
+            })
+            .unwrap();
+        assert_eq!(selection.text().trim(), format!("${tex}$"));
+        selection.clear();
+        selection
+            .handle(&mouse(MouseEventKind::Down(MouseButton::Left), x - 2, y))
+            .unwrap();
+        selection
+            .handle(&mouse(MouseEventKind::Drag(MouseButton::Left), end + 1, y))
+            .unwrap();
+        begin_frame();
+        terminal
+            .draw(|f| {
+                assert!(selection.draw_frozen(f));
+                for column in x - 2..end + 2 {
+                    assert_eq!(
+                        f.buffer_mut()[(column, y)].bg,
+                        crate::tui::theme::THEME.selection,
+                        "{tex}: surrounding parentheses and formula must share a continuous selection"
+                    );
                 }
-            });
-            paint(f.buffer_mut());
-        })
-        .unwrap();
-    assert_eq!(selection.text().trim(), "$\\frac{a}{b}$");
-    clear_layers();
+                paint(f.buffer_mut());
+            })
+            .unwrap();
+        assert_eq!(selection.text().trim(), format!("（${tex}$）"));
+        clear_layers();
+    }
 }
 
 #[test]

@@ -217,6 +217,16 @@ impl Decoder {
                     )?;
                     let ratio = image.height() as f64 / f64::from(tree.size().height());
                     let image = trim_math_sides(image);
+                    // Text can advance only by whole cells. Fit the cropped ink
+                    // to the nearest cell boundary instead of adding a blank
+                    // strip on the right; leave height and baseline unchanged.
+                    let cell_w = u32::from(cell.width);
+                    let width = ((image.width() + cell_w / 2) / cell_w).max(1) * cell_w;
+                    let image = image.resize_exact(
+                        width.min(max_w),
+                        image.height(),
+                        image::imageops::FilterType::Lanczos3,
+                    );
                     let baseline_px = baseline_px * ratio;
                     let cell_h = u32::from(cell.height);
                     let offset = ((f64::from(cell_h) * 0.75
@@ -337,6 +347,7 @@ mod math_bounds_tests {
         for tex in [
             "S",
             "R",
+            "WE = 1",
             r"\overline{Q}",
             r"\frac{a}{b}",
             r"\int_0^1 x^2 dx",
