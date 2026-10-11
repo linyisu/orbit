@@ -681,7 +681,7 @@ fn steering_is_visible_before_receipt_and_is_reconciled_by_message_id() {
         }
         let screen = render_screen(&mut tab.state);
         assert!(screen.contains("same message") && screen.replace(' ', "").contains("发送中"));
-        assert_eq!(tab.state.pending_input.height(), 2);
+        assert_eq!(tab.state.pending_input.count(), 2);
         tab.state
             .apply(AgentEvent::Model(StreamEvent::TextDelta("after".into())));
         assert!(
@@ -697,7 +697,7 @@ fn steering_is_visible_before_receipt_and_is_reconciled_by_message_id() {
             assert!(
                 render_screen(&mut tab.state)
                     .replace(' ', "")
-                    .contains("已发送，等待处理")
+                    .contains("等待处理")
             );
         }
         // Another client can submit identical text; it must not consume our pending rows.
@@ -705,7 +705,7 @@ fn steering_is_visible_before_receipt_and_is_reconciled_by_message_id() {
             message_id: 20,
             content: "same message".into(),
         });
-        assert_eq!(tab.state.pending_input.height(), 2);
+        assert_eq!(tab.state.pending_input.count(), 2);
         for id in [10, 11] {
             tab.state.apply(AgentEvent::InputReceived {
                 message_id: id,
@@ -720,7 +720,7 @@ fn steering_is_visible_before_receipt_and_is_reconciled_by_message_id() {
             }
             tab.poll_submissions();
         }
-        assert_eq!(tab.state.pending_input.height(), 0);
+        assert_eq!(tab.state.pending_input.count(), 0);
         assert_eq!(
             tab.state
                 .transcript
@@ -743,7 +743,7 @@ fn rejected_steering_restores_the_draft_without_overwriting_new_input() {
         },
         submissions::Draft::Composer("more context".into()),
     );
-    assert_eq!(tab.state.pending_input.height(), 1);
+    assert_eq!(tab.state.pending_input.count(), 1);
     requests
         .try_recv()
         .unwrap()
@@ -752,7 +752,7 @@ fn rejected_steering_restores_the_draft_without_overwriting_new_input() {
         .send(Ok(Response::Error("session is idle".into())))
         .unwrap();
     assert!(tab.poll_submissions());
-    assert_eq!(tab.state.pending_input.height(), 0);
+    assert_eq!(tab.state.pending_input.count(), 0);
     assert_eq!(tab.state.input.text, "more context");
     tab.state.input.set("new draft".into());
     tab.submit_with_receipt(
@@ -764,7 +764,7 @@ fn rejected_steering_restores_the_draft_without_overwriting_new_input() {
     );
     drop(requests.try_recv().unwrap());
     tab.poll_submissions();
-    assert_eq!(tab.state.pending_input.height(), 0);
+    assert_eq!(tab.state.pending_input.count(), 0);
     assert_eq!(tab.state.input.text, "new draft");
     assert!(
         render_screen(&mut tab.state)

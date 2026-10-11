@@ -249,8 +249,13 @@ fn draw_contents(frame: &mut Frame<'_>, state: &mut UiState) {
 
     let pending_height = state
         .pending_input
-        .height()
-        .min(areas[1].height.saturating_sub(1));
+        .height(areas[1].width)
+        .min(areas[1].height / 3);
+    let pending_height = if pending_height >= 2 {
+        pending_height
+    } else {
+        0
+    };
     let pending_area = Rect::new(
         areas[1].x,
         areas[1].bottom().saturating_sub(pending_height),
