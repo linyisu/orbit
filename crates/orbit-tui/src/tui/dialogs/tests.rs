@@ -44,6 +44,14 @@ fn transcript_dialog_preserves_centering_and_bounds_at_all_sizes() {
 
 #[test]
 fn home_output_scrolls_in_a_temporary_dialog_without_changing_the_draft() {
+    let scrollbar = |buffer: &ratatui::buffer::Buffer| {
+        buffer
+            .content
+            .iter()
+            .filter(|cell| matches!(cell.symbol(), "║" | "█"))
+            .map(|cell| cell.symbol().to_owned())
+            .collect::<Vec<_>>()
+    };
     let mut state = UiState::new("orbit::model");
     state.input.set("Orbit 草稿".into());
     state.show_output(
@@ -56,6 +64,12 @@ fn home_output_scrolls_in_a_temporary_dialog_without_changing_the_draft() {
         .unwrap();
     assert!(state.ime_cursor.is_none());
     assert!(state.info_dialog.as_ref().unwrap().max_scroll > 0);
+    assert_eq!(
+        scrollbar(terminal.backend().buffer())
+            .first()
+            .map(String::as_str),
+        Some("█")
+    );
     let key = |code| Event::Key(KeyEvent::new(code, KeyModifiers::NONE));
     handle(&mut state, key(KeyCode::PageDown));
     let dialog = state.info_dialog.as_ref().unwrap();
@@ -74,6 +88,12 @@ fn home_output_scrolls_in_a_temporary_dialog_without_changing_the_draft() {
     let text = screen.replace(' ', "");
     assert!(text.contains("末行Orbit"));
     assert!(!text.contains("首行Orbit"));
+    assert_eq!(
+        scrollbar(terminal.backend().buffer())
+            .last()
+            .map(String::as_str),
+        Some("█")
+    );
     handle(
         &mut state,
         Event::Key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)),
@@ -85,6 +105,67 @@ fn home_output_scrolls_in_a_temporary_dialog_without_changing_the_draft() {
         .draw(|frame| super::super::render::draw(frame, &mut state))
         .unwrap();
     assert!(state.ime_cursor.is_some());
+
+    state.info_dialog = Some(InfoDialog::new("简短报告", String::new()));
+    state.info_dialog.as_mut().unwrap().pages(vec![ReportPage {
+        label: "概要".into(),
+        content: Text::from(Line::from(vec![
+            Span::styled(
+                "████",
+                Style::default().fg(super::super::theme::THEME.success),
+            ),
+            Span::raw(" 剩余 100%\x1b[31m"),
+        ])),
+    }]);
+    terminal
+        .draw(|frame| super::super::render::draw(frame, &mut state))
+        .unwrap();
+    let buffer = terminal.backend().buffer();
+    let screen = buffer
+        .content
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect::<String>();
+    assert!(screen.replace(' ', "").contains("剩余100%"));
+    assert!(!screen.replace(' ', "").contains("滚轮/↑↓"));
+    assert!(!screen.contains('\x1b'));
+    assert!(
+        buffer
+            .content
+            .iter()
+            .any(|cell| cell.symbol() == "█" && cell.fg == super::super::theme::THEME.success)
+    );
+
+    // A report just one line taller than its viewport must have a nearly full
+    // thumb, with its one-cell gap moving from bottom to top when scrolled.
+    let visible = state.info_dialog.as_ref().unwrap().page_rows;
+    state.info_dialog.as_mut().unwrap().pages(vec![ReportPage {
+        label: "概要".into(),
+        content: Text::from(
+            (0..=visible)
+                .map(|n| Line::from(format!("line {n}")))
+                .collect::<Vec<_>>(),
+        ),
+    }]);
+    terminal
+        .draw(|frame| super::super::render::draw(frame, &mut state))
+        .unwrap();
+    assert_eq!(state.info_dialog.as_ref().unwrap().max_scroll, 1);
+    let top = scrollbar(terminal.backend().buffer());
+    assert_eq!(top.len(), visible);
+    assert_eq!(
+        top.iter().filter(|symbol| symbol.as_str() == "█").count(),
+        visible - 1
+    );
+    assert_eq!(top.first().map(String::as_str), Some("█"));
+    assert_eq!(top.last().map(String::as_str), Some("║"));
+    handle(&mut state, key(KeyCode::End));
+    terminal
+        .draw(|frame| super::super::render::draw(frame, &mut state))
+        .unwrap();
+    let bottom = scrollbar(terminal.backend().buffer());
+    assert_eq!(bottom.first().map(String::as_str), Some("║"));
+    assert_eq!(bottom.last().map(String::as_str), Some("█"));
 }
 
 #[test]

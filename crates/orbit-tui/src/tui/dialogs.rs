@@ -1146,7 +1146,10 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
         dialog.scroll = dialog.scroll.min(dialog.max_scroll);
         frame.render_widget(paragraph.scroll((dialog.scroll as u16, 0)), body);
         if dialog.max_scroll > 0 && !body.is_empty() {
-            let mut scrollbar = ScrollbarState::new(rows)
+            // Ratatui uses content_length - 1 as the maximum position, then
+            // adds the viewport length when sizing the thumb. Supply the
+            // number of valid offsets, not the total number of wrapped rows.
+            let mut scrollbar = ScrollbarState::new(dialog.max_scroll + 1)
                 .position(dialog.scroll)
                 .viewport_content_length(body.height as usize);
             frame.render_stateful_widget(
@@ -1161,19 +1164,25 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
         }
         let actions = if dialog.source.is_some() {
             "Tab 切页 · R 刷新 · Esc 关闭"
-        } else {
+        } else if dialog.max_scroll > 0 {
             "PgUp/PgDn 翻页 · Esc 关闭"
+        } else {
+            "Esc 关闭"
         };
-        let hint = format!(
-            "{}–{} / {} · 滚轮/↑↓ 滚动 · {actions}",
-            if rows == 0 || body.is_empty() {
-                0
-            } else {
-                dialog.scroll + 1
-            },
-            dialog.scroll.saturating_add(body.height as usize).min(rows),
-            rows,
-        );
+        let hint = if dialog.max_scroll > 0 {
+            format!(
+                "{}–{} / {} · 滚轮/↑↓ 滚动 · {actions}",
+                if rows == 0 || body.is_empty() {
+                    0
+                } else {
+                    dialog.scroll + 1
+                },
+                dialog.scroll.saturating_add(body.height as usize).min(rows),
+                rows,
+            )
+        } else {
+            actions.to_owned()
+        };
         frame.render_widget(
             Paragraph::new(super::render::fit_label(
                 &hint,
