@@ -53,6 +53,7 @@ const BORDER: Color = THEME.border;
 // visually centered in a single terminal cell, with equal space above/below.
 const TAB_SPINNER_FRAMES: [&str; 4] = ["⠖", "⠲", "⠴", "⠦"];
 const TAB_SPINNER_FRAME_INTERVAL: std::time::Duration = std::time::Duration::from_millis(200);
+const SESSION_TAB_WIDTH: usize = 22;
 pub(super) const MAX_COMPLETION_ITEMS: usize = 8;
 
 /// Notices paint after selection snapshots, including a frozen transcript.
@@ -817,21 +818,12 @@ fn draw_header(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
             }
         })
         .collect();
-    let widths: Vec<_> = titles
-        .iter()
-        .map(|title| title.width().min(32) + 5)
-        .collect();
     let active_index = state.tabs.iter().position(|tab| tab.active).unwrap_or(0);
     let budget = area.width.saturating_sub(8) as usize;
+    let tab_width = SESSION_TAB_WIDTH.min(budget);
     let mut start = 0;
 
-    while start < active_index
-        && widths[start..=active_index]
-            .iter()
-            .map(|width| width + 1)
-            .sum::<usize>()
-            > budget
-    {
+    while start < active_index && (active_index - start + 1) * (tab_width + 1) > budget {
         start += 1;
     }
 
@@ -840,11 +832,11 @@ fn draw_header(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
     for (index, tab) in state.tabs.iter().enumerate().skip(start) {
         let available = area.right().saturating_sub(x + 5) as usize;
 
-        if available < 6 {
+        if tab_width < 6 || available < tab_width {
             break;
         }
 
-        let width = widths[index].min(available) as u16;
+        let width = tab_width as u16;
         let is_running =
             (tab.active && state.status == RunStatus::Running) || tab.status == RunStatus::Running;
         let spinner_prefix = if tab.waiting_approval {

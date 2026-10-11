@@ -128,10 +128,6 @@ impl Tab {
             .to_owned()
     }
 
-    pub(super) fn ready_for_restore(&self) -> bool {
-        self.id.is_some() && self.connection.is_some() && self.connecting.is_none() && !self.offline
-    }
-
     pub fn connecting(spec: Spec, media: media::Context) -> Self {
         let mut tab = Self::empty(spec.label(), spec.workspace().into(), media);
         tab.spec = Some(spec.clone());

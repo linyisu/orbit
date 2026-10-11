@@ -852,43 +852,53 @@ fn saved_local(id: &str) -> workspace::windows::SavedTab {
 }
 
 #[tokio::test]
-async fn restore_removes_home_only_after_success_and_preserves_the_other_restored_tabs() {
+async fn restore_reuses_home_immediately_and_preserves_the_other_restored_tabs() {
     use workspace::transport::Target;
-    let mut tabs = crate::tui::tabs::live::Tabs::default();
-    let source = tabs.add_remote(connected_tab(Target::Local));
-    let first = saved_local("first");
-    let second = saved_local("second");
-    tabs.restore_tabs(&source, &[&first, &second]);
-    let first_tab = tabs.target(1).unwrap().to_owned();
-    let second_tab = tabs.target(2).unwrap().to_owned();
-    assert_eq!(tabs.remote.len(), 3);
-    tabs.poll_remote().await;
-    assert!(tabs.remote.contains_key(&source));
-    tabs.active_remote = Some(source.clone());
+    for count in [1, 2] {
+        let mut tabs = crate::tui::tabs::live::Tabs::default();
+        let source = tabs.add_remote(connected_tab(Target::Local));
+        let mut first = saved_local("first");
+        first.workspace = "/another-project".into();
+        let second = saved_local("second");
+        let saved = [&first, &second];
+        tabs.restore_tabs(&source, &saved[..count]);
+        assert_eq!(tabs.remote.len(), count);
+        assert_eq!(tabs.target(0), Some(source.as_str()));
+        assert!(tabs.remote[&source].connecting.is_some());
+        assert_eq!(tabs.remote[&source].state.workspace, first.workspace);
+        tabs.sync_remote_ui();
+        let active = tabs.active_remote.clone().unwrap();
+        assert_eq!(tabs.remote[&active].state.tabs.len(), count);
+        let order: Vec<_> = (0..count)
+            .map(|index| tabs.target(index).unwrap().to_owned())
+            .collect();
 
-    let mut restored = connected_tab(Target::Local);
-    restored.id = Some(first.id);
-    restored
-        .state
-        .transcript
-        .push(TranscriptItem::User("saved conversation".into()));
-    tabs.remote.insert(first_tab.clone(), restored);
-    tabs.poll_remote().await;
-    assert!(!tabs.remote.contains_key(&source));
-    assert_eq!(tabs.active_remote.as_ref(), Some(&first_tab));
-    assert_eq!(tabs.target(0), Some(first_tab.as_str()));
-    assert_eq!(tabs.target(1), Some(second_tab.as_str()));
-    assert_eq!(tabs.remote.len(), 2);
+        let mut restored = connected_tab(Target::Local);
+        restored.id = Some(first.id);
+        restored
+            .state
+            .transcript
+            .push(TranscriptItem::User("saved conversation".into()));
+        tabs.remote.insert(source.clone(), restored);
+        tabs.poll_remote().await;
+        assert_eq!(tabs.active_remote.as_ref(), Some(&active));
+        assert_eq!(tabs.remote.len(), count);
+        for (index, id) in order.iter().enumerate() {
+            assert_eq!(tabs.target(index), Some(id.as_str()));
+        }
+    }
 }
 
 #[tokio::test]
-async fn restore_failures_leave_the_home_available_and_can_succeed_on_retry() {
+async fn restore_failures_can_retry_in_the_same_tab() {
     use workspace::transport::Target;
     let mut tabs = crate::tui::tabs::live::Tabs::default();
     let source = tabs.add_remote(connected_tab(Target::Local));
     let saved = saved_local("failed");
     tabs.restore_tabs(&source, &[&saved]);
     let restored = tabs.active_remote.clone().unwrap();
+    assert_eq!(restored, source);
+    assert_eq!(tabs.remote.len(), 1);
     let task = tabs
         .remote
         .get_mut(&restored)
@@ -902,43 +912,39 @@ async fn restore_failures_leave_the_home_available_and_can_succeed_on_retry() {
         .unwrap()
         .disconnected("connection failed".into());
     tabs.poll_remote().await;
-    assert!(tabs.remote.contains_key(&source));
+    assert_eq!(tabs.remote.len(), 1);
+    tabs.remote.get_mut(&restored).unwrap().reconnect();
+    assert!(tabs.remote[&restored].connecting.is_some());
+    assert_eq!(tabs.remote[&restored].state.workspace, saved.workspace);
 
     let mut retried = connected_tab(Target::Local);
     retried.id = Some(saved.id);
     tabs.remote.insert(restored.clone(), retried);
     tabs.poll_remote().await;
-    assert!(!tabs.remote.contains_key(&source));
+    assert_eq!(tabs.remote.len(), 1);
     assert_eq!(tabs.active_remote.as_ref(), Some(&restored));
 }
 
 #[tokio::test]
 async fn restore_keeps_drafts_and_reuses_already_open_sessions() {
     use workspace::transport::Target;
-    for draft_timing in [0, 1, 2] {
+    for has_draft in [false, true] {
         let mut tabs = crate::tui::tabs::live::Tabs::default();
         let mut source = connected_tab(Target::Local);
-        if draft_timing == 1 {
+        if has_draft {
             source.state.input.set("keep draft".into());
         }
         let source = tabs.add_remote(source);
         let saved = saved_local("saved");
         tabs.restore_tabs(&source, &[&saved]);
         let restored = tabs.active_remote.clone().unwrap();
-        if draft_timing == 2 {
-            tabs.remote
-                .get_mut(&source)
-                .unwrap()
-                .state
-                .input
-                .set("keep draft".into());
-        }
+        assert_eq!(tabs.remote.len(), if has_draft { 2 } else { 1 });
+        assert_eq!(restored == source, !has_draft);
         let mut ready = connected_tab(Target::Local);
         ready.id = Some(saved.id.clone());
         tabs.remote.insert(restored.clone(), ready);
         tabs.poll_remote().await;
-        assert_eq!(tabs.remote.contains_key(&source), draft_timing != 0);
-        if draft_timing != 0 {
+        if has_draft {
             assert_eq!(tabs.remote[&source].state.input.text, "keep draft");
             tabs.restore_tabs(&source, &[&saved]);
             assert_eq!(tabs.remote.len(), 2);

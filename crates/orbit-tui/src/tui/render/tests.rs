@@ -1,4 +1,4 @@
-use ratatui::{Terminal, backend::TestBackend};
+use ratatui::{Terminal, backend::TestBackend, buffer::CellWidth};
 
 use super::*;
 use crate::tui::app::SessionTab;
@@ -391,7 +391,11 @@ fn selected_tab_remains_visible_and_clickable_at_narrow_width() {
             waiting_approval: false,
             elapsed: std::time::Duration::ZERO,
             id: format!("session-{index}"),
-            title: format!("Conversation {index}"),
+            title: if index == 3 {
+                "主流数字电路仿真软件推荐".into()
+            } else {
+                format!("Tab {index}")
+            },
             status: RunStatus::Idle,
             active: index == 4,
         })
@@ -401,6 +405,12 @@ fn selected_tab_remains_visible_and_clickable_at_narrow_width() {
         let mut terminal = Terminal::new(TestBackend::new(width, 16)).unwrap();
         terminal.draw(|frame| draw(frame, &mut state)).unwrap();
         assert!(state.tab_areas.iter().any(|(_, id)| id == "session-4"));
+        assert!(
+            state
+                .tab_areas
+                .windows(2)
+                .all(|tabs| tabs[0].0.width == tabs[1].0.width)
+        );
         let click = |x, y| {
             Event::Mouse(MouseEvent {
                 kind: MouseEventKind::Down(MouseButton::Left),
@@ -447,8 +457,15 @@ fn selected_tab_remains_visible_and_clickable_at_narrow_width() {
                 } else {
                     crate::tui::theme::THEME.tab_background
                 };
+                let mut next_glyph = area.x;
                 for x in area.x..area.right() {
+                    // A terminal paints a wide glyph as one unit; its trailing
+                    // cells do not have an independently emitted background.
+                    if x < next_glyph {
+                        continue;
+                    }
                     let cell = &terminal.backend().buffer()[(x, area.y)];
+                    next_glyph = x + cell.cell_width().max(1);
                     assert!(!cell.modifier.contains(Modifier::UNDERLINED));
                     if x < area.right() - 3 || hover != Some(TabAction::Close(id.clone())) {
                         assert_eq!(cell.bg, expected);
