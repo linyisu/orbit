@@ -235,8 +235,18 @@ impl Workbench {
             })
             .collect();
         for task in &self.tasks {
-            task.view
-                .update(cx, |view, cx| view.set_open_tasks(summaries.clone(), cx));
+            // Session IDs are scoped to a service/data source, just like the catalog.
+            let options = task.view.read(cx).options();
+            let navigation_tasks = self
+                .tasks
+                .iter()
+                .zip(&summaries)
+                .filter(|(other, _)| other.view.read(cx).options().same_host(options))
+                .map(|(_, summary)| summary.clone())
+                .collect();
+            task.view.update(cx, |view, cx| {
+                view.set_open_tasks(summaries.clone(), navigation_tasks, cx)
+            });
         }
         cx.notify();
         self.persist(cx);

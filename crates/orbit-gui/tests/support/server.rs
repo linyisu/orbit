@@ -113,18 +113,29 @@ fn main() -> anyhow::Result<()> {
                 json!({"type":"hello","value":{"version":orbit_protocol::VERSION,"workspace":workspace,"capabilities":{"system":"Linux","architecture":"x86_64","shell":"sh","native_processes":true,"files":true,"features":[]}}})
             }
             "all_sessions" => {
-                let saved_path = if relocation.is_none() {
-                    "/tmp/orbit-gui-fixture"
-                } else if linked {
-                    &workspace
+                if std::path::Path::new(&workspace)
+                    .join(".fixture-sidebar")
+                    .exists()
+                {
+                    json!({"type":"sessions","value":[
+                        {"id":"demo","workspace":workspace,"project_id":"fixture","model":model,"title":"请检查当前项目结构，读取 Cargo.toml 和完整的依赖关系并给出建议","updated_at":3},
+                        {"id":"navigation","workspace":workspace,"project_id":"fixture","model":model,"title":"请直接使用 read_file 读取 /tmp\n/orbit-e2e/README.md\n并继续检查","updated_at":2},
+                        {"id":"notes","workspace":"/tmp/orbit-gui-notes","project_id":"notes","model":model,"title":"整理开发笔记","updated_at":1}
+                    ]})
                 } else {
-                    "/missing/original"
-                };
-                json!({"type":"sessions","value":[
-                    {"id":"demo","workspace":saved_path,"project_id":"fixture","model":model,"title":"梳理项目结构","updated_at":3},
-                    {"id":"navigation","workspace":saved_path,"project_id":"fixture","model":model,"title":"调整项目导航","updated_at":2},
-                    {"id":"notes","workspace":"/tmp/orbit-gui-notes","project_id":"notes","model":model,"title":"整理开发笔记","updated_at":1}
-                ]})
+                    let saved_path = if relocation.is_none() {
+                        "/tmp/orbit-gui-fixture"
+                    } else if linked {
+                        &workspace
+                    } else {
+                        "/missing/original"
+                    };
+                    json!({"type":"sessions","value":[
+                        {"id":"demo","workspace":saved_path,"project_id":"fixture","model":model,"title":"梳理项目结构","updated_at":3},
+                        {"id":"navigation","workspace":saved_path,"project_id":"fixture","model":model,"title":"调整项目导航","updated_at":2},
+                        {"id":"notes","workspace":"/tmp/orbit-gui-notes","project_id":"notes","model":model,"title":"整理开发笔记","updated_at":1}
+                    ]})
+                }
             }
             "sessions" => {
                 json!({"type":"sessions","value":[{"id":"demo","workspace":workspace,"project_id":"fixture","model":model,"reasoning_effort":null,"title":"梳理项目结构","updated_at":0}]})
@@ -248,6 +259,11 @@ fn main() -> anyhow::Result<()> {
                     }
                     if prompt == "workbench" {
                         pending = workbench_events();
+                    }
+                    if prompt == "sidebar" {
+                        pending = (0..80)
+                            .map(|_| json!({"Agent":{"Model":{"TextDelta":"检查中。"}}}))
+                            .collect();
                     }
                     if prompt.trim() == "approve" {
                         approvals = vec![

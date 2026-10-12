@@ -1,6 +1,6 @@
 //! Project directories and their conversations, with Kit owning tree navigation.
 use super::*;
-use gpui_kit::component::{list::ListItem, tooltip::Tooltip};
+use gpui_kit::component::{list::ListItem, spinner::Spinner, tooltip::Tooltip};
 
 impl Workspace {
     pub(super) fn regroup(&mut self, cx: &mut Context<Self>) {
@@ -26,6 +26,8 @@ impl Workspace {
 
     pub(super) fn project_tree(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let owner = cx.weak_entity();
+        let hovered = self.hovered_title.clone();
+        let tasks = self.navigation_tasks.clone();
         let active = self
             .info
             .as_ref()
@@ -48,14 +50,49 @@ impl Workspace {
                     }
                 }
             }))
-            .child(Tree::new(&self.navigation, move |_, entry, _, _, _| {
+            .child(Tree::new(&self.navigation, move |_, entry, _, _, cx| {
                 let id = entry.item().id.clone();
                 let owner = owner.clone();
+                let hover_owner = owner.clone();
+                let hover_id = id.clone();
                 let folder = entry.is_folder();
                 let expanded = entry.is_expanded();
+                let title: SharedString = entry
+                    .item()
+                    .label
+                    .split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" ")
+                    .into();
+                let started = hovered
+                    .as_ref()
+                    .filter(|(key, _)| key == &id)
+                    .map(|(_, time)| *time);
+                let task = id.strip_prefix("session:").and_then(|session| {
+                    tasks
+                        .iter()
+                        .find(|task| task.session.as_deref() == Some(session))
+                });
+                let status = task.map(|task| task.status);
                 ListItem::new(id.clone())
                     .accessibility_label(entry.item().label.clone())
+                    .h_8()
+                    .overflow_hidden()
                     .confirmed(active.as_deref() == Some(id.as_ref()))
+                    .on_hover(move |hovering, _, cx| {
+                        let _ = hover_owner.update(cx, |view, cx| {
+                            if *hovering {
+                                view.hovered_title = Some((hover_id.clone(), Instant::now()));
+                            } else if view
+                                .hovered_title
+                                .as_ref()
+                                .is_some_and(|(id, _)| id == &hover_id)
+                            {
+                                view.hovered_title = None;
+                            }
+                            cx.notify();
+                        });
+                    })
                     .child(
                         h_flex()
                             .w_full()
@@ -76,10 +113,46 @@ impl Workspace {
                             }))
                             .child(
                                 div()
+                                    .w_0()
                                     .flex_1()
                                     .min_w_0()
+                                    .h_6()
+                                    .overflow_hidden()
+                                    .whitespace_nowrap()
                                     .text_ellipsis()
-                                    .child(entry.item().label.clone()),
+                                    .map(|label| match started.filter(|_| !cx.reduce_motion()) {
+                                        Some(started) => {
+                                            label.child(scrolling_title(title, started))
+                                        }
+                                        None => label.child(title),
+                                    }),
+                            )
+                            .child(
+                                div()
+                                    .id((ElementId::from(id.clone()), "activity"))
+                                    .w_4()
+                                    .h_4()
+                                    .flex_shrink_0()
+                                    .when_some(task, |slot, task| {
+                                        slot.when(task.attention, |slot| {
+                                            slot.child(
+                                                Icon::new(IconName::Info)
+                                                    .size_4()
+                                                    .text_color(cx.theme().muted_foreground),
+                                            )
+                                        })
+                                        .when(task.loading && !task.attention, |slot| {
+                                            slot.child(Spinner::new().small())
+                                        })
+                                        .when_some(
+                                            status,
+                                            |slot, status| {
+                                                slot.tooltip(move |window, cx| {
+                                                    Tooltip::new(status).build(window, cx)
+                                                })
+                                            },
+                                        )
+                                    }),
                             ),
                     )
                     .when(folder, |row| {
@@ -135,6 +208,63 @@ impl Workspace {
     }
 }
 
+/// Measure the actual shaped text so CJK, proportional fonts and zoom all use
+/// the same clipping boundary. Only the hovered, overflowing row animates.
+fn scrolling_title(title: SharedString, started: Instant) -> impl IntoElement {
+    canvas(
+        move |_, window, _| {
+            let style = window.text_style();
+            let font_size = style.font_size.to_pixels(window.rem_size());
+            window.text_system().shape_line(
+                title.clone(),
+                font_size,
+                &[style.to_run(title.len())],
+                None,
+            )
+        },
+        move |bounds, line, window, cx| {
+            let overflow = (line.width() - bounds.size.width).max(px(0.));
+            let offset = marquee_offset(
+                f32::from(overflow),
+                started.elapsed().as_secs_f32(),
+                f32::from(window.rem_size()),
+            );
+            window.with_content_mask(Some(ContentMask { bounds }), |window| {
+                let _ = line.paint(
+                    bounds.origin - point(px(offset), px(0.)),
+                    bounds.size.height,
+                    TextAlign::Left,
+                    None,
+                    window,
+                    cx,
+                );
+            });
+            if overflow > px(0.) {
+                window.request_animation_frame();
+            }
+        },
+    )
+    .w_full()
+    .h_full()
+}
+
+fn marquee_offset(overflow: f32, elapsed: f32, rem: f32) -> f32 {
+    if overflow <= 0. {
+        return 0.;
+    }
+    let travel = overflow / (rem * 2.5);
+    let phase = elapsed % (travel * 2. + 1.6);
+    if phase < 0.8 {
+        0.
+    } else if phase < 0.8 + travel {
+        (phase - 0.8) / travel * overflow
+    } else if phase < 1.6 + travel {
+        overflow
+    } else {
+        overflow * (1. - (phase - 1.6 - travel) / travel)
+    }
+}
+
 fn project_items(sessions: &[SessionEntry], previous: &[TreeItem]) -> Vec<TreeItem> {
     let mut groups: Vec<TreeItem> = Vec::new();
     for session in sessions {
@@ -159,7 +289,21 @@ fn project_items(sessions: &[SessionEntry], previous: &[TreeItem]) -> Vec<TreeIt
 
 #[cfg(test)]
 mod tests {
-    use super::{SessionEntry, project_items};
+    use super::{SessionEntry, marquee_offset, project_items};
+
+    #[test]
+    fn hover_scroll_pauses_at_each_end_and_stays_inside_the_overflow() {
+        assert_eq!(marquee_offset(0., 20., 16.), 0.);
+        assert_eq!(marquee_offset(80., 0.5, 16.), 0.);
+        assert!((marquee_offset(80., 1.8, 16.) - 40.).abs() < 0.001);
+        assert_eq!(marquee_offset(80., 3.2, 16.), 80.);
+        assert!((marquee_offset(80., 4.6, 16.) - 40.).abs() < 0.001);
+        for tick in 0..2000 {
+            assert!((0. ..=80.).contains(&marquee_offset(80., tick as f32 / 60., 16.)));
+        }
+        // Doubling UI scale preserves the visual speed in rems.
+        assert!((marquee_offset(160., 1.8, 32.) - 80.).abs() < 0.001);
+    }
 
     #[test]
     fn directories_with_identical_names_stay_distinct_and_keep_expansion_on_refresh() {

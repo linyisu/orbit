@@ -10,6 +10,7 @@ pub(crate) struct WorkspaceSummary {
     pub(crate) project: SharedString,
     pub(crate) status: &'static str,
     pub(crate) busy: bool,
+    pub(crate) loading: bool,
     pub(crate) attention: bool,
     pub(crate) unread: bool,
 }
@@ -121,6 +122,10 @@ impl Workspace {
             project: self.project.clone(),
             status: self.status(),
             busy: self.busy || self.pending.is_some(),
+            loading: self.opening
+                || self.recovery.is_active()
+                || self.busy
+                || self.pending.is_some(),
             attention: self.error.is_some()
                 || !self.approvals.is_empty()
                 || self
@@ -205,8 +210,14 @@ impl Workspace {
         self.regroup(cx);
         cx.notify();
     }
-    pub(crate) fn set_open_tasks(&mut self, tasks: Vec<WorkspaceSummary>, cx: &mut Context<Self>) {
+    pub(crate) fn set_open_tasks(
+        &mut self,
+        tasks: Vec<WorkspaceSummary>,
+        navigation_tasks: Vec<WorkspaceSummary>,
+        cx: &mut Context<Self>,
+    ) {
         self.open_tasks = tasks;
+        self.navigation_tasks = navigation_tasks;
         cx.notify();
     }
 }
