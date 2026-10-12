@@ -1,6 +1,7 @@
 //! Retained editors; settings requests report errors locally and never open report panels.
 use super::super::*;
 use gpui_kit::component::input::{Input, InputState};
+use gpui_kit::component::radio::{Radio, RadioGroup};
 use orbit_protocol::{
     project::{MemoryAction, MemoryCategory, SessionMemory},
     resources::{Action, Skill, Snapshot},
@@ -18,6 +19,8 @@ pub(super) struct Resources {
     kind: Kind,
     skills: Vec<Skill>,
     memories: Vec<SessionMemory>,
+    query: Entity<InputState>,
+    category: MemoryCategory,
     name: Entity<InputState>,
     body: Entity<TextareaState>,
     editing: bool,
@@ -26,6 +29,7 @@ pub(super) struct Resources {
     busy: bool,
     error: Option<String>,
     task: Task<()>,
+    _query_events: Subscription,
 }
 impl Resources {
     pub(super) fn new(
@@ -40,6 +44,12 @@ impl Resources {
         cx.defer(move |cx| {
             let _ = entity.update(cx, |view, cx| view.refresh(cx));
         });
+        let query = cx.new(|cx| InputState::new(window, cx).placeholder("搜索名称或内容…"));
+        let query_events = cx.subscribe(&query, |_: &mut Self, _, event, cx| {
+            if matches!(event, InputEvent::Change) {
+                cx.notify();
+            }
+        });
         Self {
             owner,
             session,
@@ -47,6 +57,8 @@ impl Resources {
             kind,
             skills: vec![],
             memories: vec![],
+            query,
+            category: MemoryCategory::Fact,
             name: cx.new(|cx| InputState::new(window, cx).placeholder("例如 code-review")),
             body: cx.new(|cx| TextareaState::new(window, cx).auto_grow(8, 18)),
             editing: false,
@@ -55,6 +67,7 @@ impl Resources {
             busy: false,
             error: None,
             task: Task::ready(()),
+            _query_events: query_events,
         }
     }
     fn request(&mut self, request: Request, cx: &mut Context<Self>) {
@@ -172,7 +185,7 @@ impl Resources {
             ),
             Kind::Memory => self.action(
                 Action::Memory(MemoryAction::Add {
-                    category: MemoryCategory::Fact,
+                    category: self.category,
                     content,
                 }),
                 cx,
@@ -185,12 +198,12 @@ impl Render for Resources {
         let (description, add, empty) = match self.kind {
             Kind::Skills => (
                 "管理当前工作区可用的技能。新技能保存到项目，保存后自动刷新。",
-                "新建技能",
+                "新建技能…",
                 "还没有技能，创建一个来复用 Agent 的工作流程。",
             ),
             Kind::Memory => (
                 "保存当前会话的事实与偏好，供后续对话使用。",
-                "添加记忆",
+                "添加记忆…",
                 "还没有保存的记忆。开始会话后，可在这里添加。",
             ),
         };
@@ -222,6 +235,24 @@ impl Render for Resources {
             });
         if self.editing {
             let mut form = v_flex().gap_3();
+            if matches!(self.kind, Kind::Memory) {
+                form = form.child("记忆类型").child(
+                    RadioGroup::horizontal("memory-category")
+                        .selected_index(
+                            MemoryCategory::ALL
+                                .iter()
+                                .position(|category| *category == self.category),
+                        )
+                        .disabled(self.busy)
+                        .children(MemoryCategory::ALL.into_iter().map(|category| {
+                            Radio::new(category.as_str()).label(category_label(category))
+                        }))
+                        .on_change(cx.listener(|view, ix, _, cx| {
+                            view.category = MemoryCategory::ALL[*ix];
+                            cx.notify();
+                        })),
+                );
+            }
             if !matches!(self.kind, Kind::Memory) {
                 form = form.child("技能名称").child(
                     Input::new(&self.name)
@@ -282,18 +313,39 @@ impl Render for Resources {
             );
         }
         content = content.child(
-            h_flex().child(
-                Button::new("resource-add")
-                    .icon(IconName::Plus)
-                    .label(add)
-                    .disabled(self.busy || self.session.is_none())
-                    .on_click(cx.listener(|v, _, w, cx| v.new_item(w, cx))),
-            ),
+            h_flex()
+                .gap_3()
+                .child(
+                    div().flex_1().min_w_0().child(
+                        Input::new(&self.query)
+                            .aria_label(match self.kind {
+                                Kind::Skills => "搜索技能",
+                                Kind::Memory => "搜索会话记忆",
+                            })
+                            .prefix(Icon::new(IconName::Search))
+                            .cleanable(true),
+                    ),
+                )
+                .child(
+                    Button::new("resource-add")
+                        .icon(IconName::Plus)
+                        .label(add)
+                        .disabled(self.busy || self.session.is_none())
+                        .on_click(cx.listener(|v, _, w, cx| v.new_item(w, cx))),
+                ),
         );
+        let query = self.query.read(cx).value().trim().to_lowercase();
         let mut rows = Vec::new();
         match self.kind {
             Kind::Skills => {
                 for skill in &self.skills {
+                    if !query.is_empty()
+                        && ![&skill.name, &skill.title, &skill.description]
+                            .into_iter()
+                            .any(|text| text.to_lowercase().contains(&query))
+                    {
+                        continue;
+                    }
                     let name = skill.name.clone();
                     rows.push(
                         h_flex()
@@ -323,7 +375,11 @@ impl Render for Resources {
                             .child(
                                 Button::new(SharedString::from(format!("skill-{}", skill.name)))
                                     .small()
-                                    .label(if skill.editable { "编辑" } else { "查看" })
+                                    .label(if skill.editable {
+                                        "编辑…"
+                                    } else {
+                                        "查看…"
+                                    })
                                     .disabled(self.busy)
                                     .on_click(cx.listener(move |v, _, _, cx| {
                                         v.action(Action::ReadSkill { name: name.clone() }, cx)
@@ -335,6 +391,17 @@ impl Render for Resources {
             }
             Kind::Memory => {
                 for memory in &self.memories {
+                    if !query.is_empty()
+                        && ![
+                            memory.title.as_str(),
+                            memory.content.as_str(),
+                            category_label(memory.category),
+                        ]
+                        .into_iter()
+                        .any(|text| text.to_lowercase().contains(&query))
+                    {
+                        continue;
+                    }
                     let id = memory.id;
                     rows.push(
                         h_flex()
@@ -342,7 +409,19 @@ impl Render for Resources {
                             .py_3()
                             .border_b_1()
                             .border_color(cx.theme().border)
-                            .child(div().flex_1().child(memory.content.clone()))
+                            .child(
+                                v_flex()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .gap_1()
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(cx.theme().muted_foreground)
+                                            .child(category_label(memory.category)),
+                                    )
+                                    .child(memory.content.clone()),
+                            )
                             .child(
                                 Button::new(SharedString::from(format!("memory-{id}")))
                                     .small()
@@ -363,9 +442,24 @@ impl Render for Resources {
                     .py_8()
                     .text_sm()
                     .text_color(cx.theme().muted_foreground)
-                    .child(if self.busy { "正在加载…" } else { empty }),
+                    .child(if self.busy {
+                        "正在加载…"
+                    } else if !query.is_empty() {
+                        "没有匹配的结果，试试其他关键词。"
+                    } else {
+                        empty
+                    }),
             );
         }
         content.children(rows)
+    }
+}
+
+fn category_label(category: MemoryCategory) -> &'static str {
+    match category {
+        MemoryCategory::Constraint => "约束",
+        MemoryCategory::Decision => "决策",
+        MemoryCategory::Fact => "事实",
+        MemoryCategory::Preference => "偏好",
     }
 }

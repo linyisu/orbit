@@ -1,4 +1,5 @@
 //! Window-level settings navigation with a single scroll owner per page.
+mod advanced;
 mod fonts;
 mod mcp;
 mod plugins;
@@ -16,7 +17,7 @@ use gpui_kit::component::{
     tooltip::Tooltip,
 };
 
-const PAGES: [(&str, IconName, &str); 7] = [
+const PAGES: [(&str, IconName, &str); 8] = [
     (
         "外观与布局",
         IconName::Settings,
@@ -35,6 +36,11 @@ const PAGES: [(&str, IconName, &str); 7] = [
         "快捷键",
         IconName::Command,
         "快捷键 keyboard Enter Ctrl 发送 换行 新任务 搜索 切换 聚焦 设置 工作面板",
+    ),
+    (
+        "高级 Agent",
+        IconName::Settings,
+        "Agent 能力 禁用 工具 上限 预算 轮数 调用 子代理 命令 超时 自动压缩",
     ),
 ];
 
@@ -103,8 +109,30 @@ impl Workspace {
             )
         });
         let fonts = cx.new(|cx| fonts::Fonts::new(window, cx));
-        let mcp = cx.new(|cx| mcp::Mcp::new(&self.options, self.runtime.clone(), window, cx));
+        let advanced =
+            cx.new(|cx| advanced::Advanced::new(&self.options, self.runtime.clone(), window, cx));
+        let mcp = cx.new(|cx| {
+            mcp::Mcp::new(
+                &self.options,
+                self.runtime.clone(),
+                owner.clone(),
+                session.clone(),
+                workspace.clone(),
+                window,
+                cx,
+            )
+        });
         let page = cx.new(|cx| {
+            let account_owner = owner.clone();
+            let account_events = cx.subscribe_in(
+                &accounts,
+                window,
+                move |_: &mut SettingsPage, _, _, window, cx| {
+                    let _ = account_owner.update(cx, |view, cx| {
+                        view.execute(WorkspaceCommand::RefreshModels, window, cx)
+                    });
+                },
+            );
             let query = cx.new(|cx| InputState::new(window, cx).placeholder("搜索设置…"));
             let query_events = cx.subscribe(&query, |page: &mut SettingsPage, input, event, cx| {
                 if matches!(event, InputEvent::Change) {
@@ -164,6 +192,7 @@ impl Workspace {
                 plugins,
                 fonts,
                 mcp,
+                advanced,
                 query,
                 font_size,
                 applied_font_size: Preferences::font_size(cx),
@@ -171,7 +200,7 @@ impl Workspace {
                 contexts,
                 context: 0,
                 scrolls: std::array::from_fn(|_| ScrollHandle::new()),
-                _subscriptions: vec![query_events, size_events, preferences],
+                _subscriptions: vec![query_events, size_events, preferences, account_events],
             }
         });
         self.settings_page = Some(page.clone());
@@ -189,6 +218,7 @@ pub(crate) struct SettingsPage {
     memory: Entity<resources::Resources>,
     plugins: Entity<plugins::Plugins>,
     mcp: Entity<mcp::Mcp>,
+    advanced: Entity<advanced::Advanced>,
     fonts: Entity<fonts::Fonts>,
     query: Entity<InputState>,
     font_size: Entity<InputState>,
@@ -196,7 +226,7 @@ pub(crate) struct SettingsPage {
     environment: String,
     contexts: Vec<ResourceContext>,
     context: usize,
-    scrolls: [ScrollHandle; 7],
+    scrolls: [ScrollHandle; PAGES.len()],
     _subscriptions: Vec<Subscription>,
 }
 
@@ -216,6 +246,9 @@ impl SettingsPage {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.mcp.update(cx, |mcp, cx| {
+            mcp.bind_context(session.clone(), workspace.clone(), cx)
+        });
         if self.contexts[self.context].session == session
             && self.contexts[self.context].workspace == workspace
         {
@@ -367,6 +400,7 @@ impl SettingsPage {
             3 => self.mcp.clone().into_any_element(),
             4 => self.memory.clone().into_any_element(),
             6 => shortcut_rows(cx).into_any_element(),
+            7 => self.advanced.clone().into_any_element(),
             _ => div().into_any_element(),
         }
     }
@@ -431,6 +465,10 @@ impl Render for SettingsPage {
                 2 => ("技能", "项目设置 · 浏览、创建与编辑当前工作区的技能。"),
                 3 => ("MCP 工具", "应用设置 · 配置 Agent 可用的工具服务器。"),
                 4 => ("会话记忆", "会话设置 · 管理当前会话保存的事实与偏好。"),
+                7 => (
+                    "高级 Agent",
+                    "应用设置 · 调整运行预算、能力上限与子 Agent 参数。",
+                ),
                 _ => ("快捷键", "应用快捷键 · 常用操作的键盘入口。"),
             };
             let content = self.content(cx);
