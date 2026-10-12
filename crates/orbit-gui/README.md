@@ -211,6 +211,6 @@ cargo run -p orbit-gui --locked -- \
 
 在输入框键入 `/`，将指针放在命令候选上滚到两端：候选应滚动，后方聊天的可见位置保持不变；指针移到菜单外仍可滚动聊天。Esc 返回输入，方向键和 Tab 补全继续生效。模型等参数候选使用同一滚动边界。
 
-`command-output` 模拟有界 stdout 增量及非零退出的真实结果结构，`command-output-fast` 用于传输回归；工作区下 `.fixture-command-output-hold` 文件可在原生验收时暂停最终结果。`.fixture-input-queue` 创建 35 条分页样本，队列保存在同目录的 `.fixture-input-queue.json`；`-unknown-once`、`-fail-once`、`-consume-once` 后缀的队列标记分别模拟保存后丢失回执、保存前失败和被 Agent 抢先领取。它们只属于测试服务，不执行真实命令或模型调用。
+`command-output` 模拟有界 stdout 增量及非零退出的真实结果结构，`command-output-fast` 用于传输回归；`command-output-long` 提供多行 heredoc、超长单行命令、100 行 stdout 和 40 行 stderr，分别检查 `COMMAND-END`、`STDOUT-001`／`STDOUT-100`、`STDERR-001`／`STDERR-040` 首尾标记，在窄窗口和大字体下确认命令不越界、正文能够独立滚动。工作区下 `.fixture-command-output-hold` 文件可在原生验收时暂停最终结果。`.fixture-input-queue` 创建 35 条分页样本，队列保存在同目录的 `.fixture-input-queue.json`；`-unknown-once`、`-fail-once`、`-consume-once` 后缀的队列标记分别模拟保存后丢失回执、保存前失败和被 Agent 抢先领取。它们只属于测试服务，不执行真实命令或模型调用。
 
 检查 Enter 发送、Shift+Enter 换行、Tab/Shift+Tab、Esc、命令搜索、长消息滚动、800×560 窄窗口、主题切换与重新打开后的偏好恢复。fixture 中的数字和文件仅用于测试布局，实际数据取自服务端。Rust 回归覆盖独立连接的任务与审批隔离，以及工具执行、后台委派、完成、失败、压缩和文件修改的事件投影。

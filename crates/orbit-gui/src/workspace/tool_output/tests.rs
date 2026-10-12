@@ -39,6 +39,18 @@ fn command_streams_use_actual_result_and_preserve_literal_markdown_and_unicode()
 }
 
 #[test]
+fn command_view_preserves_the_complete_multiline_request() {
+    let command = "python3 - <<'PY'\nprint('甲乙 `code`')\nPY\n";
+    let tool = tool(
+        "run_command",
+        serde_json::json!({"command":command,"cwd":"/project/with spaces"}),
+        None,
+    );
+    assert_eq!(content(&tool, Stream::Command), command);
+    assert!(content(&tool, Stream::Stdout).is_empty());
+}
+
+#[test]
 fn received_output_page_is_a_snapshot_and_more_pages_does_not_mean_retention_loss() {
     let tool = tool(
         "read_command_output",

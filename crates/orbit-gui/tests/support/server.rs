@@ -407,6 +407,9 @@ fn main() -> anyhow::Result<()> {
                             if prompt == "command-output" { 120 } else { 5 },
                         );
                     }
+                    if prompt == "command-output-long" {
+                        pending = tool_output::long_events(&workspace);
+                    }
                     if matches!(
                         prompt.lines().next(),
                         Some("disclosures" | "disclosures-live")
