@@ -34,7 +34,6 @@ use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use orbit_client::protocol::{Approval, Request, Response, SessionInfo, Update};
 use std::{
-    collections::HashMap,
     path::PathBuf,
     sync::Arc,
     time::{Duration, Instant},
@@ -119,16 +118,12 @@ pub(crate) fn bind_keys(cx: &mut App) {
     ]);
 }
 
-#[derive(Default)]
-struct Draft {
-    text: SharedString,
-    paths: Vec<PathBuf>,
-}
 struct PendingSend {
     id: String,
     session: String,
     text: SharedString,
     paths: Vec<PathBuf>,
+    steer: bool,
 }
 
 pub(crate) struct Workspace {
@@ -159,10 +154,9 @@ pub(crate) struct Workspace {
     choosing_project: bool,
     project: SharedString,
     sidebar_visible: bool,
-    drafts: HashMap<String, Draft>,
     paths: Vec<PathBuf>,
     pending: Option<PendingSend>,
-    clipboard_files: Vec<tempfile::NamedTempFile>,
+    clipboard_files: Vec<Arc<tempfile::NamedTempFile>>,
     retry: Option<PendingSend>,
     error: Option<SharedString>,
     connected: bool,
@@ -203,6 +197,7 @@ impl Workspace {
             if matches!(event, InputEvent::Change) {
                 let draft = input.read(cx).value();
                 view.update_completions(draft.as_str(), window, cx);
+                cx.emit(WorkspaceEvent::DraftChanged);
                 cx.notify();
             } else if matches!(event, InputEvent::PressEnter { shift: false, .. }) {
                 view.send(&SendMessage, window, cx);
@@ -248,7 +243,6 @@ impl Workspace {
             choosing_project: false,
             project: "工作区".into(),
             sidebar_visible: true,
-            drafts: HashMap::new(),
             paths: Vec::new(),
             pending: None,
             clipboard_files: Vec::new(),
@@ -307,21 +301,16 @@ impl Workspace {
         if self.error.is_some() {
             window.remove_notification::<Workspace>(cx);
         }
-        if let Some(info) = &self.info {
-            self.drafts.insert(
-                info.id.clone(),
-                Draft {
-                    text: self.input.read(cx).value(),
-                    paths: self.paths.clone(),
-                },
-            );
-        }
         self.error = None;
         self.opening = true;
         self.connected = false;
         let mut options = self.options.clone();
         if let Some(info) = &self.info {
-            options.resume = Some(info.id.clone());
+            options.resume = (info.persisted || self.retry.is_some() || self.pending.is_some())
+                .then(|| info.id.clone());
+            options.recover_draft = !info.persisted && options.resume.is_some();
+            options.workspace = Some(PathBuf::from(&info.workspace));
+            options.model = Some(info.model.clone());
         }
         let (backend, mut receiver) = Backend::start(options, &self.runtime);
         self.backend = Some(backend);
@@ -423,10 +412,10 @@ impl Workspace {
                 }
             }
             Event::Disconnected(error) => {
-                self.report_error(error, cx);
                 self.connected = false;
                 self.opening = false;
                 self.retry = self.pending.take().or(self.retry.take());
+                self.report_error(error, cx);
             }
             Event::Error(error) => {
                 self.report_error(error, cx);
@@ -450,6 +439,12 @@ impl Workspace {
                 {
                     let pending = self.pending.take().unwrap();
                     self.retry = None;
+                    // Start acknowledges only after the service persists it.
+                    // Closing before the next Profile poll must still resume
+                    // this session, rather than restore an empty draft.
+                    if let Some(info) = &mut self.info {
+                        info.persisted = true;
+                    }
                     if self.input.read(cx).value() == pending.text {
                         self.input
                             .update(cx, |input, cx| input.set_value("", window, cx));
@@ -463,6 +458,7 @@ impl Workspace {
         if previous != self.summary() {
             cx.emit(WorkspaceEvent::Changed);
         }
+        cx.emit(WorkspaceEvent::DraftChanged);
         cx.notify();
     }
 
@@ -508,10 +504,9 @@ impl Workspace {
         match response {
             Response::Opened(info) => {
                 self.options.relink_on_resume = false;
-                let draft = self.drafts.remove(&info.id).unwrap_or_default();
-                self.input
-                    .update(cx, |input, cx| input.set_value(draft.text, window, cx));
-                self.paths = draft.paths;
+                self.options.recover_draft = false;
+                // This entity owns one task's composer. Restoring transport
+                // history must never overwrite text edited while offline.
                 self.profile(info, cx);
                 self.opening = true;
                 self.busy = false;
@@ -685,6 +680,7 @@ impl Workspace {
             .map(|info| info.model.clone())
             .or(options.model);
         options.resume = resume;
+        options.recover_draft = false;
         cx.emit(WorkspaceEvent::Open(Box::new(options)));
     }
 
@@ -701,10 +697,12 @@ impl Workspace {
         }
         let text = self.input.read(cx).value();
         let session = self.info.as_ref().unwrap().id.clone();
-        let id = self
+        let retry = self
             .retry
             .as_ref()
-            .filter(|retry| retry.matches(&session, &text, &self.paths))
+            .filter(|retry| retry.matches(&session, &text, &self.paths));
+        let steer = retry.map_or(self.busy, |retry| retry.steer);
+        let id = retry
             .map(|retry| retry.id.clone())
             .unwrap_or_else(orbit_protocol::request_id);
         let pending = PendingSend {
@@ -712,6 +710,7 @@ impl Workspace {
             id: id.clone(),
             text: text.clone(),
             paths: self.paths.clone(),
+            steer,
         };
         if self.command(
             Command::Send {
@@ -719,12 +718,13 @@ impl Workspace {
                 id,
                 prompt: text.to_string(),
                 paths: self.paths.clone(),
-                steer: self.busy,
+                steer,
             },
             cx,
         ) {
             self.pending = Some(pending);
             self.error = None;
+            cx.emit(WorkspaceEvent::DraftChanged);
             cx.notify();
         }
     }
@@ -788,6 +788,7 @@ impl Workspace {
                     Ok(Err(error)) => view.report_error(format!("无法选择图片：{error}"), cx),
                     _ => {}
                 }
+                cx.emit(WorkspaceEvent::DraftChanged);
                 cx.notify();
             });
         });
@@ -842,11 +843,12 @@ impl Workspace {
                     Ok(Ok(files)) => {
                         view.paths
                             .extend(files.iter().map(|file| file.path().to_path_buf()));
-                        view.clipboard_files.extend(files);
+                        view.clipboard_files.extend(files.into_iter().map(Arc::new));
                     }
                     Ok(Err(error)) => view.report_error(format!("粘贴图片失败：{error}"), cx),
                     Err(error) => view.report_error(format!("粘贴图片失败：{error}"), cx),
                 }
+                cx.emit(WorkspaceEvent::DraftChanged);
                 cx.notify();
             });
         });
@@ -873,6 +875,7 @@ impl Workspace {
                 self.report_error("请选择 PNG、JPEG、WebP 或 GIF 图片。", cx);
             }
         }
+        cx.emit(WorkspaceEvent::DraftChanged);
         cx.notify();
     }
 
@@ -977,6 +980,7 @@ mod tests {
             session: "one".into(),
             text: "draft".into(),
             paths: vec!["a.png".into()],
+            steer: false,
         };
         assert!(pending.matches("one", "draft", &["a.png".into()]));
         assert!(!pending.matches("two", "draft", &["a.png".into()]));

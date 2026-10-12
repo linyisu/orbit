@@ -59,12 +59,32 @@ fn main() -> anyhow::Result<()> {
                     .ok();
             linked = relocation.as_deref() == Some("linked");
         }
-        if relocation.is_some() {
+        let recovery = std::path::Path::new(&workspace)
+            .join(".fixture-recovery")
+            .exists();
+        if relocation.is_some() || recovery {
             let mut log = std::fs::OpenOptions::new()
                 .create(true)
                 .append(true)
                 .open(std::path::Path::new(&workspace).join(".fixture-requests"))?;
             writeln!(log, "{request}")?;
+        }
+        if recovery
+            && request["method"] == "poll"
+            && std::fs::remove_file(std::path::Path::new(&workspace).join(".fixture-disconnect"))
+                .is_ok()
+        {
+            // Terminate the transport once; the next peer still exposes demo's
+            // history, as the real workspace service does across reconnects.
+            return Ok(());
+        }
+        if recovery
+            && request["method"] == "hello"
+            && std::path::Path::new(&workspace)
+                .join(".fixture-offline")
+                .exists()
+        {
+            return Ok(());
         }
         let profile = |session: &str, model: &str, mode: &str| json!({"id":session,"persisted":session=="demo","title":if session=="demo" {"梳理项目结构"} else {"新会话"},"workspace":workspace,"model":model,"models":if session == "models" { vec!["acm::shared", "acm::qwen", "antigravity-account::claude-opus", "antigravity-account::gemini-flash", "chatgpt-account::astra", "deepseek-account::shared", "deepseek-account::deepseek-flash"] } else { vec!["fixture::local","fixture::other","fixture::gemini-flash","fixture::claude-opus"] },"mode":mode,"supports_vision":true,"reasoning_effort":null,"reasoning_efforts":[],"context_tokens":128000,"input_context_tokens":120000,"max_output_tokens":8000});
         let response = match request["method"].as_str().unwrap_or_default() {

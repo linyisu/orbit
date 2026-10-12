@@ -19,11 +19,67 @@ pub(crate) enum WorkspaceEvent {
     Activate(String),
     Close(String),
     Changed,
+    DraftChanged,
     Catalog(Vec<SessionEntry>),
 }
 impl EventEmitter<WorkspaceEvent> for Workspace {}
 
 impl Workspace {
+    pub(crate) fn saved(&self, cx: &App) -> crate::workbench::storage::SavedTask {
+        let mut options = self.options.clone();
+        if let Some(info) = &self.info {
+            options.workspace = Some(PathBuf::from(&info.workspace));
+            options.model = Some(info.model.clone());
+            options.resume = (info.persisted || self.pending.is_some() || self.retry.is_some())
+                .then(|| info.id.clone());
+            options.recover_draft = !info.persisted && options.resume.is_some();
+        }
+        options.relink_on_resume = false;
+        crate::workbench::storage::SavedTask {
+            key: self.key.clone(),
+            options,
+            title: self.title.to_string(),
+            text: self.input.read(cx).value().to_string(),
+            paths: self.paths.clone(),
+            retry: self.pending.as_ref().or(self.retry.as_ref()).map(|send| {
+                crate::workbench::storage::SavedSend {
+                    id: send.id.clone(),
+                    session: send.session.clone(),
+                    text: send.text.to_string(),
+                    paths: send.paths.clone(),
+                    steer: send.steer,
+                }
+            }),
+            clipboard_files: self
+                .clipboard_files
+                .iter()
+                .filter(|file| self.paths.iter().any(|path| path == file.path()))
+                .cloned()
+                .collect(),
+        }
+    }
+    pub(crate) fn restore(
+        &mut self,
+        saved: crate::workbench::storage::SavedTask,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.key = saved.key;
+        self.title = saved.title.into();
+        self.paths = saved.paths;
+        self.input
+            .update(cx, |input, cx| input.set_value(saved.text, window, cx));
+        // A restored send is only an explicit retry candidate, never a queued
+        // command. Start retains its idempotency key across a desktop restart.
+        self.retry = saved.retry.map(|send| PendingSend {
+            id: send.id,
+            session: send.session,
+            text: send.text.into(),
+            paths: send.paths,
+            steer: send.steer,
+        });
+        cx.notify();
+    }
     pub(super) fn adjacent_task(&self, forward: bool, cx: &mut Context<Self>) {
         let Some(ix) = self.open_tasks.iter().position(|task| task.key == self.key) else {
             return;
@@ -46,8 +102,8 @@ impl Workspace {
         &self.key
     }
     pub(crate) fn can_resume(&self, id: &str, options: &Options) -> bool {
-        self.connected
-            && self.info.as_ref().is_some_and(|info| info.id == id)
+        (self.connected && self.info.as_ref().is_some_and(|info| info.id == id)
+            || self.opening && self.options.resume.as_deref() == Some(id))
             && options
                 .workspace
                 .as_ref()
@@ -113,7 +169,9 @@ impl Workspace {
         self.execution.phase().label()
     }
     pub(crate) fn is_empty_draft(&self, cx: &App) -> bool {
-        self.info.as_ref().is_some_and(|info| !info.persisted)
+        self.info
+            .as_ref()
+            .map_or(self.options.resume.is_none(), |info| !info.persisted)
             && self.conversation.read(cx).is_empty()
             && self.input.read(cx).value().is_empty()
             && self.paths.is_empty()

@@ -7,6 +7,54 @@ use orbit_client::protocol::{Request, Response};
 use std::time::Duration;
 use tokio::sync::mpsc;
 
+#[test]
+fn first_send_recovery_checks_persistence_without_sending_a_message() {
+    use clap::Parser;
+    for (resume, recover_draft, expected) in [
+        ("demo", true, "demo"),
+        ("missing", true, "draft-1"),
+        ("missing", false, "missing"),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join(".fixture-recovery"), "").unwrap();
+        let mut options = Options::parse_from(["orbit-gui"]);
+        options.config = directory.path().join("unused.toml");
+        options.workspace = Some(directory.path().to_path_buf());
+        options.server = Some(env!("CARGO_BIN_EXE_orbit-gui-fixture").into());
+        options.database = Some(directory.path().join("unused.db"));
+        options.auth_dir = Some(directory.path().join("auth"));
+        options.model = Some("fixture::local".into());
+        options.resume = Some(resume.into());
+        options.recover_draft = recover_draft;
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let (backend, mut events) = Backend::start(options, &runtime);
+        runtime.block_on(async {
+            let Event::Response(Response::Opened(info)) = until(&mut events, |event| {
+                matches!(event, Event::Response(Response::Opened(_)))
+            })
+            .await
+            else {
+                unreachable!()
+            };
+            assert_eq!(info.id, expected);
+            until(
+                &mut events,
+                |event| matches!(event, Event::Response(Response::Page(page)) if !page.more),
+            )
+            .await;
+        });
+        drop(backend);
+        let requests = std::fs::read_to_string(directory.path().join(".fixture-requests")).unwrap();
+        for line in requests.lines() {
+            let request: serde_json::Value = serde_json::from_str(line).unwrap();
+            assert!(!matches!(
+                request["method"].as_str(),
+                Some("start" | "steer")
+            ));
+        }
+    }
+}
+
 async fn until(events: &mut mpsc::Receiver<Event>, accept: impl Fn(&Event) -> bool) -> Event {
     tokio::time::timeout(Duration::from_secs(10), async {
         loop {
@@ -40,6 +88,7 @@ fn transport_retries_sends_and_resolves_approvals() {
             model: Some("fixture::local".into()),
             resume: None,
             relink_on_resume: false,
+            recover_draft: false,
             appearance: None,
             preferences: None,
             ssh: None,
@@ -128,6 +177,7 @@ fn independent_tasks_keep_running_and_scope_approvals_to_their_connection() {
         model: Some("fixture::local".into()),
         resume: Some("task-a".into()),
         relink_on_resume: false,
+        recover_draft: false,
         appearance: None,
         preferences: None,
         ssh: None,
@@ -175,6 +225,7 @@ fn history_pages_drain_without_live_poll_delays_and_keep_cursor_order() {
             model: Some("fixture::local".into()),
             resume: Some("paged".into()),
             relink_on_resume: false,
+            recover_draft: false,
             appearance: None,
             preferences: None,
             ssh: None,
@@ -220,6 +271,7 @@ fn replacement_directory_links_before_resume_and_preserves_ownership_checks() {
                 model: Some("fixture::local".into()),
                 resume: Some("demo".into()),
                 relink_on_resume: explicit,
+                recover_draft: false,
                 appearance: None,
                 preferences: None,
                 ssh: None,

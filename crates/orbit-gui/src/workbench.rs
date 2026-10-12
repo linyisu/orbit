@@ -1,5 +1,6 @@
 //! Window-level ownership of independent task workspaces. Changing selection
 //! changes only the visible entity, never a task's transport or input state.
+pub(crate) mod storage;
 use crate::{
     backend::Options,
     workspace::{Workspace, WorkspaceEvent},
@@ -17,21 +18,71 @@ pub(crate) struct Workbench {
     tasks: Vec<OpenTask>,
     active: String,
     unread: HashSet<String>,
+    origin: Options,
+    storage: storage::Storage,
+    restoring: bool,
+    _storage_errors: Task<()>,
 }
 impl Workbench {
     pub(crate) fn new(
         options: Options,
         runtime: Arc<tokio::runtime::Runtime>,
+        loaded: storage::Loaded,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        let storage::Loaded {
+            storage,
+            saved,
+            mut errors,
+        } = loaded;
         let mut workbench = Self {
             runtime,
             tasks: Vec::new(),
             active: String::new(),
             unread: HashSet::new(),
+            origin: options.clone(),
+            storage,
+            restoring: true,
+            _storage_errors: cx.spawn(async move |owner, cx| {
+                while errors.changed().await.is_ok() {
+                    let error = errors.borrow_and_update().clone();
+                    if let Some(error) = error {
+                        let _ = owner.update_in(cx, |_, window, cx| {
+                            use gpui_kit::component::{WindowExt, notification::Notification};
+                            window.push_notification(
+                                Notification::error(error).title("草稿尚未保存"),
+                                cx,
+                            );
+                        });
+                    }
+                }
+            }),
         };
-        workbench.open(options, window, cx);
+        let active = saved.as_ref().map(|saved| saved.active.clone());
+        if let Some(saved) = saved {
+            for task in saved.tasks {
+                workbench.create(task.options.clone(), Some(task), window, cx);
+            }
+        }
+        if workbench.tasks.is_empty()
+            || options.workspace.is_some()
+            || options.resume.is_some()
+            || options.ssh.is_some()
+            || options.wsl.is_some()
+        {
+            workbench.open(options, window, cx);
+        } else if let Some(active) = active {
+            workbench.activate(&active, window, cx);
+        }
+        workbench.restoring = false;
+        // Component overlays are installed after the root view constructor.
+        // Activate only once, after that installation, instead of exposing each
+        // restored tab and attempting to dismiss its notifications in bootstrap.
+        cx.defer_in(window, |workbench, window, cx| {
+            let active = workbench.active.clone();
+            workbench.activate(&active, window, cx);
+        });
         workbench
     }
     fn open(&mut self, options: Options, window: &mut Window, cx: &mut Context<Self>) {
@@ -55,6 +106,15 @@ impl Workbench {
             self.activate(&key, window, cx);
             return;
         }
+        self.create(options, None, window, cx);
+    }
+    fn create(
+        &mut self,
+        options: Options,
+        saved: Option<storage::SavedTask>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let runtime = self.runtime.clone();
         let catalog = self
             .tasks
@@ -62,6 +122,9 @@ impl Workbench {
             .find(|task| task.view.read(cx).options().same_host(&options))
             .map(|task| task.view.read(cx).catalog().to_vec());
         let view = cx.new(|cx| Workspace::new(options, runtime, window, cx));
+        if let Some(saved) = saved {
+            view.update(cx, |view, cx| view.restore(saved, window, cx));
+        }
         if let Some(catalog) = catalog {
             view.update(cx, |view, cx| view.set_catalog(catalog, cx));
         }
@@ -72,6 +135,7 @@ impl Workbench {
                 WorkspaceEvent::Open(options) => workbench.open((**options).clone(), window, cx),
                 WorkspaceEvent::Activate(key) => workbench.activate(key, window, cx),
                 WorkspaceEvent::Close(key) => workbench.close(key, window, cx),
+                WorkspaceEvent::DraftChanged => workbench.persist(cx),
                 WorkspaceEvent::Changed => {
                     let summary = source.read(cx).summary();
                     let finished = workbench
@@ -117,6 +181,9 @@ impl Workbench {
             return;
         }
         self.active = key.to_owned();
+        if self.restoring {
+            return;
+        }
         self.unread.remove(key);
         for task in &self.tasks {
             let visible = task.view.read(cx).key() == key;
@@ -139,6 +206,7 @@ impl Workbench {
         }
         let mut options = self.tasks[ix].view.read(cx).options().clone();
         options.resume = None;
+        options.recover_draft = false;
         options.relink_on_resume = false;
         let was_active = self.active == key;
         self.tasks.remove(ix);
@@ -171,6 +239,20 @@ impl Workbench {
                 .update(cx, |view, cx| view.set_open_tasks(summaries.clone(), cx));
         }
         cx.notify();
+        self.persist(cx);
+    }
+    fn persist(&self, cx: &App) {
+        if self.restoring {
+            return;
+        }
+        self.storage.save(storage::Snapshot::new(
+            self.origin.clone(),
+            self.active.clone(),
+            self.tasks
+                .iter()
+                .map(|task| task.view.read(cx).saved(cx))
+                .collect(),
+        ));
     }
 }
 impl Render for Workbench {

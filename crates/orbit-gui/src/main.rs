@@ -21,9 +21,11 @@ fn main() -> anyhow::Result<()> {
         return orbit_client::interaction::askpass();
     }
     orbit_client::register_server_bundle(include_bytes!(env!("ORBIT_EMBEDDED_SERVER")))?;
-    let options = backend::Options::parse();
+    let mut options = backend::Options::parse();
+    options.resolve_paths()?;
     let runtime = Arc::new(tokio::runtime::Runtime::new()?);
     let preferences = preferences::Preferences::load(options.preferences.as_deref(), &runtime)?;
+    let (loaded, _writer) = workbench::storage::Storage::load(&options)?;
     gpui_kit::application()
         .with_assets(assets::AppAssets)
         .run(move |cx| {
@@ -47,7 +49,7 @@ fn main() -> anyhow::Result<()> {
                 cx,
                 |window, cx| {
                     window.set_window_title("Orbit");
-                    cx.new(|cx| workbench::Workbench::new(options, runtime, window, cx))
+                    cx.new(|cx| workbench::Workbench::new(options, runtime, loaded, window, cx))
                 },
             );
             if let Err(error) = result {

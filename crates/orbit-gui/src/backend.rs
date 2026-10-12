@@ -11,7 +11,7 @@ use orbit_client::{
 };
 use tokio::sync::mpsc;
 
-#[derive(Clone, clap::Parser)]
+#[derive(Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, clap::Parser)]
 #[command(name = "orbit-gui", about = "Orbit desktop client")]
 pub(crate) struct Options {
     #[arg(long, default_value = "config.toml", env = "orbit_config")]
@@ -30,7 +30,13 @@ pub(crate) struct Options {
     pub(crate) resume: Option<String>,
     /// One-shot intent from selecting a replacement directory for a saved session.
     #[arg(skip)]
+    #[serde(skip)]
     pub(crate) relink_on_resume: bool,
+    /// A first send may have lost its acknowledgement before persistence was
+    /// confirmed. Only this case may recover as a fresh draft if absent.
+    #[arg(skip)]
+    #[serde(default)]
+    pub(crate) recover_draft: bool,
     /// Directory containing the Shell appearance panel; watched in debug builds.
     #[arg(long)]
     pub(crate) appearance: Option<PathBuf>,
@@ -44,6 +50,22 @@ pub(crate) struct Options {
 }
 
 impl Options {
+    pub(crate) fn resolve_paths(&mut self) -> Result<()> {
+        let directory = std::env::current_dir()?;
+        for path in std::iter::once(&mut self.config)
+            .chain(self.workspace.iter_mut())
+            .chain(self.database.iter_mut())
+            .chain(self.auth_dir.iter_mut())
+            .chain(self.preferences.iter_mut())
+            .chain(self.appearance.iter_mut())
+        {
+            if path.is_relative() {
+                *path = directory.join(&*path);
+            }
+        }
+        Ok(())
+    }
+
     /// Session IDs and paths are meaningful only within the same service/data
     /// source. Never activate a local tab for an identically named remote one.
     pub(crate) fn same_host(&self, other: &Self) -> bool {
@@ -212,6 +234,7 @@ async fn run(
             history = client.request(Request::AllSessions).await?;
         }
     }
+    let resume = recovered_session(options.resume, options.recover_draft, &history)?;
     events.send(Event::Response(history)).await?;
     let model = match options.model {
         Some(model) => Some(model),
@@ -232,16 +255,14 @@ async fn run(
     let initial = Request::Open {
         model: model.clone(),
         policy: Default::default(),
-        resume: options.resume,
+        resume,
         configuration: connection.configuration().await?,
     };
-    deliver(
-        client.request(initial).await?,
-        &mut session,
-        &mut cursor,
-        events,
-    )
-    .await?;
+    let opened = client.request(initial).await?;
+    if let Response::Error(error) = opened {
+        bail!(error);
+    }
+    deliver(opened, &mut session, &mut cursor, events).await?;
     let mut interval = tokio::time::interval(Duration::from_millis(80));
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut quota_tasks = tokio::task::JoinSet::new();
@@ -414,6 +435,20 @@ async fn send(
         Response::Error(error) => bail!(error),
         _ => bail!("服务未确认发送，请检查会话状态。"),
     }
+}
+
+fn recovered_session(
+    resume: Option<String>,
+    recover_draft: bool,
+    history: &Response,
+) -> Result<Option<String>> {
+    if !recover_draft {
+        return Ok(resume);
+    }
+    let Response::Sessions(sessions) = history else {
+        bail!("无法确认未发送任务的会话记录");
+    };
+    Ok(resume.filter(|id| sessions.iter().any(|session| &session.id == id)))
 }
 
 async fn deliver(

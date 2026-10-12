@@ -62,6 +62,7 @@ impl Workspace {
         }
         options.workspace = Some(path);
         options.resume = resume;
+        options.recover_draft = false;
         options.relink_on_resume = relink;
         cx.emit(WorkspaceEvent::Open(Box::new(options)));
     }
@@ -118,6 +119,7 @@ impl Workspace {
                                 options.wsl = (!values[2].is_empty()).then(|| values[2].clone());
                                 options.workspace = Some(PathBuf::from(&values[0]));
                                 options.resume = None;
+                                options.recover_draft = false;
                                 options.relink_on_resume = false;
                                 cx.emit(WorkspaceEvent::Open(Box::new(options)));
                             });

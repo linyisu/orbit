@@ -91,6 +91,7 @@ impl Workspace {
                                     .when(self.pending.is_none(), |attachment| {
                                         attachment.on_remove(cx.listener(move |view, _, _, cx| {
                                             view.paths.retain(|path| path != &remove);
+                                            cx.emit(WorkspaceEvent::DraftChanged);
                                             cx.notify();
                                         }))
                                     })
