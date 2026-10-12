@@ -6,6 +6,8 @@ mod lifecycle;
 pub(crate) use lifecycle::{WorkspaceEvent, WorkspaceSummary};
 mod models;
 mod navigation;
+mod sidebar;
+pub(crate) use sidebar::Sidebar;
 mod panel;
 mod questions;
 mod recovery;
@@ -132,7 +134,6 @@ pub(crate) struct Workspace {
     visible: bool,
     open_tasks: Vec<WorkspaceSummary>,
     navigation_tasks: Vec<WorkspaceSummary>,
-    hovered_title: Option<(SharedString, Instant)>,
     execution: crate::execution::Execution,
     execution_scroll: UniformListScrollHandle,
     task_scroll: ScrollHandle,
@@ -156,12 +157,10 @@ pub(crate) struct Workspace {
     model: SharedString,
     location: SharedString,
     sessions: Vec<SessionEntry>,
-    groups: Vec<TreeItem>,
-    navigation: Entity<TreeState>,
+    sidebar: Entity<Sidebar>,
     project_picker: Task<()>,
     choosing_project: bool,
     project: SharedString,
-    sidebar_visible: bool,
     paths: Vec<PathBuf>,
     pending: Option<PendingSend>,
     clipboard_files: Vec<Arc<tempfile::NamedTempFile>>,
@@ -192,6 +191,7 @@ impl Workspace {
     pub(crate) fn new(
         options: Options,
         runtime: Arc<tokio::runtime::Runtime>,
+        sidebar: Entity<Sidebar>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -228,7 +228,6 @@ impl Workspace {
             visible: false,
             open_tasks: Vec::new(),
             navigation_tasks: Vec::new(),
-            hovered_title: None,
             execution: Default::default(),
             execution_scroll: UniformListScrollHandle::new(),
             task_scroll: ScrollHandle::new(),
@@ -252,12 +251,10 @@ impl Workspace {
             model: "模型".into(),
             location,
             sessions: Vec::new(),
-            groups: Vec::new(),
-            navigation: cx.new(|cx| TreeState::new(cx)),
+            sidebar,
             project_picker: Task::ready(()),
             choosing_project: false,
             project: "工作区".into(),
-            sidebar_visible: true,
             paths: Vec::new(),
             pending: None,
             clipboard_files: Vec::new(),
@@ -497,10 +494,6 @@ impl Workspace {
     }
 
     fn profile(&mut self, info: SessionInfo, cx: &mut Context<Self>) {
-        let changed = self
-            .info
-            .as_ref()
-            .is_none_or(|previous| previous.id != info.id || previous.workspace != info.workspace);
         if let Some(entry) = self
             .sessions
             .iter_mut()
@@ -521,15 +514,6 @@ impl Workspace {
             .into();
         self.info = Some(info);
         self.refresh_title(cx);
-        self.regroup(cx);
-        if changed {
-            let item = TreeItem::new(
-                format!("session:{}", self.info.as_ref().unwrap().id),
-                self.title.clone(),
-            );
-            self.navigation
-                .update(cx, |tree, cx| tree.set_selected_item(Some(&item), cx));
-        }
     }
 
     fn response(&mut self, response: Response, window: &mut Window, cx: &mut Context<Self>) {
@@ -578,7 +562,6 @@ impl Workspace {
                     })
                     .collect();
                 self.refresh_title(cx);
-                self.regroup(cx);
                 cx.emit(WorkspaceEvent::Catalog(self.sessions.clone()));
             }
             Response::Page(page) => {
@@ -991,7 +974,7 @@ impl Workspace {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq)]
 pub(crate) struct SessionEntry {
     id: SharedString,
     title: SharedString,

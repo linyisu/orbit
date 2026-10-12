@@ -211,7 +211,6 @@ impl Workspace {
     pub(crate) fn set_catalog(&mut self, catalog: Vec<SessionEntry>, cx: &mut Context<Self>) {
         self.sessions = catalog;
         self.refresh_title(cx);
-        self.regroup(cx);
         cx.notify();
     }
 

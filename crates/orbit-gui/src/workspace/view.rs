@@ -415,15 +415,6 @@ impl Render for Workspace {
                 .flex_1()
                 .min_w_0()
                 .gap_2()
-                .child(
-                    Button::new("workspace-menu")
-                        .ghost()
-                        .small()
-                        .icon(IconName::Menu)
-                        .accessibility_label("工作区命令")
-                        .tooltip("工作区命令 · Ctrl+Shift+P")
-                        .on_click(cx.listener(|view, _, window, cx| view.commands(window, cx))),
-                )
                 .child(div().text_sm().child(self.project.clone()))
                 .when_some(
                     self.info.as_ref().and_then(|info| info.branch.clone()),
@@ -437,98 +428,6 @@ impl Render for Workspace {
                     },
                 ),
         );
-        let sidebar = v_flex()
-            .size_full()
-            .bg(cx.theme().sidebar)
-            .text_color(cx.theme().sidebar_foreground)
-            .child(
-                v_flex()
-                    .p_3()
-                    .gap_1()
-                    .child(
-                        Button::new("new-session")
-                            .ghost()
-                            .small()
-                            .w_full()
-                            .accessibility_label("新任务")
-                            .child(
-                                h_flex()
-                                    .w_full()
-                                    .gap_2()
-                                    .child(Icon::new(IconName::Plus).size_4())
-                                    .child("新任务"),
-                            )
-                            .tooltip("Ctrl+N")
-                            .disabled(self.opening || !self.connected)
-                            .on_click(cx.listener(|view, _, _, cx| view.open(None, cx))),
-                    )
-                    .child(
-                        Button::new("open-project")
-                            .ghost()
-                            .small()
-                            .w_full()
-                            .accessibility_label("打开项目")
-                            .child(
-                                h_flex()
-                                    .w_full()
-                                    .gap_2()
-                                    .child(Icon::new(IconName::Folder).size_4())
-                                    .child("打开项目…"),
-                            )
-                            .tooltip("Ctrl+O")
-                            .disabled(self.choosing_project || self.pending.is_some())
-                            .on_click(cx.listener(|view, _, _, cx| view.open_project(cx))),
-                    )
-                    .child(
-                        Button::new("find-task")
-                            .ghost()
-                            .small()
-                            .w_full()
-                            .child(
-                                h_flex()
-                                    .w_full()
-                                    .gap_2()
-                                    .child(Icon::new(IconName::Search).size_4())
-                                    .child("搜索任务"),
-                            )
-                            .tooltip("搜索任务 · Ctrl+P")
-                            .on_click(
-                                cx.listener(|view, _, window, cx| view.search_sessions(window, cx)),
-                            ),
-                    ),
-            )
-            .child(
-                div()
-                    .px_4()
-                    .py_2()
-                    .text_xs()
-                    .text_color(cx.theme().muted_foreground)
-                    .child("项目"),
-            )
-            .child(div().flex_1().min_h_0().child(self.project_tree(cx)))
-            .child(
-                h_flex()
-                    .p_2()
-                    .border_t_1()
-                    .border_color(cx.theme().border)
-                    .child(
-                        Button::new("appearance")
-                            .ghost()
-                            .w_full()
-                            .child(
-                                h_flex()
-                                    .w_full()
-                                    .gap_2()
-                                    .child(Icon::new(IconName::Settings).small())
-                                    .child("设置"),
-                            )
-                            .accessibility_label("设置")
-                            .tooltip("设置 · Ctrl+,")
-                            .on_click(cx.listener(|view, _, window, cx| {
-                                view.appearance(&AppearanceSettings, window, cx)
-                            })),
-                    ),
-            );
         let empty = !self.opening && self.conversation.read(cx).is_empty();
         let body =
             v_flex()
@@ -551,8 +450,7 @@ impl Render for Workspace {
                                 .accessibility_label("切换侧栏")
                                 .tooltip("切换侧栏 · Ctrl+B")
                                 .on_click(cx.listener(|view, _, _, cx| {
-                                    view.sidebar_visible = !view.sidebar_visible;
-                                    cx.notify();
+                                    view.sidebar.update(cx, |sidebar, cx| sidebar.toggle(cx));
                                 })),
                         )
                         .child(div().flex_1().min_w_0().child(self.task_tabs(window, cx)))
@@ -815,34 +713,13 @@ impl Render for Workspace {
                 }),
             )
             .on_action(cx.listener(|view, _: &ToggleSidebar, _, cx| {
-                view.sidebar_visible = !view.sidebar_visible;
-                cx.notify();
+                view.sidebar.update(cx, |sidebar, cx| sidebar.toggle(cx));
             }))
             .on_action(cx.listener(|view, _: &FocusComposer, window, cx| {
                 view.input.update(cx, |input, cx| input.focus(window, cx))
             }))
             .child(title_bar)
-            .child(div().flex_1().min_h_0().child(if self.sidebar_visible {
-                h_resizable("workspace-panes")
-                    .on_resize(|state, window, cx| {
-                        if let Some(width) = state.read(cx).sizes().first().copied() {
-                            crate::preferences::Preferences::set_sidebar(
-                                width / window.rem_size(),
-                                cx,
-                            );
-                        }
-                    })
-                    .child(
-                        resizable_panel()
-                            .size(window.rem_size() * crate::preferences::Preferences::sidebar(cx))
-                            .size_range(window.rem_size() * 12. ..window.rem_size() * 24.)
-                            .child(sidebar),
-                    )
-                    .child(resizable_panel().child(body))
-                    .into_any_element()
-            } else {
-                body
-            }))
+            .child(div().flex_1().min_h_0().child(body))
             .into_any_element()
     }
 }

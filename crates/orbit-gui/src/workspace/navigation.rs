@@ -1,170 +1,7 @@
 //! Project directories and their conversations, with Kit owning tree navigation.
 use super::*;
-use gpui_kit::component::{list::ListItem, spinner::Spinner, tooltip::Tooltip};
 
 impl Workspace {
-    pub(super) fn regroup(&mut self, cx: &mut Context<Self>) {
-        let mut groups = project_items(&self.sessions, &self.groups);
-        for group in &mut groups {
-            if group.id.as_ref() == format!("project:{}", self.location)
-                && !self.groups.iter().any(|previous| previous.id == group.id)
-            {
-                *group = group.clone().expanded(true);
-            }
-        }
-        self.groups = groups;
-        let selected = self
-            .info
-            .as_ref()
-            .map(|info| TreeItem::new(format!("session:{}", info.id), info.title.clone()));
-        self.navigation.update(cx, |tree, cx| {
-            tree.set_items(self.groups.clone(), cx);
-            let ix = selected.as_ref().and_then(|item| tree.index_of(&item.id));
-            tree.set_selected_index(ix, cx);
-        });
-    }
-
-    pub(super) fn project_tree(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let owner = cx.weak_entity();
-        let hovered = self.hovered_title.clone();
-        let tasks = self.navigation_tasks.clone();
-        let active = self
-            .info
-            .as_ref()
-            .map(|info| format!("session:{}", info.id));
-        div()
-            .id("project-conversations")
-            .size_full()
-            .capture_key_down(cx.listener(|view, event: &KeyDownEvent, window, cx| {
-                if event.keystroke.key == "enter" {
-                    let id = view
-                        .navigation
-                        .read(cx)
-                        .selected_item()
-                        .map(|item| item.id.clone());
-                    if let Some(id) =
-                        id.and_then(|id| id.strip_prefix("session:").map(str::to_owned))
-                    {
-                        view.select_session(&id, window, cx);
-                        cx.stop_propagation();
-                    }
-                }
-            }))
-            .child(Tree::new(&self.navigation, move |_, entry, _, _, cx| {
-                let id = entry.item().id.clone();
-                let owner = owner.clone();
-                let hover_owner = owner.clone();
-                let hover_id = id.clone();
-                let folder = entry.is_folder();
-                let expanded = entry.is_expanded();
-                let title: SharedString = entry
-                    .item()
-                    .label
-                    .split_whitespace()
-                    .collect::<Vec<_>>()
-                    .join(" ")
-                    .into();
-                let started = hovered
-                    .as_ref()
-                    .filter(|(key, _)| key == &id)
-                    .map(|(_, time)| *time);
-                let task = id.strip_prefix("session:").and_then(|session| {
-                    tasks
-                        .iter()
-                        .find(|task| task.session.as_deref() == Some(session))
-                });
-                let status = task.map(|task| task.status);
-                ListItem::new(id.clone())
-                    .accessibility_label(entry.item().label.clone())
-                    .h_8()
-                    .overflow_hidden()
-                    .confirmed(active.as_deref() == Some(id.as_ref()))
-                    .on_hover(move |hovering, _, cx| {
-                        let _ = hover_owner.update(cx, |view, cx| {
-                            if *hovering {
-                                view.hovered_title = Some((hover_id.clone(), Instant::now()));
-                            } else if view
-                                .hovered_title
-                                .as_ref()
-                                .is_some_and(|(id, _)| id == &hover_id)
-                            {
-                                view.hovered_title = None;
-                            }
-                            cx.notify();
-                        });
-                    })
-                    .child(
-                        h_flex()
-                            .w_full()
-                            .min_w_0()
-                            .gap_2()
-                            .child(div().w_4().flex_shrink_0().when(folder, |slot| {
-                                slot.child(
-                                    Icon::new(if expanded {
-                                        IconName::FolderOpen
-                                    } else {
-                                        IconName::Folder
-                                    })
-                                    .size_4(),
-                                )
-                            }))
-                            .child(
-                                div()
-                                    .w_0()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .h_6()
-                                    .overflow_hidden()
-                                    .whitespace_nowrap()
-                                    .text_ellipsis()
-                                    .map(|label| match started.filter(|_| !cx.reduce_motion()) {
-                                        Some(started) => {
-                                            label.child(scrolling_title(title, started))
-                                        }
-                                        None => label.child(title),
-                                    }),
-                            )
-                            .child(
-                                div()
-                                    .id((ElementId::from(id.clone()), "activity"))
-                                    .w_4()
-                                    .h_4()
-                                    .flex_shrink_0()
-                                    .when_some(task, |slot, task| {
-                                        slot.when(task.attention, |slot| {
-                                            slot.child(
-                                                Icon::new(IconName::Info)
-                                                    .size_4()
-                                                    .text_color(cx.theme().muted_foreground),
-                                            )
-                                        })
-                                        .when(task.loading && !task.attention, |slot| {
-                                            slot.child(Spinner::new().small())
-                                        })
-                                        .when_some(
-                                            status,
-                                            |slot, status| {
-                                                slot.tooltip(move |window, cx| {
-                                                    Tooltip::new(status).build(window, cx)
-                                                })
-                                            },
-                                        )
-                                    }),
-                            ),
-                    )
-                    .when(folder, |row| {
-                        let path = id.strip_prefix("project:").unwrap_or(&id).to_owned();
-                        row.tooltip(move |window, cx| Tooltip::new(path.clone()).build(window, cx))
-                    })
-                    .on_click(move |_, window, cx| {
-                        if let Some(session) = id.strip_prefix("session:") {
-                            let _ = owner
-                                .update(cx, |view, cx| view.select_session(session, window, cx));
-                        }
-                    })
-            }))
-    }
-
     pub(super) fn select_session(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
         if self.opening || self.choosing_project {
             return;
@@ -207,7 +44,7 @@ impl Workspace {
 
 /// Measure the actual shaped text so CJK, proportional fonts and zoom all use
 /// the same clipping boundary. Only the hovered, overflowing row animates.
-fn scrolling_title(title: SharedString, started: Instant) -> impl IntoElement {
+pub(super) fn scrolling_title(title: SharedString, started: Instant) -> impl IntoElement {
     canvas(
         move |_, window, _| {
             let style = window.text_style();
@@ -262,7 +99,7 @@ fn marquee_offset(overflow: f32, elapsed: f32, rem: f32) -> f32 {
     }
 }
 
-fn project_items(sessions: &[SessionEntry], previous: &[TreeItem]) -> Vec<TreeItem> {
+pub(super) fn project_items(sessions: &[SessionEntry], previous: &[TreeItem]) -> Vec<TreeItem> {
     let mut groups: Vec<TreeItem> = Vec::new();
     for session in sessions {
         let id: SharedString = format!("project:{}", session.workspace).into();

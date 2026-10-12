@@ -3,7 +3,7 @@
 pub(crate) mod storage;
 use crate::{
     backend::Options,
-    workspace::{Workspace, WorkspaceEvent},
+    workspace::{Sidebar, Workspace, WorkspaceEvent},
 };
 use gpui_kit::*;
 use std::{collections::HashSet, sync::Arc};
@@ -12,8 +12,12 @@ struct OpenTask {
     view: Entity<Workspace>,
     _subscription: Subscription,
     was_busy: bool,
+    _observer: Subscription,
 }
 pub(crate) struct Workbench {
+    sidebar: Entity<Sidebar>,
+    panes: Entity<gpui_kit::component::resizable::ResizableState>,
+    _sidebar_observer: Subscription,
     runtime: Arc<tokio::runtime::Runtime>,
     tasks: Vec<OpenTask>,
     active: String,
@@ -39,7 +43,12 @@ impl Workbench {
         if let Some(snapshot) = &mut saved {
             snapshot.deduplicate_tabs();
         }
+        let sidebar = cx.new(Sidebar::new);
+        let sidebar_observer = cx.observe(&sidebar, |_, _, cx| cx.notify());
         let mut workbench = Self {
+            sidebar,
+            panes: cx.new(|_| Default::default()),
+            _sidebar_observer: sidebar_observer,
             runtime,
             tasks: Vec::new(),
             active: String::new(),
@@ -124,7 +133,7 @@ impl Workbench {
             .iter()
             .find(|task| task.view.read(cx).options().same_host(&options))
             .map(|task| task.view.read(cx).catalog().to_vec());
-        let view = cx.new(|cx| Workspace::new(options, runtime, window, cx));
+        let view = cx.new(|cx| Workspace::new(options, runtime, self.sidebar.clone(), window, cx));
         if let Some(saved) = saved {
             view.update(cx, |view, cx| view.restore(saved, window, cx));
         }
@@ -168,11 +177,13 @@ impl Workbench {
                 }
             },
         );
+        let observer = cx.observe(&view, |workbench, _, cx| workbench.sync_sidebar(cx));
         let key = view.read(cx).key().to_owned();
         self.tasks.push(OpenTask {
             view,
             _subscription: subscription,
             was_busy: false,
+            _observer: observer,
         });
         self.activate(&key, window, cx);
     }
@@ -255,8 +266,19 @@ impl Workbench {
                 view.set_open_tasks(summaries.clone(), navigation_tasks, cx)
             });
         }
+        self.sync_sidebar(cx);
         cx.notify();
         self.persist(cx);
+    }
+    fn sync_sidebar(&self, cx: &mut Context<Self>) {
+        if let Some(task) = self
+            .tasks
+            .iter()
+            .find(|task| task.view.read(cx).key() == self.active)
+        {
+            self.sidebar
+                .update(cx, |sidebar, cx| sidebar.bind(&task.view, cx));
+        }
     }
     fn persist(&self, cx: &App) {
         if self.restoring {
@@ -273,12 +295,40 @@ impl Workbench {
     }
 }
 impl Render for Workbench {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        div().size_full().children(
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        use gpui_kit::component::resizable::{h_resizable, resizable_panel};
+        let body = div().size_full().children(
             self.tasks
                 .iter()
                 .find(|task| task.view.read(cx).key() == self.active)
                 .map(|task| task.view.clone()),
-        )
+        );
+        if !self.sidebar.read(cx).visible() {
+            return body.into_any_element();
+        }
+        use gpui_kit::component::ActiveTheme;
+        div()
+            .size_full()
+            .font_family(cx.theme().font_family.clone())
+            .child(
+                h_resizable("window-panes")
+                    .with_state(&self.panes)
+                    .on_resize(|state, window, cx| {
+                        if let Some(width) = state.read(cx).sizes().first().copied() {
+                            crate::preferences::Preferences::set_sidebar(
+                                width / window.rem_size(),
+                                cx,
+                            );
+                        }
+                    })
+                    .child(
+                        resizable_panel()
+                            .size(window.rem_size() * crate::preferences::Preferences::sidebar(cx))
+                            .size_range(window.rem_size() * 12. ..window.rem_size() * 24.)
+                            .child(self.sidebar.clone()),
+                    )
+                    .child(resizable_panel().child(body)),
+            )
+            .into_any_element()
     }
 }
