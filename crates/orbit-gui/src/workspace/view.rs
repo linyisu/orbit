@@ -46,10 +46,6 @@ impl Workspace {
                 cx.listener(|view, paths: &ExternalPaths, _, cx| view.add_images(&paths.0, cx)),
             )
             .w_full()
-            .when(
-                crate::preferences::Preferences::comfortable_width(cx),
-                |view| view.max_w(rems(CONTENT_WIDTH_REM)),
-            )
             .gap_2()
             .child(
                 v_flex()
@@ -532,75 +528,73 @@ impl Render for Workspace {
                     ),
             );
         let empty = !self.opening && self.conversation.read(cx).is_empty();
-        let body = v_flex()
-            .size_full()
-            .min_w_0()
-            .min_h_0()
-            .child(
-                h_flex()
-                    .h_9()
-                    .px_2()
-                    .gap_2()
-                    .flex_shrink_0()
-                    .border_b_1()
-                    .border_color(cx.theme().border)
-                    .child(
-                        Button::new("toggle-sidebar")
-                            .ghost()
-                            .small()
-                            .icon(IconName::PanelLeft)
-                            .accessibility_label("切换侧栏")
-                            .tooltip("切换侧栏 · Ctrl+B")
-                            .on_click(cx.listener(|view, _, _, cx| {
-                                view.sidebar_visible = !view.sidebar_visible;
-                                cx.notify();
-                            })),
-                    )
-                    .child(div().flex_1().min_w_0().child(self.task_tabs(cx)))
-                    .when(self.error.is_some() && self.info.is_none(), |bar| {
-                        bar.child(
-                            Button::new("project-error")
+        let body =
+            v_flex()
+                .size_full()
+                .min_w_0()
+                .min_h_0()
+                .child(
+                    h_flex()
+                        .h_9()
+                        .px_2()
+                        .gap_2()
+                        .flex_shrink_0()
+                        .border_b_1()
+                        .border_color(cx.theme().border)
+                        .child(
+                            Button::new("toggle-sidebar")
                                 .ghost()
                                 .small()
-                                .icon(IconName::CircleAlert)
-                                .label("查看错误")
-                                .on_click(
-                                    cx.listener(|view, _, window, cx| view.show_error(window, cx)),
-                                ),
+                                .icon(IconName::PanelLeft)
+                                .accessibility_label("切换侧栏")
+                                .tooltip("切换侧栏 · Ctrl+B")
+                                .on_click(cx.listener(|view, _, _, cx| {
+                                    view.sidebar_visible = !view.sidebar_visible;
+                                    cx.notify();
+                                })),
                         )
-                    })
-                    .child(
-                        Button::new("new-task-tab")
-                            .ghost()
-                            .small()
-                            .icon(IconName::Plus)
-                            .accessibility_label("新任务")
-                            .tooltip("新任务 · Ctrl+N")
-                            .on_click(cx.listener(|view, _, _, cx| view.open(None, cx))),
-                    )
-                    .child(
-                        Button::new("toggle-inspector")
-                            .ghost()
-                            .small()
-                            .icon(IconName::PanelRight)
-                            .label("工作面板")
-                            .accessibility_label("工作面板")
-                            .tooltip("执行、计划、变更与 Agent")
-                            .on_click(cx.listener(|view, _, _, cx| {
-                                view.inspector = if view.inspector.is_some() {
-                                    None
-                                } else {
-                                    Some(super::inspector::Section::Execution)
-                                };
-                                cx.notify();
-                            })),
-                    ),
-            )
-            .child(
-                div()
-                    .flex_1()
-                    .min_h_0()
-                    .child(if self.opening && !self.recovery.is_active() {
+                        .child(div().flex_1().min_w_0().child(self.task_tabs(cx)))
+                        .when(self.error.is_some() && self.info.is_none(), |bar| {
+                            bar.child(
+                                Button::new("project-error")
+                                    .ghost()
+                                    .small()
+                                    .icon(IconName::CircleAlert)
+                                    .label("查看错误")
+                                    .on_click(cx.listener(|view, _, window, cx| {
+                                        view.show_error(window, cx)
+                                    })),
+                            )
+                        })
+                        .child(
+                            Button::new("new-task-tab")
+                                .ghost()
+                                .small()
+                                .icon(IconName::Plus)
+                                .accessibility_label("新任务")
+                                .tooltip("新任务 · Ctrl+N")
+                                .on_click(cx.listener(|view, _, _, cx| view.open(None, cx))),
+                        )
+                        .child(
+                            Button::new("toggle-inspector")
+                                .ghost()
+                                .small()
+                                .icon(IconName::PanelRight)
+                                .label("工作面板")
+                                .accessibility_label("工作面板")
+                                .tooltip("执行、计划、变更与 Agent")
+                                .on_click(cx.listener(|view, _, _, cx| {
+                                    view.inspector = if view.inspector.is_some() {
+                                        None
+                                    } else {
+                                        Some(super::inspector::Section::Execution)
+                                    };
+                                    cx.notify();
+                                })),
+                        ),
+                )
+                .child(div().flex_1().min_h_0().child(
+                    if self.opening && !self.recovery.is_active() {
                         v_flex()
                             .size_full()
                             .items_center()
@@ -647,125 +641,116 @@ impl Render for Workspace {
                                         ),
                                 )
                             })
-                            .when(self.info.is_some(), |view| {
-                                view.child(
-                                    div()
-                                        .w_full()
-                                        .when(
-                                            crate::preferences::Preferences::comfortable_width(cx),
-                                            |view| view.max_w(rems(CONTENT_WIDTH_REM)),
-                                        )
-                                        .px_6()
-                                        .pt_3()
-                                        .child(self.composer(window, cx)),
-                                )
-                            })
                             .into_any_element()
                     } else {
                         self.conversation.clone().into_any_element()
-                    }),
-            )
-            .when(
-                !self.approvals.is_empty()
-                    || self
-                        .question_form
-                        .as_ref()
-                        .is_some_and(|form| form.read(cx).hidden())
-                    || self
-                        .planning
-                        .plan
-                        .as_ref()
-                        .is_some_and(|p| p.status == orbit_protocol::plan::Status::Review),
-                |view| {
-                    view.child(
-                        h_flex()
-                            .px_4()
-                            .py_2()
-                            .gap_2()
-                            .flex_wrap()
-                            .children(self.approvals.iter().map(|approval| {
-                                let approval = approval.clone();
-                                Button::new(("approval", approval.id))
-                                    .small()
-                                    .label("审批操作…")
-                                    .on_click(cx.listener(move |view, _, window, cx| {
-                                        view.approval(&approval, window, cx)
-                                    }))
-                            }))
-                            .when(
-                                self.question_form
-                                    .as_ref()
-                                    .is_some_and(|form| form.read(cx).hidden()),
-                                |view| {
-                                    view.child(
-                                        Button::new("answer-agent")
-                                            .small()
-                                            .label("回答 Agent…")
-                                            .on_click(cx.listener(|view, _, window, cx| {
-                                                view.questions(window, cx)
-                                            })),
-                                    )
-                                },
-                            )
-                            .when(
-                                self.planning.plan.as_ref().is_some_and(|p| {
-                                    p.status == orbit_protocol::plan::Status::Review
-                                }),
-                                |view| {
-                                    view.child(
-                                        Button::new("review-plan")
-                                            .small()
-                                            .label("审阅计划…")
-                                            .on_click(cx.listener(|view, _, window, cx| {
-                                                view.show_plan(window, cx)
-                                            })),
-                                    )
-                                },
-                            ),
-                    )
-                },
-            )
-            .when(
-                self.info.is_some() && !empty && (!self.opening || self.recovery.is_active()),
-                |view| {
-                    view.child(
-                        v_flex()
-                            .w_full()
-                            .items_center()
-                            .px_4()
-                            .pt_2()
-                            .pb_3()
-                            .when(self.busy, |view| {
-                                view.child(
-                                    h_flex()
-                                        .w_full()
-                                        .when(
-                                            crate::preferences::Preferences::comfortable_width(cx),
-                                            |view| view.max_w(rems(CONTENT_WIDTH_REM)),
-                                        )
-                                        .pb_2()
-                                        .child(
-                                            Button::new("run-progress")
-                                                .ghost()
-                                                .xsmall()
-                                                .label(format!(
-                                                    "{}  ·  {} 次工具调用  ·  {} 个文件",
-                                                    self.status(),
-                                                    self.execution.tools().len(),
-                                                    self.execution.files().len()
-                                                ))
-                                                .on_click(cx.listener(|view, _, _, cx| {
-                                                    view.inspector =
-                                                        Some(super::inspector::Section::Execution);
-                                                    cx.notify();
+                    },
+                ))
+                .when(
+                    !self.approvals.is_empty()
+                        || self
+                            .question_form
+                            .as_ref()
+                            .is_some_and(|form| form.read(cx).hidden())
+                        || self
+                            .planning
+                            .plan
+                            .as_ref()
+                            .is_some_and(|p| p.status == orbit_protocol::plan::Status::Review),
+                    |view| {
+                        view.child(
+                            h_flex()
+                                .px_4()
+                                .py_2()
+                                .gap_2()
+                                .flex_wrap()
+                                .children(self.approvals.iter().map(|approval| {
+                                    let approval = approval.clone();
+                                    Button::new(("approval", approval.id))
+                                        .small()
+                                        .label("审批操作…")
+                                        .on_click(cx.listener(move |view, _, window, cx| {
+                                            view.approval(&approval, window, cx)
+                                        }))
+                                }))
+                                .when(
+                                    self.question_form
+                                        .as_ref()
+                                        .is_some_and(|form| form.read(cx).hidden()),
+                                    |view| {
+                                        view.child(
+                                            Button::new("answer-agent")
+                                                .small()
+                                                .label("回答 Agent…")
+                                                .on_click(cx.listener(|view, _, window, cx| {
+                                                    view.questions(window, cx)
                                                 })),
-                                        ),
+                                        )
+                                    },
                                 )
-                            })
-                            .child(self.composer(window, cx)),
-                    )
-                },
-            );
+                                .when(
+                                    self.planning.plan.as_ref().is_some_and(|p| {
+                                        p.status == orbit_protocol::plan::Status::Review
+                                    }),
+                                    |view| {
+                                        view.child(
+                                            Button::new("review-plan")
+                                                .small()
+                                                .label("审阅计划…")
+                                                .on_click(cx.listener(|view, _, window, cx| {
+                                                    view.show_plan(window, cx)
+                                                })),
+                                        )
+                                    },
+                                ),
+                        )
+                    },
+                )
+                .when(
+                    self.info.is_some() && (!self.opening || self.recovery.is_active()),
+                    |view| {
+                        view.child(
+                            v_flex()
+                                .w_full()
+                                .flex_shrink_0()
+                                .items_center()
+                                .px_4()
+                                .pt_2()
+                                .pb_3()
+                                .when(self.busy, |view| {
+                                    view.child(
+                                        h_flex()
+                                            .w_full()
+                                            .max_w(rems(CONTENT_WIDTH_REM))
+                                            .pb_2()
+                                            .child(
+                                                Button::new("run-progress")
+                                                    .ghost()
+                                                    .xsmall()
+                                                    .label(format!(
+                                                        "{}  ·  {} 次工具调用  ·  {} 个文件",
+                                                        self.status(),
+                                                        self.execution.tools().len(),
+                                                        self.execution.files().len()
+                                                    ))
+                                                    .on_click(cx.listener(|view, _, _, cx| {
+                                                        view.inspector = Some(
+                                                            super::inspector::Section::Execution,
+                                                        );
+                                                        cx.notify();
+                                                    })),
+                                            ),
+                                    )
+                                })
+                                .child(
+                                    div()
+                                        .w_full()
+                                        .max_w(rems(CONTENT_WIDTH_REM))
+                                        .child(self.composer(window, cx)),
+                                ),
+                        )
+                    },
+                );
         let accessory = self
             .panel
             .as_ref()
