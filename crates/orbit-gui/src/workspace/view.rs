@@ -1,6 +1,7 @@
 //! Component composition for the workspace and message composer.
 use super::*;
-use crate::theme::CONTENT_WIDTH_REM;
+use crate::preferences::Preferences;
+use crate::theme::{CONTENT_GUTTER_REM, CONTENT_WIDTH_REM};
 use orbit_client::protocol::Mode;
 
 impl Workspace {
@@ -665,7 +666,7 @@ impl Render for Workspace {
                     |view| {
                         view.child(
                             h_flex()
-                                .px_4()
+                                .px(rems(CONTENT_GUTTER_REM))
                                 .py_2()
                                 .gap_2()
                                 .flex_wrap()
@@ -719,14 +720,16 @@ impl Render for Workspace {
                                 .w_full()
                                 .flex_shrink_0()
                                 .items_center()
-                                .px_4()
+                                .px(rems(CONTENT_GUTTER_REM))
                                 .pt_2()
                                 .pb_3()
                                 .when(self.busy, |view| {
                                     view.child(
                                         h_flex()
                                             .w_full()
-                                            .max_w(rems(CONTENT_WIDTH_REM))
+                                            .when(Preferences::comfortable_width(cx), |view| {
+                                                view.max_w(rems(CONTENT_WIDTH_REM))
+                                            })
                                             .pb_2()
                                             .child(
                                                 Button::new("run-progress")
@@ -750,7 +753,9 @@ impl Render for Workspace {
                                 .child(
                                     div()
                                         .w_full()
-                                        .max_w(rems(CONTENT_WIDTH_REM))
+                                        .when(Preferences::comfortable_width(cx), |view| {
+                                            view.max_w(rems(CONTENT_WIDTH_REM))
+                                        })
                                         .child(self.composer(window, cx)),
                                 ),
                         )

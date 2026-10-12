@@ -353,7 +353,14 @@ impl Render for Conversation {
             })
             .jump_button(false)
             .with_list_style(StyleRefinement::default().py_6())
-            .with_row_style(StyleRefinement::default().px_4().pb_3())
+            .with_row_style(
+                StyleRefinement::default()
+                    .pl(rems(crate::theme::CONTENT_GUTTER_REM))
+                    .pr(rems(
+                        crate::theme::CONTENT_GUTTER_REM - crate::theme::NAVIGATION_WIDTH_REM,
+                    ))
+                    .pb_3(),
+            )
             .size_full();
         h_flex()
             .size_full()

@@ -81,7 +81,7 @@ impl Render for SettingsPage {
                                 .item(SettingItem::new("居中窄栏", SettingField::switch(
                                     crate::preferences::Preferences::comfortable_width,
                                     crate::preferences::Preferences::set_comfortable_width,
-                                ).default_value(false)).description("关闭时，对话内容适应窗口宽度").keywords(["宽度", "对话", "布局"]))))
+                                ).default_value(false)).description("对话内容与输入框使用相同宽度；关闭时随窗口展开").keywords(["宽度", "对话", "布局"]))))
                         .page(SettingPage::new("账号与模型").icon(IconName::User).resettable(false)
                             .group(SettingGroup::new().item(SettingItem::render(move |_, _, _| accounts.clone()).keywords(["账号", "API", "连接", "模型", "密钥"])))
                             .group(SettingGroup::new().item(SettingItem::render(move |_, _, _| {

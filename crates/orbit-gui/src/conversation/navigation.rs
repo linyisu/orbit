@@ -4,6 +4,7 @@ use gpui_kit::component::{
     button::{Button, ButtonVariants},
     message_scroller::MessageScrollerState,
     scroll::Scrollbar,
+    tooltip::Tooltip,
     v_flex,
 };
 use gpui_kit::prelude::FluentBuilder;
@@ -115,22 +116,37 @@ impl Navigation {
             self.anchors[index].preview
         );
         div()
-            .h_8()
+            .id(("round-preview", index))
+            .h_5()
             .w_full()
             .flex()
             .items_center()
             .justify_center()
+            .tooltip({
+                let label = label.clone();
+                move |window, cx| {
+                    let width = window.viewport_size().width / 4.;
+                    let label = label.clone();
+                    Tooltip::element(move |window, _| {
+                        div()
+                            .w(width - window.rem_size())
+                            .whitespace_normal()
+                            .child(label.clone())
+                    })
+                    .max_w(width)
+                    .build(window, cx)
+                }
+            })
             .child(
                 Button::new(("round", index))
                     .ghost()
                     .small()
-                    .size_7()
+                    .size_5()
                     .p_0()
                     .accessibility_label(label.clone())
-                    .tooltip(label)
                     .child(
                         div()
-                            .size_2p5()
+                            .size_2()
                             .rounded_full()
                             .border_1()
                             .border_color(if active {
@@ -156,7 +172,7 @@ impl Render for Navigation {
         let owner = cx.weak_entity();
         v_flex()
             .h_full()
-            .w_10()
+            .w(rems(crate::theme::NAVIGATION_WIDTH_REM))
             .flex_shrink_0()
             .min_h_0()
             .py_2()

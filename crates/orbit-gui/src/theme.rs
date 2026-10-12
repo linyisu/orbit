@@ -5,6 +5,8 @@ use gpui_kit::{App, SharedString};
 use std::rc::Rc;
 
 pub(crate) const CONTENT_WIDTH_REM: f32 = 48.;
+pub(crate) const CONTENT_GUTTER_REM: f32 = 3.;
+pub(crate) const NAVIGATION_WIDTH_REM: f32 = 2.;
 
 /// Technical tables keep identifiers and short CJK values intact. Kit measures
 /// the actual glyph runs and owns horizontal scrolling when the table is wider
