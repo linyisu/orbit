@@ -681,7 +681,10 @@ impl Workspace {
             dialog
                 .title(title.clone())
                 .width(window.rem_size() * 44.)
-                .child(TextView::markdown("plan", markdown.clone()))
+                .child(
+                    TextView::markdown("plan", markdown.clone())
+                        .style(crate::theme::document_style()),
+                )
                 .footer(
                     h_flex()
                         .gap_2()

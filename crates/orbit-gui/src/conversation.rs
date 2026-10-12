@@ -499,6 +499,7 @@ impl Render for MessageRow {
                 view.child(
                     TextView::new(&self.text)
                         .when(!self.user, |view| view.w_full())
+                        .style(crate::theme::document_style())
                         .plugin(crate::math::MathPlugin::inline())
                         .plugin(crate::math::MathPlugin::display())
                         .selectable(true)

@@ -221,6 +221,11 @@ fn main() -> anyhow::Result<()> {
                     if prompt == "rendering" {
                         pending = [json!({"Agent":{"Model":{"TextDelta":"你目前遇到的**“高位无法复位”和“进位不正常”**，需要先检查输入。\n\n使能计数（$EN_{in}=1$），满模了，下一拍你该加一。\n\n**使能计数（$EN_{in}=1$）**，观察输出。\n\n行内公式 $\\frac{a+b}{c}$ 和 $x_i^2$ 应与正文自然对齐。\n\n`**原样保留**` 与 **正常加粗**。"}}})].into();
                     }
+                    if prompt == "table" {
+                        pending =
+                            [json!({"Agent":{"Model":{"TextDelta":include_str!("table.md")}}})]
+                                .into();
+                    }
                     if prompt == "workbench" {
                         pending = workbench_events();
                     }

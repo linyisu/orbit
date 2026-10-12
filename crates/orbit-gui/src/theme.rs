@@ -6,6 +6,18 @@ use std::rc::Rc;
 
 pub(crate) const CONTENT_WIDTH_REM: f32 = 48.;
 
+/// Technical tables keep identifiers and short CJK values intact. Kit measures
+/// the actual glyph runs and owns horizontal scrolling when the table is wider
+/// than its viewport; prose outside cells retains its normal wrapping.
+pub(crate) fn document_style() -> gpui_kit::component::text::TextViewStyle {
+    use gpui_kit::{Overflow, StyleRefinement, Styled};
+    let mut table = StyleRefinement::default();
+    table.overflow.x = Some(Overflow::Scroll);
+    gpui_kit::component::text::TextViewStyle::default()
+        .table(table)
+        .table_cell(StyleRefinement::default().whitespace_nowrap())
+}
+
 pub(crate) fn install(cx: &mut App) {
     let mut set: ThemeSet = serde_json::from_str(include_str!("../appearance/theme.json"))
         .expect("bundled Orbit theme is valid");

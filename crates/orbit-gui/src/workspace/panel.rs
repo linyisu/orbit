@@ -137,9 +137,11 @@ impl Render for Panel {
             )
             .child(
                 div().flex_1().min_h_0().overflow_y_scrollbar().child(
-                    div()
-                        .p_4()
-                        .child(TextView::new(&self.text).selectable(true)),
+                    div().p_4().child(
+                        TextView::new(&self.text)
+                            .style(crate::theme::document_style())
+                            .selectable(true),
+                    ),
                 ),
             )
     }
