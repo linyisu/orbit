@@ -380,6 +380,9 @@ fn main() -> anyhow::Result<()> {
                             [json!({"Agent":{"Model":{"TextDelta":include_str!("code.md")}}})]
                                 .into();
                     }
+                    if prompt == "font-fallback" {
+                        pending = [json!({"Agent":{"Model":{"TextDelta":include_str!("font-fallback.md")}}})].into();
+                    }
                     if prompt == "selection" {
                         pending = [json!({"Agent":{"Model":{"TextDelta":"### 3. `bner0` 指令\n\n普通文字 `inline code` 与**加粗文字**连续选中。\n\n1. 混合 `code` 的列表项\n2. 下一项\n\n公式 $EN_{in}=1$ 和后面的文字。"}}})].into();
                     }

@@ -18,12 +18,13 @@ members = [
     "crates/orbit-tools",
     "crates/orbit-store",
 ]
-exclude = ["vendor/ratex-unicode-font", "vendor/gpui-kit"]
+exclude = ["vendor/ratex-unicode-font", "vendor/gpui-kit", "vendor/gpui-pre-wgpu"]
 
 [patch."https://github.com/longbridge/gpui-kit"]
 gpui-base = { path = "vendor/gpui-kit/crates/base" }
 
 [patch.crates-io]
+gpui-pre-wgpu = { path = "vendor/gpui-pre-wgpu" }
 ratex-unicode-font = { path = "vendor/ratex-unicode-font" }
 rquickjs = { git = "https://github.com/longbridge/gpui-kit", rev = "1ccf011620da24d633f7cd6d3c11ca2e97798dcf" }
 

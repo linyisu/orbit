@@ -1,7 +1,7 @@
 //! Product palette and shared geometry. Component and Shell consume the same
 //! resolved tokens; feature views never introduce literal palette colors.
 use gpui_kit::component::{Theme, ThemeSet};
-use gpui_kit::{App, Global, SharedString};
+use gpui_kit::{App, FontFallbacks, Global, SharedString};
 use std::rc::Rc;
 
 pub(crate) const CONTENT_WIDTH_REM: f32 = 48.;
@@ -14,6 +14,7 @@ struct FontCatalog {
     families: Vec<SharedString>,
     ui: SharedString,
     code: SharedString,
+    emoji: bool,
 }
 impl Global for FontCatalog {}
 
@@ -24,6 +25,41 @@ pub(crate) fn installed_fonts(cx: &App) -> &[SharedString] {
 pub(crate) fn default_fonts(cx: &App) -> (SharedString, SharedString) {
     let fonts = cx.global::<FontCatalog>();
     (fonts.ui.clone(), fonts.code.clone())
+}
+
+pub(crate) fn has_emoji_font(cx: &App) -> bool {
+    cx.global::<FontCatalog>().emoji
+}
+
+const EMOJI_FAMILIES: &[&str] = &[
+    "Noto Color Emoji",
+    "Apple Color Emoji",
+    "Segoe UI Emoji",
+    "Noto Emoji",
+    "Twemoji Mozilla",
+];
+
+/// Explicit coverage supplements, rather than replaces, the platform's native
+/// fallback. GPUI preserves the chosen primary font for glyphs it contains.
+fn fallback_families(installed: &[String]) -> Vec<String> {
+    EMOJI_FAMILIES
+        .iter()
+        .copied()
+        .chain([
+            "Noto Sans CJK SC",
+            "Source Han Sans SC",
+            "WenQuanYi Micro Hei",
+            "Microsoft YaHei",
+            "PingFang SC",
+            "Noto Sans Symbols 2",
+            "Noto Sans Symbols",
+            "Segoe UI Symbol",
+            "DejaVu Sans",
+            "Noto Sans",
+        ])
+        .filter(|candidate| installed.iter().any(|family| family == candidate))
+        .map(str::to_owned)
+        .collect()
 }
 
 pub(crate) fn resolve_fonts(
@@ -72,6 +108,11 @@ pub(crate) fn install(cx: &mut App) {
     let mut fonts = cx.text_system().all_font_names();
     fonts.sort_by_cached_key(|font| font.to_lowercase());
     fonts.dedup();
+    let fallbacks = fallback_families(&fonts);
+    gpui_kit::base::Root::set_font_fallbacks(Some(FontFallbacks::from_fonts(fallbacks)), cx);
+    let emoji = EMOJI_FAMILIES
+        .iter()
+        .any(|name| fonts.iter().any(|font| font == name));
     let family: Option<SharedString> = [
         "Noto Sans CJK SC",
         "WenQuanYi Micro Hei",
@@ -87,6 +128,7 @@ pub(crate) fn install(cx: &mut App) {
             .clone()
             .unwrap_or_else(|| Theme::global(cx).font_family.clone()),
         code: Theme::global(cx).mono_font_family.clone(),
+        emoji,
     });
     for theme in &mut set.themes {
         theme.font_family = family.clone();
@@ -105,7 +147,7 @@ pub(crate) fn install(cx: &mut App) {
 
 #[cfg(test)]
 mod tests {
-    use super::resolve_family;
+    use super::{fallback_families, resolve_family};
     use gpui_kit::SharedString;
     use gpui_kit::component::ThemeSet;
     use gpui_kit::component::highlighter::{HighlightTheme, SyntaxHighlighter};
@@ -120,6 +162,22 @@ mod tests {
         );
         assert_eq!(resolve_family(None, &fallback, &installed), fallback);
         assert_eq!(resolve_family(Some("Code"), &fallback, &installed), "Code");
+    }
+
+    #[test]
+    fn glyph_fallback_chain_uses_installed_coverage_fonts_in_order() {
+        let installed = [
+            "Chosen font",
+            "DejaVu Sans",
+            "Noto Sans CJK SC",
+            "Noto Color Emoji",
+        ]
+        .map(str::to_owned);
+        assert_eq!(
+            fallback_families(&installed),
+            ["Noto Color Emoji", "Noto Sans CJK SC", "DejaVu Sans"],
+        );
+        assert!(fallback_families(&["Chosen font".to_owned()]).is_empty());
     }
 
     #[test]

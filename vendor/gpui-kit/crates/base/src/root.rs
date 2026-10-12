@@ -2,14 +2,19 @@
 use crate::input::Copy;
 use crate::{StyledExt, TextSelectionLayer};
 use gpui::{
-    AnyElement, AnyView, App, AppContext, ClipboardItem, Context, Div, Entity, Global,
-    InteractiveElement, IntoElement, KeyBinding, ParentElement, Render, Stateful, StyleRefinement,
-    Styled, Window, actions, div,
+    AnyElement, AnyView, App, AppContext, ClipboardItem, Context, Div, Entity, FontFallbacks,
+    Global, InteractiveElement, IntoElement, KeyBinding, ParentElement, Render, Stateful,
+    StyleRefinement, Styled, Window, actions, div,
 };
 use std::{any::TypeId, rc::Rc};
 
 actions!(root, [Tab, TabPrev]);
 const CONTEXT: &str = "Root";
+
+/// A presentation-supplied chain, kept outside the component theme projection
+/// so changing appearance cannot discard character coverage.
+struct RootFontFallbacks(Option<FontFallbacks>);
+impl Global for RootFontFallbacks {}
 
 pub(crate) fn init(cx: &mut App) {
     cx.bind_keys([
@@ -96,6 +101,14 @@ pub struct Root {
 }
 
 impl Root {
+    /// Set the native glyph fallback chain inherited by window content,
+    /// component overlays, and text editors. The application chooses families;
+    /// Base only passes their coverage policy to GPUI's text system.
+    pub fn set_font_fallbacks(fallbacks: Option<FontFallbacks>, cx: &mut App) {
+        cx.set_global(RootFontFallbacks(fallbacks));
+        cx.refresh_windows();
+    }
+
     /// Register a presentation plugin once per application. Re-registering its
     /// type replaces the factory for future windows rather than mounting it twice.
     pub fn register_plugin<V: RootPlugin>(
@@ -300,6 +313,9 @@ impl Render for Root {
             );
         for plugin in &self.plugins {
             (plugin.style)(&mut content, window, cx);
+        }
+        if let Some(fallbacks) = cx.try_global::<RootFontFallbacks>() {
+            content.text_style().font_fallbacks = fallbacks.0.clone();
         }
         let mut content = content.refine_style(&self.style).into_any_element();
         for plugin in &self.plugins {

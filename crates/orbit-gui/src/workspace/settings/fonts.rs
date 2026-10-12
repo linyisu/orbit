@@ -204,11 +204,19 @@ impl Fonts {
                         "你好，Orbit。让想法变成现实。"
                     })
                     .child(if code {
-                        "// 中文注释 · 0O 1lI {} [] () => != 0123456789"
+                        "// 中文注释 · 0O 1lI {} [] () => != 0123456789 · 📦 🚀 ✅"
                     } else {
-                        "The quick brown fox jumps over the lazy dog. 0123456789"
+                        "The quick brown fox jumps over the lazy dog. 0123456789 · 📦 🚀 ✅"
                     }),
             )
+            .when(!crate::theme::has_emoji_font(cx), |v| {
+                v.child(
+                    div()
+                        .text_sm()
+                        .text_color(cx.theme().muted_foreground)
+                        .child("未发现 emoji 字体，部分表情可能无法显示。系统文字与符号回退仍生效，原文与复制内容保持完整。"),
+                )
+            })
     }
 }
 
