@@ -507,31 +507,18 @@ impl Render for Workspace {
             )
             .child(div().flex_1().min_h_0().child(self.project_tree(cx)))
             .child(
-                h_flex()
-                    .p_3()
-                    .gap_1()
-                    .child(
-                        Button::new("accounts")
-                            .ghost()
-                            .small()
-                            .label("账号…")
-                            .on_click(cx.listener(|view, _, window, cx| {
-                                view.execute(WorkspaceCommand::Accounts, window, cx)
-                            })),
-                    )
-                    .child(div().flex_1())
-                    .child(
-                        Button::new("appearance")
-                            .ghost()
-                            .small()
-                            .icon(IconName::Settings)
-                            .label("设置")
-                            .accessibility_label("设置")
-                            .tooltip("设置 · Ctrl+,")
-                            .on_click(cx.listener(|view, _, window, cx| {
-                                view.appearance(&AppearanceSettings, window, cx)
-                            })),
-                    ),
+                h_flex().p_3().gap_1().child(div().flex_1()).child(
+                    Button::new("appearance")
+                        .ghost()
+                        .small()
+                        .icon(IconName::Settings)
+                        .label("设置")
+                        .accessibility_label("设置")
+                        .tooltip("设置 · Ctrl+,")
+                        .on_click(cx.listener(|view, _, window, cx| {
+                            view.appearance(&AppearanceSettings, window, cx)
+                        })),
+                ),
             );
         let empty = !self.opening && self.conversation.read(cx).is_empty();
         let body =
