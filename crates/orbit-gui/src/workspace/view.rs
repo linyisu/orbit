@@ -67,18 +67,12 @@ impl Workspace {
                             |path| {
                                 let remove = path.clone();
                                 let preview = path.clone();
-                                let label: SharedString = path
-                                    .file_name()
-                                    .unwrap_or_default()
-                                    .to_string_lossy()
-                                    .into_owned()
-                                    .into();
+                                let preview_owner = cx.weak_entity();
                                 Attachment::new()
                                     .id(SharedString::from(path.to_string_lossy().into_owned()))
                                     .axis(Axis::Vertical)
                                     .w(rems(7.))
                                     .h(rems(5.))
-                                    .tooltip(label.clone())
                                     .media(
                                         AttachmentMedia::new().aspect_ratio(7. / 5.).child(
                                             img(path.clone())
@@ -88,26 +82,32 @@ impl Workspace {
                                     )
                                     .when(self.pending.is_none(), |attachment| {
                                         attachment.on_remove(cx.listener(move |view, _, _, cx| {
+                                            // The card's preview layer must not handle this click.
+                                            cx.stop_propagation();
                                             view.paths.retain(|path| path != &remove);
                                             cx.emit(WorkspaceEvent::DraftChanged);
                                             cx.notify();
                                         }))
                                     })
                                     .on_click(move |_, window, cx| {
-                                        let preview = preview.clone();
-                                        let label = label.clone();
-                                        window.open_dialog(cx, move |dialog, _, _| {
-                                            dialog.title(label.clone()).child(
-                                                div().h_64().w_full().child(
-                                                    img(preview.clone())
-                                                        .size_full()
-                                                        .object_fit(ObjectFit::Contain),
-                                                ),
-                                            )
-                                        });
+                                        // A removed card can still have a queued click in this frame.
+                                        if preview_owner
+                                            .read_with(cx, |view, _| view.paths.contains(&preview))
+                                            .unwrap_or(false)
+                                        {
+                                            crate::image_preview::open_path(preview.clone(), window, cx);
+                                        }
                                     })
                             },
                         )))
+                    })
+                    .when(self.busy && !self.paths.is_empty(), |view| {
+                        view.child(
+                            div()
+                                .text_sm()
+                                .text_color(cx.theme().muted_foreground)
+                                .child("图片已加入草稿，当前响应结束后可发送"),
+                        )
                     })
                     .child(
                         Textarea::new(&self.input)

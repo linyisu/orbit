@@ -4,6 +4,7 @@ mod assets;
 mod backend;
 mod conversation;
 mod execution;
+mod image_preview;
 mod keymap;
 mod math;
 mod preferences;

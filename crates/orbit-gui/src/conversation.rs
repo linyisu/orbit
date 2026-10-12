@@ -3,7 +3,7 @@ mod markdown;
 mod model;
 mod navigation;
 use gpui_kit::component::{
-    ActiveTheme, IconName, Sizable, WindowExt,
+    ActiveTheme, IconName, Sizable,
     bubble::{Bubble, BubbleContent, BubbleVariant},
     button::{Button, ButtonVariants},
     h_flex,
@@ -553,41 +553,12 @@ impl Render for MessageRow {
                                 Err(_) => div().child("图片加载失败").into_any_element(),
                             })
                             .on_click(move |_, window, cx| {
-                                let data = data.clone();
-                                window.open_dialog(cx, move |dialog, window, _| {
-                                    let width = (window.viewport_size().width
-                                        - window.rem_size() * 4.)
-                                        .min(window.rem_size() * 64.);
-                                    let height = (window.viewport_size().height
-                                        - window.rem_size() * 10.)
-                                        .max(window.rem_size() * 8.);
-                                    let (image_width, image_height) = dimensions;
-                                    let scale = (f32::from(width - window.rem_size() * 2.5)
-                                        / image_width.max(1) as f32)
-                                        .min(f32::from(height) / image_height.max(1) as f32)
-                                        .min(1.);
-                                    let fitted_width = (px(image_width as f32 * scale)
-                                        + window.rem_size() * 2.5)
-                                        .max(window.rem_size() * 20.)
-                                        .min(width);
-                                    dialog.title("图片预览").width(fitted_width).child(
-                                        match &data {
-                                            Ok(Some(image)) => h_flex()
-                                                .justify_center()
-                                                .child(
-                                                    img(image.clone())
-                                                        .w(px(image_width as f32 * scale))
-                                                        .h(px(image_height as f32 * scale))
-                                                        .object_fit(ObjectFit::Contain),
-                                                )
-                                                .into_any_element(),
-                                            Err(error) => {
-                                                div().child(error.clone()).into_any_element()
-                                            }
-                                            _ => div().child("加载图片…").into_any_element(),
-                                        },
-                                    )
-                                });
+                                crate::image_preview::open(
+                                    data.clone(),
+                                    Some(dimensions),
+                                    window,
+                                    cx,
+                                );
                             })
                     }),
                 ))

@@ -889,8 +889,7 @@ impl Workspace {
             && !self.opening
             && self.pending.is_none()
             && self.info.is_some()
-            && (!self.input.read(cx).value().trim().is_empty() || !self.paths.is_empty())
-            && (!self.busy || self.paths.is_empty())
+            && draft_ready(&self.input.read(cx).value(), &self.paths, self.busy)
     }
 
     fn refresh_usage(&mut self, cx: &mut Context<Self>) {
@@ -950,7 +949,7 @@ impl Workspace {
     }
 
     fn paste_images(&mut self, item: &ClipboardItem, cx: &mut Context<Self>) -> bool {
-        if self.pending.is_some() || self.busy {
+        if self.pending.is_some() {
             return false;
         }
         let images = item
@@ -1011,7 +1010,7 @@ impl Workspace {
     }
 
     fn add_images(&mut self, paths: &[PathBuf], cx: &mut Context<Self>) {
-        if self.pending.is_some() || self.busy {
+        if self.pending.is_some() {
             return;
         }
         for path in paths {
@@ -1056,6 +1055,12 @@ impl Workspace {
     }
 }
 
+fn draft_ready(text: &str, paths: &[PathBuf], busy: bool) -> bool {
+    // The service's steering request carries text only. Keep image drafts intact
+    // until a normal Start request can upload them, even when they include text.
+    (!text.trim().is_empty() || !paths.is_empty()) && (!busy || paths.is_empty())
+}
+
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct SessionEntry {
     id: SharedString,
@@ -1070,7 +1075,18 @@ impl PendingSend {
 }
 #[cfg(test)]
 mod tests {
-    use super::PendingSend;
+    use super::{PendingSend, draft_ready};
+
+    #[test]
+    fn image_drafts_wait_for_idle_without_becoming_text_steers() {
+        let paths = ["draft.png".into()];
+        assert!(!draft_ready("", &paths, true));
+        assert!(!draft_ready("look at this image", &paths, true));
+        assert!(draft_ready("", &paths, false));
+        assert!(draft_ready("look at this image", &paths, false));
+        assert!(draft_ready("a text supplement", &[], true));
+        assert!(!draft_ready("  ", &[], true));
+    }
     #[test]
     fn ambiguous_send_reuses_receipt_only_for_the_same_session_and_payload() {
         let pending = PendingSend {
