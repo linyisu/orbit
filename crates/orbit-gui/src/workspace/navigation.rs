@@ -266,7 +266,12 @@ fn project_items(sessions: &[SessionEntry], previous: &[TreeItem]) -> Vec<TreeIt
     let mut groups: Vec<TreeItem> = Vec::new();
     for session in sessions {
         let id: SharedString = format!("project:{}", session.workspace).into();
-        let child = TreeItem::new(format!("session:{}", session.id), session.title.clone());
+        let title = if session.title.trim().is_empty() {
+            "未命名会话".into()
+        } else {
+            session.title.clone()
+        };
+        let child = TreeItem::new(format!("session:{}", session.id), title);
         if let Some(group) = groups.iter_mut().find(|group| group.id == id) {
             group.children.push(child);
         } else {
@@ -281,6 +286,14 @@ fn project_items(sessions: &[SessionEntry], previous: &[TreeItem]) -> Vec<TreeIt
             groups.push(TreeItem::new(id, label).expanded(expanded).child(child));
         }
     }
+    // The server returns sessions by recent activity. Project navigation must
+    // not move when opening a session updates that activity, including when a
+    // new Workspace entity is created with no previous tree to consult.
+    groups.sort_by(|left, right| {
+        left.label
+            .cmp(&right.label)
+            .then_with(|| left.id.cmp(&right.id))
+    });
     groups
 }
 
@@ -314,11 +327,30 @@ mod tests {
             });
         let groups = project_items(&entries, &[]);
         assert_eq!(groups.len(), 2);
-        assert_eq!(groups[0].children.len(), 2);
-        assert_eq!(groups[1].children[0].id, "session:b");
+        assert_eq!(groups[1].children.len(), 2);
+        assert_eq!(groups[0].children[0].id, "session:b");
         let previous = vec![groups[1].clone().expanded(true)];
         let refreshed = project_items(&entries, &previous);
         assert!(!refreshed[0].is_expanded());
         assert!(refreshed[1].is_expanded());
+    }
+
+    #[test]
+    fn opening_a_session_does_not_reorder_projects() {
+        let mut entries =
+            [("b", "/work/beta"), ("a", "/work/alpha")].map(|(id, path)| SessionEntry {
+                id: id.into(),
+                title: id.into(),
+                workspace: path.into(),
+            });
+        let initial = project_items(&entries, &[]);
+        entries.reverse();
+        for previous in [&[][..], initial.as_slice()] {
+            let refreshed = project_items(&entries, previous);
+            assert_eq!(
+                refreshed.iter().map(|group| &group.id).collect::<Vec<_>>(),
+                initial.iter().map(|group| &group.id).collect::<Vec<_>>()
+            );
+        }
     }
 }
