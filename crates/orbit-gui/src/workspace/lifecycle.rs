@@ -136,6 +136,9 @@ impl Workspace {
         }
     }
     pub(crate) fn status(&self) -> &'static str {
+        if self.recovery.is_active() {
+            return "正在重新连接";
+        }
         if self.opening {
             return "正在打开";
         }

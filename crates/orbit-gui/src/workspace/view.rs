@@ -352,6 +352,13 @@ impl Workspace {
                     .w_full()
                     .gap_2()
                     .flex_wrap()
+                    .when(self.recovery.is_active(), |row| row.child(
+                        div().text_xs().text_color(cx.theme().muted_foreground).child(self.recovery.label())
+                    ))
+                    .when(!self.connected && !self.opening && !self.recovery.is_active() && self.info.is_some(), |row| row.child(
+                        Button::new("reconnect-task").ghost().xsmall().label("重新连接")
+                            .on_click(cx.listener(|view, _, window, cx| view.connect(window, cx)))
+                    ))
                     .child(
                         Button::new("composer-context")
                             .ghost()
@@ -594,68 +601,75 @@ impl Render for Workspace {
                             })),
                     ),
             )
-            .child(div().flex_1().min_h_0().child(if self.opening {
-                v_flex()
-                    .size_full()
-                    .items_center()
-                    .justify_center()
-                    .gap_2()
-                    .child(gpui_kit::component::spinner::Spinner::new())
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(cx.theme().muted_foreground)
-                            .child("正在恢复会话…"),
-                    )
-                    .into_any_element()
-            } else if empty {
-                v_flex()
-                    .size_full()
-                    .items_center()
-                    .justify_center()
-                    .gap_3()
-                    .child(div().text_xl().font_weight(FontWeight::MEDIUM).child(
-                        if self.info.is_some() {
-                            "开始新任务"
-                        } else {
-                            "打开项目，开始工作"
-                        },
-                    ))
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(cx.theme().muted_foreground)
-                            .child(if self.info.is_some() {
-                                "描述任务，或继续左侧的会话"
-                            } else {
-                                "选择工作目录，或从左侧继续已有会话"
-                            }),
-                    )
-                    .when(self.info.is_none(), |view| {
-                        view.child(
-                            Button::new("home-open-project")
-                                .label("打开项目…")
-                                .disabled(self.choosing_project)
-                                .on_click(cx.listener(|view, _, _, cx| view.open_project(cx))),
-                        )
-                    })
-                    .when(self.info.is_some(), |view| {
-                        view.child(
-                            div()
-                                .w_full()
-                                .when(
-                                    crate::preferences::Preferences::comfortable_width(cx),
-                                    |view| view.max_w(rems(CONTENT_WIDTH_REM)),
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .child(if self.opening && !self.recovery.is_active() {
+                        v_flex()
+                            .size_full()
+                            .items_center()
+                            .justify_center()
+                            .gap_2()
+                            .child(gpui_kit::component::spinner::Spinner::new())
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child("正在恢复会话…"),
+                            )
+                            .into_any_element()
+                    } else if empty {
+                        v_flex()
+                            .size_full()
+                            .items_center()
+                            .justify_center()
+                            .gap_3()
+                            .child(div().text_xl().font_weight(FontWeight::MEDIUM).child(
+                                if self.info.is_some() {
+                                    "开始新任务"
+                                } else {
+                                    "打开项目，开始工作"
+                                },
+                            ))
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(if self.info.is_some() {
+                                        "描述任务，或继续左侧的会话"
+                                    } else {
+                                        "选择工作目录，或从左侧继续已有会话"
+                                    }),
+                            )
+                            .when(self.info.is_none(), |view| {
+                                view.child(
+                                    Button::new("home-open-project")
+                                        .label("打开项目…")
+                                        .disabled(self.choosing_project)
+                                        .on_click(
+                                            cx.listener(|view, _, _, cx| view.open_project(cx)),
+                                        ),
                                 )
-                                .px_6()
-                                .pt_3()
-                                .child(self.composer(window, cx)),
-                        )
-                    })
-                    .into_any_element()
-            } else {
-                self.conversation.clone().into_any_element()
-            }))
+                            })
+                            .when(self.info.is_some(), |view| {
+                                view.child(
+                                    div()
+                                        .w_full()
+                                        .when(
+                                            crate::preferences::Preferences::comfortable_width(cx),
+                                            |view| view.max_w(rems(CONTENT_WIDTH_REM)),
+                                        )
+                                        .px_6()
+                                        .pt_3()
+                                        .child(self.composer(window, cx)),
+                                )
+                            })
+                            .into_any_element()
+                    } else {
+                        self.conversation.clone().into_any_element()
+                    }),
+            )
             .when(
                 !self.approvals.is_empty()
                     || self
@@ -716,44 +730,47 @@ impl Render for Workspace {
                     )
                 },
             )
-            .when(self.info.is_some() && !empty && !self.opening, |view| {
-                view.child(
-                    v_flex()
-                        .w_full()
-                        .items_center()
-                        .px_4()
-                        .pt_2()
-                        .pb_3()
-                        .when(self.busy, |view| {
-                            view.child(
-                                h_flex()
-                                    .w_full()
-                                    .when(
-                                        crate::preferences::Preferences::comfortable_width(cx),
-                                        |view| view.max_w(rems(CONTENT_WIDTH_REM)),
-                                    )
-                                    .pb_2()
-                                    .child(
-                                        Button::new("run-progress")
-                                            .ghost()
-                                            .xsmall()
-                                            .label(format!(
-                                                "{}  ·  {} 次工具调用  ·  {} 个文件",
-                                                self.status(),
-                                                self.execution.tools().len(),
-                                                self.execution.files().len()
-                                            ))
-                                            .on_click(cx.listener(|view, _, _, cx| {
-                                                view.inspector =
-                                                    Some(super::inspector::Section::Execution);
-                                                cx.notify();
-                                            })),
-                                    ),
-                            )
-                        })
-                        .child(self.composer(window, cx)),
-                )
-            });
+            .when(
+                self.info.is_some() && !empty && (!self.opening || self.recovery.is_active()),
+                |view| {
+                    view.child(
+                        v_flex()
+                            .w_full()
+                            .items_center()
+                            .px_4()
+                            .pt_2()
+                            .pb_3()
+                            .when(self.busy, |view| {
+                                view.child(
+                                    h_flex()
+                                        .w_full()
+                                        .when(
+                                            crate::preferences::Preferences::comfortable_width(cx),
+                                            |view| view.max_w(rems(CONTENT_WIDTH_REM)),
+                                        )
+                                        .pb_2()
+                                        .child(
+                                            Button::new("run-progress")
+                                                .ghost()
+                                                .xsmall()
+                                                .label(format!(
+                                                    "{}  ·  {} 次工具调用  ·  {} 个文件",
+                                                    self.status(),
+                                                    self.execution.tools().len(),
+                                                    self.execution.files().len()
+                                                ))
+                                                .on_click(cx.listener(|view, _, _, cx| {
+                                                    view.inspector =
+                                                        Some(super::inspector::Section::Execution);
+                                                    cx.notify();
+                                                })),
+                                        ),
+                                )
+                            })
+                            .child(self.composer(window, cx)),
+                    )
+                },
+            );
         let accessory = self
             .panel
             .as_ref()

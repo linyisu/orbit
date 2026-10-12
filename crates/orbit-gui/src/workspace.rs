@@ -8,6 +8,7 @@ mod models;
 mod navigation;
 mod panel;
 mod questions;
+mod recovery;
 mod settings;
 mod slash;
 mod view;
@@ -137,6 +138,8 @@ pub(crate) struct Workspace {
     runtime: Arc<tokio::runtime::Runtime>,
     backend: Option<Backend>,
     receive: Task<()>,
+    reconnect: Task<()>,
+    recovery: recovery::Recovery,
     timer: Task<()>,
     picker: Task<()>,
     _subscriptions: Vec<Subscription>,
@@ -226,6 +229,8 @@ impl Workspace {
             runtime,
             backend: None,
             receive: Task::ready(()),
+            reconnect: Task::ready(()),
+            recovery: Default::default(),
             timer: Task::ready(()),
             picker: Task::ready(()),
             _subscriptions: vec![subscription, focused, blurred],
@@ -298,6 +303,12 @@ impl Workspace {
     }
 
     fn connect(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.reconnect = Task::ready(());
+        self.recovery = Default::default();
+        self.start_connection(window, cx);
+    }
+
+    fn start_connection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.error.is_some() {
             window.remove_notification::<Workspace>(cx);
         }
@@ -415,7 +426,20 @@ impl Workspace {
                 self.connected = false;
                 self.opening = false;
                 self.retry = self.pending.take().or(self.retry.take());
-                self.report_error(error, cx);
+                if let Some(delay) = self
+                    .info
+                    .as_ref()
+                    .and_then(|_| self.recovery.disconnected(Instant::now()))
+                {
+                    self.error = Some(error.into());
+                    self.reconnect = cx.spawn(async move |owner, cx| {
+                        cx.background_executor().timer(delay).await;
+                        let _ = owner
+                            .update_in(cx, |view, window, cx| view.start_connection(window, cx));
+                    });
+                } else {
+                    self.report_error(error, cx);
+                }
             }
             Event::Error(error) => {
                 self.report_error(error, cx);
@@ -557,6 +581,9 @@ impl Workspace {
                 // Live output can also span pages. Only an initial restore
                 // owns the loading screen; live catch-up keeps the chat visible.
                 self.opening = restoring && page.more;
+                if !page.more {
+                    self.recovery.restored(Instant::now());
+                }
                 self.busy = page.busy;
                 self.approvals = page.approvals;
                 self.planning = page.planning;
