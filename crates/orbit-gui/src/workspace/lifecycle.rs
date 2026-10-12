@@ -198,20 +198,9 @@ impl Workspace {
             window.remove_notification::<Workspace>(cx);
         }
         if visible {
-            // A retained workspace can return with different tab widths and a
-            // different sidebar split. Reveal against its newly painted bounds.
-            let owner = cx.weak_entity();
-            window.on_next_frame(move |_, cx| {
-                let _ = owner.update(cx, |view, cx| {
-                    if view.visible {
-                        view.reveal_task();
-                        cx.notify();
-                    }
-                });
-            });
+            self.task_reveal = true;
         }
         if visible && changed {
-            self.reveal_task();
             self.input.update(cx, |input, cx| input.focus(window, cx));
             if self.connected {
                 self.command(Command::Request(Request::AllSessions), cx);
@@ -266,14 +255,27 @@ impl Workspace {
         self.open_tasks = tasks;
         self.navigation_tasks = navigation_tasks;
         if layout_changed {
-            self.reveal_task();
+            self.task_reveal = true;
         }
         cx.notify();
     }
 
-    fn reveal_task(&self) {
+    pub(super) fn reveal_task(&self) {
         if let Some(index) = self.open_tasks.iter().position(|task| task.key == self.key) {
-            self.task_scroll.scroll_to_item(index);
+            // The retained scroll viewport may already have consumed its
+            // layout request before this workspace becomes visible again.
+            if let Some(tab) = self.task_scroll.bounds_for_item(index) {
+                let viewport = self.task_scroll.bounds();
+                let mut offset = self.task_scroll.offset();
+                if tab.right() + offset.x > viewport.right() {
+                    offset.x = viewport.right() - tab.right();
+                }
+                if tab.left() + offset.x < viewport.left() {
+                    offset.x = viewport.left() - tab.left();
+                }
+                offset.x = offset.x.clamp(-self.task_scroll.max_offset().x, px(0.));
+                self.task_scroll.set_offset(offset);
+            }
         }
     }
 }

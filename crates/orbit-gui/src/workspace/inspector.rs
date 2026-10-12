@@ -3,6 +3,7 @@
 use super::*;
 use actions::WorkspaceCommand;
 use gpui_kit::component::{
+    ElementExt,
     scroll::{ScrollableElement, Scrollbar},
     tab::{Tab, TabBar},
 };
@@ -33,7 +34,7 @@ impl Workspace {
             .iter()
             .position(|task| task.key == self.key)
             .unwrap_or(0);
-        TabBar::new("open-tasks")
+        let tabs = TabBar::new("open-tasks")
             .w_full()
             .segmented()
             .track_scroll(&self.task_scroll)
@@ -81,7 +82,24 @@ impl Workspace {
                 if let Some(task) = view.open_tasks.get(*ix) {
                     cx.emit(WorkspaceEvent::Activate(task.key.clone()));
                 }
-            }))
+            }));
+        let owner = cx.weak_entity();
+        div()
+            .w_full()
+            .child(tabs)
+            .on_prepaint(move |bounds, _, cx| {
+                let _ = owner.update(cx, |view, cx| {
+                    if view.task_reveal || view.task_width != Some(bounds.size.width) {
+                        view.task_reveal = false;
+                        view.task_width = Some(bounds.size.width);
+                        let before = view.task_scroll.offset();
+                        view.reveal_task();
+                        if view.task_scroll.offset() != before {
+                            cx.notify();
+                        }
+                    }
+                });
+            })
     }
 
     pub(super) fn inspector_view(&self, cx: &mut Context<Self>) -> impl IntoElement {
