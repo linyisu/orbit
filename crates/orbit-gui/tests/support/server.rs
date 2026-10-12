@@ -1,5 +1,6 @@
 //! Offline protocol peer for integration and native-window checks.
 //! Enabled explicitly with `test-support`; never calls a model.
+mod disclosures;
 mod files;
 mod input_queue;
 mod review;
@@ -315,8 +316,14 @@ fn main() -> anyhow::Result<()> {
                 }) && std::path::Path::new(&workspace)
                     .join(".fixture-command-output-hold")
                     .exists();
+                let hold_disclosure = pending.front().is_some_and(|event| {
+                    event["Agent"]["ToolStarted"]["call"]["id"] == "disclosure-02"
+                }) && std::path::Path::new(&workspace)
+                    .join(".fixture-disclosure-hold")
+                    .exists();
                 if approvals.is_empty()
                     && !hold_command
+                    && !hold_disclosure
                     && let Some(event) = pending.pop_front()
                 {
                     events.push(event);
@@ -398,6 +405,15 @@ fn main() -> anyhow::Result<()> {
                         pending = tool_output::events(
                             &workspace,
                             if prompt == "command-output" { 120 } else { 5 },
+                        );
+                    }
+                    if matches!(
+                        prompt.lines().next(),
+                        Some("disclosures" | "disclosures-live")
+                    ) {
+                        pending = disclosures::events(
+                            &workspace,
+                            prompt.lines().next() == Some("disclosures-live"),
                         );
                     }
                     if prompt == "sidebar" {

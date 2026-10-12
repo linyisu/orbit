@@ -17,13 +17,14 @@ use gpui_kit::*;
 use model::{Kind, Transcript, Turn};
 pub(crate) use navigation::bind_keys;
 use orbit_client::protocol::Update;
-use std::sync::Arc;
+use std::{cell::Cell, rc::Rc, sync::Arc};
 
 pub(crate) struct Conversation {
     transcript: Transcript,
     rows: Vec<Entity<TurnView>>,
     scroll: Entity<MessageScrollerState>,
     navigation: Entity<navigation::Navigation>,
+    viewport_height: Rc<Cell<Pixels>>,
 }
 struct TurnView {
     index: usize,
@@ -35,6 +36,11 @@ struct TurnView {
     expanded: bool,
     scroll: Entity<MessageScrollerState>,
     process_scroll: Entity<MessageScrollerState>,
+    viewport_height: Rc<Cell<Pixels>>,
+    _subscriptions: Vec<Subscription>,
+}
+struct Disclosure {
+    index: usize,
 }
 struct MessageRow {
     index: usize,
@@ -46,13 +52,13 @@ struct MessageRow {
     user: bool,
     images: Vec<MessageImage>,
     expanded: bool,
-    scroll: Entity<MessageScrollerState>,
 }
 struct MessageImage {
     path: SharedString,
     data: Result<Option<Arc<Image>>, SharedString>,
     dimensions: Option<(u32, u32)>,
 }
+impl EventEmitter<Disclosure> for MessageRow {}
 impl Conversation {
     pub(crate) fn new(cx: &mut Context<Self>) -> Self {
         let scroll = cx.new(|cx| MessageScrollerState::new(0, cx));
@@ -62,6 +68,7 @@ impl Conversation {
             transcript: Transcript::default(),
             rows: vec![],
             scroll,
+            viewport_height: Rc::new(Cell::new(px(0.))),
         }
     }
     pub(crate) fn is_empty(&self) -> bool {
@@ -80,18 +87,28 @@ impl Conversation {
         };
         while self.rows.len() < self.transcript.turns.len() {
             let index = self.rows.len();
-            self.rows
-                .push(cx.new(|cx| TurnView::new(index, self.scroll.clone(), cx)));
-            self.scroll.update(cx, |scroll, cx| scroll.append(1, cx));
+            self.rows.push(cx.new(|cx| {
+                TurnView::new(
+                    index * 2 + 1,
+                    self.scroll.clone(),
+                    self.viewport_height.clone(),
+                    cx,
+                )
+            }));
+            // Keep the prompt and its response in separate virtual rows. A
+            // disclosure can then reveal its header without scrolling back
+            // through a potentially very long user message.
+            self.scroll.update(cx, |scroll, cx| scroll.append(2, cx));
             if let Some(prompt) = &self.transcript.turns[index].prompt {
-                self.navigation
-                    .update(cx, |navigation, cx| navigation.append(index, prompt, cx));
+                self.navigation.update(cx, |navigation, cx| {
+                    navigation.append(index * 2, prompt, cx)
+                });
             }
         }
         let turn = &self.transcript.turns[change.turn];
         self.rows[change.turn].update(cx, |view, cx| view.sync(turn, change.part, cx));
         self.scroll.update(cx, |scroll, cx| {
-            scroll.remeasure_items(change.turn..change.turn + 1, cx)
+            scroll.remeasure_items(change.turn * 2 + 1..change.turn * 2 + 2, cx)
         });
         cx.notify();
     }
@@ -134,14 +151,19 @@ impl Conversation {
                     }
                 });
                 self.scroll.update(cx, |scroll, cx| {
-                    scroll.remeasure_items(index..index + 1, cx)
+                    scroll.remeasure_items(index * 2..index * 2 + 1, cx)
                 });
             }
         }
     }
 }
 impl TurnView {
-    fn new(index: usize, scroll: Entity<MessageScrollerState>, cx: &mut Context<Self>) -> Self {
+    fn new(
+        index: usize,
+        scroll: Entity<MessageScrollerState>,
+        viewport_height: Rc<Cell<Pixels>>,
+        cx: &mut Context<Self>,
+    ) -> Self {
         Self {
             index,
             user: None,
@@ -152,6 +174,8 @@ impl TurnView {
             expanded: false,
             scroll,
             process_scroll: cx.new(|cx| MessageScrollerState::new(0, cx)),
+            viewport_height,
+            _subscriptions: vec![],
         }
     }
     fn sync(&mut self, turn: &Turn, changed: Option<usize>, cx: &mut Context<Self>) {
@@ -159,8 +183,7 @@ impl TurnView {
             && let Some(prompt) = &turn.prompt
         {
             self.user = Some(cx.new(|cx| {
-                let mut row =
-                    MessageRow::new(self.index, self.scroll.clone(), prompt, false, true, cx);
+                let mut row = MessageRow::new(self.index - 1, prompt, false, true, cx);
                 row.images = turn
                     .images
                     .iter()
@@ -176,33 +199,26 @@ impl TurnView {
         while self.parts.len() < turn.parts.len() {
             let index = self.parts.len();
             let part = &turn.parts[index];
-            self.parts.push(cx.new(|cx| {
-                MessageRow::new(
-                    index,
-                    self.process_scroll.clone(),
-                    &part.content,
-                    part.kind != Kind::Text,
-                    false,
-                    cx,
-                )
-            }));
+            let row = cx.new(|cx| {
+                MessageRow::new(index, &part.content, part.kind != Kind::Text, false, cx)
+            });
+            self._subscriptions
+                .push(cx.subscribe(&row, |view, _, event: &Disclosure, cx| {
+                    view.process_scroll.update(cx, |scroll, cx| {
+                        scroll.remeasure_items(event.index..event.index + 1, cx);
+                        // Explicitly anchor after invalidation: a list whose
+                        // collapsed rows fit has resumed tail following.
+                        scroll.scroll_to_item(event.index, cx);
+                    });
+                    view.scroll.update(cx, |scroll, cx| {
+                        scroll.remeasure_items(view.index..view.index + 1, cx);
+                        scroll.scroll_to_item(view.index, cx);
+                    });
+                    cx.notify();
+                }));
+            self.parts.push(row);
         }
         let conclusion = turn.conclusion();
-        // A prose segment becomes process context when the next tool starts.
-        for index in [self.conclusion, conclusion].into_iter().flatten() {
-            self.parts[index].update(cx, |row, _| {
-                row.index = if Some(index) == conclusion {
-                    self.index
-                } else {
-                    index
-                };
-                row.scroll = if Some(index) == conclusion {
-                    self.scroll.clone()
-                } else {
-                    self.process_scroll.clone()
-                };
-            });
-        }
         let indices: Vec<_> = changed
             .map(|i| vec![i])
             .unwrap_or_else(|| (0..self.parts.len()).collect());
@@ -237,16 +253,27 @@ impl TurnView {
     }
 }
 impl Render for TurnView {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let weak = cx.weak_entity();
+        let reading = self.parts.iter().take(self.process_count).any(|part| {
+            let part = part.read(cx);
+            part.expanded && part.source_len > 0
+        });
+        let available = if self.viewport_height.get() > px(0.) {
+            self.viewport_height.get()
+        } else {
+            window.viewport_size().height * 0.6
+        };
+        let process_height = if reading {
+            (available * 0.7).min(window.rem_size() * 32.)
+        } else {
+            (window.rem_size() * self.process_count as f32 * 1.75).min(available * 0.5)
+        };
         v_flex()
             .w_full()
             .min_w_0()
             .items_start()
             .gap_4()
-            .when_some(self.user.clone(), |view, user| {
-                view.child(div().w_full().py_3().child(user))
-            })
             .when(self.process_count > 0, |view| {
                 view.child(
                     Button::new("turn-process")
@@ -265,8 +292,8 @@ impl Render for TurnView {
                                     .update(cx, |scroll, cx| scroll.scroll_to_item(0, cx));
                             }
                             view.scroll.update(cx, |scroll, cx| {
+                                scroll.remeasure_items(view.index..view.index + 1, cx);
                                 scroll.scroll_to_item(view.index, cx);
-                                scroll.remeasure_items(view.index..view.index + 1, cx)
                             });
                             cx.notify();
                         })),
@@ -275,8 +302,10 @@ impl Render for TurnView {
             .when(self.expanded && self.process_count > 0, |view| {
                 view.child(
                     div()
+                        .id("process-viewport")
+                        .occlude()
                         .w_full()
-                        .h(rems((self.process_count as f32 * 1.75).clamp(4., 18.)))
+                        .h(process_height)
                         .border_l_1()
                         .border_color(cx.theme().border)
                         .pl_3()
@@ -326,11 +355,23 @@ impl Render for Conversation {
         let measured = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         let row_bounds = measured.clone();
         let navigation = self.navigation.downgrade();
+        let owner = cx.weak_entity();
+        let viewport_height = self.viewport_height.clone();
         let scroller =
             MessageScroller::new("conversation", self.scroll.clone(), move |index, _, cx| {
                 weak.upgrade()
-                    .and_then(|view| view.read(cx).rows.get(index).cloned())
-                    .map(|row| {
+                    .and_then(|view| view.read(cx).rows.get(index / 2).cloned())
+                    .map(|turn| {
+                        let row = if index % 2 == 0 {
+                            div()
+                                .w_full()
+                                .when_some(turn.read(cx).user.clone(), |view, user| {
+                                    view.py_3().child(user)
+                                })
+                                .into_any_element()
+                        } else {
+                            turn.into_any_element()
+                        };
                         let row_bounds = row_bounds.clone();
                         h_flex()
                             .relative()
@@ -386,6 +427,24 @@ impl Render for Conversation {
                         canvas(
                             move |_, _, _| {},
                             move |bounds, _, _, cx| {
+                                if viewport_height.replace(bounds.size.height) != bounds.size.height
+                                {
+                                    let owner = owner.clone();
+                                    // This is the resolved chat viewport, excluding
+                                    // the composer and toolbar. Resize disclosures
+                                    // after paint, outside the list's measurement
+                                    // borrow, and only when that viewport changes.
+                                    cx.defer(move |cx| {
+                                        let _ = owner.update(cx, |view, cx| {
+                                            for row in &view.rows {
+                                                row.update(cx, |_, cx| cx.notify());
+                                            }
+                                            view.scroll
+                                                .update(cx, |scroll, cx| scroll.remeasure(cx));
+                                            cx.notify();
+                                        });
+                                    });
+                                }
                                 let row = navigation::current_row(&measured.borrow(), bounds.top());
                                 measured.borrow_mut().clear();
                                 if let Some(row) = row {
@@ -410,14 +469,7 @@ impl Render for Conversation {
 }
 
 impl MessageRow {
-    fn new(
-        index: usize,
-        scroll: Entity<MessageScrollerState>,
-        source: &str,
-        muted: bool,
-        user: bool,
-        cx: &mut Context<Self>,
-    ) -> Self {
+    fn new(index: usize, source: &str, muted: bool, user: bool, cx: &mut Context<Self>) -> Self {
         Self {
             index,
             title: "".into(),
@@ -447,7 +499,6 @@ impl MessageRow {
             user,
             images: vec![],
             expanded: !muted,
-            scroll,
         }
     }
 }
@@ -478,9 +529,7 @@ impl Render for MessageRow {
                                     text.set_text(&markdown::prose(&source), cx)
                                 });
                             }
-                            view.scroll.update(cx, |scroll, cx| {
-                                scroll.remeasure_items(view.index..view.index + 1, cx)
-                            });
+                            cx.emit(Disclosure { index: view.index });
                             cx.notify();
                         })),
                 )

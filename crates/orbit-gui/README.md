@@ -207,6 +207,8 @@ cargo run -p orbit-gui --locked -- \
 
 `font-fallback` 展示中文、emoji 标题、加粗、行内代码、代码块、肤色、ZWJ 组合和旗帜；切到不含中文字形的界面／代码字体后检查回退，遍历 emoji 字体预览后再检查正文，复制仍须保留原始文本。
 
+`disclosures` 展示五次工具调用，首尾包含 50／30 行输出；提示第一行保持 `disclosures`，后面可追加长用户消息。展开首项、末项及思考记录，标题和正文开头应直接可见；阅读区按实际聊天高度扩展，滚到首尾也不应带动主聊天。工作区下 `.fixture-disclosure-hold` 文件会暂停第二次调用，删除后继续追加，可验证阅读位置不被运行中的新记录打断；`disclosures-live` 另提供短暂延迟。
+
 `command-output` 模拟有界 stdout 增量及非零退出的真实结果结构，`command-output-fast` 用于传输回归；工作区下 `.fixture-command-output-hold` 文件可在原生验收时暂停最终结果。`.fixture-input-queue` 创建 35 条分页样本，队列保存在同目录的 `.fixture-input-queue.json`；`-unknown-once`、`-fail-once`、`-consume-once` 后缀的队列标记分别模拟保存后丢失回执、保存前失败和被 Agent 抢先领取。它们只属于测试服务，不执行真实命令或模型调用。
 
 检查 Enter 发送、Shift+Enter 换行、Tab/Shift+Tab、Esc、命令搜索、长消息滚动、800×560 窄窗口、主题切换与重新打开后的偏好恢复。fixture 中的数字和文件仅用于测试布局，实际数据取自服务端。Rust 回归覆盖独立连接的任务与审批隔离，以及工具执行、后台委派、完成、失败、压缩和文件修改的事件投影。
