@@ -211,6 +211,8 @@ cargo run -p orbit-gui --locked -- \
 
 `disclosures` 展示五次工具调用，首尾包含 50／30 行输出；提示第一行保持 `disclosures`，后面可追加长用户消息。展开首项、末项及思考记录，标题和正文开头应直接可见；阅读区按实际聊天高度扩展，滚到首尾也不应带动主聊天。工作区下 `.fixture-disclosure-hold` 文件会暂停第二次调用，删除后继续追加，可验证阅读位置不被运行中的新记录打断；`disclosures-live` 另提供短暂延迟。
 
+`disclosure-flow` 验证执行记录的自动展开与收起。发送前在工作区创建 `.fixture-disclosure-flow-text`、`.fixture-disclosure-flow-stream`、`.fixture-disclosure-flow-resume` 和 `.fixture-disclosure-flow-final` 四个文件：首先应自动显示已完成的工具和思考标题，空正文增量不会收起；展开思考可检查多段英文、连续长标识符及中文的边界和换行。依次删除 `-text`（首段正文开始，应自动收起；紧随其后的 `FLOW-LATE-REASONING` 思考增量不能隐藏答复或重新展开记录）、手动重新展开、删除 `-stream`（正文继续，手动展开应保留）、删除 `-resume`（重新执行工具，应自动展开）、删除 `-final`（最终正文开始，应再次收起）。各阶段由标记文件控制，不依赖操作速度；完成后重新恢复会话，历史执行记录应默认收起。
+
 在输入框键入 `/`，将指针放在命令候选上滚到两端：候选应滚动，后方聊天的可见位置保持不变；指针移到菜单外仍可滚动聊天。Esc 返回输入，方向键和 Tab 补全继续生效。模型等参数候选使用同一滚动边界。
 
 `command-output` 模拟有界 stdout 增量及非零退出的真实结果结构，`command-output-fast` 用于传输回归；`command-output-long` 提供多行 heredoc、超长单行命令、100 行 stdout 和 40 行 stderr，分别检查 `COMMAND-END`、`STDOUT-001`／`STDOUT-100`、`STDERR-001`／`STDERR-040` 首尾标记，在窄窗口和大字体下确认命令不越界、正文能够独立滚动。工作区下 `.fixture-command-output-hold` 文件可在原生验收时暂停最终结果。`.fixture-input-queue` 创建 35 条分页样本，队列保存在同目录的 `.fixture-input-queue.json`；`-unknown-once`、`-fail-once`、`-consume-once` 后缀的队列标记分别模拟保存后丢失回执、保存前失败和被 Agent 抢先领取。它们只属于测试服务，不执行真实命令或模型调用。

@@ -321,9 +321,13 @@ fn main() -> anyhow::Result<()> {
                 }) && std::path::Path::new(&workspace)
                     .join(".fixture-disclosure-hold")
                     .exists();
+                let hold_disclosure_flow = pending
+                    .front()
+                    .is_some_and(|event| disclosures::flow_held(&workspace, event));
                 if approvals.is_empty()
                     && !hold_command
                     && !hold_disclosure
+                    && !hold_disclosure_flow
                     && let Some(event) = pending.pop_front()
                 {
                     events.push(event);
@@ -418,6 +422,9 @@ fn main() -> anyhow::Result<()> {
                             &workspace,
                             prompt.lines().next() == Some("disclosures-live"),
                         );
+                    }
+                    if prompt.lines().next() == Some("disclosure-flow") {
+                        pending = disclosures::flow_events();
                     }
                     if prompt == "sidebar" {
                         pending = (0..80)

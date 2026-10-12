@@ -65,3 +65,55 @@ pub(super) fn events(workspace: &str, live: bool) -> VecDeque<Value> {
     events.push_back(json!({"Agent":{"Model":{"TextDelta":"DISCLOSURES-END：五个命令已完成。"}}}));
     events
 }
+
+pub(super) fn flow_events() -> VecDeque<Value> {
+    let first = json!({
+        "id":"disclosure-flow-first",
+        "function":{"name":"read_file","arguments":"{\"path\":\"src/main.rs\"}"},
+    });
+    let resumed = json!({
+        "id":"disclosure-flow-resumed",
+        "function":{"name":"read_file","arguments":"{\"path\":\"Cargo.toml\"}"},
+    });
+    let reasoning = format!(
+        "FLOW-REASONING-BEGIN: The provided text highlights a duplicated phrase within a new article, specifically copied from another previously corrected article. This indicates a potential copy-paste error during the new article's creation. The goal is to address this duplicated content while retaining its original meaning.\n\n\
+         A second paragraph checks that English text wraps inside the reasoning container at narrow window sizes and that every continuation line preserves the same indentation.\n\n\
+         Unbroken token: {}\n\n\
+         中文换行检查：{}\n\nFLOW-REASONING-END",
+        "reasoning_boundary_".repeat(24),
+        "思考内容应保持在阅读区内，不能越过左边框，也不能溢出到聊天界面。".repeat(5),
+    );
+    [
+        json!({"Agent":{"Model":{"ReasoningDelta":reasoning}}}),
+        json!({"Agent":{"ToolStarted":{"call":first}}}),
+        json!({"Agent":{"ToolFinished":{"call":first,"content":"FLOW-FIRST-TOOL: source inspected","changes":[]}}}),
+        // An empty model delta must not end the execution presentation.
+        json!({"Agent":{"Model":{"TextDelta":""}}}),
+        json!({"Agent":{"Model":{"TextDelta":"FLOW-FIRST: 初步检查已完成。"}}}),
+        json!({"Agent":{"Model":{"ReasoningDelta":"FLOW-LATE-REASONING: 正文开始后迟到的思考增量不能隐藏答复或重新展开执行记录。"}}}),
+        json!({"Agent":{"Model":{"TextDelta":" FLOW-CONTINUATION: 正文继续输出，手动展开的工具记录应保持展开。"}}}),
+        json!({"Agent":{"ToolStarted":{"call":resumed}}}),
+        json!({"Agent":{"ToolFinished":{"call":resumed,"content":"FLOW-RESUMED-TOOL: manifest inspected","changes":[]}}}),
+        json!({"Agent":{"Model":{"ReasoningDelta":"FLOW-RESUMED-REASONING: 工具执行恢复后，记录应再次自动展开。"}}}),
+        json!({"Agent":{"Model":{"TextDelta":"FLOW-FINAL: 补充检查完成，开始最终答复。"}}}),
+    ]
+    .into()
+}
+
+pub(super) fn flow_held(workspace: &str, event: &Value) -> bool {
+    let text = event["Agent"]["Model"]["TextDelta"].as_str();
+    let marker = if text.is_some_and(|text| text.starts_with("FLOW-FIRST:")) {
+        "text"
+    } else if text.is_some_and(|text| text.starts_with(" FLOW-CONTINUATION:")) {
+        "stream"
+    } else if event["Agent"]["ToolStarted"]["call"]["id"] == "disclosure-flow-resumed" {
+        "resume"
+    } else if text.is_some_and(|text| text.starts_with("FLOW-FINAL:")) {
+        "final"
+    } else {
+        return false;
+    };
+    std::path::Path::new(workspace)
+        .join(format!(".fixture-disclosure-flow-{marker}"))
+        .exists()
+}

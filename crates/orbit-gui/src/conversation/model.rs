@@ -29,10 +29,16 @@ pub(super) struct Turn {
 }
 impl Turn {
     pub(super) fn conclusion(&self) -> Option<usize> {
+        // Reasoning and reports may arrive after prose in the same stream.
+        // Only another tool call moves that answer into the process history.
         self.parts
-            .len()
-            .checked_sub(1)
-            .filter(|i| self.parts[*i].kind == Kind::Text)
+            .iter()
+            .rposition(|part| matches!(part.kind, Kind::Text | Kind::Tool))
+            .filter(|index| self.parts[*index].kind == Kind::Text)
+    }
+    pub(super) fn process_indices(&self) -> impl Iterator<Item = usize> + '_ {
+        let conclusion = self.conclusion();
+        (0..self.parts.len()).filter(move |index| Some(*index) != conclusion)
     }
     pub(super) fn process_count(&self) -> usize {
         self.parts.len() - usize::from(self.conclusion().is_some())
@@ -326,6 +332,73 @@ mod tests {
         let turn = &transcript.turns[0];
         assert_eq!(turn.process_count(), 2);
         assert_eq!(turn.parts[turn.conclusion().unwrap()].content, "修复完成。");
+    }
+
+    #[test]
+    fn mixed_reasoning_keeps_the_answer_visible_until_execution_resumes() {
+        let mut transcript = Transcript::default();
+        apply(&mut transcript, json!({"Started":{"prompt":"检查项目"}}));
+        apply(
+            &mut transcript,
+            json!({"Agent":{"ToolStarted":{"call":call("first")}}}),
+        );
+        apply(
+            &mut transcript,
+            json!({"Agent":{"ToolFinished":{"call":call("first"),"content":"文件内容","changes":[]}}}),
+        );
+        apply(
+            &mut transcript,
+            json!({"Agent":{"Model":{"TextDelta":"检查"}}}),
+        );
+        apply(
+            &mut transcript,
+            json!({"Agent":{"Model":{"ReasoningDelta":"补充思考"}}}),
+        );
+        apply(
+            &mut transcript,
+            json!({"Agent":{"Model":{"TextDelta":"完成。"}}}),
+        );
+        apply(
+            &mut transcript,
+            json!({"Report":{"title":"提示","text":"补充提示"}}),
+        );
+        let turn = &transcript.turns[0];
+        assert_eq!(turn.conclusion(), Some(1));
+        assert_eq!(turn.parts[1].content, "检查完成。");
+        assert_eq!(turn.process_indices().collect::<Vec<_>>(), vec![0, 2, 3]);
+        assert_eq!(turn.process_count(), 3);
+
+        apply(
+            &mut transcript,
+            json!({"Agent":{"ToolStarted":{"call":call("second")}}}),
+        );
+        let turn = &transcript.turns[0];
+        assert_eq!(turn.conclusion(), None);
+        assert_eq!(
+            turn.process_indices().collect::<Vec<_>>(),
+            vec![0, 1, 2, 3, 4]
+        );
+        apply(
+            &mut transcript,
+            json!({"Agent":{"Model":{"TextDelta":"再次检查完成。"}}}),
+        );
+        apply(
+            &mut transcript,
+            json!({"Agent":{"Model":{"ReasoningDelta":"后续思考"}}}),
+        );
+        apply(
+            &mut transcript,
+            json!({"Agent":{"ToolFinished":{"call":call("second"),"content":"检查结果","changes":[]}}}),
+        );
+        apply(&mut transcript, json!({"Finished":{"status":"completed"}}));
+        let turn = &transcript.turns[0];
+        assert_eq!(turn.conclusion(), Some(5));
+        assert_eq!(turn.parts[5].content, "再次检查完成。");
+        assert_eq!(
+            turn.process_indices().collect::<Vec<_>>(),
+            vec![0, 1, 2, 3, 4, 6]
+        );
+        assert_eq!(turn.process_count(), 6);
     }
 
     #[test]

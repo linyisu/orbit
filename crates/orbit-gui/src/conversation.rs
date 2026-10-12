@@ -2,6 +2,7 @@
 mod markdown;
 mod model;
 mod navigation;
+mod process;
 use gpui_kit::component::{
     ActiveTheme, IconName, Sizable,
     bubble::{Bubble, BubbleContent, BubbleVariant},
@@ -17,6 +18,7 @@ use gpui_kit::*;
 use model::{Kind, Transcript, Turn};
 pub(crate) use navigation::bind_keys;
 use orbit_client::protocol::Update;
+use process::ProcessDisclosure;
 use std::{cell::Cell, rc::Rc, sync::Arc};
 
 pub(crate) struct Conversation {
@@ -30,10 +32,10 @@ struct TurnView {
     index: usize,
     user: Option<Entity<MessageRow>>,
     parts: Vec<Entity<MessageRow>>,
-    process_count: usize,
+    process: Vec<usize>,
     conclusion: Option<usize>,
     label: SharedString,
-    expanded: bool,
+    disclosure: ProcessDisclosure,
     scroll: Entity<MessageScrollerState>,
     process_scroll: Entity<MessageScrollerState>,
     viewport_height: Rc<Cell<Pixels>>,
@@ -168,10 +170,10 @@ impl TurnView {
             index,
             user: None,
             parts: vec![],
-            process_count: 0,
+            process: vec![],
             conclusion: None,
             label: "".into(),
-            expanded: false,
+            disclosure: ProcessDisclosure::default(),
             scroll,
             process_scroll: cx.new(|cx| MessageScrollerState::new(0, cx)),
             viewport_height,
@@ -204,12 +206,14 @@ impl TurnView {
             });
             self._subscriptions
                 .push(cx.subscribe(&row, |view, _, event: &Disclosure, cx| {
-                    view.process_scroll.update(cx, |scroll, cx| {
-                        scroll.remeasure_items(event.index..event.index + 1, cx);
-                        // Explicitly anchor after invalidation: a list whose
-                        // collapsed rows fit has resumed tail following.
-                        scroll.scroll_to_item(event.index, cx);
-                    });
+                    if let Some(index) = view.process.iter().position(|part| *part == event.index) {
+                        view.process_scroll.update(cx, |scroll, cx| {
+                            scroll.remeasure_items(index..index + 1, cx);
+                            // Explicitly anchor after invalidation: a list whose
+                            // collapsed rows fit has resumed tail following.
+                            scroll.scroll_to_item(index, cx);
+                        });
+                    }
                     view.scroll.update(cx, |scroll, cx| {
                         scroll.remeasure_items(view.index..view.index + 1, cx);
                         scroll.scroll_to_item(view.index, cx);
@@ -219,6 +223,7 @@ impl TurnView {
             self.parts.push(row);
         }
         let conclusion = turn.conclusion();
+        let process: Vec<_> = turn.process_indices().collect();
         let indices: Vec<_> = changed
             .map(|i| vec![i])
             .unwrap_or_else(|| (0..self.parts.len()).collect());
@@ -236,17 +241,31 @@ impl TurnView {
                 row.source_len = part.content.len();
                 cx.notify();
             });
-            self.process_scroll.update(cx, |scroll, cx| {
-                scroll.remeasure_items(index..index + 1, cx)
-            });
+            if let Some(index) = process.iter().position(|part| *part == index) {
+                self.process_scroll.update(cx, |scroll, cx| {
+                    scroll.remeasure_items(index..index + 1, cx)
+                });
+            }
         }
+        let preserved = self
+            .process
+            .iter()
+            .zip(&process)
+            .take_while(|(a, b)| a == b)
+            .count();
         let count = turn.process_count();
-        if count > self.process_count {
+        if count > self.process.len() {
             self.process_scroll.update(cx, |scroll, cx| {
-                scroll.append(count - self.process_count, cx)
+                scroll.append(count - self.process.len(), cx)
             });
         }
-        self.process_count = count;
+        if preserved < self.process.len() {
+            self.process_scroll.update(cx, |scroll, cx| {
+                scroll.remeasure_items(preserved..count, cx)
+            });
+        }
+        self.process = process;
+        self.disclosure.sync(conclusion.is_some());
         self.conclusion = conclusion;
         self.label = turn.label().into();
         cx.notify();
@@ -255,8 +274,8 @@ impl TurnView {
 impl Render for TurnView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let weak = cx.weak_entity();
-        let reading = self.parts.iter().take(self.process_count).any(|part| {
-            let part = part.read(cx);
+        let reading = self.process.iter().any(|index| {
+            let part = self.parts[*index].read(cx);
             part.expanded && part.source_len > 0
         });
         let available = if self.viewport_height.get() > px(0.) {
@@ -267,27 +286,27 @@ impl Render for TurnView {
         let process_height = if reading {
             (available * 0.7).min(window.rem_size() * 32.)
         } else {
-            (window.rem_size() * self.process_count as f32 * 1.75).min(available * 0.5)
+            (window.rem_size() * self.process.len() as f32 * 1.75).min(available * 0.5)
         };
         v_flex()
             .w_full()
             .min_w_0()
             .items_start()
             .gap_4()
-            .when(self.process_count > 0, |view| {
+            .when(!self.process.is_empty(), |view| {
                 view.child(
                     Button::new("turn-process")
                         .ghost()
                         .small()
-                        .icon(if self.expanded {
+                        .icon(if self.disclosure.expanded() {
                             IconName::ChevronDown
                         } else {
                             IconName::ChevronRight
                         })
                         .label(self.label.clone())
                         .on_click(cx.listener(|view, _, _, cx| {
-                            view.expanded = !view.expanded;
-                            if view.expanded {
+                            view.disclosure.toggle();
+                            if view.disclosure.expanded() {
                                 view.process_scroll
                                     .update(cx, |scroll, cx| scroll.scroll_to_item(0, cx));
                             }
@@ -299,34 +318,42 @@ impl Render for TurnView {
                         })),
                 )
             })
-            .when(self.expanded && self.process_count > 0, |view| {
-                view.child(
-                    div()
-                        .id("process-viewport")
-                        .occlude()
-                        .w_full()
-                        .h(process_height)
-                        .border_l_1()
-                        .border_color(cx.theme().border)
-                        .pl_3()
-                        .child(
-                            MessageScroller::new(
-                                "turn-activities",
-                                self.process_scroll.clone(),
-                                move |index, _, cx| {
-                                    weak.upgrade()
-                                        .and_then(|view| view.read(cx).parts.get(index).cloned())
-                                        .map(|part| part.into_any_element())
-                                        .unwrap_or_else(|| div().into_any_element())
-                                },
-                            )
-                            .jump_button(false)
-                            .with_row_style(StyleRefinement::default().px_0().pb_1())
-                            .with_list_style(StyleRefinement::default().py_0())
-                            .size_full(),
-                        ),
-                )
-            })
+            .when(
+                self.disclosure.expanded() && !self.process.is_empty(),
+                |view| {
+                    view.child(
+                        div()
+                            .id("process-viewport")
+                            .occlude()
+                            .w_full()
+                            .h(process_height)
+                            .border_l_1()
+                            .border_color(cx.theme().border)
+                            .pl_3()
+                            .child(
+                                MessageScroller::new(
+                                    "turn-activities",
+                                    self.process_scroll.clone(),
+                                    move |index, _, cx| {
+                                        weak.upgrade()
+                                            .and_then(|view| {
+                                                let view = view.read(cx);
+                                                view.process
+                                                    .get(index)
+                                                    .map(|part| view.parts[*part].clone())
+                                            })
+                                            .map(|part| part.into_any_element())
+                                            .unwrap_or_else(|| div().into_any_element())
+                                    },
+                                )
+                                .jump_button(false)
+                                .with_row_style(StyleRefinement::default().px_0().pb_1())
+                                .with_list_style(StyleRefinement::default().py_0())
+                                .size_full(),
+                            ),
+                    )
+                },
+            )
             .when_some(
                 self.conclusion.and_then(|i| self.parts.get(i).cloned()),
                 |view, reply| view.child(reply),
