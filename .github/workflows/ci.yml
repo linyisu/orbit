@@ -36,6 +36,11 @@ jobs:
 
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2
+        with:
+          # Do not restore old target archives or create another multi-GB
+          # archive beside the GUI and portable-server build outputs.
+          prefix-key: v1-ci-registry
+          cache-targets: "false"
 
       - name: Check formatting
         run: cargo fmt --all --check
@@ -47,13 +52,12 @@ jobs:
         run: cargo test -p orbit-xtask
 
       - name: Clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets --features orbit-gui/test-support --locked -- -D warnings
 
-      - name: Run tests
-        run: cargo test --workspace
-
-      - name: GUI transport regression
-        run: cargo test -p orbit-gui --features test-support --test transport --locked
+      # Keep the same workspace feature graph as Clippy. A separate GUI-only
+      # invocation rebuilds shared dependencies with a different feature set.
+      - name: Run workspace tests including GUI transport regression
+        run: cargo test --workspace --features orbit-gui/test-support --locked
 
       - name: Report build resources on failure
         if: failure()
