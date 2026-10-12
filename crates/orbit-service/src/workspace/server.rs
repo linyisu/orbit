@@ -452,6 +452,9 @@ impl Service {
                     .await?;
                 Ok(Response::Plugins(catalog))
             }
+            Request::Resources { session, action } => Ok(Response::Resources(
+                self.session(&session).await?.resources(action).await?,
+            )),
             Request::Admin { action } => {
                 let _opening = self.opening.lock().await;
                 ensure!(

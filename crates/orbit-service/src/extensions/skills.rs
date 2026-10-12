@@ -98,7 +98,8 @@ impl Skills {
             roots.push((root, SkillSource::MarketplacePlugin));
         }
 
-        if let Some(root) = crate::instructions::project_root(cwd) {
+        {
+            let root = crate::instructions::project_root(cwd).unwrap_or_else(|| cwd.to_path_buf());
             roots.push((root.join(".claude/skills"), SkillSource::ClaudeProject));
             roots.push((root.join(".orbit/skills"), SkillSource::OrbitProject));
         }

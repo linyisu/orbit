@@ -8,6 +8,7 @@ mod profile;
 pub mod project;
 pub mod protocol;
 mod questions;
+mod resources;
 mod run;
 mod server;
 mod session;

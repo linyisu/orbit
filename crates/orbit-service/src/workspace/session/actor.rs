@@ -395,6 +395,12 @@ impl Actor {
                 }
                 let _ = result.send(response);
             }
+            Command::Resources { action, result } => {
+                let busy = self.active() || self.questions.running().await;
+                let response =
+                    crate::workspace::resources::execute(&mut self.setup, action, busy).await;
+                let _ = result.send(response);
+            }
             Command::SetModel { model, effort } => {
                 ensure!(
                     !self.busy(),

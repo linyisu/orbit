@@ -2,6 +2,7 @@ pub mod admin;
 pub mod plan;
 pub mod plugins;
 pub mod project;
+pub mod resources;
 pub mod search;
 pub mod usage;
 pub mod user_input;
@@ -11,7 +12,7 @@ use std::io;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
-pub const VERSION: u32 = 17;
+pub const VERSION: u32 = 18;
 // Steering receipts identify the durable input independently of its consumption.
 pub const MIN_COMPATIBLE_VERSION: u32 = 15;
 
@@ -77,6 +78,10 @@ pub enum Request {
     Plugins {
         session: String,
         action: plugins::Action,
+    },
+    Resources {
+        session: String,
+        action: resources::Action,
     },
     Admin {
         action: admin::Action,
@@ -345,6 +350,7 @@ pub enum Response<E, A> {
     UserInputs(user_input::History),
     Report(Report),
     Plugins(plugins::Catalog),
+    Resources(resources::Snapshot),
     File(String),
     InputQueued {
         message_id: i64,

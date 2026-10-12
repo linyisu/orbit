@@ -60,6 +60,10 @@ pub enum Command {
         action: orbit_protocol::SessionAction,
         result: oneshot::Sender<Result<orbit_protocol::Report>>,
     },
+    Resources {
+        action: orbit_protocol::resources::Action,
+        result: oneshot::Sender<Result<orbit_protocol::resources::Snapshot>>,
+    },
     Start {
         request_id: String,
         prompt: String,
@@ -386,6 +390,15 @@ impl Handle {
         let (result, response) = oneshot::channel();
         self.command(Command::UsageContext { result }).await?;
         Ok(response.await?)
+    }
+
+    pub async fn resources(
+        &self,
+        action: orbit_protocol::resources::Action,
+    ) -> Result<orbit_protocol::resources::Snapshot> {
+        let (result, response) = oneshot::channel();
+        self.command(Command::Resources { action, result }).await?;
+        response.await?
     }
 
     pub async fn command(&self, command: Command) -> Result<()> {

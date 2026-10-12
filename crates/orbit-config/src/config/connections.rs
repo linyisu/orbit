@@ -1,5 +1,6 @@
 //! Shared connection persistence for official and custom providers.
 pub mod edit;
+pub mod mcp;
 use std::io::Write;
 
 use anyhow::{Context, Result, ensure};
