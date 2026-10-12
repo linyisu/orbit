@@ -34,30 +34,40 @@ impl Workspace {
             .position(|task| task.key == self.key)
             .unwrap_or(0);
         TabBar::new("open-tasks")
-            .underline()
+            .folder()
             .small()
             .menu(self.open_tasks.len() > 3)
             .selected_index(active)
             .children(self.open_tasks.iter().map(|task| {
-                let status = if task.attention {
-                    "待处理"
-                } else if task.busy {
-                    "运行中"
-                } else if task.unread {
-                    "未读"
-                } else {
-                    ""
-                };
+                let key = task.key.clone();
                 Tab::new()
                     .label(task.title.clone())
-                    .w(rems(11.))
-                    .max_w(rems(11.))
+                    .max_w(rems(14.))
+                    .when(task.attention, |tab| {
+                        tab.prefix(Icon::new(IconName::CircleAlert).size_3())
+                    })
+                    .when(task.loading && !task.attention, |tab| {
+                        tab.prefix(gpui_kit::component::spinner::Spinner::new().small())
+                    })
+                    .when(task.unread && !task.attention && !task.loading, |tab| {
+                        tab.prefix(div().size_1p5().rounded_full().bg(cx.theme().primary))
+                    })
                     .suffix(
-                        div()
-                            .w_12()
-                            .text_xs()
-                            .text_color(cx.theme().muted_foreground)
-                            .child(status),
+                        Button::new(SharedString::from(format!("close-task-{key}")))
+                            .ghost()
+                            .xsmall()
+                            .icon(IconName::Close)
+                            .accessibility_label(format!("关闭 {}", task.title))
+                            .tooltip(if task.busy {
+                                "任务仍在运行，请先停止任务"
+                            } else {
+                                "关闭标签页，保留会话记录"
+                            })
+                            .disabled(task.busy)
+                            .on_click(cx.listener(move |_, _, _, cx| {
+                                cx.stop_propagation();
+                                cx.emit(WorkspaceEvent::Close(key.clone()));
+                            })),
                     )
             }))
             .on_click(cx.listener(|view, ix: &usize, _, cx| {

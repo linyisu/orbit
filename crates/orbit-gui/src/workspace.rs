@@ -500,14 +500,11 @@ impl Workspace {
             .iter_mut()
             .find(|entry| entry.id.as_ref() == info.id)
         {
-            entry.title = info.title.clone().into();
+            if !info.title.trim().is_empty() {
+                entry.title = info.title.clone().into();
+            }
             entry.workspace = info.workspace.clone().into();
         }
-        self.title = if info.title.is_empty() {
-            "新会话".into()
-        } else {
-            info.title.clone().into()
-        };
         self.model = info.model.clone().into();
         self.location = info.workspace.clone().into();
         self.project = PathBuf::from(&info.workspace)
@@ -517,6 +514,7 @@ impl Workspace {
             .into_owned()
             .into();
         self.info = Some(info);
+        self.refresh_title();
         self.regroup(cx);
         if changed {
             let item = TreeItem::new(
@@ -577,6 +575,7 @@ impl Workspace {
                         workspace: session.workspace.into(),
                     })
                     .collect();
+                self.refresh_title();
                 self.regroup(cx);
                 cx.emit(WorkspaceEvent::Catalog(self.sessions.clone()));
             }

@@ -103,8 +103,8 @@ impl Workspace {
         &self.key
     }
     pub(crate) fn can_resume(&self, id: &str, options: &Options) -> bool {
-        (self.connected && self.info.as_ref().is_some_and(|info| info.id == id)
-            || self.opening && self.options.resume.as_deref() == Some(id))
+        (self.info.as_ref().is_some_and(|info| info.id == id)
+            || self.options.resume.as_deref() == Some(id))
             && options
                 .workspace
                 .as_ref()
@@ -207,8 +207,39 @@ impl Workspace {
     }
     pub(crate) fn set_catalog(&mut self, catalog: Vec<SessionEntry>, cx: &mut Context<Self>) {
         self.sessions = catalog;
+        self.refresh_title();
         self.regroup(cx);
         cx.notify();
+    }
+
+    pub(super) fn refresh_title(&mut self) {
+        let id = self
+            .info
+            .as_ref()
+            .map(|info| info.id.as_str())
+            .or(self.options.resume.as_deref());
+        let title = self
+            .info
+            .as_ref()
+            .filter(|info| !info.title.trim().is_empty())
+            .map(|info| info.title.as_str())
+            .or_else(|| {
+                self.sessions
+                    .iter()
+                    .find(|entry| Some(entry.id.as_ref()) == id)
+                    .map(|entry| entry.title.as_ref())
+            });
+        self.title = title
+            .map(|title| title.split_whitespace().collect::<Vec<_>>().join(" "))
+            .filter(|title| !title.is_empty())
+            .unwrap_or_else(|| {
+                if id.is_some() {
+                    "历史会话".into()
+                } else {
+                    "新会话".into()
+                }
+            })
+            .into();
     }
     pub(crate) fn set_open_tasks(
         &mut self,

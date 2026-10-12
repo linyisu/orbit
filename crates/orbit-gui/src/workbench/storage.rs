@@ -23,7 +23,7 @@ pub(crate) struct SavedTask {
     pub(crate) clipboard_files: Vec<Arc<tempfile::NamedTempFile>>,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct SavedSend {
     pub(crate) id: String,
     pub(crate) session: String,
@@ -40,6 +40,30 @@ pub(crate) struct Snapshot {
     pub(crate) tasks: Vec<SavedTask>,
 }
 impl Snapshot {
+    pub(crate) fn deduplicate_tabs(&mut self) {
+        let mut kept: Vec<SavedTask> = Vec::new();
+        for task in self.tasks.drain(..) {
+            let duplicate = kept.iter().find(|other| {
+                other.options.same_host(&task.options)
+                    && other.options.workspace == task.options.workspace
+                    && other.options.resume == task.options.resume
+                    && (task.options.resume.is_some()
+                        || task.text.is_empty() && task.paths.is_empty())
+                    && other.text == task.text
+                    && other.paths == task.paths
+                    && other.retry == task.retry
+            });
+            if let Some(other) = duplicate {
+                if self.active == task.key {
+                    self.active = other.key.clone();
+                }
+            } else {
+                kept.push(task);
+            }
+        }
+        self.tasks = kept;
+    }
+
     pub(crate) fn new(origin: Options, active: String, tasks: Vec<SavedTask>) -> Self {
         Self {
             version: 1,
@@ -238,6 +262,38 @@ mod tests {
             retry: None,
             clipboard_files: Vec::new(),
         }
+    }
+
+    #[test]
+    fn duplicate_history_tabs_merge_without_losing_distinct_drafts_or_hosts() {
+        let directory = tempfile::tempdir().unwrap();
+        let options = options(directory.path());
+        let mut first = task(options.clone(), "first");
+        first.options.resume = Some("session".into());
+        let mut duplicate = first.clone();
+        duplicate.key = "duplicate".into();
+        let mut edited = first.clone();
+        edited.key = "edited".into();
+        edited.text = "另一个未发送的草稿".into();
+        let mut remote = first.clone();
+        remote.key = "remote".into();
+        remote.options.ssh = Some("another-host".into());
+        let mut snapshot = Snapshot::new(
+            options,
+            "duplicate".into(),
+            vec![first, duplicate, edited, remote],
+        );
+        snapshot.deduplicate_tabs();
+        assert_eq!(snapshot.active, "first");
+        assert_eq!(
+            snapshot
+                .tasks
+                .iter()
+                .map(|task| task.key.as_str())
+                .collect::<Vec<_>>(),
+            ["first", "edited", "remote"]
+        );
+        assert_eq!(snapshot.tasks[1].text, "另一个未发送的草稿");
     }
 
     #[test]

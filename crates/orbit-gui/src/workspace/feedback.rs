@@ -19,6 +19,8 @@ impl Workspace {
                     Notification::error("查看详情")
                         .title(if view.connected && view.info.is_some() {
                             "操作未完成"
+                        } else if view.options.resume.is_some() {
+                            "无法打开会话"
                         } else {
                             "无法打开项目"
                         })
@@ -39,19 +41,28 @@ impl Workspace {
             return;
         };
         let disconnected = !self.connected || self.info.is_none();
+        let resuming = self.options.resume.is_some();
         let owner = cx.weak_entity();
         window.open_dialog(cx, move |dialog, _, _| {
             let retry = owner.clone();
             dialog
                 .title(if disconnected {
-                    "无法打开项目"
+                    if resuming {
+                        "无法打开会话"
+                    } else {
+                        "无法打开项目"
+                    }
                 } else {
                     "操作未完成"
                 })
-                .child(TextView::markdown(
-                    "failure-details",
-                    format!("````text\n{error}\n````"),
-                ))
+                .child(
+                    div()
+                        .id("failure-details")
+                        .max_h(rems(18.))
+                        .overflow_y_scroll()
+                        .text_sm()
+                        .child(error.clone()),
+                )
                 .footer(
                     h_flex()
                         .gap_2()

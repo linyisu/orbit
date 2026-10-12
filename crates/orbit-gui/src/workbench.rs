@@ -33,9 +33,12 @@ impl Workbench {
     ) -> Self {
         let storage::Loaded {
             storage,
-            saved,
+            mut saved,
             mut errors,
         } = loaded;
+        if let Some(snapshot) = &mut saved {
+            snapshot.deduplicate_tabs();
+        }
         let mut workbench = Self {
             runtime,
             tasks: Vec::new(),
@@ -205,6 +208,9 @@ impl Workbench {
             return;
         }
         let mut options = self.tasks[ix].view.read(cx).options().clone();
+        // A failed restored tab may still carry a removed model in its launch
+        // options. Closing it must leave a usable blank task with the default.
+        options.model = None;
         options.resume = None;
         options.recover_draft = false;
         options.relink_on_resume = false;

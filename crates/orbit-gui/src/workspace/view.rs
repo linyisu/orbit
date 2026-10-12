@@ -569,20 +569,15 @@ impl Render for Workspace {
                                 ),
                         )
                     })
-                    .when(self.open_tasks.len() > 1, |bar| {
-                        bar.child(
-                            Button::new("close-task")
-                                .ghost()
-                                .small()
-                                .icon(IconName::Close)
-                                .accessibility_label("关闭当前任务视图")
-                                .tooltip("关闭当前任务视图")
-                                .disabled(self.busy || self.pending.is_some())
-                                .on_click(cx.listener(|view, _, _, cx| {
-                                    cx.emit(WorkspaceEvent::Close(view.key.clone()))
-                                })),
-                        )
-                    })
+                    .child(
+                        Button::new("new-task-tab")
+                            .ghost()
+                            .small()
+                            .icon(IconName::Plus)
+                            .accessibility_label("新任务")
+                            .tooltip("新任务 · Ctrl+N")
+                            .on_click(cx.listener(|view, _, _, cx| view.open(None, cx))),
+                    )
                     .child(
                         Button::new("toggle-inspector")
                             .ghost()
