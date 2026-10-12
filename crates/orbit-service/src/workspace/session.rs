@@ -1,6 +1,6 @@
 use std::{collections::BTreeMap, path::Path, sync::Arc};
 
-use anyhow::{Result, ensure};
+use anyhow::{Context, Result, ensure};
 use orbit_tools::approval::ApprovalPreview;
 use sha2::{Digest, Sha256};
 use tokio::sync::{Mutex, mpsc, oneshot};
@@ -19,6 +19,7 @@ pub struct Handle {
     pub info: SessionInfo,
     pub(super) clients: std::sync::atomic::AtomicUsize,
     pub policy: orbit_protocol::SessionPolicy,
+    pub(super) requested_policy: orbit_protocol::SessionPolicy,
     pub view: Arc<Mutex<View>>,
     progress_delivery: Mutex<progress::Deliveries>,
     history: Vec<orbit_store::transcript::RunIndex>,
@@ -52,6 +53,11 @@ pub enum Command {
         agent: String,
         message: String,
     },
+    Subagents {
+        action: orbit_protocol::subagents::Action,
+        expected_workspace: String,
+        result: oneshot::Sender<Result<orbit_protocol::subagents::Snapshot>>,
+    },
     SetMode {
         mode: Mode,
     },
@@ -69,6 +75,16 @@ pub enum Command {
         action: orbit_protocol::project::TaskAction,
         expected_workspace: Option<String>,
         result: oneshot::Sender<Result<orbit_protocol::project::TaskSnapshot>>,
+    },
+    Files {
+        action: orbit_protocol::files::Action,
+        expected_workspace: Option<String>,
+        result: oneshot::Sender<Result<orbit_protocol::files::Snapshot>>,
+    },
+    Review {
+        action: orbit_protocol::review::Action,
+        expected_workspace: String,
+        result: oneshot::Sender<Result<orbit_protocol::review::Snapshot>>,
     },
     Start {
         request_id: String,
@@ -298,6 +314,10 @@ impl Handle {
 
     pub async fn authorize_subagent(&self, agent: &str) -> Result<()> {
         ensure!(
+            !self.policy.disabled(orbit_protocol::Capability::Subagents),
+            "子 Agent 功能已禁用"
+        );
+        ensure!(
             self.store.subagent_parent(agent).await?.as_deref() == Some(&self.info.id),
             "该记录不是当前会话的子代理。"
         );
@@ -353,6 +373,7 @@ impl Handle {
             _configuration: configuration,
             info,
             clients: std::sync::atomic::AtomicUsize::new(0),
+            requested_policy: policy.clone(),
             policy,
             view,
             progress_delivery: Default::default(),
@@ -398,6 +419,21 @@ impl Handle {
         Ok(response.await?)
     }
 
+    pub async fn subagents(
+        &self,
+        action: orbit_protocol::subagents::Action,
+        expected_workspace: String,
+    ) -> Result<orbit_protocol::subagents::Snapshot> {
+        let (result, response) = oneshot::channel();
+        self.command(Command::Subagents {
+            action,
+            expected_workspace,
+            result,
+        })
+        .await?;
+        response.await.context("subagent request was interrupted")?
+    }
+
     pub async fn resources(
         &self,
         action: orbit_protocol::resources::Action,
@@ -411,6 +447,36 @@ impl Handle {
         })
         .await?;
         response.await?
+    }
+
+    pub async fn files(
+        &self,
+        action: orbit_protocol::files::Action,
+        expected_workspace: Option<String>,
+    ) -> Result<orbit_protocol::files::Snapshot> {
+        let (result, response) = oneshot::channel();
+        self.command(Command::Files {
+            action,
+            expected_workspace,
+            result,
+        })
+        .await?;
+        response.await.context("file request was interrupted")?
+    }
+
+    pub async fn review(
+        &self,
+        action: orbit_protocol::review::Action,
+        expected_workspace: String,
+    ) -> Result<orbit_protocol::review::Snapshot> {
+        let (result, response) = oneshot::channel();
+        self.command(Command::Review {
+            action,
+            expected_workspace,
+            result,
+        })
+        .await?;
+        response.await.context("review request was interrupted")?
     }
 
     pub async fn tasks(

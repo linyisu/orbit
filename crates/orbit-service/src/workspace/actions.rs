@@ -45,6 +45,7 @@ pub(super) async fn execute(
                 &directory,
                 &setup.session,
                 setup.resources.policy.clone(),
+                &setup.resources.disabled_tools,
             )
             .await?;
             super::profile::apply(
@@ -93,6 +94,11 @@ pub(super) async fn execute(
                 )
             };
             skills.register_tool(&mut setup.resources.tools);
+            super::setup::filter_configured_tools(
+                &mut setup.resources.tools,
+                &setup.resources.policy,
+                &setup.resources.disabled_tools,
+            );
             setup.resources.budget.skills = skills;
             setup.resources.budget.plugin_skill_diagnostics = roots.diagnostics;
             Ok(report("Skills", setup.resources.budget.skills.render()))

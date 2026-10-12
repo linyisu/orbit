@@ -18,6 +18,7 @@ const DEPENDENCIES: &[(&str, &[&str])] = &[
             "orbit-agent",
             "orbit-auth",
             "orbit-model",
+            "orbit-protocol",
             "orbit-runtime",
             "orbit-tools",
         ],
@@ -87,6 +88,7 @@ const DEPENDENCIES: &[(&str, &[&str])] = &[
             "orbit-agent",
             "orbit-model",
             "orbit-tools",
+            "orbit-runtime",
         ],
     ),
     (

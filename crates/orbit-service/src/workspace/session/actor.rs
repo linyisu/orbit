@@ -5,7 +5,7 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{Result, ensure};
+use anyhow::{Context, Result, ensure};
 use orbit_agent::{
     events::AgentEvent,
     inbox::{AgentInbox, InboxMessage},
@@ -33,6 +33,10 @@ struct Running {
 struct Undo {
     task: tokio::task::JoinHandle<Result<String>>,
     cancellation: CancellationToken,
+    completion: Option<(
+        String,
+        tokio::sync::oneshot::Sender<Result<orbit_protocol::review::Snapshot>>,
+    )>,
 }
 
 struct Actor {
@@ -143,13 +147,18 @@ pub(super) async fn run(
                 }
             }
             result = async { (&mut actor.undo.as_mut().unwrap().task).await }, if actor.undo.is_some() => {
-                actor.undo = None;
+                let undo = actor.undo.take().unwrap();
                 actor.pending.clear();
                 let mut view = actor.view.lock().await;
                 view.busy = false;
                 view.approvals.clear();
-                let text = match result { Ok(Ok(text)) => text, Ok(Err(error)) => format!("撤销失败：{error:#}"), Err(error) => format!("撤销任务中断：{error}") };
-                view.push(Update::Report(orbit_protocol::Report { title: "撤销文件写入".into(), text }));
+                let result = match result { Ok(result) => result, Err(error) => Err(anyhow::anyhow!("撤销任务中断：{error}")) };
+                if let Some((path, reply)) = undo.completion {
+                    let _ = reply.send(result.map(|detail| orbit_protocol::review::Snapshot::Undone { path, detail }));
+                } else {
+                    let text = match result { Ok(text) => text, Err(error) => format!("撤销失败：{error:#}") };
+                    view.push(Update::Report(orbit_protocol::Report { title: "撤销文件写入".into(), text }));
+                }
             }
             Some(request) = actor.setup.resources.approvals.recv() => actor.approval(request).await,
             _ = outputs.tick(), if actor.running.is_some() && !actor.progress.is_empty() && actor.progress_task.is_none() => {
@@ -409,6 +418,103 @@ impl Actor {
                         "工作区已切换，请重新打开当前项目的设置后重试"
                     );
                     crate::workspace::resources::execute(&mut self.setup, action, busy).await
+                }
+                .await;
+                let _ = result.send(response);
+            }
+            Command::Files {
+                action,
+                expected_workspace,
+                result,
+            } => {
+                let busy = self.active() || self.questions.running().await;
+                let response =
+                    async {
+                        ensure!(
+                            expected_workspace.as_ref().is_none_or(|expected| expected
+                                == &self.setup.session.snapshot.session.workspace),
+                            "工作区已切换，请重新打开文件"
+                        );
+                        crate::workspace::files::execute(&mut self.setup, action, busy).await
+                    }
+                    .await;
+                let _ = result.send(response);
+            }
+            Command::Review {
+                action,
+                expected_workspace,
+                result,
+            } => {
+                let scope = expected_workspace == self.setup.session.snapshot.session.workspace;
+                if !scope {
+                    let _ = result.send(Err(anyhow::anyhow!("工作区已切换，请重新打开差异审查")));
+                } else if matches!(
+                    action,
+                    orbit_protocol::review::Action::Stage { .. }
+                        | orbit_protocol::review::Action::Unstage { .. }
+                ) {
+                    let response = async {
+                        ensure!(
+                            !self.active() && !self.questions.running().await,
+                            "请先结束正在运行的任务再更改暂存区"
+                        );
+                        crate::workspace::review::execute(&self.setup, action).await
+                    }
+                    .await;
+                    let _ = result.send(response);
+                } else if let orbit_protocol::review::Action::Undo {
+                    path,
+                    run_id,
+                    call_id,
+                } = action
+                {
+                    let response = async {
+                        ensure!(
+                            !self.questions.running().await,
+                            "请先结束旁路提问再撤销文件写入"
+                        );
+                        let changes = self
+                            .setup
+                            .session
+                            .store
+                            .workspace_changes(self.setup.session.id())
+                            .await?;
+                        let current = changes
+                            .iter()
+                            .rev()
+                            .find(|change| change.change.path == path)
+                            .context("该检查点已不存在")?;
+                        ensure!(
+                            !current.undone
+                                && current.run_id == run_id
+                                && current.call_id == call_id,
+                            "检查点已变更，请重新审查后撤销"
+                        );
+                        self.undo(Some(path.clone())).await
+                    }
+                    .await;
+                    match response {
+                        Ok(()) => self.undo.as_mut().unwrap().completion = Some((path, result)),
+                        Err(error) => {
+                            let _ = result.send(Err(error));
+                        }
+                    }
+                } else {
+                    let _ =
+                        result.send(crate::workspace::review::execute(&self.setup, action).await);
+                }
+            }
+            Command::Subagents {
+                action,
+                expected_workspace,
+                result,
+            } => {
+                let response = async {
+                    ensure!(
+                        expected_workspace == self.setup.session.snapshot.session.workspace,
+                        "工作区已切换，请重新打开子 Agent 列表"
+                    );
+                    crate::workspace::subagents::execute(&mut self.setup, action).await
                 }
                 .await;
                 let _ = result.send(response);
@@ -725,6 +831,22 @@ impl Actor {
 
     async fn undo(&mut self, path: Option<String>) -> Result<()> {
         ensure!(
+            !self
+                .setup
+                .resources
+                .policy
+                .disabled(orbit_protocol::Capability::Files),
+            "文件功能已禁用"
+        );
+        ensure!(
+            !self
+                .setup
+                .resources
+                .policy
+                .disabled(orbit_protocol::Capability::Write),
+            "文件写入已禁用"
+        );
+        ensure!(
             !self.setup.resources.policy.read_only,
             "read-only sessions cannot undo files"
         );
@@ -751,7 +873,11 @@ impl Actor {
             store.record_workspace_undo(&session, &change).await?;
             Ok(output)
         });
-        self.undo = Some(Undo { task, cancellation });
+        self.undo = Some(Undo {
+            task,
+            cancellation,
+            completion: None,
+        });
         self.view.lock().await.busy = true;
         Ok(())
     }

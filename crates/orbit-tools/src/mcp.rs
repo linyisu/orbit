@@ -107,11 +107,18 @@ impl McpConfig {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct McpToolStatus {
+    pub name: String,
+    pub description: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct McpServerStatus {
     pub name: String,
     pub detail: String,
     pub tool_count: usize,
     pub connected: bool,
+    pub tools: Vec<McpToolStatus>,
 }
 
 /// Register namespaced tools; report optional server failures without aborting the TUI.
@@ -131,6 +138,7 @@ pub async fn register(
                 detail: "已禁用".into(),
                 tool_count: 0,
                 connected: false,
+                tools: Vec::new(),
             });
             continue;
         }
@@ -141,6 +149,7 @@ pub async fn register(
                 detail: "需要审批通道；未启动".into(),
                 tool_count: 0,
                 connected: false,
+                tools: Vec::new(),
             });
             continue;
         };
@@ -151,6 +160,7 @@ pub async fn register(
                 detail: "启动需显式授权：添加 --allow-mcp-start".into(),
                 tool_count: 0,
                 connected: false,
+                tools: Vec::new(),
             });
             continue;
         }
@@ -168,6 +178,13 @@ pub async fn register(
                     })
                     .collect::<Vec<_>>();
                 let count = filtered.len();
+                let tools = filtered
+                    .iter()
+                    .map(|definition| McpToolStatus {
+                        name: exposed_name(name, &definition.name),
+                        description: definition.description.clone(),
+                    })
+                    .collect();
                 let client = Arc::new(Mutex::new(client));
 
                 for definition in filtered {
@@ -189,6 +206,7 @@ pub async fn register(
                     },
                     tool_count: count,
                     connected: true,
+                    tools,
                 });
             }
 
@@ -197,6 +215,7 @@ pub async fn register(
                 detail: error.to_string(),
                 tool_count: 0,
                 connected: false,
+                tools: Vec::new(),
             }),
         }
     }

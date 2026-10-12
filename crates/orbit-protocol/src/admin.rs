@@ -7,6 +7,7 @@ pub enum Action {
     LinkProject { id: String },
     Sessions,
     SessionStorage,
+    RenameSession { id: String, title: String },
     DeleteSession { id: String },
     InspectSession { id: String, section: SessionSection },
 }

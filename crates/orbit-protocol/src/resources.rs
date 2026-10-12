@@ -14,6 +14,21 @@ pub enum Action {
     },
     Memories,
     Memory(super::project::MemoryAction),
+    Mcp,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct McpServer {
+    pub name: String,
+    pub connected: bool,
+    pub detail: String,
+    pub tools: Vec<McpTool>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct McpTool {
+    pub name: String,
+    pub description: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -34,4 +49,5 @@ pub enum Snapshot {
         editable: bool,
     },
     Memories(Vec<super::project::SessionMemory>),
+    Mcp(Vec<McpServer>),
 }

@@ -8,6 +8,8 @@ use orbit_model::{error::ModelError, types::ChatCompletion};
 use tokio::sync::Notify;
 
 use super::*;
+#[path = "tests/native_controls.rs"]
+mod native_controls;
 
 fn response(message: ChatMessage) -> ChatCompletion {
     ChatCompletion {

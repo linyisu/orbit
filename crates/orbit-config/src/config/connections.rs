@@ -66,7 +66,7 @@ fn append_account(
     save_provider(path, auth_directory, &name, spec)
 }
 
-fn read_config(path: &std::path::Path) -> Result<String> {
+pub(super) fn read_config(path: &std::path::Path) -> Result<String> {
     match std::fs::read_to_string(path) {
         Ok(content) => Ok(content),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok("[providers]\n".into()),
@@ -114,7 +114,7 @@ pub fn save_provider(
     crate::config::FileConfig::load(path, auth_directory)?.model_options()
 }
 
-fn persist(path: &std::path::Path, original: &str, updated: &str) -> Result<()> {
+pub(super) fn persist(path: &std::path::Path, original: &str, updated: &str) -> Result<()> {
     let parent = path
         .parent()
         .filter(|path| !path.as_os_str().is_empty())
@@ -133,7 +133,7 @@ fn persist(path: &std::path::Path, original: &str, updated: &str) -> Result<()> 
         read_config(path)? == original,
         "配置已被其他程序修改，请重试"
     );
-    temporary.persist(path).context("无法保存连接配置")?;
+    temporary.persist(path).context("无法保存配置")?;
 
     Ok(())
 }

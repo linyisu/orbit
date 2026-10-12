@@ -65,6 +65,7 @@ pub(crate) fn filter_tools(
             "list_files",
             "search_text",
             "project_overview",
+            "code_symbols",
             "verification_status",
         ] {
             tools.remove(name);

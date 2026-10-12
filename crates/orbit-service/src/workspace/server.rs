@@ -422,7 +422,7 @@ impl Service {
                 };
                 if let Some(handle) = existing {
                     ensure!(
-                        handle.policy == policy,
+                        handle.requested_policy == policy,
                         "open session has a different capability policy"
                     );
                     handle.clients.fetch_add(1, Ordering::AcqRel);
@@ -447,8 +447,11 @@ impl Service {
                 let mut options = options.clone();
                 options.model = model;
                 let setup =
-                    super::setup::prepare_service_with_policy(&options, resume, policy).await?;
-                let handle = Arc::new(Handle::spawn(setup, configuration).await?);
+                    super::setup::prepare_service_with_policy(&options, resume, policy.clone())
+                        .await?;
+                let mut handle = Handle::spawn(setup, configuration).await?;
+                handle.requested_policy = policy;
+                let handle = Arc::new(handle);
                 let info = handle.info.clone();
                 handle.clients.fetch_add(1, Ordering::AcqRel);
                 self.sessions.lock().await.insert(info.id.clone(), handle);
@@ -487,12 +490,55 @@ impl Service {
                     .tasks(action, expected_workspace)
                     .await?,
             )),
+            Request::Files {
+                session,
+                expected_workspace,
+                action,
+            } => Ok(Response::Files(
+                self.session(&session)
+                    .await?
+                    .files(action, expected_workspace)
+                    .await?,
+            )),
+            Request::Review {
+                session,
+                expected_workspace,
+                action,
+            } => Ok(Response::Review(
+                self.session(&session)
+                    .await?
+                    .review(action, expected_workspace)
+                    .await?,
+            )),
+            Request::Subagents {
+                session,
+                expected_workspace,
+                action,
+            } => Ok(Response::Subagents(
+                self.session(&session)
+                    .await?
+                    .subagents(action, expected_workspace)
+                    .await?,
+            )),
             Request::Admin { action } => {
                 let _opening = self.opening.lock().await;
                 ensure!(
                     !self.closing.load(Ordering::Acquire),
                     "workspace service is shutting down"
                 );
+                if let orbit_protocol::admin::Action::RenameSession { id, title } = &action {
+                    super::admin::ensure_title(title)?;
+                    let handle = self.sessions.lock().await.get(id).cloned();
+                    if let Some(handle) = handle {
+                        return Ok(Response::Report(
+                            handle
+                                .action(orbit_protocol::SessionAction::Rename {
+                                    title: title.clone(),
+                                })
+                                .await?,
+                        ));
+                    }
+                }
                 if let orbit_protocol::admin::Action::DeleteSession { id } = &action {
                     let handle = self.sessions.lock().await.get(id).cloned();
                     if let Some(handle) = handle {

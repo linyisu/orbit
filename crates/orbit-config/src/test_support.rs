@@ -144,6 +144,8 @@ impl TestConfig {
                 max_output_tokens: 32000,
                 max_turns: 0,
                 max_tool_calls: 2000,
+                disabled_capabilities: Vec::new(),
+                disabled_tools: Vec::new(),
                 command: Default::default(),
                 subagents: Default::default(),
                 compaction: Default::default(),

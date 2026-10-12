@@ -1,9 +1,12 @@
 pub mod admin;
+pub mod files;
 pub mod plan;
 pub mod plugins;
 pub mod project;
 pub mod resources;
+pub mod review;
 pub mod search;
+pub mod subagents;
 pub mod usage;
 pub mod user_input;
 
@@ -12,7 +15,7 @@ use std::io;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
-pub const VERSION: u32 = 20;
+pub const VERSION: u32 = 22;
 // Steering receipts identify the durable input independently of its consumption.
 pub const MIN_COMPATIBLE_VERSION: u32 = 15;
 
@@ -97,6 +100,21 @@ pub enum Request {
     },
     Admin {
         action: admin::Action,
+    },
+    Review {
+        session: String,
+        expected_workspace: String,
+        action: review::Action,
+    },
+    Subagents {
+        session: String,
+        expected_workspace: String,
+        action: subagents::Action,
+    },
+    Files {
+        session: String,
+        expected_workspace: Option<String>,
+        action: files::Action,
     },
     Start {
         session: String,
@@ -364,6 +382,9 @@ pub enum Response<E, A> {
     Plugins(plugins::Catalog),
     Resources(resources::Snapshot),
     Tasks(project::TaskSnapshot),
+    Review(review::Snapshot),
+    Subagents(subagents::Snapshot),
+    Files(files::Snapshot),
     File(String),
     InputQueued {
         message_id: i64,

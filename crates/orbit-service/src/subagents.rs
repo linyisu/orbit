@@ -41,6 +41,7 @@ pub use orbit_config::subagents::SubagentConfig;
 struct ActiveAgent {
     job_id: String,
     inbox: AgentInbox,
+    run_id: i64,
 }
 
 type BackendFactory = Arc<dyn Fn(ModelClient) -> Arc<dyn ModelBackend> + Send + Sync>;
@@ -204,7 +205,7 @@ impl Tool for AgentTool {
 
             Action::Cancel => (
                 "Cancel selected subagents, without cancelling their siblings. Empty agent_ids cancels all of this parent's active subagents. Wait for final status before assuming cancellation has finished.",
-                json!({"type":"object","properties":{"agent_ids":{"type":"array","items":{"type":"string"}}},"additionalProperties":false}),
+                json!({"type":"object","properties":{"agent_ids":{"type":"array","items":{"type":"string"}},"expected_run_id":{"type":"integer","minimum":1,"description":"Optional stale-row guard; valid only for exactly one selected agent."}},"additionalProperties":false}),
             ),
         };
         ToolDefinition::function(self.action.name(), description, schema)
@@ -265,6 +266,7 @@ struct IdsArgs {
     agent_ids: Vec<String>,
     #[serde(default)]
     all: bool,
+    expected_run_id: Option<i64>,
 }
 
 #[derive(Deserialize)]
@@ -645,6 +647,13 @@ impl Service {
             Action::Wait | Action::Cancel => {
                 let args: IdsArgs = serde_json::from_value(args)?;
                 ensure!(
+                    args.expected_run_id.is_none()
+                        || (matches!(action, Action::Cancel)
+                            && args.agent_ids.len() == 1
+                            && args.expected_run_id.is_some_and(|run| run > 0)),
+                    "run guard is valid only when cancelling exactly one agent"
+                );
+                ensure!(
                     args.agent_ids.len() <= 128,
                     "at most 128 agent IDs per request"
                 );
@@ -652,15 +661,14 @@ impl Service {
                 let mut ids = Vec::new();
                 for id in &args.agent_ids {
                     self.store.owned_subagent(&self.parent, id).await?;
-                    ids.push(
-                        active
-                            .get(id)
-                            .context(
-                                "agent is inactive in this run; use read_agent for stored results",
-                            )?
-                            .job_id
-                            .clone(),
+                    let entry = active.get(id).context(
+                        "agent is inactive in this run; use read_agent for stored results",
+                    )?;
+                    ensure!(
+                        args.expected_run_id.is_none_or(|run| run == entry.run_id),
+                        "子 Agent 已开始另一轮任务，请刷新后重试"
                     );
+                    ids.push(entry.job_id.clone());
                 }
 
                 drop(active);
@@ -844,6 +852,7 @@ impl Service {
             ActiveAgent {
                 job_id: receipt.job_id.clone(),
                 inbox,
+                run_id,
             },
         );
         let mut output=ToolOutput::text(json!({"workspace":workspace,"agent_id":agent.id,"invocation_id":invocation,"run_id":run_id,"job_id":receipt.job_id,"role":agent.role,"model":agent.model,"status":"running"}).to_string());

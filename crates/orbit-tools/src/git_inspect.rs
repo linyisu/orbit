@@ -1,17 +1,23 @@
 //! A bounded, read-only view of the Git repository that owns a workspace.
 
 use std::{
-    io::Read,
+    collections::BTreeSet,
+    io::{self, Read},
+    os::unix::process::CommandExt,
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::{Child, Command, Stdio},
+    time::{Duration, Instant},
 };
 
 use orbit_agent::tool::{Tool, ToolError, ToolFuture, ToolOutput};
 use orbit_model::types::{ToolCall, ToolDefinition};
-use orbit_runtime::filesystem::Workspace;
+use orbit_runtime::filesystem::{Workspace, WorkspaceError};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
+
+mod index;
+pub use index::{ReviewedFile, review_index_patch, update_review_index};
 
 const MAX_OUTPUT_BYTES: usize = 256 * 1024;
 /// A SWE prediction must contain the complete patch. Refuse a larger patch
@@ -19,6 +25,8 @@ const MAX_OUTPUT_BYTES: usize = 256 * 1024;
 const MAX_PATCH_BYTES: usize = 4 * 1024 * 1024;
 const MAX_ENTRIES: usize = 500;
 const MAX_OFFSET: usize = 20_000;
+const GIT_TIMEOUT: Duration = Duration::from_secs(10);
+const GIT_POLL_INTERVAL: Duration = Duration::from_millis(10);
 
 #[derive(Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -74,6 +82,73 @@ pub fn capture_baseline(workspace: &Path) -> Option<Value> {
         &cancellation,
     )
     .ok()
+}
+
+/// The desktop uses the same bounded Git execution and path checks as the tool.
+pub fn review_status(workspace: &Workspace, offset: usize) -> Result<Value, ToolError> {
+    let cancellation = CancellationToken::new();
+    let root = repository_root(workspace.root(), &cancellation)?;
+    let args = Arguments {
+        offset,
+        limit: MAX_ENTRIES,
+        ..Arguments::default()
+    };
+    validate(&args)?;
+    status_inner(&root, workspace, &args, &cancellation, true)
+}
+
+/// Complete, size-limited patch for one reviewed file. Never silently truncate.
+pub fn review_patch(
+    workspace: &Workspace,
+    path: &str,
+    staged: bool,
+    untracked: bool,
+) -> Result<String, ToolError> {
+    let cancellation = CancellationToken::new();
+    let root = repository_root(workspace.root(), &cancellation)?;
+    let path = checked_review_path(workspace, path)?;
+    let mut args = vec![
+        "diff".into(),
+        "--no-ext-diff".into(),
+        "--no-textconv".into(),
+        "--no-renames".into(),
+        "--unified=3".into(),
+    ];
+    if untracked {
+        let listing = status_inner(
+            &root,
+            workspace,
+            &Arguments {
+                path: Some(path.clone()),
+                ..Arguments::default()
+            },
+            &cancellation,
+            true,
+        )?;
+        if !listing["entries"].as_array().is_some_and(|entries| {
+            entries
+                .iter()
+                .any(|entry| entry["path"] == path && entry["kind"] == "untracked")
+        }) {
+            return Err(invalid(
+                "the file is no longer untracked; refresh the review",
+            ));
+        }
+        args.extend([
+            "--no-index".into(),
+            "--".into(),
+            "/dev/null".into(),
+            path.clone(),
+        ]);
+    } else {
+        if staged {
+            args.push("--cached".into());
+        }
+        args.extend(["--".into(), path.clone()]);
+    }
+    let patch = git_export(&root, args, &cancellation, untracked)?;
+    checked_review_path(workspace, &path)?;
+    String::from_utf8(patch).map_err(|_| failed("Git patch contains non-UTF-8 paths or content"))
 }
 
 /// Complete worktree patch, including untracked regular files.
@@ -275,11 +350,34 @@ fn status(
     args: &Arguments,
     cancellation: &CancellationToken,
 ) -> Result<Value, ToolError> {
-    let output = git(
-        root,
-        ["status", "--porcelain=v2", "--branch", "-z"],
-        cancellation,
-    )?;
+    status_inner(root, workspace, args, cancellation, false)
+}
+
+fn status_inner(
+    root: &Path,
+    workspace: &Workspace,
+    args: &Arguments,
+    cancellation: &CancellationToken,
+    review: bool,
+) -> Result<Value, ToolError> {
+    let command = [
+        "status",
+        "--porcelain=v2",
+        "--branch",
+        "--untracked-files=all",
+        "-z",
+    ];
+    let output = if review {
+        // A desktop list must not report a truncated prefix as the complete final page.
+        git_export(
+            root,
+            command.into_iter().map(str::to_owned).collect(),
+            cancellation,
+            false,
+        )?
+    } else {
+        git(root, command, cancellation)?
+    };
     let mut branch = json!({
         "head": null,
         "oid": null,
@@ -309,6 +407,16 @@ fn status(
         let (entry, consumed) = parse_status_entry(record, records.get(index).copied())?;
         index += consumed;
         let Some(entry) = entry else { continue };
+        if review
+            && ["path", "original_path"].iter().any(|key| {
+                entry
+                    .get(key)
+                    .and_then(Value::as_str)
+                    .is_some_and(|path| checked_review_path(workspace, path).is_err())
+            })
+        {
+            continue;
+        }
         if path_filter.as_ref().is_some_and(|filter| {
             let path = entry
                 .get("path")
@@ -442,6 +550,20 @@ fn checked_path(workspace: &Workspace, path: Option<&str>) -> Result<Option<Stri
             .map_err(failed)
     })
     .transpose()
+}
+
+fn checked_review_path(workspace: &Workspace, path: &str) -> Result<String, ToolError> {
+    let relative = workspace
+        .checked_relative(Path::new(path))
+        .map_err(failed)?;
+    // Descriptor-based resolution checks protected inodes and symlink destinations as well
+    // as the requested spelling. Deleted tracked files still have an inspectable Git blob.
+    match workspace.open_read(&relative) {
+        Ok(_) => {}
+        Err(WorkspaceError::Io(error)) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(failed(error)),
+    }
+    Ok(relative.to_string_lossy().into_owned())
 }
 
 fn parse_branch(branch: &mut Value, record: &[u8]) -> Result<(), ToolError> {
@@ -586,6 +708,152 @@ fn git_with_limit(
     truncate: bool,
     allows_difference_status: bool,
 ) -> Result<Vec<u8>, ToolError> {
+    git_with_index(
+        root,
+        args,
+        cancellation,
+        limit,
+        truncate,
+        allows_difference_status,
+        None,
+        Instant::now() + GIT_TIMEOUT,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn git_with_index(
+    root: &Path,
+    args: Vec<String>,
+    cancellation: &CancellationToken,
+    limit: usize,
+    truncate: bool,
+    allows_difference_status: bool,
+    index: Option<&Path>,
+    deadline: Instant,
+) -> Result<Vec<u8>, ToolError> {
+    git_with_objects(
+        root,
+        args,
+        cancellation,
+        limit,
+        truncate,
+        allows_difference_status,
+        index,
+        None,
+        deadline,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn git_with_objects(
+    root: &Path,
+    args: Vec<String>,
+    cancellation: &CancellationToken,
+    limit: usize,
+    truncate: bool,
+    allows_difference_status: bool,
+    index: Option<&Path>,
+    objects: Option<&Path>,
+    deadline: Instant,
+) -> Result<Vec<u8>, ToolError> {
+    // --no-textconv does not disable clean/process filters. Enumerate configured
+    // driver names with a non-converting Git builtin, then override every driver
+    // through argv. This also covers attributes supplied by .git/info/attributes.
+    let keys = run_git(
+        root,
+        vec![
+            "config".into(),
+            "--null".into(),
+            "--name-only".into(),
+            "--get-regexp".into(),
+            r"^(filter\..*\.(clean|smudge|process|required)|remote\..*\.promisor|extensions\.partialclone)$".into(),
+        ],
+        cancellation,
+        &BTreeSet::new(),
+        GitLimits {
+            bytes: MAX_OUTPUT_BYTES,
+            truncate: false,
+            allows_difference_status: true, // `git config` returns 1 when no key matches.
+            deadline,
+        },
+    )?;
+    let mut drivers = BTreeSet::new();
+    for key in keys.split(|byte| *byte == 0).filter(|key| !key.is_empty()) {
+        let key = text(key)?;
+        if !key.starts_with("filter.") {
+            // Older Git versions may not understand GIT_NO_LAZY_FETCH. Refuse
+            // partial repositories before any object-reading builtin can
+            // invoke a configured transport or upload-pack executable.
+            return Err(failed(
+                "Partial/promisor repositories require external object fetching and cannot be inspected safely",
+            ));
+        }
+        let (driver, _) = key
+            .rsplit_once('.')
+            .ok_or_else(|| failed("invalid Git filter key"))?;
+        drivers.insert(driver.to_owned());
+        if drivers.len() > 256 {
+            return Err(failed(
+                "Git repository configures more than 256 conversion filters",
+            ));
+        }
+    }
+    run_git_index(
+        root,
+        args,
+        cancellation,
+        &drivers,
+        GitLimits {
+            bytes: limit,
+            truncate,
+            allows_difference_status,
+            deadline,
+        },
+        index,
+        objects,
+    )
+}
+
+struct GitLimits {
+    bytes: usize,
+    truncate: bool,
+    allows_difference_status: bool,
+    deadline: Instant,
+}
+
+struct GitChild(Child);
+
+impl Drop for GitChild {
+    fn drop(&mut self) {
+        // Each child has its own process group. Kill descendants that may still hold
+        // stdout open, then reap the direct child on every exit path.
+        unsafe {
+            libc::kill(-(self.0.id() as i32), libc::SIGKILL);
+        }
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+fn run_git(
+    root: &Path,
+    args: Vec<String>,
+    cancellation: &CancellationToken,
+    drivers: &BTreeSet<String>,
+    limits: GitLimits,
+) -> Result<Vec<u8>, ToolError> {
+    run_git_index(root, args, cancellation, drivers, limits, None, None)
+}
+
+fn run_git_index(
+    root: &Path,
+    args: Vec<String>,
+    cancellation: &CancellationToken,
+    drivers: &BTreeSet<String>,
+    limits: GitLimits,
+    index: Option<&Path>,
+    objects: Option<&Path>,
+) -> Result<Vec<u8>, ToolError> {
     if cancellation.is_cancelled() {
         return Err(ToolError::Cancelled);
     }
@@ -600,18 +868,27 @@ fn git_with_limit(
         .env("LC_ALL", "C")
         .arg("--no-optional-locks")
         .arg("--no-pager")
+        .arg("--literal-pathspecs")
         .arg("-c")
         .arg("core.fsmonitor=false")
         .arg("-c")
         .arg("core.hooksPath=/dev/null")
         .arg("-c")
-        .arg("diff.external=")
+        .arg("diff.external=");
+    for driver in drivers {
+        for suffix in ["clean=", "smudge=", "process=", "required=false"] {
+            command.arg("-c").arg(format!("{driver}.{suffix}"));
+        }
+    }
+    command
         .arg("-C")
         .arg(root)
         .args(args)
         .env("GIT_CONFIG_NOSYSTEM", "1")
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GIT_NO_LAZY_FETCH", "1")
+        .env("GIT_NO_REPLACE_OBJECTS", "1")
         .env_remove("GIT_DIR")
         .env_remove("GIT_WORK_TREE")
         .env_remove("GIT_INDEX_FILE")
@@ -619,41 +896,63 @@ fn git_with_limit(
         .env_remove("GIT_ALTERNATE_OBJECT_DIRECTORIES")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null());
-    let mut child = command.spawn().map_err(failed)?;
-    let mut stdout = child.stdout.take().expect("stdout is piped");
+        .stderr(Stdio::null())
+        .process_group(0);
+    if let Some(index) = index {
+        command.env("GIT_INDEX_FILE", index);
+    }
+    if let Some(objects) = objects {
+        command.env("GIT_OBJECT_DIRECTORY", objects);
+    }
+    let mut child = GitChild(command.spawn().map_err(failed)?);
+    let mut stdout = child.0.stdout.take().expect("stdout is piped");
+    let flags = rustix::fs::fcntl_getfl(&stdout).map_err(failed)?;
+    rustix::fs::fcntl_setfl(&stdout, flags | rustix::fs::OFlags::NONBLOCK).map_err(failed)?;
     let mut output = Vec::new();
-    let mut limited = (&mut stdout).take((limit + 1) as u64);
-    limited.read_to_end(&mut output).map_err(failed)?;
-
-    if output.len() > limit {
-        let _ = child.kill();
-        let _ = child.wait();
-
-        if truncate {
-            output.truncate(limit);
+    let mut buffer = [0; 8192];
+    let mut eof = false;
+    loop {
+        if cancellation.is_cancelled() {
+            return Err(ToolError::Cancelled);
+        }
+        if Instant::now() >= limits.deadline {
+            return Err(failed("Git inspection timed out after 10 seconds"));
+        }
+        if !eof {
+            match stdout.read(&mut buffer) {
+                Ok(0) => eof = true,
+                Ok(count) => {
+                    let remaining = limits.bytes.saturating_add(1).saturating_sub(output.len());
+                    output.extend_from_slice(&buffer[..count.min(remaining)]);
+                    if output.len() > limits.bytes {
+                        if limits.truncate {
+                            output.truncate(limits.bytes);
+                            return Ok(output);
+                        }
+                        return Err(failed(format!(
+                            "Git output exceeds the {} byte inspection limit",
+                            limits.bytes,
+                        )));
+                    }
+                    continue;
+                }
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
+                Err(error) => return Err(failed(error)),
+            }
+        }
+        if eof && let Some(status) = child.0.try_wait().map_err(failed)? {
+            if !status.success() && !(limits.allows_difference_status && status.code() == Some(1)) {
+                return Err(failed(
+                    "Git inspection failed; the workspace may not be a Git repository",
+                ));
+            }
             return Ok(output);
         }
-
-        return Err(ToolError::ExecutionFailed(format!(
-            "Git output exceeds the {} MiB export limit",
-            limit / (1024 * 1024)
-        )));
+        std::thread::sleep(
+            GIT_POLL_INTERVAL.min(limits.deadline.saturating_duration_since(Instant::now())),
+        );
     }
-
-    let status = child.wait().map_err(failed)?;
-
-    if !status.success() && !(allows_difference_status && status.code() == Some(1)) {
-        return Err(ToolError::ExecutionFailed(
-            "Git inspection failed; the workspace may not be a Git repository".into(),
-        ));
-    }
-
-    if cancellation.is_cancelled() {
-        return Err(ToolError::Cancelled);
-    }
-
-    Ok(output)
 }
 
 fn text(bytes: &[u8]) -> Result<String, ToolError> {
@@ -665,6 +964,91 @@ fn text(bytes: &[u8]) -> Result<String, ToolError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn probe(script: &str) -> Vec<String> {
+        vec![
+            "-c".into(),
+            format!("alias.orbit-probe=!{script}"),
+            "orbit-probe".into(),
+        ]
+    }
+
+    #[test]
+    fn git_deadline_stops_a_child_that_never_closes_stdout() {
+        let directory = tempfile::tempdir().unwrap();
+        let started = Instant::now();
+        let result = run_git(
+            directory.path(),
+            probe("exec sleep 30"),
+            &CancellationToken::new(),
+            &BTreeSet::new(),
+            GitLimits {
+                bytes: 1024,
+                truncate: false,
+                allows_difference_status: false,
+                deadline: started + Duration::from_millis(100),
+            },
+        );
+        assert!(
+            matches!(result, Err(ToolError::ExecutionFailed(error)) if error.contains("timed out"))
+        );
+        assert!(started.elapsed() < Duration::from_secs(3));
+    }
+
+    #[test]
+    fn git_cancellation_stops_a_child_without_output() {
+        let directory = tempfile::tempdir().unwrap();
+        let cancellation = CancellationToken::new();
+        let token = cancellation.clone();
+        let canceller = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(50));
+            token.cancel();
+        });
+        let started = Instant::now();
+        let result = run_git(
+            directory.path(),
+            probe("exec sleep 30"),
+            &cancellation,
+            &BTreeSet::new(),
+            GitLimits {
+                bytes: 1024,
+                truncate: false,
+                allows_difference_status: false,
+                deadline: started + Duration::from_secs(3),
+            },
+        );
+        canceller.join().unwrap();
+        assert!(matches!(result, Err(ToolError::Cancelled)));
+        assert!(started.elapsed() < Duration::from_secs(2));
+    }
+
+    #[test]
+    fn git_output_limits_stop_the_process_and_preserve_strict_or_truncated_semantics() {
+        let directory = tempfile::tempdir().unwrap();
+        for truncate in [false, true] {
+            let started = Instant::now();
+            let result = run_git(
+                directory.path(),
+                probe("printf 123456789; exec sleep 30"),
+                &CancellationToken::new(),
+                &BTreeSet::new(),
+                GitLimits {
+                    bytes: 8,
+                    truncate,
+                    allows_difference_status: false,
+                    deadline: started + Duration::from_secs(3),
+                },
+            );
+            if truncate {
+                assert_eq!(result.unwrap(), b"12345678");
+            } else {
+                assert!(
+                    matches!(result, Err(ToolError::ExecutionFailed(error)) if error.contains("8 byte"))
+                );
+            }
+            assert!(started.elapsed() < Duration::from_secs(2));
+        }
+    }
 
     #[test]
     fn parses_rename_and_unmerged_porcelain_v2_records() {

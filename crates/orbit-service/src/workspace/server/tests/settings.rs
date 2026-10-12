@@ -2,6 +2,52 @@ use super::*;
 use orbit_protocol::{SessionAction, resources};
 
 #[tokio::test]
+async fn configured_capability_ceiling_does_not_change_reconnect_identity() {
+    let fixture = Fixture::new("https://example.com/v1").await;
+    let path = &fixture.service.options.config;
+    let previous = fs::read_to_string(path).unwrap();
+    fs::write(
+        path,
+        format!("disabled_capabilities = ['web', 'mcp']\n{previous}"),
+    )
+    .unwrap();
+    let open = |resume, policy| Request::Open {
+        model: Some("test::test".into()),
+        policy,
+        resume,
+        configuration: None,
+    };
+    let Response::Opened(first) = fixture
+        .request(open(None, Default::default()))
+        .await
+        .unwrap()
+    else {
+        panic!("expected new session");
+    };
+    let Response::Opened(reopened) = fixture
+        .request(open(Some(first.id.clone()), Default::default()))
+        .await
+        .unwrap()
+    else {
+        panic!("expected reopened session");
+    };
+    assert_eq!(reopened.id, first.id);
+    let handle = fixture.service.session(&first.id).await.unwrap();
+    assert!(handle.policy.disabled(orbit_protocol::Capability::Web));
+    assert!(handle.policy.disabled(orbit_protocol::Capability::Mcp));
+    assert_eq!(handle.requested_policy, Default::default());
+    let changed = orbit_protocol::SessionPolicy {
+        read_only: true,
+        disabled: vec![],
+    };
+    let error = fixture
+        .request(open(Some(first.id), changed))
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("different capability policy"));
+}
+
+#[tokio::test]
 async fn settings_workspace_guard_is_checked_by_the_resource_actor() {
     let fixture = Fixture::new("https://example.com/v1").await;
     fs::create_dir(fixture.external.join(".git")).unwrap();

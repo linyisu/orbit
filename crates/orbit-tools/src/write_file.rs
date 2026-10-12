@@ -46,6 +46,45 @@ impl WriteFile {
         }
     }
 
+    /// Save an explicit user edit against the text originally opened in the editor.
+    /// The caller owns user authorization and session read-only/capability checks.
+    /// Filesystem authorization and the atomic commit stay identical to file tools.
+    pub async fn save_user_edit(
+        &self,
+        path: String,
+        original: String,
+        content: String,
+        cancellation: CancellationToken,
+    ) -> Result<ToolOutput, ToolError> {
+        if path.trim().is_empty() || content.len() > MAX_BYTES || content.contains('\0') {
+            return Err(failed(
+                "文件内容必须是没有 NUL 的 UTF-8 文本，且不能超过 1 MiB",
+            ));
+        }
+        check_cancelled(&cancellation)?;
+        let workspace = self.workspace.clone();
+        let prepared = tokio::task::spawn_blocking(move || {
+            let prepared = Prepared::new(workspace, Arguments { path, content })?;
+            if prepared.preview.before.as_deref() != Some(original.as_str()) {
+                return Err(failed(
+                    "文件已被其他程序修改。编辑内容已保留，请比较磁盘版本后再保存。",
+                ));
+            }
+            Ok::<_, ToolError>(prepared)
+        })
+        .await
+        .map_err(failed)??;
+        let change = FileChange {
+            path: prepared.preview.path.clone(),
+            before: prepared.preview.before.clone(),
+            after: prepared.preview.after.clone(),
+        };
+        tokio::task::spawn_blocking(move || prepared.commit(cancellation))
+            .await
+            .map_err(failed)?
+            .map(|receipt| ToolOutput::with_changes(receipt, vec![change]))
+    }
+
     pub(crate) async fn edit(
         &self,
         path: String,

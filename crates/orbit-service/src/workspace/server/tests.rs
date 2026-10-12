@@ -2,6 +2,8 @@
 use orbit_config::test_support::{TestConfig, TestModel, TestProvider};
 mod drafts;
 mod permissions;
+mod review;
+mod session_controls;
 mod settings;
 mod tasks;
 use orbit_protocol::{Mode, SessionInfo};

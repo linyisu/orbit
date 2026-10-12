@@ -233,3 +233,147 @@ pub async fn save(
 
     FileConfig::load(path, auth)?.model_options()
 }
+
+/// Remove one connection from the reviewed snapshot. A credential shared with
+/// another connection remains in the authentication store.
+pub async fn remove(path: &Path, auth: &Path, draft: &ConnectionDraft) -> Result<Vec<ModelOption>> {
+    let name = draft
+        .original_name
+        .as_deref()
+        .context("只能移除已保存的连接")?;
+    let original: FileConfig = toml::from_str(&draft.source)?;
+    let credential = original
+        .providers
+        .get(name)
+        .and_then(|provider| provider.credential.clone());
+    let mut document = draft.source.parse::<toml_edit::DocumentMut>()?;
+    let providers = document["providers"]
+        .as_table_like_mut()
+        .context("供应商配置无效")?;
+    ensure!(providers.remove(name).is_some(), "连接已不存在，请刷新列表");
+    if providers.is_empty() {
+        // A parent created by [providers.name] is implicit; once empty it
+        // would disappear during serialization, but FileConfig requires it.
+        document["providers"] = toml_edit::Item::Table(toml_edit::Table::new());
+    }
+    if document
+        .get("compaction")
+        .and_then(|item| item.get("model"))
+        .and_then(toml_edit::Item::as_str)
+        .and_then(|model| model.split_once("::"))
+        .is_some_and(|(provider, _)| provider == name)
+        && let Some(compaction) = document["compaction"].as_table_like_mut()
+    {
+        compaction.remove("model");
+    }
+    let updated = document.to_string();
+    let remaining = FileConfig::parse(&updated, auth)?;
+    let options = remaining.model_options()?;
+    for model in &options {
+        orbit_model::client::ModelClient::new(model.config.clone())?;
+    }
+    super::persist(path, &draft.source, &updated)?;
+    if let Some(credential) = credential.as_ref()
+        && !remaining
+            .providers
+            .values()
+            .any(|provider| provider.credential.as_ref() == Some(credential))
+    {
+        orbit_auth::AuthStore::new(auth.to_path_buf())?
+            .remove(credential)
+            .await
+            .context("连接已移除，但无法清理它的凭据。请刷新列表后重试凭据清理。")?;
+    }
+    Ok(options)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn model_limits_can_be_saved_and_cleared_without_replacing_other_settings() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("config.toml");
+        let auth = directory.path().join("auth");
+        let store = orbit_auth::AuthStore::new(&auth).unwrap();
+        store
+            .set_api_key("existing", "secret".into(), "http://localhost/v1")
+            .await
+            .unwrap();
+        std::fs::write(&path, "# preserved\n[providers.gateway]\napi_format='openai_responses'\nbase_url='http://localhost/v1'\ncredential='existing'\nauto_refresh_models=false\ntimeout_seconds=75\nmodels=['a','b']\n[providers.gateway.model_overrides.a]\nsupports_vision=true\n").unwrap();
+        let mut draft = ConnectionDraft::load(&path, Some("gateway")).unwrap();
+        draft.models[0].context_tokens = Some(131072);
+        draft.models[0].input_context_tokens = Some(96000);
+        draft.models[0].max_output_tokens = Some(8192);
+        let options = save(&path, &auth, &draft, KeyChange::Keep).await.unwrap();
+        assert_eq!(options[0].input_context_tokens, 96000);
+        assert_eq!(options[0].max_output_tokens, 8192);
+        assert!(options[0].supports_vision);
+
+        let mut draft = ConnectionDraft::load(&path, Some("gateway")).unwrap();
+        assert_eq!(draft.models[0].context_tokens, Some(131072));
+        assert_eq!(draft.models[0].input_context_tokens, Some(96000));
+        assert_eq!(draft.models[0].max_output_tokens, Some(8192));
+        assert!(draft.models[1].context_tokens.is_none());
+        draft.models[0].context_tokens = None;
+        draft.models[0].input_context_tokens = None;
+        draft.models[0].max_output_tokens = None;
+        save(&path, &auth, &draft, KeyChange::Keep).await.unwrap();
+
+        let draft = ConnectionDraft::load(&path, Some("gateway")).unwrap();
+        assert!(draft.models[0].context_tokens.is_none());
+        assert!(draft.models[0].input_context_tokens.is_none());
+        assert!(draft.models[0].max_output_tokens.is_none());
+        assert_eq!(draft.models[0].supports_vision, Some(true));
+        let configuration = FileConfig::load(&path, &auth).unwrap();
+        assert_eq!(configuration.providers["gateway"].timeout_seconds, 75);
+        assert_eq!(
+            configuration.providers["gateway"].credential.as_deref(),
+            Some("existing")
+        );
+        assert_eq!(configuration.providers["gateway"].models.len(), 2);
+        assert_eq!(store.list().unwrap().len(), 1);
+        let source = std::fs::read_to_string(&path).unwrap();
+        assert!(source.starts_with("# preserved"));
+        assert!(!source.contains("secret"));
+    }
+
+    #[tokio::test]
+    async fn removal_preserves_shared_credentials_and_rejects_stale_snapshots() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("config.toml");
+        let auth = directory.path().join("auth");
+        let store = orbit_auth::AuthStore::new(&auth).unwrap();
+        store
+            .set_api_key("shared", "secret".into(), "http://localhost/v1")
+            .await
+            .unwrap();
+        let provider = "api_format='openai_chat_completions'\nbase_url='http://localhost/v1'\ncredential='shared'\nmodels=['model']\n";
+        std::fs::write(&path, format!("# preserved\n[compaction]\nmodel='first::model'\n[providers.first]\n{provider}[providers.second]\n{provider}")).unwrap();
+        let first = ConnectionDraft::load(&path, Some("first")).unwrap();
+        let stale = ConnectionDraft::load(&path, Some("second")).unwrap();
+        let options = remove(&path, &auth, &first).await.unwrap();
+        assert_eq!(options.len(), 1);
+        assert_eq!(saved_connections(&path).unwrap(), vec!["second"]);
+        assert!(
+            FileConfig::load(&path, &auth)
+                .unwrap()
+                .compaction
+                .model
+                .is_none()
+        );
+        assert_eq!(store.list().unwrap().len(), 1);
+        assert!(
+            std::fs::read_to_string(&path)
+                .unwrap()
+                .starts_with("# preserved")
+        );
+        assert!(remove(&path, &auth, &stale).await.is_err());
+        assert_eq!(store.list().unwrap().len(), 1);
+        let second = ConnectionDraft::load(&path, Some("second")).unwrap();
+        assert!(remove(&path, &auth, &second).await.unwrap().is_empty());
+        assert!(store.list().unwrap().is_empty());
+        assert!(saved_connections(&path).unwrap().is_empty());
+    }
+}

@@ -145,7 +145,7 @@ async fn failed_permission_persistence_never_publishes_or_confirms_the_change() 
 }
 
 /// Only the external model is simulated; dispatch, actor, policy, tool writes and store are real.
-async fn write_model(listener: tokio::net::TcpListener, outside: std::path::PathBuf) {
+pub(super) async fn write_model(listener: tokio::net::TcpListener, outside: std::path::PathBuf) {
     let mut step = 0;
     while step < 3 {
         let (mut socket, _) = listener.accept().await.unwrap();

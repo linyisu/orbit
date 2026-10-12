@@ -17,6 +17,7 @@ httpdate.workspace = true
 hyper-util.workspace = true
 ignore.workspace = true
 image.workspace = true
+libc.workspace = true
 orbit-agent.workspace = true
 orbit-model.workspace = true
 orbit-runtime.workspace = true

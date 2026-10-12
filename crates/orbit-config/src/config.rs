@@ -1,5 +1,6 @@
 //! Application configuration, validation and runtime projection.
 
+pub mod advanced;
 pub mod connections;
 use std::{
     collections::BTreeMap,
@@ -35,6 +36,12 @@ pub struct FileConfig {
     pub max_turns: usize,
     #[serde(default = "default_max_tool_calls")]
     pub max_tool_calls: usize,
+    /// A persistent ceiling, combined with each caller's narrower session policy.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub disabled_capabilities: Vec<orbit_protocol::Capability>,
+    /// Exact registered tool names hidden after all optional tools are installed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub disabled_tools: Vec<String>,
     #[serde(default)]
     pub command: orbit_tools::run_command::CommandLimits,
     #[serde(default)]
@@ -217,6 +224,7 @@ impl FileConfig {
 
     pub fn validate(&self) -> Result<()> {
         let config = self;
+        advanced::validate_disabled(&config.disabled_capabilities, &config.disabled_tools)?;
         config.subagents.validate()?;
 
         if config.context_tokens < MIN_CONTEXT_TOKENS {

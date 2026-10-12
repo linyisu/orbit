@@ -61,6 +61,11 @@ pub(super) async fn execute(
             );
             lines.join("\n")
         }
+        Action::RenameSession { id, title } => {
+            ensure_title(&title)?;
+            store.acquire(&id).await?.set_title(title.clone()).await?;
+            title
+        }
         Action::DeleteSession { id } => {
             let deleted = store.delete_session(&id).await?;
             let mut text = if deleted {
@@ -88,4 +93,12 @@ pub(super) async fn execute(
         title: "工作区管理".into(),
         text,
     })
+}
+
+pub(super) fn ensure_title(title: &str) -> Result<()> {
+    anyhow::ensure!(
+        !title.trim().is_empty() && title.chars().count() <= 120,
+        "会话标题应为 1–120 个字符"
+    );
+    Ok(())
 }

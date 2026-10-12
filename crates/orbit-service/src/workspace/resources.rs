@@ -3,7 +3,7 @@ use crate::{PreparedWorkspace, skills::SkillSource};
 use anyhow::{Context, Result, ensure};
 use orbit_protocol::{
     Capability, SessionAction,
-    resources::{Action, Skill, Snapshot},
+    resources::{Action, McpServer, McpTool, Skill, Snapshot},
 };
 use std::{fs, io::Write, path::Path};
 
@@ -12,6 +12,41 @@ pub(super) async fn execute(
     action: Action,
     busy: bool,
 ) -> Result<Snapshot> {
+    if matches!(action, Action::Mcp) {
+        ensure!(
+            !setup.resources.policy.disabled(Capability::Mcp),
+            "MCP 工具已禁用"
+        );
+        let visible = setup
+            .resources
+            .tools
+            .definitions()
+            .into_iter()
+            .map(|definition| definition.function.name)
+            .collect::<std::collections::HashSet<_>>();
+        return Ok(Snapshot::Mcp(
+            setup
+                .resources
+                .budget
+                .mcp_statuses
+                .iter()
+                .map(|server| McpServer {
+                    name: server.name.clone(),
+                    connected: server.connected,
+                    detail: server.detail.clone(),
+                    tools: server
+                        .tools
+                        .iter()
+                        .filter(|tool| visible.contains(&tool.name))
+                        .map(|tool| McpTool {
+                            name: tool.name.clone(),
+                            description: tool.description.clone(),
+                        })
+                        .collect(),
+                })
+                .collect(),
+        ));
+    }
     if matches!(action, Action::Memories | Action::Memory(_)) {
         ensure!(
             !setup.resources.policy.disabled(Capability::ProjectState),
@@ -181,6 +216,28 @@ mod tests {
         let mut setup = super::super::setup::prepare_service(&options, None)
             .await
             .unwrap();
+        // The settings snapshot exposes registration results without starting
+        // any new processes and obeys the same capability policy as tools.
+        setup
+            .resources
+            .budget
+            .mcp_statuses
+            .push(orbit_tools::mcp::McpServerStatus {
+                name: "blocked".into(),
+                detail: "启动需显式授权".into(),
+                tool_count: 0,
+                connected: false,
+                tools: Vec::new(),
+            });
+        let Snapshot::Mcp(servers) = execute(&mut setup, Action::Mcp, false).await.unwrap() else {
+            panic!("MCP snapshot expected")
+        };
+        assert_eq!(servers[0].name, "blocked");
+        assert!(!servers[0].connected);
+        assert!(servers[0].tools.is_empty());
+        setup.resources.policy.disabled.push(Capability::Mcp);
+        assert!(execute(&mut setup, Action::Mcp, false).await.is_err());
+        setup.resources.policy.disabled.clear();
         let save = || Action::SaveSkill {
             name: "review".into(),
             original: None,

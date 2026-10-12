@@ -54,6 +54,8 @@ pub struct WorkspaceResources {
     pub mode: orbit_protocol::Mode,
     pub mode_revision: u64,
     pub policy: orbit_protocol::SessionPolicy,
+    /// The startup tool ceiling survives refreshes for this session.
+    pub disabled_tools: Vec<String>,
     pub diagnostics: Vec<String>,
     pub web_client: std::sync::Arc<orbit_tools::web_fetch::WebClient>,
     pub cursor_trail: bool,
@@ -121,7 +123,7 @@ async fn prepare(
     } else {
         session::SessionState::open_in(options.database.clone(), resume, model, directory).await?
     };
-    let mut resources = prepare_resources(options, directory, &session, policy).await?;
+    let mut resources = prepare_resources(options, directory, &session, policy, &[]).await?;
     if session.saved_model_profile().0 != resources.model_name {
         // Repair only the model profile after resources have been prepared;
         // opening history must not depend on a provider that was removed.
@@ -157,7 +159,7 @@ pub async fn prepare_workspace_resources(
     directory: &std::path::Path,
     session: &session::SessionState,
 ) -> Result<WorkspaceResources> {
-    prepare_resources(options, directory, session, Default::default()).await
+    prepare_resources(options, directory, session, Default::default(), &[]).await
 }
 
 pub(super) async fn prepare_resources(
@@ -165,6 +167,7 @@ pub(super) async fn prepare_resources(
     directory: &std::path::Path,
     session: &session::SessionState,
     policy: orbit_protocol::SessionPolicy,
+    inherited_disabled_tools: &[String],
 ) -> Result<WorkspaceResources> {
     use orbit_protocol::Capability;
     let config_path = &options.config;
@@ -175,6 +178,18 @@ pub(super) async fn prepare_resources(
     );
     let (approvals, approval_receiver) = orbit_tools::approval::channel();
     let mut file_config = FileConfig::load(config_path, &options.auth_directory)?;
+    file_config
+        .disabled_tools
+        .extend(inherited_disabled_tools.iter().cloned());
+    file_config.disabled_tools.sort_unstable();
+    file_config.disabled_tools.dedup();
+    // Persisted ceilings only narrow the caller's policy; they never replace it.
+    let mut policy = policy;
+    policy
+        .disabled
+        .extend(file_config.disabled_capabilities.iter().copied());
+    policy.disabled.sort_unstable();
+    policy.disabled.dedup();
     let diagnostics = orbit_config::models::updater::refresh(&mut file_config, false)
         .await
         .diagnostics;
@@ -262,7 +277,8 @@ pub(super) async fn prepare_resources(
     let user_input =
         crate::user_input::Questions::new(session.store.clone(), session.id().into()).await?;
     user_input.register(&mut tools, None);
-    crate::policy::filter_tools(&mut tools, &policy.disabled.iter().copied().collect());
+    // Delegated agents capture this allowlist at registration.
+    filter_configured_tools(&mut tools, &policy, &file_config.disabled_tools);
     if !policy.disabled(Capability::Subagents) {
         subagents::register(
             &mut tools,
@@ -284,6 +300,9 @@ pub(super) async fn prepare_resources(
     if !policy.disabled(Capability::All) && !session.store.is_subagent(session.id()).await? {
         planning.register(&mut tools);
     }
+    // Apply ceilings after every group, including subagents and planning, so
+    // a later registration cannot accidentally reintroduce a hidden tool.
+    filter_configured_tools(&mut tools, &policy, &file_config.disabled_tools);
 
     Ok(WorkspaceResources {
         mode_revision: 0,
@@ -295,6 +314,7 @@ pub(super) async fn prepare_resources(
         },
         options: options.clone(),
         policy,
+        disabled_tools: file_config.disabled_tools.clone(),
         diagnostics,
         web_client: runtime.web_client,
         cursor_trail: file_config.tui.cursor_trail,
@@ -323,6 +343,17 @@ pub(super) async fn prepare_resources(
             memory_scope,
         },
     })
+}
+
+pub(super) fn filter_configured_tools(
+    tools: &mut orbit_agent::tool::ToolRegistry,
+    policy: &orbit_protocol::SessionPolicy,
+    disabled_tools: &[String],
+) {
+    crate::policy::filter_tools(tools, &policy.disabled.iter().copied().collect());
+    for name in disabled_tools {
+        tools.remove(name);
+    }
 }
 
 fn restored_model(
@@ -363,6 +394,169 @@ pub struct RequestBudget {
 mod tests {
     use super::*;
     use orbit_protocol::{Capability, SessionPolicy};
+
+    #[tokio::test]
+    async fn refreshed_skill_and_source_tools_keep_the_startup_ceiling() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        std::fs::create_dir(root.join(".git")).unwrap();
+        let skill = root.join(".orbit/skills/example");
+        std::fs::create_dir_all(&skill).unwrap();
+        std::fs::write(
+            skill.join("SKILL.md"),
+            "---\nname: example\ndescription: Example skill\n---\nKeep identifiers stable.\n",
+        )
+        .unwrap();
+        let mut configuration =
+            TestConfig::new().provider(TestProvider::new("test").models([TestModel::new("mock")]));
+        configuration.config.disabled_capabilities = vec![Capability::Files];
+        configuration.config.disabled_tools = vec!["load_skill".into()];
+        configuration.write(root.join("config.toml")).unwrap();
+        let options = WorkspaceOptions {
+            model: Some("test::mock".into()),
+            initial_directory: root.into(),
+            config: root.join("config.toml"),
+            auth_directory: root.join("auth"),
+            database: root.join("sessions.db"),
+            allow_mcp_start: false,
+            home: None,
+            config_home: None,
+            instruction_dir: None,
+            editor_command: "vi".into(),
+        };
+        let mut setup = prepare_service(&options, None).await.unwrap();
+        assert!(setup.resources.budget.skills.get("example").is_some());
+        for name in ["code_symbols", "load_skill"] {
+            assert!(!setup.resources.tools.contains(name));
+            assert!(matches!(
+                setup
+                    .resources
+                    .tools
+                    .execute(
+                        orbit_model::types::ToolCall::function(
+                            "ceiling",
+                            name,
+                            serde_json::json!({"query":"example","name":"example"})
+                        ),
+                        tokio_util::sync::CancellationToken::new(),
+                    )
+                    .await,
+                Err(orbit_agent::tool::ToolError::UnknownTool(_))
+            ));
+        }
+        // Changes on disk affect later sessions. Refreshing the current skill
+        // catalogue (also used after plugin updates) must keep its startup ceiling.
+        configuration.config.disabled_capabilities.clear();
+        configuration.config.disabled_tools.clear();
+        configuration.write(&options.config).unwrap();
+        super::super::actions::execute(
+            &mut setup,
+            orbit_protocol::SessionAction::RefreshSkills,
+            false,
+        )
+        .await
+        .unwrap();
+        let snapshot = super::super::resources::execute(
+            &mut setup,
+            orbit_protocol::resources::Action::Skills,
+            false,
+        )
+        .await
+        .unwrap();
+        assert!(
+            matches!(snapshot, orbit_protocol::resources::Snapshot::Skills(skills) if skills.iter().any(|skill| skill.name == "example"))
+        );
+        for name in ["code_symbols", "load_skill"] {
+            assert!(
+                !setup.resources.tools.contains(name),
+                "refresh reintroduced {name}"
+            );
+        }
+        assert_eq!(setup.resources.disabled_tools, ["load_skill"]);
+        let moved = root.join("moved");
+        std::fs::create_dir(&moved).unwrap();
+        super::super::actions::execute(
+            &mut setup,
+            orbit_protocol::SessionAction::ChangeDirectory {
+                path: moved.display().to_string(),
+            },
+            false,
+        )
+        .await
+        .unwrap();
+        assert_eq!(setup.resources.disabled_tools, ["load_skill"]);
+        assert!(!setup.resources.tools.contains("load_skill"));
+        assert!(!setup.resources.tools.contains("code_symbols"));
+        drop(setup);
+        let fresh = prepare_service(&options, None).await.unwrap();
+        assert!(fresh.resources.tools.contains("code_symbols"));
+        assert!(fresh.resources.tools.contains("load_skill"));
+    }
+
+    #[tokio::test]
+    async fn persisted_ceilings_narrow_callers_and_filter_late_registered_tools() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let mut configuration =
+            TestConfig::new().provider(TestProvider::new("test").models([TestModel::new("mock")]));
+        configuration.config.max_turns = 12;
+        configuration.config.max_tool_calls = 99;
+        configuration.config.disabled_capabilities = vec![Capability::Web, Capability::Mcp];
+        configuration.config.disabled_tools =
+            vec!["read_file".into(), "spawn_agent".into(), "task_list".into()];
+        configuration.write(root.join("config.toml")).unwrap();
+        let options = WorkspaceOptions {
+            model: Some("test::mock".into()),
+            initial_directory: root.into(),
+            config: root.join("config.toml"),
+            auth_directory: root.join("auth"),
+            database: root.join("sessions.db"),
+            allow_mcp_start: false,
+            home: None,
+            config_home: None,
+            instruction_dir: None,
+            editor_command: "vi".into(),
+        };
+        let setup = prepare_service_with_policy(
+            &options,
+            None,
+            SessionPolicy {
+                read_only: true,
+                disabled: vec![Capability::Skills],
+            },
+        )
+        .await
+        .unwrap();
+        assert!(setup.resources.policy.read_only);
+        for capability in [Capability::Web, Capability::Mcp, Capability::Skills] {
+            assert!(setup.resources.policy.disabled(capability));
+        }
+        assert_eq!(setup.resources.budget.max_turns, 12);
+        assert_eq!(setup.resources.budget.max_tool_calls, 99);
+        assert!(setup.resources.tools.contains("search_text"));
+        for name in [
+            "web_fetch",
+            "load_skill",
+            "read_file",
+            "spawn_agent",
+            "task_list",
+            "write_file",
+        ] {
+            assert!(
+                !setup.resources.tools.contains(name),
+                "unexpected tool {name}"
+            );
+        }
+        drop(setup);
+        configuration.config.disabled_capabilities = vec![Capability::All];
+        configuration.config.disabled_tools.clear();
+        configuration.write(root.join("config.toml")).unwrap();
+        let setup = prepare_service_with_policy(&options, None, SessionPolicy::default())
+            .await
+            .unwrap();
+        assert!(setup.resources.tools.definitions().is_empty());
+        assert!(!setup.resources.policy.read_only);
+    }
 
     #[tokio::test]
     async fn service_policy_filters_tools_before_delegation_and_blocks_mutation() {

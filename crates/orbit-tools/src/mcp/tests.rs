@@ -176,6 +176,13 @@ done
     .await;
 
     assert_eq!(statuses[0].tool_count, 1, "{statuses:?}");
+    assert_eq!(
+        statuses[0].tools,
+        vec![McpToolStatus {
+            name: "mcp__fixture__echo".into(),
+            description: "Echo input".into(),
+        }]
+    );
 
     let output = registry
         .execute(
@@ -230,6 +237,7 @@ async fn configured_server_requires_startup_authorization() {
     .await;
 
     assert!(statuses[0].detail.contains("--allow-mcp-start"));
+    assert!(statuses[0].tools.is_empty());
     assert!(registry.definitions().is_empty());
 }
 
