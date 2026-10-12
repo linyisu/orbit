@@ -1735,3 +1735,65 @@ fn closing_btw_drops_an_outstanding_poll_without_preserving_a_draft_session() {
     assert!(!tab.state.btw.visible());
     assert!(tab.question_poll.is_none());
 }
+
+#[tokio::test]
+async fn switching_antigravity_models_replaces_the_footer_pool() {
+    use orbit_protocol::usage::{Account, Limit, Snapshot};
+    let (mut tab, _) = tab("本地");
+    let account = Account {
+        provider: "Antigravity".into(),
+        limits: [
+            ("Gemini Models · weekly", 0.77),
+            ("Gemini Models · 5h", 0.0),
+            ("Claude and GPT models · weekly", 0.98),
+            ("Claude and GPT models · 5h", 0.93),
+        ]
+        .into_iter()
+        .map(|(label, fraction)| Limit {
+            label: label.into(),
+            remaining_fraction: Some(fraction),
+            ..Default::default()
+        })
+        .collect(),
+        ..Default::default()
+    };
+    for (model, expected, excluded) in [
+        ("gemini-3.8-flash", ["77%", "0%"], "93%"),
+        ("claude-opus-4-6", ["98%", "93%"], "77%"),
+        ("gpt-oss-120b", ["98%", "93%"], "77%"),
+        ("gemini-3.8-pro", ["77%", "0%"], "93%"),
+    ] {
+        let info: SessionInfo = serde_json::from_value(serde_json::json!({
+            "id":"same-session", "title":"", "workspace":"/project", "model":format!("antigravity::{model}"), "models":[],
+            "supports_vision":false, "reasoning_effort":null, "reasoning_efforts":[],
+            "context_tokens":1000, "input_context_tokens":900, "max_output_tokens":100
+        })).unwrap();
+        tab.profile(&info);
+        assert!(tab.state.usage.snapshot.is_none());
+        let snapshot = Snapshot {
+            model: model.into(),
+            account: account.clone(),
+            ..Default::default()
+        };
+        tab.usage_task = Some(AbortOnDropHandle::new(tokio::spawn(async { Ok(snapshot) })));
+        tokio::task::yield_now().await;
+        tab.poll_usage().await;
+        let screen = render_screen(&mut tab.state);
+        assert!(
+            expected.iter().all(|value| screen.contains(value)),
+            "{model}: {screen}"
+        );
+        assert!(!screen.contains(excluded));
+        assert_eq!(
+            tab.state
+                .usage
+                .snapshot
+                .as_ref()
+                .unwrap()
+                .account
+                .limits
+                .len(),
+            4
+        );
+    }
+}

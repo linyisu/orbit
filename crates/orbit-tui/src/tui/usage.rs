@@ -166,13 +166,7 @@ impl State {
         let Some(snapshot) = &self.snapshot else {
             return fallback();
         };
-        let limits: Vec<_> = snapshot
-            .account
-            .limits
-            .iter()
-            .filter(|limit| limit.scope == Scope::Account)
-            .take(2)
-            .collect();
+        let limits: Vec<_> = snapshot.summary_limits().take(2).collect();
         if limits.is_empty() {
             return fallback();
         }
@@ -544,6 +538,7 @@ mod tests {
         );
         let mut state = State::default();
         state.receive(Snapshot {
+            model: "gemini-3.8-flash".into(),
             account: Account {
                 provider: "Antigravity".into(),
                 name: "main".into(),

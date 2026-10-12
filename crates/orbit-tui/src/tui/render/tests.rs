@@ -2163,6 +2163,7 @@ fn usage_footer_shows_two_meters_on_home_and_chat_without_hover_details() {
         }
         state.input.set("unsent draft".into());
         state.usage.receive(Snapshot {
+            model: "gemini-3.8-flash".into(),
             account: Account {
                 provider: "Antigravity".into(),
                 name: "main".into(),
