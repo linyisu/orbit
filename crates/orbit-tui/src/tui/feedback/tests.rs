@@ -327,3 +327,64 @@ fn details_use_the_existing_scrollable_dialog_above_other_surfaces() {
     assert!(state.show_help);
     assert!(state.feedback.notices.is_empty());
 }
+
+#[test]
+fn model_and_compaction_failures_open_details_without_dumping_errors_in_history() {
+    use orbit_agent::events::AgentEvent;
+    let details = "model returned HTTP 429:\n{\n  \"error\": \"RESOURCE_EXHAUSTED\"\n}";
+    for event in [
+        AgentEvent::Failed {
+            error: details.into(),
+        },
+        AgentEvent::CompactionFailed {
+            kind: None,
+            error: details.into(),
+        },
+    ] {
+        let mut state = UiState::new("mock");
+        state.submit("original question".into());
+        state.input.set("unsent draft".into());
+        let history = state.transcript.len();
+        state.apply(event);
+        assert_eq!(state.transcript.len(), history);
+        assert_eq!(state.feedback.notices.len(), 1);
+        assert!(state.feedback.notices[0].text.contains(details));
+        let screen = draw(&mut state, 100, 30);
+        assert!(!screen.contains("RESOURCE_EXHAUSTED"));
+        let area = state.feedback.area;
+        for kind in [
+            MouseEventKind::Down(MouseButton::Left),
+            MouseEventKind::Up(MouseButton::Left),
+        ] {
+            state.handle_feedback(&mouse(kind, area.x + 2, area.y + 1));
+        }
+        assert!(
+            state
+                .info_dialog
+                .as_ref()
+                .unwrap()
+                .content
+                .contains(details)
+        );
+        assert_eq!(state.input.text, "unsent draft");
+    }
+}
+
+#[test]
+fn replayed_failures_neither_fill_the_transcript_nor_reopen_old_notifications() {
+    use orbit_agent::events::AgentEvent;
+    let mut state = UiState::new("mock");
+    state.start_remote(
+        "old question".into(),
+        orbit_protocol::RunPresentation {
+            replayed: true,
+            ..Default::default()
+        },
+    );
+    state.apply(AgentEvent::Failed {
+        error: "old HTTP 429 payload".into(),
+    });
+    state.finish_remote("failed", None);
+    assert_eq!(state.transcript.len(), 1);
+    assert!(state.feedback.notices.is_empty());
+}

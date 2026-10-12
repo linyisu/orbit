@@ -316,7 +316,10 @@ async fn switching_to_a_smaller_context_starts_compaction_in_the_service() {
         .unwrap();
     tokio::time::timeout(std::time::Duration::from_secs(3),async {
         loop {
-            if handle.view.lock().await.page(0).unwrap().updates.iter().any(|update|matches!(update,Update::Started{presentation,..} if presentation.compact)) { break; }
+            let updates = handle.view.lock().await.page(0).unwrap().updates;
+            let started = updates.iter().any(|update| matches!(update, Update::Started { presentation, .. } if presentation.compact));
+            let announced = updates.iter().any(|update| matches!(update, Update::Agent(event) if matches!(event.as_ref(), AgentEvent::CompactionStarted)));
+            if started && announced { break; }
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
     }).await.unwrap();

@@ -284,6 +284,9 @@ impl UiState {
         }
         if presentation.compact || prompt == "/compact" || presentation.queued_input {
             self.begin_run();
+            if presentation.compact || prompt == "/compact" {
+                self.activity.apply(&AgentEvent::CompactionStarted);
+            }
             if presentation.replayed {
                 self.scroll = scroll;
                 self.follow_bottom = follow;
@@ -658,14 +661,16 @@ impl UiState {
                 )));
             }
 
-            AgentEvent::CompactionFailed { kind, .. } => {
-                self.transcript
-                    .push(TranscriptItem::Maintenance(match kind {
+            AgentEvent::CompactionFailed { kind, error } => {
+                if !self.remote_replay {
+                    let summary = match kind {
                         Some(kind) => {
                             format!("上下文整理未完成：{}。原上下文已保留。", kind.label())
                         }
                         None => "上下文整理未完成，原上下文已保留".into(),
-                    }))
+                    };
+                    self.feedback.error(format!("{summary}\n\n{error}"));
+                }
             }
 
             AgentEvent::ReasoningFinished { elapsed_ms } => {
@@ -736,7 +741,6 @@ impl UiState {
                 if !self.remote_replay {
                     self.feedback.error(&error);
                 }
-                self.transcript.push(TranscriptItem::Error(error));
             }
 
             AgentEvent::Cancelled => {

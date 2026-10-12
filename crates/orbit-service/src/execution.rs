@@ -121,6 +121,10 @@ pub async fn start(
         .for_input_window(local_limit.saturating_sub(max_output_tokens as usize));
     let task = tokio::spawn(async move {
         if compacting {
+            sender
+                .send(AgentEvent::CompactionStarted)
+                .await
+                .map_err(|_| AgentError::EventChannelClosed)?;
             let compacted = orbit_agent::context::compact_configured(
                 &backend,
                 request.messages,

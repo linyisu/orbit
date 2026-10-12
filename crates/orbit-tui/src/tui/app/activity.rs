@@ -23,7 +23,10 @@ enum Phase {
 impl Activity {
     pub fn apply(&mut self, event: &AgentEvent) {
         match event {
-            AgentEvent::TurnStarted { .. } | AgentEvent::ContextUsage { .. } => {
+            AgentEvent::TurnStarted { .. } => {
+                self.phase = Phase::Waiting;
+            }
+            AgentEvent::ContextUsage { .. } if !matches!(self.phase, Phase::Compacting) => {
                 self.phase = Phase::Waiting;
             }
             AgentEvent::Model(StreamEvent::ReasoningDelta(text)) if !text.is_empty() => {

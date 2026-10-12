@@ -134,8 +134,7 @@ impl Questions {
                 dialog
                     .view
                     .ui
-                    .transcript
-                    .push(TranscriptItem::Error(error.clone()));
+                    .report_local(TranscriptItem::Error(error.clone()));
             }
         }
 

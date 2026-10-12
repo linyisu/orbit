@@ -1797,3 +1797,45 @@ async fn switching_antigravity_models_replaces_the_footer_pool() {
         );
     }
 }
+
+#[test]
+fn compact_run_presentation_sets_activity_before_any_model_event() {
+    use orbit_agent::events::AgentEvent;
+    for (prompt, compact) in [("/compact", false), ("", true)] {
+        let (mut tab, _) = tab("本地");
+        tab.apply(page(
+            vec![Update::Started {
+                prompt: prompt.into(),
+                presentation: orbit_protocol::RunPresentation {
+                    compact,
+                    ..Default::default()
+                },
+            }],
+            vec![],
+        ));
+        assert_eq!(tab.state.activity.label(), "正在压缩上下文");
+        tab.apply(page(
+            vec![Update::agent(AgentEvent::ContextUsage {
+                estimated_input: 50000,
+            })],
+            vec![],
+        ));
+        assert!(
+            render_screen(&mut tab.state)
+                .replace(' ', "")
+                .contains("正在压缩上下文")
+        );
+        tab.apply(page(
+            vec![Update::Finished {
+                status: "completed".into(),
+                elapsed_ms: None,
+            }],
+            vec![],
+        ));
+        assert!(
+            !render_screen(&mut tab.state)
+                .replace(' ', "")
+                .contains("正在压缩上下文")
+        );
+    }
+}
