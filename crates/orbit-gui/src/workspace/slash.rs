@@ -505,6 +505,11 @@ impl Workspace {
         };
         div()
             .id("composer-completions")
+            // This deferred surface overlaps the transcript. Occlude its
+            // hitbox so wheel events stay in CommandList, including at the
+            // scroll edges; a bubble listener runs after gpui::list's wheel
+            // handler and cannot reliably protect the transcript behind it.
+            .occlude()
             .on_mouse_down_out(cx.listener(|view, _, _, cx| {
                 view.dismiss_completions(cx);
             }))
