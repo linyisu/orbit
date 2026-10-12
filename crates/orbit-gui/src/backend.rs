@@ -236,7 +236,17 @@ async fn run(
     }
     let resume = recovered_session(options.resume, options.recover_draft, &history)?;
     events.send(Event::Response(history)).await?;
-    let model = match options.model {
+    // The service preserves a valid historical model. Send today's default as
+    // its fallback instead of blindly recycling a stale tab's launch model.
+    let preferred = if resume.is_some() {
+        match &connection.local_configuration {
+            Some(local) => local.selected_model().await?.or(options.model),
+            None => options.model,
+        }
+    } else {
+        options.model
+    };
+    let model = match preferred {
         Some(model) => Some(model),
         None => match &connection.local_configuration {
             Some(local) => match local.selected_model().await? {

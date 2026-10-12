@@ -122,6 +122,16 @@ async fn prepare(
         session::SessionState::open_in(options.database.clone(), resume, model, directory).await?
     };
     let mut resources = prepare_resources(options, directory, &session, policy).await?;
+    if session.saved_model_profile().0 != resources.model_name {
+        // Repair only the model profile after resources have been prepared;
+        // opening history must not depend on a provider that was removed.
+        session
+            .set_model_profile(
+                resources.model_name.clone(),
+                resources.model.config().reasoning_effort,
+            )
+            .await?;
+    }
     let (saved_model, effort) = session.saved_model_profile();
     if let Some(choice) = resources
         .budget
@@ -169,7 +179,11 @@ pub(super) async fn prepare_resources(
         .await
         .diagnostics;
     let model_options = file_config.model_options()?;
-    let selected_model = file_config.select_model(session.saved_model_profile().0)?;
+    let selected_model = restored_model(
+        &file_config,
+        session.saved_model_profile().0,
+        options.model.as_deref(),
+    )?;
     let agent_config = file_config.agent_config();
     let command_limits = file_config.command.clone();
     let web = file_config.web.clone();
@@ -311,6 +325,24 @@ pub(super) async fn prepare_resources(
     })
 }
 
+fn restored_model(
+    config: &FileConfig,
+    saved: &str,
+    preferred: Option<&str>,
+) -> Result<ModelOption> {
+    if let Ok(model) = config.select_model(saved) {
+        return Ok(model);
+    }
+    if let Some(model) = preferred.and_then(|name| config.select_model(name).ok()) {
+        return Ok(model);
+    }
+    config
+        .model_options()?
+        .into_iter()
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("没有可用模型，请先在设置中添加模型连接"))
+}
+
 pub struct RequestBudget {
     pub context_tokens: usize,
     pub input_context_tokens: usize,
@@ -443,11 +475,56 @@ mod selection_tests {
             .begin("question".into(), "test::chosen".into())
             .await
             .unwrap();
-        setup.session.finish("cancelled", None).await.unwrap();
+        setup
+            .session
+            .finish(
+                "completed",
+                Some(vec![
+                    orbit_model::types::ChatMessage::user("question"),
+                    orbit_model::types::ChatMessage::assistant("answer"),
+                ]),
+            )
+            .await
+            .unwrap();
         let id = setup.session.id().to_owned();
         drop(setup);
         options.model = Some("test::first".into());
-        let restored = prepare_service(&options, Some(id)).await.unwrap();
+        let restored = prepare_service(&options, Some(id.clone())).await.unwrap();
         assert_eq!(restored.resources.model_name, "test::chosen");
+        drop(restored);
+
+        // Removing a provider/model must not strand an otherwise valid history.
+        std::fs::write(
+            &options.config,
+            TestConfig::new()
+                .provider(
+                    TestProvider::new("test")
+                        .endpoint("http://127.0.0.1:1/v1")
+                        .models([TestModel::new("first"), TestModel::new("preferred")]),
+                )
+                .providers_toml()
+                .unwrap(),
+        )
+        .unwrap();
+        options.model = Some("test::preferred".into());
+        let restored = prepare_service(&options, Some(id.clone())).await.unwrap();
+        assert_eq!(restored.resources.model_name, "test::preferred");
+        assert_eq!(restored.session.id(), id);
+        assert_eq!(restored.session.saved_model_profile().0, "test::preferred");
+        assert!(!restored.session.snapshot.history.is_empty());
+        drop(restored);
+        options.model = Some("test::first".into());
+        let restored = prepare_service(&options, Some(id)).await.unwrap();
+        assert_eq!(
+            restored.resources.model_name, "test::preferred",
+            "the repaired choice must persist"
+        );
+        let config = FileConfig::load(&options.config, &options.auth_directory).unwrap();
+        assert_eq!(
+            restored_model(&config, "gone::model", Some("also::gone"))
+                .unwrap()
+                .qualified_name(),
+            "test::first"
+        );
     }
 }
