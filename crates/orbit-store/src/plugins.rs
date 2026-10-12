@@ -8,6 +8,19 @@ use crate::{
 use anyhow::{Context, Result, ensure};
 use sea_orm::*;
 impl Store {
+    /// Whether any project in this database relies on a marketplace source.
+    /// Removing or replacing its catalogue would invalidate those pinned packages.
+    pub async fn marketplace_is_enabled(&self, source: &str) -> Result<bool> {
+        self.read_access(|conn| async move {
+            Ok(plugins::Entity::find()
+                .filter(plugins::Column::MarketplaceSource.eq(source))
+                .one(&conn)
+                .await?
+                .is_some())
+        })
+        .await
+    }
+
     pub async fn project_plugins(&self, project_id: &str) -> Result<Vec<ProjectPlugin>> {
         self.read_access(|conn| async move {
             Ok(plugins::Entity::find()

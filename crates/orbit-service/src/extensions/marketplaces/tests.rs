@@ -52,6 +52,102 @@ async fn registers_a_local_claude_marketplace_without_touching_a_project() {
 }
 
 #[tokio::test]
+async fn refresh_replaces_the_same_source_even_if_the_catalogue_name_changes() {
+    let temp = tempfile::tempdir().unwrap();
+    let market = temp.path().join("market");
+    fs::create_dir_all(market.join(".claude-plugin")).unwrap();
+    let manifest = market.join(".claude-plugin/marketplace.json");
+    fs::write(&manifest, r#"{"name":"before","plugins":[]}"#).unwrap();
+    let source = market.to_string_lossy().into_owned();
+    let store = Store::at(temp.path().join("orbit-data"));
+    store.add(source.clone()).await.unwrap();
+    fs::write(
+        &manifest,
+        r#"{"name":"after","plugins":[{"name":"review","source":"plugins/review"}]}"#,
+    )
+    .unwrap();
+
+    let refreshed = store.refresh(source.clone()).await.unwrap();
+
+    assert_eq!(refreshed.name, "after");
+    assert_eq!(refreshed.plugins.len(), 1);
+    assert_eq!(store.list().unwrap(), vec![refreshed]);
+    assert!(store.refresh("missing/source".into()).await.is_err());
+
+    fs::write(&manifest, "invalid JSON").unwrap();
+    assert!(store.refresh(source).await.is_err());
+    assert_eq!(store.list().unwrap()[0].name, "after");
+}
+
+#[tokio::test]
+async fn remove_unregisters_only_the_requested_source_and_preserves_files() {
+    let temp = tempfile::tempdir().unwrap();
+    let store = Store::at(temp.path().join("orbit-data"));
+    for name in ["first", "second"] {
+        let market = temp.path().join(name);
+        fs::create_dir_all(market.join(".claude-plugin")).unwrap();
+        fs::write(
+            market.join(".claude-plugin/marketplace.json"),
+            format!(r#"{{"name":"{name}","plugins":[]}}"#),
+        )
+        .unwrap();
+        store
+            .add(market.to_string_lossy().into_owned())
+            .await
+            .unwrap();
+    }
+    // Cached source files are retained too; removal is not a cache deletion.
+    let cached = store.root.join("source-existing-checkout");
+    fs::create_dir(&cached).unwrap();
+    fs::write(cached.join("package.txt"), "retained").unwrap();
+    let first = temp.path().join("first");
+
+    store.remove(first.to_str().unwrap()).unwrap();
+
+    assert_eq!(store.list().unwrap().len(), 1);
+    assert_eq!(store.list().unwrap()[0].name, "second");
+    assert!(first.join(".claude-plugin/marketplace.json").is_file());
+    assert_eq!(
+        fs::read_to_string(cached.join("package.txt")).unwrap(),
+        "retained"
+    );
+    assert!(store.remove(first.to_str().unwrap()).is_err());
+}
+
+#[tokio::test]
+async fn adding_a_same_named_source_does_not_replace_another_market() {
+    let temp = tempfile::tempdir().unwrap();
+    let store = Store::at(temp.path().join("orbit-data"));
+    let mut sources = Vec::new();
+    for directory in ["first", "second"] {
+        let market = temp.path().join(directory);
+        fs::create_dir_all(market.join(".claude-plugin")).unwrap();
+        fs::write(
+            market.join(".claude-plugin/marketplace.json"),
+            r#"{"name":"shared-name","plugins":[]}"#,
+        )
+        .unwrap();
+        sources.push(market.to_string_lossy().into_owned());
+    }
+    let original = store.add(sources[0].clone()).await.unwrap();
+
+    assert!(store.add(sources[1].clone()).await.is_err());
+    assert_eq!(store.list().unwrap(), vec![original]);
+}
+
+#[test]
+fn catalogue_mutations_are_serialized_until_the_lease_is_released() {
+    let temp = tempfile::tempdir().unwrap();
+    let first_store = Store::at(temp.path().join("orbit-data"));
+    let second_store = Store::at(temp.path().join("orbit-data"));
+    let first = first_store.lock().unwrap();
+
+    assert!(second_store.lock().is_err());
+    drop(first);
+    second_store.lock().unwrap();
+}
+
+#[tokio::test]
 async fn a_new_git_revision_does_not_replace_an_existing_checkout() {
     let temp = tempfile::tempdir().unwrap();
     let source = temp.path().join("source");

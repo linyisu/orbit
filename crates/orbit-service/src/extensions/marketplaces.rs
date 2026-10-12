@@ -4,6 +4,7 @@
 use std::{
     collections::BTreeSet,
     fs,
+    io::Write,
     path::{Component, Path, PathBuf},
 };
 
@@ -27,6 +28,27 @@ pub fn list_current() -> Result<Vec<Marketplace>> {
 
 pub async fn add_current(source: String) -> Result<Marketplace> {
     Store::current()?.add(source).await
+}
+
+pub async fn refresh_current(source: String) -> Result<Marketplace> {
+    Store::current()?.refresh(source).await
+}
+
+pub fn remove_current(source: &str) -> Result<()> {
+    Store::current()?.remove(source)
+}
+
+/// Serialize catalogue changes with project enablement checks across service processes.
+pub fn lock_current() -> Result<CatalogueLease> {
+    Store::current()?.lock()
+}
+
+pub struct CatalogueLease(fs::File);
+
+impl Drop for CatalogueLease {
+    fn drop(&mut self) {
+        let _ = self.0.unlock();
+    }
 }
 
 /// Enabled skill roots, with diagnostics for packages whose contents have changed.
@@ -195,9 +217,25 @@ impl Store {
         }
     }
 
+    fn lock(&self) -> Result<CatalogueLease> {
+        fs::create_dir_all(&self.root)?;
+        let file = fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(self.root.join("marketplaces.lock"))?;
+        file.try_lock()
+            .context("插件市场正在被其他会话更新，请稍后重试")?;
+        Ok(CatalogueLease(file))
+    }
+
     fn list(&self) -> Result<Vec<Marketplace>> {
+        Ok(self.load()?.marketplaces)
+    }
+
+    fn load(&self) -> Result<StoredMarketplaces> {
         if !self.index.exists() {
-            return Ok(Vec::new());
+            return Ok(StoredMarketplaces::default());
         }
 
         let stored: StoredMarketplaces = serde_json::from_slice(
@@ -206,7 +244,16 @@ impl Store {
         )
         .with_context(|| format!("failed to parse {}", self.index.display()))?;
 
-        Ok(stored.marketplaces)
+        Ok(stored)
+    }
+
+    fn save(&self, stored: &StoredMarketplaces) -> Result<()> {
+        let mut file = tempfile::NamedTempFile::new_in(&self.root)?;
+        serde_json::to_writer_pretty(&mut file, stored)?;
+        file.flush()?;
+        file.as_file().sync_all()?;
+        file.persist(&self.index)?;
+        Ok(())
     }
 
     async fn add(&self, source: String) -> Result<Marketplace> {
@@ -226,20 +273,46 @@ impl Store {
         let mut market = parse_catalog(&directory)?;
         market.source = source;
         market.revision = revision;
-        let mut stored = StoredMarketplaces {
-            marketplaces: self.list()?,
-        };
+        self.register(market)
+    }
+
+    async fn refresh(&self, source: String) -> Result<Marketplace> {
+        let source = source.trim().to_owned();
+        ensure!(
+            self.list()?.iter().any(|market| market.source == source),
+            "插件市场已移除，请重新添加"
+        );
+        self.add(source).await
+    }
+
+    fn register(&self, market: Marketplace) -> Result<Marketplace> {
+        let mut stored = self.load()?;
+        ensure!(
+            !stored.marketplaces.iter().any(|existing| {
+                existing.name == market.name && existing.source != market.source
+            }),
+            "已存在同名的插件市场，请先移除旧来源"
+        );
         stored
             .marketplaces
-            .retain(|existing| existing.name != market.name);
+            .retain(|existing| existing.source != market.source);
         stored.marketplaces.push(market.clone());
         stored
             .marketplaces
             .sort_by(|left, right| left.name.cmp(&right.name));
-        let encoded = serde_json::to_vec_pretty(&stored)?;
-        fs::write(&self.index, encoded)?;
-
+        self.save(&stored)?;
         Ok(market)
+    }
+
+    fn remove(&self, source: &str) -> Result<()> {
+        let mut stored = self.load()?;
+        let previous_len = stored.marketplaces.len();
+        stored.marketplaces.retain(|market| market.source != source);
+        ensure!(
+            stored.marketplaces.len() != previous_len,
+            "插件市场已移除，请刷新列表"
+        );
+        self.save(&stored)
     }
 
     async fn clone_git_source(&self, source: &str) -> Result<(PathBuf, Option<String>)> {

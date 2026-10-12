@@ -134,14 +134,23 @@ fn main() -> anyhow::Result<()> {
                 json!({"type":"hello","value":{"version":orbit_protocol::VERSION,"workspace":workspace,"capabilities":{"system":"Linux","architecture":"x86_64","shell":"sh","native_processes":true,"files":true,"features":[]}}})
             }
             "all_sessions" => {
+                let catalog_root = std::fs::read_to_string(
+                    std::path::Path::new(&workspace).join(".fixture-sidebar"),
+                )
+                .unwrap_or_default();
+                let catalog_root = if catalog_root.trim().is_empty() {
+                    &workspace
+                } else {
+                    catalog_root.trim()
+                };
                 if std::path::Path::new(&workspace)
                     .join(".fixture-sidebar")
                     .exists()
                 {
                     json!({"type":"sessions","value":[
-                        {"id":"demo","workspace":workspace,"project_id":"fixture","model":model,"title":"请检查当前项目结构，读取 Cargo.toml 和完整的依赖关系并给出建议","updated_at":3},
-                        {"id":"navigation","workspace":workspace,"project_id":"fixture","model":model,"title":"请直接使用 read_file 读取 /tmp\n/orbit-e2e/README.md\n并继续检查","updated_at":2},
-                        {"id":"unavailable","workspace":workspace,"project_id":"fixture","model":model,"title":"验证打开失败的会话","updated_at":1},
+                        {"id":"demo","workspace":catalog_root,"project_id":"fixture","model":model,"title":"请检查当前项目结构，读取 Cargo.toml 和完整的依赖关系并给出建议","updated_at":3},
+                        {"id":"navigation","workspace":catalog_root,"project_id":"fixture","model":model,"title":"请直接使用 read_file 读取 /tmp\n/orbit-e2e/README.md\n并继续检查","updated_at":2},
+                        {"id":"unavailable","workspace":catalog_root,"project_id":"fixture","model":model,"title":"验证打开失败的会话","updated_at":1},
                         {"id":"notes","workspace":"/tmp/orbit-gui-notes","project_id":"notes","model":model,"title":"整理开发笔记","updated_at":1}
                     ]})
                 } else {
@@ -434,9 +443,7 @@ fn main() -> anyhow::Result<()> {
                 };
                 json!({"type":"resources","value":snapshot})
             }
-            "plugins" => {
-                json!({"type":"plugins","value":{"marketplaces":[],"project_id":"fixture","enabled":[],"inspections":[]}})
-            }
+            "plugins" => plugin_catalog(&workspace, &request["action"])?,
             _ => json!({"type":"ok"}),
         };
         let bytes = serde_json::to_vec(&response)?;
@@ -486,4 +493,51 @@ fn tool_history() -> Vec<Value> {
         json!({"Finished":{"status":"completed"}}),
     ]);
     events
+}
+
+fn plugin_catalog(workspace: &str, action: &Value) -> anyhow::Result<Value> {
+    let path = std::path::Path::new(workspace).join(".fixture-plugins.json");
+    let mut catalog: orbit_protocol::plugins::Catalog = match std::fs::read(&path) {
+        Ok(bytes) => serde_json::from_slice(&bytes)?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(
+                json!({"type":"plugins","value":{"marketplaces":[],"project_id":"fixture","enabled":[],"inspections":[]}}),
+            );
+        }
+        Err(error) => return Err(error.into()),
+    };
+    match action["action"].as_str() {
+        Some("enable") => {
+            let mut plugin: orbit_protocol::project::ProjectPlugin =
+                serde_json::from_value(action["plugin"].clone())?;
+            plugin.project_id = catalog.project_id.clone();
+            catalog.enabled.retain(|p| {
+                p.marketplace_source != plugin.marketplace_source
+                    || p.plugin_name != plugin.plugin_name
+            });
+            catalog.enabled.push(plugin);
+        }
+        Some("disable") => catalog.enabled.retain(|p| {
+            Some(p.marketplace_source.as_str()) != action["marketplace_source"].as_str()
+                || Some(p.plugin_name.as_str()) != action["plugin_name"].as_str()
+        }),
+        Some("remove") => {
+            if catalog
+                .enabled
+                .iter()
+                .any(|p| Some(p.marketplace_source.as_str()) == action["source"].as_str())
+            {
+                return Ok(
+                    json!({"type":"error","value":"这个市场仍有已启用插件，请先停用后再移除"}),
+                );
+            }
+            catalog
+                .marketplaces
+                .retain(|m| Some(m.source.as_str()) != action["source"].as_str());
+        }
+        Some("add") => return Ok(json!({"type":"error","value":"测试市场目录不存在，请检查来源"})),
+        _ => {}
+    }
+    std::fs::write(path, serde_json::to_vec(&catalog)?)?;
+    Ok(json!({"type":"plugins","value":catalog}))
 }

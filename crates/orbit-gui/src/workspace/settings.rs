@@ -1,6 +1,7 @@
 //! Searchable settings with retained, inline editors for each resource type.
 mod fonts;
 mod mcp;
+mod plugins;
 mod resources;
 use super::actions::WorkspaceCommand;
 use super::*;
@@ -53,9 +54,7 @@ impl Workspace {
                 cx,
             )
         });
-        let plugins = cx.new(|cx| {
-            resources::Resources::new(owner.clone(), session, resources::Kind::Plugins, window, cx)
-        });
+        let plugins = cx.new(|cx| plugins::Plugins::new(owner.clone(), session, window, cx));
         let fonts = cx.new(|cx| fonts::Fonts::new(window, cx));
         let mcp = cx.new(|cx| mcp::Mcp::new(&self.options, self.runtime.clone(), window, cx));
         self.settings_page = Some(cx.new(|_| SettingsPage {
@@ -79,7 +78,7 @@ pub(super) struct SettingsPage {
     pub(super) initial_page: usize,
     skills: Entity<resources::Resources>,
     memory: Entity<resources::Resources>,
-    plugins: Entity<resources::Resources>,
+    plugins: Entity<plugins::Plugins>,
     mcp: Entity<mcp::Mcp>,
     fonts: Entity<fonts::Fonts>,
 }
@@ -139,7 +138,7 @@ impl Render for SettingsPage {
                             .group(SettingGroup::new().item(SettingItem::render(move |_, _, _| mcp.clone()).keywords(["MCP", "工具", "服务器"]))))
                         .page(SettingPage::new("会话记忆").icon(IconName::Brain).resettable(false)
                             .group(SettingGroup::new().item(SettingItem::render(move |_, _, _| memory.clone()).keywords(["记忆", "偏好"]))))
-                        .page(SettingPage::new("插件").icon(IconName::Puzzle).resettable(false)
+                        .page(SettingPage::new("插件市场").icon(IconName::Puzzle).resettable(false).header_style(&StyleRefinement::default().hidden())
                             .group(SettingGroup::new().item(SettingItem::render(move |_, _, _| plugins.clone()).keywords(["插件", "市场"]))))
                         .page(SettingPage::new("快捷键").icon(IconName::Command).resettable(false)
                             .group(SettingGroup::new().items([

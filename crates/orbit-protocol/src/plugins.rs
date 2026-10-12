@@ -44,6 +44,13 @@ pub enum Action {
     Add {
         source: String,
     },
+    Refresh {
+        source: String,
+    },
+    /// Unregister an unused source, preserving its directory and cached files.
+    Remove {
+        source: String,
+    },
     Enable {
         plugin: super::project::ProjectPlugin,
     },

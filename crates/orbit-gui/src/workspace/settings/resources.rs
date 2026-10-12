@@ -1,12 +1,8 @@
 //! Retained editors; settings requests report errors locally and never open report panels.
 use super::super::*;
-use gpui_kit::component::{
-    input::{Input, InputState},
-    switch::Switch,
-};
+use gpui_kit::component::input::{Input, InputState};
 use orbit_protocol::{
-    plugins,
-    project::{MemoryAction, MemoryCategory, ProjectPlugin, SessionMemory},
+    project::{MemoryAction, MemoryCategory, SessionMemory},
     resources::{Action, Skill, Snapshot},
 };
 
@@ -14,7 +10,6 @@ use orbit_protocol::{
 pub(super) enum Kind {
     Skills,
     Memory,
-    Plugins,
 }
 pub(super) struct Resources {
     owner: WeakEntity<Workspace>,
@@ -22,7 +17,6 @@ pub(super) struct Resources {
     kind: Kind,
     skills: Vec<Skill>,
     memories: Vec<SessionMemory>,
-    plugins: Option<plugins::Catalog>,
     name: Entity<InputState>,
     body: Entity<TextareaState>,
     editing: bool,
@@ -50,13 +44,7 @@ impl Resources {
             kind,
             skills: vec![],
             memories: vec![],
-            plugins: None,
-            name: cx.new(|cx| {
-                InputState::new(window, cx).placeholder(match kind {
-                    Kind::Skills => "例如 code-review",
-                    _ => "Git 地址或本地插件市场目录",
-                })
-            }),
+            name: cx.new(|cx| InputState::new(window, cx).placeholder("例如 code-review")),
             body: cx.new(|cx| TextareaState::new(window, cx).auto_grow(8, 18)),
             editing: false,
             original: None,
@@ -113,10 +101,7 @@ impl Resources {
                         view.editing = true;
                         view.readonly = !editable;
                     }
-                    Ok(Response::Plugins(catalog)) => {
-                        view.plugins = Some(catalog);
-                        view.editing = false;
-                    }
+
                     Ok(_) => {
                         view.error = Some("服务没有返回设置数据，请更新工作区服务后重试".into())
                     }
@@ -135,19 +120,11 @@ impl Resources {
             cx.notify();
         }
     }
-    fn plugin(&mut self, action: plugins::Action, cx: &mut Context<Self>) {
-        if let Some(session) = self.session.clone() {
-            self.request(Request::Plugins { session, action }, cx);
-        } else {
-            self.error = Some("请先打开工作区".into());
-            cx.notify();
-        }
-    }
+
     fn refresh(&mut self, cx: &mut Context<Self>) {
         match self.kind {
             Kind::Skills => self.action(Action::Skills, cx),
             Kind::Memory => self.action(Action::Memories, cx),
-            Kind::Plugins => self.plugin(plugins::Action::List, cx),
         }
     }
     fn new_item(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -183,7 +160,6 @@ impl Resources {
                 }),
                 cx,
             ),
-            Kind::Plugins => self.plugin(plugins::Action::Add { source: name }, cx),
         }
     }
 }
@@ -199,11 +175,6 @@ impl Render for Resources {
                 "保存当前会话的事实与偏好，供后续对话使用。",
                 "添加记忆",
                 "还没有保存的记忆。开始会话后，可在这里添加。",
-            ),
-            Kind::Plugins => (
-                "添加插件市场，并为当前项目启用所需插件。",
-                "添加来源",
-                "还没有插件来源。添加 Git 地址或本地市场目录。",
             ),
         };
         let mut content = v_flex()
@@ -235,23 +206,13 @@ impl Render for Resources {
         if self.editing {
             let mut form = v_flex().gap_3();
             if !matches!(self.kind, Kind::Memory) {
-                form = form
-                    .child(if matches!(self.kind, Kind::Skills) {
-                        "技能名称"
-                    } else {
-                        "插件来源"
-                    })
-                    .child(
-                        Input::new(&self.name)
-                            .aria_label(if matches!(self.kind, Kind::Skills) {
-                                "技能名称"
-                            } else {
-                                "插件来源"
-                            })
-                            .disabled(self.busy || self.original.is_some()),
-                    );
+                form = form.child("技能名称").child(
+                    Input::new(&self.name)
+                        .aria_label("技能名称")
+                        .disabled(self.busy || self.original.is_some()),
+                );
             }
-            if !matches!(self.kind, Kind::Plugins) {
+            {
                 form = form
                     .child(if matches!(self.kind, Kind::Skills) {
                         "技能说明（Markdown）"
@@ -376,100 +337,6 @@ impl Render for Resources {
                             )
                             .into_any_element(),
                     );
-                }
-            }
-            Kind::Plugins => {
-                if let Some(catalog) = &self.plugins {
-                    for market in &catalog.marketplaces {
-                        for plugin in &market.plugins {
-                            let name = plugin.name.clone();
-                            let source = market.source.clone();
-                            let enabled = catalog
-                                .enabled
-                                .iter()
-                                .any(|p| p.plugin_name == name && p.marketplace_source == source);
-                            let inspection = catalog
-                                .inspections
-                                .iter()
-                                .find(|p| p.name == name && p.source == source);
-                            let package = inspection.and_then(|p| p.package.as_ref().ok());
-                            let pinned = ProjectPlugin {
-                                project_id: catalog.project_id.clone(),
-                                marketplace_source: source.clone(),
-                                plugin_name: name.clone(),
-                                package_source: plugin.source.clone().unwrap_or_default(),
-                                version: package.and_then(|p| p.version.clone()),
-                                marketplace_revision: market.revision.clone(),
-                                enabled_at: 0,
-                            };
-                            rows.push(
-                                h_flex()
-                                    .gap_4()
-                                    .py_3()
-                                    .border_b_1()
-                                    .border_color(cx.theme().border)
-                                    .child(
-                                        v_flex()
-                                            .flex_1()
-                                            .min_w_0()
-                                            .gap_1()
-                                            .child(name.clone())
-                                            .child(
-                                                div()
-                                                    .text_sm()
-                                                    .text_color(cx.theme().muted_foreground)
-                                                    .child(plugin.description.clone()),
-                                            )
-                                            .child(
-                                                div()
-                                                    .text_xs()
-                                                    .text_color(cx.theme().muted_foreground)
-                                                    .child(market.name.clone()),
-                                            )
-                                            .when_some(
-                                                inspection
-                                                    .and_then(|p| p.package.as_ref().err())
-                                                    .cloned(),
-                                                |v, e| {
-                                                    v.child(
-                                                        div()
-                                                            .text_sm()
-                                                            .text_color(cx.theme().danger)
-                                                            .child(e),
-                                                    )
-                                                },
-                                            ),
-                                    )
-                                    .child(
-                                        Switch::new(SharedString::from(format!("{source}:{name}")))
-                                            .checked(enabled)
-                                            .label("启用")
-                                            .disabled(
-                                                self.busy
-                                                    || (!enabled
-                                                        && (package.is_none()
-                                                            || plugin.source.is_none())),
-                                            )
-                                            .on_click(cx.listener(move |v, checked, _, cx| {
-                                                v.plugin(
-                                                    if *checked {
-                                                        plugins::Action::Enable {
-                                                            plugin: pinned.clone(),
-                                                        }
-                                                    } else {
-                                                        plugins::Action::Disable {
-                                                            marketplace_source: source.clone(),
-                                                            plugin_name: name.clone(),
-                                                        }
-                                                    },
-                                                    cx,
-                                                )
-                                            })),
-                                    )
-                                    .into_any_element(),
-                            );
-                        }
-                    }
                 }
             }
         }

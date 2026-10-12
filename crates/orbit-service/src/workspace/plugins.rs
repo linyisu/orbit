@@ -2,6 +2,13 @@ use anyhow::{Context, Result, ensure};
 use orbit_protocol::plugins::{Action, Catalog, Inspection};
 
 pub(super) async fn execute(handle: &super::session::Handle, action: Action) -> Result<Catalog> {
+    // Enabling a package and changing its source must not interleave between
+    // the usage check and the atomic catalogue replacement.
+    let _catalog_lock = if matches!(&action, Action::List) {
+        None
+    } else {
+        Some(crate::marketplaces::lock_current()?)
+    };
     let info = handle.current_info().await;
     let project_id = if matches!(&action, Action::Enable { .. }) {
         handle.store.resolve_project(&info.workspace).await?.id
@@ -17,7 +24,16 @@ pub(super) async fn execute(handle: &super::session::Handle, action: Action) -> 
     match action {
         Action::List => {}
         Action::Add { source } => {
+            require_unused_source(&handle.store, source.trim()).await?;
             crate::marketplaces::add_current(source).await?;
+        }
+        Action::Refresh { source } => {
+            require_unused_source(&handle.store, source.trim()).await?;
+            crate::marketplaces::refresh_current(source).await?;
+        }
+        Action::Remove { source } => {
+            require_unused_source(&handle.store, &source).await?;
+            crate::marketplaces::remove_current(&source)?;
         }
         Action::Enable { mut plugin } => {
             let markets = crate::marketplaces::list_current()?;
@@ -68,4 +84,58 @@ pub(super) async fn execute(handle: &super::session::Handle, action: Action) -> 
         enabled: handle.store.project_plugins(project).await?,
         inspections,
     })
+}
+
+async fn require_unused_source(store: &orbit_store::store::Store, source: &str) -> Result<()> {
+    ensure!(
+        !store.marketplace_is_enabled(source).await?,
+        "该市场仍有插件被项目启用，请先在相关项目中停用插件，再刷新或移除市场"
+    );
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn source_changes_are_blocked_until_all_projects_disable_their_plugins() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = orbit_store::store::Store::open(directory.path().join("orbit.db"))
+            .await
+            .unwrap();
+        let source = "owner/market";
+        let mut projects = Vec::new();
+        for name in ["first", "second"] {
+            let root = directory.path().join(name);
+            std::fs::create_dir(&root).unwrap();
+            let project = store.resolve_project(&root).await.unwrap();
+            store
+                .enable_project_plugin(orbit_store::types::ProjectPlugin {
+                    project_id: project.id.clone(),
+                    marketplace_source: source.into(),
+                    plugin_name: "review".into(),
+                    package_source: "plugins/review".into(),
+                    version: Some("1.0.0".into()),
+                    marketplace_revision: Some("a".repeat(40)),
+                    enabled_at: 0,
+                })
+                .await
+                .unwrap();
+            projects.push(project);
+        }
+
+        assert!(require_unused_source(&store, "other/market").await.is_ok());
+        assert!(require_unused_source(&store, source).await.is_err());
+        store
+            .disable_project_plugin(&projects[0].id, source, "review")
+            .await
+            .unwrap();
+        assert!(require_unused_source(&store, source).await.is_err());
+        store
+            .disable_project_plugin(&projects[1].id, source, "review")
+            .await
+            .unwrap();
+        assert!(require_unused_source(&store, source).await.is_ok());
+    }
 }
