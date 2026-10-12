@@ -38,6 +38,11 @@ fn argument_menu_completes_without_executing_incomplete_commands() {
     press(&mut state, KeyCode::Down, KeyModifiers::NONE, false);
     assert_eq!(
         press(&mut state, KeyCode::Enter, KeyModifiers::NONE, false),
+        Action::None
+    );
+    assert_eq!(state.input.text, "/model two::");
+    assert_eq!(
+        press(&mut state, KeyCode::Enter, KeyModifiers::NONE, false),
         Action::Submit("/model two::fast".into())
     );
 

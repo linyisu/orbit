@@ -3,6 +3,7 @@ mod bootstrap;
 mod local_server;
 pub use bootstrap::register_server_bundle;
 mod command;
+pub mod completion;
 pub mod configuration;
 pub mod connect;
 pub mod directories;

@@ -235,7 +235,9 @@ pub(super) fn keyboard_action(state: &mut UiState, event: Event, busy: bool) -> 
 
             KeyCode::Tab => {
                 let candidate = &menu[state.menu_index];
-                let suffix = if (candidate.continue_input && !candidate.name.starts_with("/cd "))
+                let suffix = if (candidate.continue_input
+                    && !candidate.name.starts_with("/cd ")
+                    && !candidate.name.ends_with("::"))
                     || matches!(
                         candidate.name.as_str(),
                         "/cd"
@@ -262,7 +264,15 @@ pub(super) fn keyboard_action(state: &mut UiState, event: Event, busy: bool) -> 
 
             KeyCode::Enter if key.modifiers.is_empty() => {
                 let candidate = &menu[state.menu_index];
-                if candidate.continue_input && !candidate.name.starts_with("/cd ") {
+                if candidate.continue_input && candidate.name.ends_with("::") {
+                    state.input.set(candidate.name.clone());
+                    state.menu_index = 0;
+                    return Action::None;
+                }
+                if candidate.continue_input
+                    && !candidate.name.starts_with("/cd ")
+                    && !candidate.name.ends_with("::")
+                {
                     state.input.set(format!("{} ", candidate.name));
                     state.menu_index = 0;
                     return Action::None;
