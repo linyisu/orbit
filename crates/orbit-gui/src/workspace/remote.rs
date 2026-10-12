@@ -1,5 +1,7 @@
 //! A remote target is configured here; the workbench owns the opened connection
 //! and its retry lifecycle. Inputs remain intact until a valid target is submitted.
+#[path = "remote/browser.rs"]
+mod browser;
 use super::*;
 use gpui_kit::component::{
     input::{Input, InputState},
@@ -112,6 +114,7 @@ fn optional(value: &str) -> Option<String> {
 struct RemoteConnection {
     owner: WeakEntity<Workspace>,
     options: Options,
+    runtime: Arc<tokio::runtime::Runtime>,
     mode: Mode,
     host: Entity<InputState>,
     distribution: Entity<InputState>,
@@ -131,6 +134,8 @@ struct RemoteConnection {
     advanced: bool,
     submitted: bool,
     error: Option<SharedString>,
+    browser: Option<Entity<browser::DirectoryBrowser>>,
+    browser_subscription: Option<Subscription>,
     _subscriptions: Vec<Subscription>,
     _discovery: Task<()>,
 }
@@ -154,6 +159,17 @@ pub(super) fn open(
                 (window.rem_size() * 34.).min(window.bounds().size.width - window.rem_size() * 2.),
             )
             .child(form.clone())
+            .on_ok({
+                let form = form.clone();
+                move |_, window, cx| {
+                    form.update(cx, |view, cx| {
+                        if view.browser.is_none() {
+                            view.connect(window, cx);
+                        }
+                    });
+                    false
+                }
+            })
             .on_close({
                 let owner = owner.clone();
                 move |_, window, cx| {
@@ -261,6 +277,8 @@ impl RemoteConnection {
                 cx.subscribe_in(input, window, |view, _, event, window, cx| match event {
                     InputEvent::Change => {
                         view.error = None;
+                        view.browser = None;
+                        view.browser_subscription = None;
                         cx.notify();
                     }
                     InputEvent::PressEnter { shift: false, .. } => view.connect(window, cx),
@@ -329,6 +347,7 @@ impl RemoteConnection {
         Self {
             owner,
             options,
+            runtime,
             mode,
             host,
             distribution,
@@ -348,6 +367,8 @@ impl RemoteConnection {
             advanced,
             submitted: false,
             error: None,
+            browser: None,
+            browser_subscription: None,
             _subscriptions: subscriptions,
             _discovery: discovery,
         }
@@ -404,6 +425,32 @@ impl RemoteConnection {
                 cx.notify();
             }
         }
+    }
+
+    fn browse(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        match self.draft(cx).options(&self.options) {
+            Ok(options) => {
+                let browser = cx.new(|cx| {
+                    browser::DirectoryBrowser::new(options, self.runtime.clone(), window, cx)
+                });
+                self.browser_subscription = Some(cx.subscribe_in(
+                    &browser,
+                    window,
+                    |view, _, event: &browser::Selected, window, cx| {
+                        view.workspace.update(cx, |input, cx| {
+                            input.set_value(event.0.clone(), window, cx);
+                        });
+                        view.browser = None;
+                        view.browser_subscription = None;
+                        cx.notify();
+                    },
+                ));
+                self.browser = Some(browser);
+                self.error = None;
+            }
+            Err(error) => self.error = Some(error.to_string().into()),
+        }
+        cx.notify();
     }
 
     fn field(&self, label: &'static str, input: &Entity<InputState>) -> impl IntoElement {
@@ -505,6 +552,8 @@ impl Render for RemoteConnection {
                 .on_change(cx.listener(|view, ix, window, cx| {
                     view.mode = if *ix == 0 { Mode::Ssh } else { Mode::Wsl };
                     view.error = None;
+                    view.browser = None;
+                    view.browser_subscription = None;
                     view.focus_target(window, cx);
                     cx.notify();
                 }))
@@ -538,7 +587,44 @@ impl Render for RemoteConnection {
                 .into_any_element(),
         );
         field_rows.insert(self.workspace.entity_id(), rows.len());
-        rows.push(self.field("工作区目录", &self.workspace).into_any_element());
+        rows.push(
+            v_flex()
+                .gap_1p5()
+                .child(div().text_sm().child("工作区目录"))
+                .child(
+                    h_flex()
+                        .gap_2()
+                        .child(
+                            div().flex_1().min_w_0().child(
+                                Input::new(&self.workspace)
+                                    .aria_label("工作区目录")
+                                    .w_full(),
+                            ),
+                        )
+                        .child(
+                            Button::new("remote-browse")
+                                .icon(IconName::FolderOpen)
+                                .label(if self.browser.is_some() {
+                                    "关闭浏览"
+                                } else {
+                                    "浏览目录"
+                                })
+                                .on_click(cx.listener(|view, _, window, cx| {
+                                    if view.browser.is_some() {
+                                        view.browser = None;
+                                        view.browser_subscription = None;
+                                        cx.notify();
+                                    } else {
+                                        view.browse(window, cx);
+                                    }
+                                })),
+                        ),
+                )
+                .when_some(self.browser.clone(), |view, browser| {
+                    view.child(div().pt_2().child(browser))
+                })
+                .into_any_element(),
+        );
         rows.push(
             Button::new("remote-advanced")
                 .ghost()
