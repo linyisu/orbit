@@ -519,6 +519,21 @@ impl Actor {
                 .await;
                 let _ = result.send(response);
             }
+            Command::InputQueue {
+                action,
+                expected_workspace,
+                result,
+            } => {
+                let inbox = self.running.as_ref().map(|run| run.inbox.clone());
+                let response = crate::workspace::input_queue::execute(
+                    &mut self.setup,
+                    inbox,
+                    &expected_workspace,
+                    action,
+                )
+                .await;
+                let _ = result.send(response);
+            }
             Command::Tasks {
                 action,
                 expected_workspace,

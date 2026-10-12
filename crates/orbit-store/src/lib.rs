@@ -5,6 +5,7 @@ pub mod diagnostics;
 mod entities;
 mod event_log;
 mod execution;
+pub mod input_queue;
 mod migrations;
 pub mod project;
 pub mod projects;

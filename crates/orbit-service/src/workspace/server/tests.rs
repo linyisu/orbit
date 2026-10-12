@@ -1,6 +1,7 @@
 #[cfg(test)]
 use orbit_config::test_support::{TestConfig, TestModel, TestProvider};
 mod drafts;
+mod input_queue;
 mod permissions;
 mod review;
 mod session_controls;

@@ -154,6 +154,31 @@ impl SessionWriter {
         self.active_run
     }
 
+    /// Writer ownership rules out another process's inbox. During a local run
+    /// the caller must also reserve its AgentInbox before changing persistence.
+    pub async fn edit_queued_input(
+        &self,
+        expected_workspace: &str,
+        id: i64,
+        expected: &str,
+        content: String,
+    ) -> Result<()> {
+        self.store
+            .change_queued_input(&self.id, expected_workspace, id, expected, Some(content))
+            .await
+    }
+
+    pub async fn remove_queued_input(
+        &self,
+        expected_workspace: &str,
+        id: i64,
+        expected: &str,
+    ) -> Result<()> {
+        self.store
+            .change_queued_input(&self.id, expected_workspace, id, expected, None)
+            .await
+    }
+
     pub fn id(&self) -> &str {
         &self.id
     }

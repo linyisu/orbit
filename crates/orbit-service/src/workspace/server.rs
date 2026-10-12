@@ -520,6 +520,16 @@ impl Service {
                     .subagents(action, expected_workspace)
                     .await?,
             )),
+            Request::InputQueue {
+                session,
+                expected_workspace,
+                action,
+            } => Ok(Response::InputQueue(
+                self.session(&session)
+                    .await?
+                    .input_queue(action, expected_workspace)
+                    .await?,
+            )),
             Request::Admin { action } => {
                 let _opening = self.opening.lock().await;
                 ensure!(

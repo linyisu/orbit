@@ -669,6 +669,41 @@ impl SessionState {
         self.writer.as_ref().and_then(SessionWriter::active_run_id)
     }
 
+    pub(crate) async fn edit_queued_input(
+        &mut self,
+        expected_workspace: &str,
+        id: i64,
+        expected: &str,
+        content: String,
+    ) -> Result<()> {
+        self.ensure_writer().await?;
+        let result = self
+            .writer
+            .as_ref()
+            .unwrap()
+            .edit_queued_input(expected_workspace, id, expected, content)
+            .await;
+        self.release_idle_writer();
+        result
+    }
+
+    pub(crate) async fn remove_queued_input(
+        &mut self,
+        expected_workspace: &str,
+        id: i64,
+        expected: &str,
+    ) -> Result<()> {
+        self.ensure_writer().await?;
+        let result = self
+            .writer
+            .as_ref()
+            .unwrap()
+            .remove_queued_input(expected_workspace, id, expected)
+            .await;
+        self.release_idle_writer();
+        result
+    }
+
     pub async fn flush_events(&self) -> Result<()> {
         if let Some(journal) = &self.journal {
             journal.flush().await?;

@@ -58,6 +58,11 @@ pub enum Command {
         expected_workspace: String,
         result: oneshot::Sender<Result<orbit_protocol::subagents::Snapshot>>,
     },
+    InputQueue {
+        action: orbit_protocol::input_queue::Action,
+        expected_workspace: String,
+        result: oneshot::Sender<Result<orbit_protocol::input_queue::Snapshot>>,
+    },
     SetMode {
         mode: Mode,
     },
@@ -432,6 +437,23 @@ impl Handle {
         })
         .await?;
         response.await.context("subagent request was interrupted")?
+    }
+
+    pub async fn input_queue(
+        &self,
+        action: orbit_protocol::input_queue::Action,
+        expected_workspace: String,
+    ) -> Result<orbit_protocol::input_queue::Snapshot> {
+        let (result, response) = oneshot::channel();
+        self.command(Command::InputQueue {
+            action,
+            expected_workspace,
+            result,
+        })
+        .await?;
+        response
+            .await
+            .context("input queue request was interrupted")?
     }
 
     pub async fn resources(

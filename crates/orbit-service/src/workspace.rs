@@ -4,6 +4,7 @@ mod changes;
 mod completion;
 pub mod configuration;
 mod files;
+mod input_queue;
 mod plugins;
 mod profile;
 pub mod project;
