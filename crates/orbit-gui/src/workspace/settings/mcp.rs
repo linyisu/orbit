@@ -450,7 +450,7 @@ impl Render for Mcp {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let mut content = v_flex().w_full().max_w(rems(60.)).gap_4()
             .child(h_flex().gap_3()
-                .child(div().flex_1().text_sm().text_color(cx.theme().muted_foreground)
+                .child(div().flex_1().min_w_0().whitespace_normal().text_sm().text_color(cx.theme().muted_foreground)
                     .child("配置 MCP 工具服务器。保存后新会话生效；连接远程工作区时，命令在远程运行。"))
                 .child(Button::new("mcp-refresh").ghost().small().label("刷新")
                     .disabled(self.busy || self.status_busy || self.editing)
