@@ -1,6 +1,177 @@
 use super::*;
 
 #[tokio::test]
+async fn global_history_resolves_a_moved_project_before_resume_without_writing_on_browse() {
+    let fixture = Fixture::new("http://127.0.0.1:1/v1").await;
+    let store = &fixture.handle.store;
+    let old = &fixture.external;
+    let moved = fixture._root.path().join("moved-project");
+    let mut writer = store
+        .create(old.display().to_string(), "test::test".into())
+        .await
+        .unwrap();
+    let id = writer.id().to_owned();
+    writer
+        .begin("remember this".into(), "test::test".into())
+        .await
+        .unwrap();
+    writer
+        .finish(
+            "completed",
+            vec![],
+            Some(vec![orbit_model::types::ChatMessage::user("remember this")]),
+        )
+        .await
+        .unwrap();
+    drop(writer);
+    let original = store.session(&id).await.unwrap();
+    fs::rename(old, &moved).unwrap();
+
+    // Merely selecting the new directory must locate history without creating
+    // a session or persisting a project-path change.
+    let mut options = fixture.service.options.clone();
+    options.initial_directory = moved.clone();
+    let Response::Sessions(history) = fixture
+        .service
+        .dispatch(Request::AllSessions, &options, 0)
+        .await
+        .unwrap()
+    else {
+        panic!("missing global history")
+    };
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0].id, id);
+    assert_eq!(history[0].project_id, original.project_id);
+    assert_eq!(history[0].workspace, moved.display().to_string());
+    assert_eq!(
+        store.session(&id).await.unwrap().workspace,
+        original.workspace
+    );
+
+    let wrong_directory = fixture
+        .request(Request::Open {
+            model: None,
+            policy: Default::default(),
+            resume: Some(id.clone()),
+            configuration: None,
+        })
+        .await
+        .unwrap_err();
+    assert!(
+        wrong_directory
+            .to_string()
+            .contains("session belongs to workspace")
+    );
+    assert_eq!(
+        store.session(&id).await.unwrap().project_id,
+        original.project_id
+    );
+
+    // The GUI reconnects to the path returned by the sidebar listing.
+    options.initial_directory = history[0].workspace.clone().into();
+    let Response::Opened(info) = fixture
+        .service
+        .dispatch(
+            Request::Open {
+                model: None,
+                policy: Default::default(),
+                resume: Some(id.clone()),
+                configuration: None,
+            },
+            &options,
+            0,
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("failed to resume moved project")
+    };
+    assert_eq!(info.id, id);
+    assert_eq!(info.workspace, moved.display().to_string());
+    let snapshot = store.load(&id).await.unwrap();
+    assert_eq!(snapshot.runs.len(), 1);
+    assert_eq!(snapshot.history.len(), 1);
+
+    // Other workspaces also see the corrected location after a real resume.
+    let Response::Sessions(history) = fixture.request(Request::AllSessions).await.unwrap() else {
+        panic!("missing refreshed history")
+    };
+    assert_eq!(history[0].workspace, info.workspace);
+
+    // Reusing the original path is a new project, not the migrated one.
+    fs::create_dir(old).unwrap();
+    options.initial_directory = old.clone();
+    let Response::Sessions(local) = fixture
+        .service
+        .dispatch(Request::Sessions, &options, 0)
+        .await
+        .unwrap()
+    else {
+        panic!("missing project history")
+    };
+    assert!(local.is_empty());
+}
+
+#[tokio::test]
+async fn global_history_lists_other_directories_without_changing_project_scoped_history() {
+    let fixture = Fixture::new("http://127.0.0.1:1/v1").await;
+    let store = &fixture.handle.store;
+    let mut ids = Vec::new();
+    for directory in [
+        &fixture.service.options.initial_directory,
+        &fixture.external,
+    ] {
+        let mut writer = store
+            .create(directory.display().to_string(), "test::test".into())
+            .await
+            .unwrap();
+        ids.push(writer.id().to_owned());
+        writer
+            .begin("saved conversation".into(), "test::test".into())
+            .await
+            .unwrap();
+        writer
+            .finish("completed", vec![], Some(vec![]))
+            .await
+            .unwrap();
+    }
+    let Response::Sessions(global) = fixture.request(Request::AllSessions).await.unwrap() else {
+        panic!("missing global history")
+    };
+    assert_eq!(global.len(), 2);
+    assert!(
+        ids.iter()
+            .all(|id| global.iter().any(|session| &session.id == id))
+    );
+    let Response::Sessions(local) = fixture.request(Request::Sessions).await.unwrap() else {
+        panic!("missing project history")
+    };
+    assert_eq!(local.len(), 1);
+    assert_eq!(local[0].id, ids[0]);
+    let mut remote_options = fixture.service.options.clone();
+    remote_options.initial_directory = fixture.external.clone();
+    let Response::Opened(info) = fixture
+        .service
+        .dispatch(
+            Request::Open {
+                model: None,
+                policy: Default::default(),
+                resume: Some(ids[1].clone()),
+                configuration: None,
+            },
+            &remote_options,
+            0,
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("failed to resume other project")
+    };
+    assert_eq!(info.workspace, fixture.external.display().to_string());
+    assert_eq!(info.id, ids[1]);
+}
+
+#[tokio::test]
 async fn resumed_transcript_pages_join_live_updates_without_reordering_or_losing_reconnect_history()
 {
     use orbit_agent::events::AgentEvent;
@@ -560,4 +731,87 @@ fn assert_no_domain_records(store: &orbit_store::store::Store) {
             .unwrap();
         assert_eq!(count, 0, "draft wrote records to {table}");
     }
+}
+
+#[tokio::test]
+async fn explicit_directory_replacement_recovers_history_after_filesystem_identity_changes() {
+    let fixture = Fixture::new("http://127.0.0.1:1/v1").await;
+    let store = &fixture.handle.store;
+    let old = &fixture.external;
+    let moved = fixture._root.path().join("Workspace");
+    // A cross-filesystem move (or copy then removing the source) creates a new
+    // directory identity; rename-only coverage cannot catch this workflow.
+    fs::create_dir(&moved).unwrap();
+    let mut writer = store
+        .create(old.display().to_string(), "test::test".into())
+        .await
+        .unwrap();
+    let id = writer.id().to_owned();
+    writer
+        .begin("remember this".into(), "test::test".into())
+        .await
+        .unwrap();
+    writer
+        .finish(
+            "completed",
+            vec![],
+            Some(vec![orbit_model::types::ChatMessage::user("remember this")]),
+        )
+        .await
+        .unwrap();
+    drop(writer);
+    let original = store.session(&id).await.unwrap();
+    fs::remove_dir_all(old).unwrap();
+    let mut options = fixture.service.options.clone();
+    options.initial_directory = moved.clone();
+    let open = || Request::Open {
+        model: None,
+        policy: Default::default(),
+        resume: Some(id.clone()),
+        configuration: None,
+    };
+    let error = fixture
+        .service
+        .dispatch(open(), &options, 0)
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("session belongs to workspace"));
+    assert_eq!(
+        store.session(&id).await.unwrap().workspace,
+        original.workspace
+    );
+    fixture
+        .service
+        .dispatch(
+            Request::Admin {
+                action: orbit_protocol::admin::Action::LinkProject {
+                    id: original.project_id.clone(),
+                },
+            },
+            &options,
+            0,
+        )
+        .await
+        .unwrap();
+    let Response::Sessions(history) = fixture
+        .service
+        .dispatch(Request::AllSessions, &options, 0)
+        .await
+        .unwrap()
+    else {
+        panic!("missing history")
+    };
+    assert_eq!(history[0].id, id);
+    assert_eq!(history[0].project_id, original.project_id);
+    assert_eq!(history[0].workspace, moved.display().to_string());
+    let Response::Opened(info) = fixture.service.dispatch(open(), &options, 0).await.unwrap()
+    else {
+        panic!("failed to resume relocated session")
+    };
+    assert_eq!(info.id, id);
+    assert_eq!(info.workspace, moved.display().to_string());
+    let snapshot = store.load(&id).await.unwrap();
+    assert_eq!(snapshot.runs.len(), 1);
+    assert_eq!(snapshot.history.len(), 1);
+    assert_eq!(snapshot.session.project_id, original.project_id);
 }

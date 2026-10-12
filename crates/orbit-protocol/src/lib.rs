@@ -11,7 +11,7 @@ use std::io;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
-pub const VERSION: u32 = 16;
+pub const VERSION: u32 = 17;
 // Steering receipts identify the durable input independently of its consumption.
 pub const MIN_COMPATIBLE_VERSION: u32 = 15;
 
@@ -69,6 +69,8 @@ pub enum Request {
         configuration: Option<Configuration>,
     },
     Sessions,
+    /// All resumable conversations on this host, across project directories.
+    AllSessions,
     ListSessions {
         session: String,
     },

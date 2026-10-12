@@ -488,6 +488,28 @@ impl Service {
                     .collect();
                 Ok(Response::Sessions(sessions))
             }
+            Request::AllSessions => {
+                let store =
+                    orbit_store::store::Store::open(connection_options.database.clone()).await?;
+                let mut sessions = store.list_resumable().await?;
+                // Opening a directory is read-only until a conversation is resumed or
+                // started. Resolve its identity as the TUI does, so a moved project
+                // can be resumed before its new path has been persisted.
+                if let Some(project) = store
+                    .project_at(&connection_options.initial_directory)
+                    .await?
+                {
+                    let ids = store.equivalent_project_ids(&project.id).await?;
+                    if let Some(path) = project.path {
+                        for session in &mut sessions {
+                            if ids.contains(&session.project_id) {
+                                session.workspace.clone_from(&path);
+                            }
+                        }
+                    }
+                }
+                Ok(Response::Sessions(sessions))
+            }
             Request::Sessions => {
                 let store =
                     orbit_store::store::Store::open(connection_options.database.clone()).await?;
