@@ -18,7 +18,10 @@ members = [
     "crates/orbit-tools",
     "crates/orbit-store",
 ]
-exclude = ["vendor/ratex-unicode-font"]
+exclude = ["vendor/ratex-unicode-font", "vendor/gpui-kit"]
+
+[patch."https://github.com/longbridge/gpui-kit"]
+gpui-base = { path = "vendor/gpui-kit/crates/base" }
 
 [patch.crates-io]
 ratex-unicode-font = { path = "vendor/ratex-unicode-font" }

@@ -120,6 +120,7 @@ fn main() -> anyhow::Result<()> {
                     json!({"type":"sessions","value":[
                         {"id":"demo","workspace":workspace,"project_id":"fixture","model":model,"title":"请检查当前项目结构，读取 Cargo.toml 和完整的依赖关系并给出建议","updated_at":3},
                         {"id":"navigation","workspace":workspace,"project_id":"fixture","model":model,"title":"请直接使用 read_file 读取 /tmp\n/orbit-e2e/README.md\n并继续检查","updated_at":2},
+                        {"id":"unavailable","workspace":workspace,"project_id":"fixture","model":model,"title":"验证打开失败的会话","updated_at":1},
                         {"id":"notes","workspace":"/tmp/orbit-gui-notes","project_id":"notes","model":model,"title":"整理开发笔记","updated_at":1}
                     ]})
                 } else {
@@ -154,6 +155,14 @@ fn main() -> anyhow::Result<()> {
                 json!({"type":"error","value":"session belongs to workspace /missing/original"})
             }
             "open" => {
+                if request["resume"] == "unavailable" {
+                    let response = json!({"type":"error","value":"测试会话暂时无法打开，请重试。"});
+                    let bytes = serde_json::to_vec(&response)?;
+                    output.write_all(&(bytes.len() as u32).to_be_bytes())?;
+                    output.write_all(&bytes)?;
+                    output.flush()?;
+                    continue;
+                }
                 count += 1;
                 session = request["resume"]
                     .as_str()
@@ -251,6 +260,9 @@ fn main() -> anyhow::Result<()> {
                     }
                     if prompt == "rendering" {
                         pending = [json!({"Agent":{"Model":{"TextDelta":"你目前遇到的**“高位无法复位”和“进位不正常”**，需要先检查输入。\n\n使能计数（$EN_{in}=1$），满模了，下一拍你该加一。\n\n**使能计数（$EN_{in}=1$）**，观察输出。\n\n行内公式 $\\frac{a+b}{c}$ 和 $x_i^2$ 应与正文自然对齐。\n\n`**原样保留**` 与 **正常加粗**。"}}})].into();
+                    }
+                    if prompt == "selection" {
+                        pending = [json!({"Agent":{"Model":{"TextDelta":"### 3. `bner0` 指令\n\n普通文字 `inline code` 与**加粗文字**连续选中。\n\n1. 混合 `code` 的列表项\n2. 下一项\n\n公式 $EN_{in}=1$ 和后面的文字。"}}})].into();
                     }
                     if prompt == "table" {
                         pending =
