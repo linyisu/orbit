@@ -87,11 +87,18 @@ const ENTRIES: &[Entry] = &[
         Action::Workspace(Command::Changes)
     ),
     entry!(
+        "file",
+        "文件…",
+        "浏览、读取和编辑工作区文件",
+        File,
+        Action::Workspace(Command::File)
+    ),
+    entry!(
         "diff",
         "查看差异",
         "检查工作区的代码变更",
         GitBranch,
-        Action::Argument
+        Action::Workspace(Command::Diff)
     ),
     entry!("memory", "记忆", "查看项目记忆", BookOpen, Action::Argument),
     entry!(
@@ -127,7 +134,7 @@ const ENTRIES: &[Entry] = &[
         "撤销文件修改",
         "选择要撤销修改的文件",
         File,
-        Action::Argument
+        Action::Workspace(Command::Undo)
     ),
     entry!(
         "mode",
@@ -573,6 +580,7 @@ mod tests {
     fn filters_by_command_name_and_localized_purpose() {
         assert_eq!(matches("/MCP")[0].name, "mcp");
         assert_eq!(matches("/额度")[0].name, "usage");
+        assert_eq!(matches("/编辑")[0].name, "file");
         assert!(matches("/not-a-command").is_empty());
     }
 }

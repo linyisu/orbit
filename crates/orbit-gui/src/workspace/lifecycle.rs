@@ -23,10 +23,98 @@ pub(crate) enum WorkspaceEvent {
     Changed,
     DraftChanged,
     Catalog(Vec<SessionEntry>),
+    SessionDeleted { id: String, options: Box<Options> },
 }
 impl EventEmitter<WorkspaceEvent> for Workspace {}
 
 impl Workspace {
+    pub(super) fn show_files(
+        &mut self,
+        path: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(info) = &self.info else { return };
+        let session = info.id.clone();
+        let workspace = info.workspace.clone();
+        if !self
+            .files
+            .as_ref()
+            .is_some_and(|files| files.read(cx).belongs_to(&session, &workspace))
+        {
+            if let Some(previous) = self.files.take()
+                && previous.read(cx).has_unsaved_changes()
+            {
+                self.file_drafts.push(previous);
+            }
+            if let Some(index) = self
+                .file_drafts
+                .iter()
+                .position(|files| files.read(cx).belongs_to_workspace(&workspace))
+            {
+                let files = self.file_drafts.remove(index);
+                files.update(cx, |files, cx| files.bind_session(session, cx));
+                self.files = Some(files);
+            } else {
+                let owner = cx.weak_entity();
+                self.files =
+                    Some(cx.new(|cx| files::Files::new(owner, session, workspace, window, cx)));
+            }
+        }
+        self.page = MainPage::Files;
+        if let Some(files) = &self.files {
+            files.update(cx, |files, cx| {
+                if let Some(path) = path {
+                    files.open(path, window, cx);
+                }
+                files.focus(window, cx);
+            });
+        }
+        cx.notify();
+    }
+
+    pub(super) fn close_files(&mut self, cx: &mut Context<Self>) {
+        self.page = MainPage::Conversation;
+        cx.notify();
+    }
+
+    pub(super) fn show_review(
+        &mut self,
+        path: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(info) = &self.info else { return };
+        let session = info.id.clone();
+        let workspace = info.workspace.clone();
+        if !self
+            .review
+            .as_ref()
+            .is_some_and(|review| review.read(cx).belongs_to(&session, &workspace))
+        {
+            let owner = cx.weak_entity();
+            self.review =
+                Some(cx.new(|cx| review::Review::new(owner, session, workspace, window, cx)));
+        }
+        self.page = MainPage::Review;
+        if let Some(review) = &self.review {
+            review.update(cx, |review, cx| review.activate(path, cx));
+        }
+        cx.notify();
+    }
+
+    pub(super) fn show_checkpoints(
+        &mut self,
+        path: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.show_review(None, window, cx);
+        if let Some(review) = &self.review {
+            review.update(cx, |review, cx| review.activate_checkpoint(path, cx));
+        }
+    }
+
     pub(crate) fn saved(&self, cx: &App) -> crate::workbench::storage::SavedTask {
         let mut options = self.options.clone();
         if let Some(info) = &self.info {
@@ -102,6 +190,33 @@ impl Workspace {
     }
     pub(crate) fn key(&self) -> &str {
         &self.key
+    }
+    pub(crate) fn files_need_attention(&self, cx: &App) -> bool {
+        self.files
+            .iter()
+            .chain(self.file_drafts.iter())
+            .any(|files| files.read(cx).has_unsaved_changes())
+    }
+    pub(crate) fn files_saving(&self, cx: &App) -> bool {
+        self.files
+            .iter()
+            .chain(self.file_drafts.iter())
+            .any(|files| files.read(cx).is_saving())
+    }
+    pub(crate) fn discard_file_edits(&mut self, cx: &mut Context<Self>) {
+        self.files = None;
+        self.file_drafts.clear();
+        if self.page == MainPage::Files {
+            self.page = MainPage::Conversation;
+        }
+        cx.notify();
+    }
+    pub(crate) fn focus_file_edits(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(files) = self.files.clone() {
+            self.page = MainPage::Files;
+            files.update(cx, |files, cx| files.focus(window, cx));
+            cx.notify();
+        }
     }
     pub(crate) fn can_resume(&self, id: &str, options: &Options) -> bool {
         (self.info.as_ref().is_some_and(|info| info.id == id)
@@ -283,7 +398,7 @@ impl Workspace {
         self.search_sessions(window, cx);
     }
     pub(crate) fn focus_composer(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.tasks_open = false;
+        self.page = MainPage::Conversation;
         self.input.update(cx, |input, cx| input.focus(window, cx));
         cx.notify();
     }
@@ -335,7 +450,7 @@ impl Workspace {
             self.tasks =
                 Some(cx.new(|cx| tasks::Tasks::new(owner, session, workspace, window, cx)));
         }
-        self.tasks_open = true;
+        self.page = MainPage::Tasks;
         self.panel = None;
         self.inspector = None;
         if create {

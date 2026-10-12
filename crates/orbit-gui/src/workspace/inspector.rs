@@ -287,27 +287,35 @@ impl Workspace {
             })
             .children(self.execution.files().iter().map(|path| {
                 let path = path.clone();
-                Button::new(SharedString::from(format!("changed-file:{path}")))
-                    .ghost()
-                    .small()
-                    .w_full()
-                    .child(div().w_full().text_ellipsis().child(path.clone()))
-                    .tooltip(path.clone())
-                    .on_click(cx.listener(move |view, _, _, cx| {
-                        if let Some(info) = &view.info {
-                            view.command(
-                                Command::Request(Request::SessionAction {
-                                    session: info.id.clone(),
-                                    action: orbit_protocol::SessionAction::Inspect {
-                                        section: orbit_protocol::Inspection::Diff {
-                                            path: Some(path.clone()),
-                                        },
-                                    },
-                                }),
-                                cx,
-                            );
-                        }
-                    }))
+                let edit_path = path.clone();
+                h_flex()
+                    .gap_2()
+                    .min_w_0()
+                    .child(
+                        Button::new(SharedString::from(format!("changed-file:{path}")))
+                            .ghost()
+                            .small()
+                            .flex_1()
+                            .min_w_0()
+                            .child(div().w_full().text_ellipsis().child(path.clone()))
+                            .accessibility_label(format!("查看 {path} 的差异"))
+                            .tooltip(path.clone())
+                            .disabled(self.info.is_none())
+                            .on_click(cx.listener(move |view, _, window, cx| {
+                                view.show_review(Some(path.clone()), window, cx);
+                            })),
+                    )
+                    .child(
+                        Button::new(SharedString::from(format!("edit-changed-file:{edit_path}")))
+                            .ghost()
+                            .small()
+                            .label("编辑…")
+                            .disabled(self.info.is_none())
+                            .accessibility_label(format!("编辑 {edit_path}"))
+                            .on_click(cx.listener(move |view, _, window, cx| {
+                                view.show_files(Some(edit_path.clone()), window, cx);
+                            })),
+                    )
             }))
             .child(
                 Button::new("inspect-session-changes")
@@ -330,6 +338,14 @@ impl Workspace {
                     .text_sm()
                     .font_weight(FontWeight::MEDIUM)
                     .child("协作 Agent"),
+            )
+            .child(
+                Button::new("browse-child-agents")
+                    .small()
+                    .label("全部子 Agent…")
+                    .on_click(
+                        cx.listener(|view, _, window, cx| view.open_child_agents(window, cx)),
+                    ),
             )
             .when(self.execution.agents().is_empty(), |view| {
                 view.child(hint("任务委派后，子 Agent 会出现在这里。", cx))

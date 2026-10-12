@@ -1,7 +1,9 @@
 mod actions;
+mod approval;
 pub(crate) use actions::WorkspaceCommand;
 mod connection;
 mod feedback;
+mod files;
 mod inspector;
 mod lifecycle;
 pub(crate) use lifecycle::{WorkspaceEvent, WorkspaceSummary};
@@ -12,9 +14,11 @@ pub(crate) use sidebar::Sidebar;
 mod panel;
 mod questions;
 mod recovery;
+mod review;
 mod settings;
 pub(crate) use settings::SettingsPage;
 mod slash;
+mod subagents;
 mod tasks;
 mod view;
 
@@ -69,6 +73,7 @@ actions!(
 );
 
 pub(crate) fn bind_keys(cx: &mut App) {
+    files::bind_keys(cx);
     cx.bind_keys([
         KeyBinding::new(
             "down",
@@ -132,6 +137,14 @@ struct PendingSend {
     steer: bool,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MainPage {
+    Conversation,
+    Tasks,
+    Files,
+    Review,
+}
+
 pub(crate) struct Workspace {
     key: String,
     visible: bool,
@@ -178,6 +191,9 @@ pub(crate) struct Workspace {
     appearance: Option<Appearance>,
     settings_page: Option<Entity<settings::SettingsPage>>,
     question_form: Option<Entity<questions::QuestionForm>>,
+    side_questions: Option<Entity<questions::SideQuestions>>,
+    question_history: Option<Entity<questions::QuestionHistory>>,
+    child_agents: Option<Entity<subagents::ChildAgents>>,
     command_search: Entity<gpui_kit::component::command::CommandState>,
     command_open: bool,
     arguments: slash::Arguments,
@@ -189,7 +205,10 @@ pub(crate) struct Workspace {
     panel: Option<Entity<panel::Panel>>,
     subagent: Option<(String, Entity<Conversation>)>,
     tasks: Option<Entity<tasks::Tasks>>,
-    tasks_open: bool,
+    page: MainPage,
+    files: Option<Entity<files::Files>>,
+    file_drafts: Vec<Entity<files::Files>>,
+    review: Option<Entity<review::Review>>,
 }
 
 impl Workspace {
@@ -274,6 +293,9 @@ impl Workspace {
             appearance: None,
             settings_page: None,
             question_form: None,
+            side_questions: None,
+            question_history: None,
+            child_agents: None,
             command_search: cx
                 .new(|cx| gpui_kit::component::command::CommandState::new(window, cx)),
             command_open: false,
@@ -286,7 +308,10 @@ impl Workspace {
             panel: None,
             subagent: None,
             tasks: None,
-            tasks_open: false,
+            page: MainPage::Conversation,
+            files: None,
+            file_drafts: Vec::new(),
+            review: None,
         };
         view.input.update(cx, |input, cx| input.focus(window, cx));
         view.connect(window, cx);
@@ -323,6 +348,18 @@ impl Workspace {
     }
 
     fn start_connection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(panel) = &self.child_agents {
+            panel.update(cx, |panel, cx| panel.disconnected(cx));
+        }
+        if let Some(form) = &self.question_form {
+            form.update(cx, |form, cx| form.disconnected(cx));
+        }
+        if let Some(files) = &self.files {
+            files.update(cx, |files, cx| files.disconnected(cx));
+        }
+        if let Some(review) = &self.review {
+            review.update(cx, |review, cx| review.disconnected(cx));
+        }
         self.clear_connection_challenges(window, cx);
         if let Some(tasks) = &self.tasks {
             tasks.update(cx, |tasks, cx| tasks.disconnected(window, cx));
@@ -392,11 +429,14 @@ impl Workspace {
                     let owner = cx.weak_entity();
                     let title = format!("子 Agent · {agent}");
                     if self.visible {
+                        let width = (window.rem_size() * 48.).min(
+                            (window.viewport_size().width - window.rem_size() * 2.).max(px(0.)),
+                        );
                         window.open_sheet(cx, move |sheet, _, _| {
                             let owner = owner.clone();
                             sheet
                                 .title(title.clone())
-                                .size(rems(48.))
+                                .size(width)
                                 .child(div().h_full().child(conversation.clone()))
                                 .on_close(move |_, _, cx| {
                                     let _ = owner.update(cx, |view, cx| {
@@ -433,10 +473,12 @@ impl Workspace {
                 result,
             } => self.argument_completions(&session, &input, result, window, cx),
             Event::Challenge(challenge) => self.connection_challenge(challenge, window, cx),
-            Event::File { path, bytes } => match String::from_utf8(bytes) {
-                Ok(text) => self.show_report(path, format!("````\n{text}\n````"), window, cx),
-                Err(_) => self.report_error("这个文件是二进制文件，请选择文本文件。", cx),
-            },
+            Event::File { path, bytes } => {
+                self.show_files(None, window, cx);
+                if let Some(files) = &self.files {
+                    files.update(cx, |files, cx| files.receive_file(path, bytes, window, cx));
+                }
+            }
             Event::Usage { session, result } => {
                 if self.info.as_ref().is_some_and(|info| {
                     info.id == session
@@ -451,6 +493,18 @@ impl Workspace {
                 }
             }
             Event::Disconnected(error) => {
+                if let Some(panel) = &self.child_agents {
+                    panel.update(cx, |panel, cx| panel.disconnected(cx));
+                }
+                if let Some(form) = &self.question_form {
+                    form.update(cx, |form, cx| form.disconnected(cx));
+                }
+                if let Some(files) = &self.files {
+                    files.update(cx, |files, cx| files.disconnected(cx));
+                }
+                if let Some(review) = &self.review {
+                    review.update(cx, |review, cx| review.disconnected(cx));
+                }
                 self.clear_connection_challenges(window, cx);
                 if let Some(tasks) = &self.tasks {
                     tasks.update(cx, |tasks, cx| tasks.disconnected(window, cx));
@@ -519,16 +573,52 @@ impl Workspace {
     }
 
     fn profile(&mut self, info: SessionInfo, window: &mut Window, cx: &mut Context<Self>) {
+        if self
+            .info
+            .as_ref()
+            .is_some_and(|previous| previous.workspace != info.workspace || previous.id != info.id)
+        {
+            self.question_form = None;
+        }
+        if self.visible
+            && (self.side_questions.is_some()
+                || self.question_history.is_some()
+                || self.child_agents.is_some())
+            && self.info.as_ref().is_some_and(|previous| {
+                previous.workspace != info.workspace || previous.id != info.id
+            })
+        {
+            window.close_sheet(cx);
+        }
         if let Some(previous) = &self.info {
             if previous.workspace != info.workspace {
                 self.tasks = None;
-                self.tasks_open = false;
-            } else if previous.id != info.id
-                && let Some(tasks) = &self.tasks
-            {
-                tasks.update(cx, |tasks, cx| {
-                    tasks.bind_session(info.id.clone(), window, cx)
-                });
+                self.page = MainPage::Conversation;
+                if let Some(files) = self.files.take()
+                    && files.read(cx).has_unsaved_changes()
+                {
+                    self.file_drafts.push(files);
+                }
+                self.review = None;
+                self.side_questions = None;
+                self.question_history = None;
+                self.child_agents = None;
+            } else if previous.id != info.id {
+                self.side_questions = None;
+                self.question_history = None;
+                self.child_agents = None;
+                if let Some(tasks) = &self.tasks {
+                    tasks.update(cx, |tasks, cx| {
+                        tasks.bind_session(info.id.clone(), window, cx)
+                    });
+                }
+                if let Some(files) = &self.files {
+                    files.update(cx, |files, cx| files.bind_session(info.id.clone(), cx));
+                }
+                self.review = None;
+                if self.page == MainPage::Review {
+                    self.page = MainPage::Conversation;
+                }
             }
         }
         if let Some(entry) = self
@@ -571,7 +661,25 @@ impl Workspace {
                 self.error = None;
                 self.approvals.clear();
                 self.user_inputs.clear();
-                self.question_form = None;
+                if self.visible
+                    && (self.side_questions.is_some() || self.question_history.is_some())
+                {
+                    window.close_sheet(cx);
+                }
+                self.side_questions = None;
+                self.question_history = None;
+                if let (Some(panel), Some(info)) = (&self.child_agents, &self.info) {
+                    let retained = panel.update(cx, |panel, cx| {
+                        let retained = panel.rebind(&info.id, &info.workspace, &self.options, cx);
+                        if retained {
+                            panel.reconnected(cx);
+                        }
+                        retained
+                    });
+                    if !retained {
+                        self.child_agents = None;
+                    }
+                }
                 self.planning = Default::default();
                 self.context_used = 0;
                 self.panel = None;
@@ -660,50 +768,10 @@ impl Workspace {
             }
             Response::Usage(snapshot) => self.usage.update(cx, |usage, cx| usage.set(snapshot, cx)),
             Response::Report(report) => self.show_report(report.title, report.text, window, cx),
-            Response::File(content) => self.show_report(
-                "文件".into(),
-                format!("````text\n{content}\n````"),
-                window,
-                cx,
-            ),
+            Response::File(_) => self.report_error("文件响应缺少路径，请从文件页重新打开。", cx),
             Response::Questions(questions) => self.show_questions(questions, window, cx),
             Response::Plugins(catalog) => self.show_plugins(catalog, window, cx),
-            Response::UserInputs(history) => {
-                let text = history
-                    .records
-                    .iter()
-                    .map(|record| {
-                        let questions = record
-                            .form
-                            .questions
-                            .iter()
-                            .map(|question| question.prompt.as_str())
-                            .collect::<Vec<_>>()
-                            .join("\n\n");
-                        let answers = record
-                            .answers
-                            .iter()
-                            .map(|answer| format!("{} {}", answer.selected.join(", "), answer.text))
-                            .collect::<Vec<_>>()
-                            .join("\n\n");
-                        format!(
-                            "## {} · {:?}\n\n{questions}\n\n{answers}",
-                            record.id, record.status
-                        )
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n\n---\n\n");
-                self.show_report(
-                    "Agent 问答历史".into(),
-                    if text.is_empty() {
-                        "暂无问答记录".into()
-                    } else {
-                        text
-                    },
-                    window,
-                    cx,
-                );
-            }
+            Response::UserInputs(_) => self.open_question_history(window, cx),
             Response::Subagent(page) => {
                 let conversation = cx.new(Conversation::new);
                 conversation.update(cx, |view, cx| {
@@ -711,10 +779,12 @@ impl Workspace {
                         view.apply(update, cx);
                     }
                 });
+                let width = (window.rem_size() * 48.)
+                    .min((window.viewport_size().width - window.rem_size() * 2.).max(px(0.)));
                 window.open_sheet(cx, move |sheet, _, _| {
                     sheet
                         .title("子 Agent")
-                        .size(rems(48.))
+                        .size(width)
                         .child(div().h_full().child(conversation.clone()))
                 });
             }
@@ -743,7 +813,7 @@ impl Workspace {
     }
 
     fn send(&mut self, _: &SendMessage, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.visible || self.tasks_open {
+        if !self.visible || self.page != MainPage::Conversation {
             return;
         }
         if self.command_open {
@@ -938,63 +1008,6 @@ impl Workspace {
         }
         cx.emit(WorkspaceEvent::DraftChanged);
         cx.notify();
-    }
-
-    fn approval(&self, approval: &Approval, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(info) = &self.info else {
-            return;
-        };
-        let session = info.id.clone();
-        let id = approval.id;
-        let text: SharedString = serde_json::to_string_pretty(&approval.preview)
-            .unwrap_or_default()
-            .into();
-        let weak = cx.weak_entity();
-        window.open_dialog(cx, move |dialog, _, _| {
-            let buttons = [
-                (false, false, "拒绝"),
-                (true, false, "允许一次"),
-                (true, true, "记住并允许"),
-            ]
-            .into_iter()
-            .map(|(allow, remember, label)| {
-                let weak = weak.clone();
-                let session = session.clone();
-                Button::new(if remember {
-                    "remember"
-                } else if allow {
-                    "allow"
-                } else {
-                    "deny"
-                })
-                .label(label)
-                .on_click(move |_, window, cx| {
-                    let accepted = weak
-                        .update(cx, |view, cx| {
-                            view.command(
-                                Command::Request(Request::Approve {
-                                    session: session.clone(),
-                                    approval: id,
-                                    allow,
-                                    remember,
-                                }),
-                                cx,
-                            )
-                        })
-                        .unwrap_or(false);
-                    if accepted {
-                        window.close_dialog(cx);
-                    }
-                })
-            });
-            dialog
-                .title("审批操作")
-                .child(TextView::markdown(
-                    "approval-preview",
-                    format!("```json\n{text}\n```"),
-                ))
-                .footer(h_flex().gap_2().justify_end().children(buttons))
-        });
     }
 
     fn show_usage(&self, window: &mut Window, cx: &mut Context<Self>) {

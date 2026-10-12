@@ -1,12 +1,43 @@
 //! Offline protocol peer for integration and native-window checks.
 //! Enabled explicitly with `test-support`; never calls a model.
+mod files;
+mod review;
+mod side_questions;
+mod subagents;
+mod user_input_history;
 use base64::Engine;
+use files::{execute as fixture_files, read_file as fixture_read_file};
 use serde_json::{Value, json};
 use std::{
     collections::{HashMap, VecDeque},
     io::{Read, Write},
     time::{SystemTime, UNIX_EPOCH},
 };
+
+#[derive(Default, serde::Serialize, serde::Deserialize)]
+struct SessionCatalog {
+    titles: HashMap<String, String>,
+    deleted: std::collections::HashSet<String>,
+}
+
+fn catalog_response(mut response: Value, catalog: &SessionCatalog) -> Value {
+    if let Some(sessions) = response["value"].as_array_mut() {
+        sessions.retain(|session| {
+            !catalog
+                .deleted
+                .contains(session["id"].as_str().unwrap_or_default())
+        });
+        for session in sessions {
+            if let Some(title) = catalog
+                .titles
+                .get(session["id"].as_str().unwrap_or_default())
+            {
+                session["title"] = title.clone().into();
+            }
+        }
+    }
+    response
+}
 
 fn main() -> anyhow::Result<()> {
     if std::env::args().any(|argument| argument == "--help") {
@@ -37,9 +68,9 @@ fn main() -> anyhow::Result<()> {
     let mut count = 0;
     let mut mode = "auto".to_string();
     let mut planning = json!({"generation":0,"mode":"build","plan":null});
-    let mut user_inputs = json!([]);
-    let mut side_question = String::new();
-    let mut agent_updates = vec![json!({"Agent":{"Model":{"TextDelta":"子任务初始回答"}}})];
+    let mut user_inputs = user_input_history::FixtureUserInputs::default();
+    let mut side_questions: HashMap<String, side_questions::FixtureQuestions> = HashMap::new();
+    let mut child_agents = subagents::FixtureSubagents::default();
     loop {
         let mut header = [0; 4];
         if input.read_exact(&mut header).is_err() {
@@ -70,7 +101,9 @@ fn main() -> anyhow::Result<()> {
                 .create(true)
                 .append(true)
                 .open(std::path::Path::new(&workspace).join(".fixture-requests"))?;
-            writeln!(log, "{request}")?;
+            let mut line = serde_json::to_vec(&request)?;
+            line.push(b'\n');
+            log.write_all(&line)?;
         }
         if recovery
             && request["method"] == "poll"
@@ -92,8 +125,16 @@ fn main() -> anyhow::Result<()> {
         let tab_layout = std::path::Path::new(&workspace)
             .join(".fixture-tabs")
             .exists();
+        let catalog_path = std::path::Path::new(&workspace).join(".fixture-sessions.json");
+        let mut catalog: SessionCatalog = std::fs::read(&catalog_path)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap_or_default();
         let title = |session: &str| {
-            if tab_layout {
+            if let Some(title) = catalog.titles.get(session) {
+                return title.clone();
+            }
+            (if tab_layout {
                 match session {
                     "demo" => "请检查当前项目结构，读取 Cargo.toml 和完整的依赖关系并给出建议",
                     "navigation" => {
@@ -105,7 +146,8 @@ fn main() -> anyhow::Result<()> {
                 "梳理项目结构"
             } else {
                 "新会话"
-            }
+            })
+            .to_owned()
         };
         let profile = |session: &str, model: &str, mode: &str| json!({"id":session,"persisted":session=="demo","title":title(session),"workspace":workspace,"model":model,"models":if session == "models" { vec!["acm::shared", "acm::qwen", "antigravity-account::claude-opus", "antigravity-account::gemini-flash", "chatgpt-account::astra", "deepseek-account::shared", "deepseek-account::deepseek-flash"] } else { vec!["fixture::local","fixture::other","fixture::gemini-flash","fixture::claude-opus"] },"mode":mode,"supports_vision":true,"reasoning_effort":null,"reasoning_efforts":[],"context_tokens":128000,"input_context_tokens":120000,"max_output_tokens":8000});
         let response = match request["method"].as_str().unwrap_or_default() {
@@ -143,7 +185,7 @@ fn main() -> anyhow::Result<()> {
                 } else {
                     catalog_root.trim()
                 };
-                if std::path::Path::new(&workspace)
+                let response = if std::path::Path::new(&workspace)
                     .join(".fixture-sidebar")
                     .exists()
                 {
@@ -166,10 +208,41 @@ fn main() -> anyhow::Result<()> {
                         {"id":"navigation","workspace":saved_path,"project_id":"fixture","model":model,"title":"调整项目导航","updated_at":2},
                         {"id":"notes","workspace":"/tmp/orbit-gui-notes","project_id":"notes","model":model,"title":"整理开发笔记","updated_at":1}
                     ]})
+                };
+                catalog_response(response, &catalog)
+            }
+            "sessions" => catalog_response(
+                json!({"type":"sessions","value":[{"id":"demo","workspace":workspace,"project_id":"fixture","model":model,"reasoning_effort":null,"title":"梳理项目结构","updated_at":0}]}),
+                &catalog,
+            ),
+            "admin" if request["action"]["action"] == "rename_session" => {
+                let id = request["action"]["id"].as_str().unwrap_or_default();
+                let title = request["action"]["title"].as_str().unwrap_or_default();
+                if title.trim().is_empty() || title.chars().count() > 120 {
+                    json!({"type":"error","value":"会话标题应为 1–120 个字符"})
+                } else if catalog.deleted.contains(id) {
+                    json!({"type":"error","value":"会话已删除"})
+                } else {
+                    catalog.titles.insert(id.to_owned(), title.to_owned());
+                    std::fs::write(&catalog_path, serde_json::to_vec(&catalog)?)?;
+                    json!({"type":"report","value":{"title":"会话标题","text":title}})
                 }
             }
-            "sessions" => {
-                json!({"type":"sessions","value":[{"id":"demo","workspace":workspace,"project_id":"fixture","model":model,"reasoning_effort":null,"title":"梳理项目结构","updated_at":0}]})
+            "admin" if request["action"]["action"] == "delete_session" => {
+                let id = request["action"]["id"].as_str().unwrap_or_default();
+                if (id == session && (!pending.is_empty() || !approvals.is_empty()))
+                    || side_questions
+                        .get(id)
+                        .is_some_and(|questions| questions.running())
+                {
+                    json!({"type":"error","value":"会话正在运行，无法删除"})
+                } else {
+                    catalog.deleted.insert(id.to_owned());
+                    catalog.titles.remove(id);
+                    history.remove(id);
+                    std::fs::write(&catalog_path, serde_json::to_vec(&catalog)?)?;
+                    json!({"type":"report","value":{"title":"工作区管理","text":"会话及私有文件已删除。"}})
+                }
             }
             "admin" if request["action"]["action"] == "link_project" => {
                 if relocation.as_deref() == Some("reject") {
@@ -198,6 +271,8 @@ fn main() -> anyhow::Result<()> {
                     .as_str()
                     .map(str::to_owned)
                     .unwrap_or_else(|| format!("draft-{count}"));
+                user_inputs.prepare(&workspace, &session);
+                child_agents.prepare(&workspace, &session);
                 history.entry(session.clone()).or_default();
                 if session == "demo"
                     && std::path::Path::new(&workspace)
@@ -244,7 +319,7 @@ fn main() -> anyhow::Result<()> {
                 } else {
                     events.len()
                 };
-                json!({"type":"page","value":{"next":next,"more":next < events.len(),"busy":!pending.is_empty()||!approvals.is_empty(),"model":model,"updates":&events[after.min(events.len())..next],"approvals":approvals,"planning":planning,"user_inputs":user_inputs}})
+                json!({"type":"page","value":{"next":next,"more":next < events.len(),"busy":!pending.is_empty()||!approvals.is_empty(),"model":model,"updates":&events[after.min(events.len())..next],"approvals":approvals,"planning":planning,"user_inputs":user_inputs.live(&session)}})
             }
             "usage" => {
                 let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
@@ -267,14 +342,7 @@ fn main() -> anyhow::Result<()> {
             "start" => {
                 let prompt = request["prompt"].as_str().unwrap_or_default();
                 if prompt == "question" || prompt == "questions" {
-                    user_inputs = json!([{"id":"question-1","call_id":"question-call","source":null,"status":"pending","answers":[],"form":{"questions":[{"id":"choice","title":"实现方式","prompt":"选择实现方式","kind":"single","options":[{"id":"small","label":"小步迭代"},{"id":"full","label":"完整迁移"}],"allow_custom":true,"required":true}]}}]);
-                }
-                if prompt == "questions" {
-                    user_inputs[0]["form"]["questions"].as_array_mut().unwrap().push(json!({
-                        "id":"details","title":"补充要求","prompt":"还需要哪些内容？可选择多项，也可以补充说明。","kind":"multiple",
-                        "options":[{"id":"docs","label":"说明文档","description":"记录使用方法与设计决定"},{"id":"tests","label":"回归验证"}],
-                        "allow_custom":true,"required":true
-                    }));
+                    user_inputs.start(&workspace, &session, prompt == "questions");
                 }
                 if prompt.trim() == "fail" && reject {
                     reject = false;
@@ -372,19 +440,12 @@ fn main() -> anyhow::Result<()> {
                 }
                 json!({"type":"ok"})
             }
-            "answer_user_input" => {
-                user_inputs[0]["status"] = json!(if request["answers"].is_null() {
-                    "declined"
-                } else {
-                    "answered"
-                });
-                user_inputs[0]["answers"] = if request["answers"].is_null() {
-                    json!([])
-                } else {
-                    request["answers"].clone()
-                };
-                json!({"type":"ok"})
-            }
+            "answer_user_input" => user_inputs.answer(&request),
+            "user_input_history" => user_inputs.history(
+                &workspace,
+                request["session"].as_str().unwrap_or_default(),
+                request["before"].as_i64(),
+            ),
             "read_file" if request["path"] == "missing.png" => {
                 json!({"type":"error","value":"图片不存在"})
             }
@@ -392,26 +453,23 @@ fn main() -> anyhow::Result<()> {
                 let bytes = std::fs::read(std::path::Path::new(&workspace).join("preview.png"))?;
                 json!({"type":"file","value":base64::engine::general_purpose::STANDARD.encode(bytes)})
             }
-            "read_file" => json!({"type":"file","value":"aGVsbG8gZ3VpCg=="}),
-            "read_subagent" => {
-                let after = request["after"].as_u64().unwrap_or_default() as usize;
-                json!({"type":"subagent","value":{"next":agent_updates.len(),"more":false,"busy":false,"model":model,"updates":&agent_updates[after.min(agent_updates.len())..],"approvals":[]}})
+            "read_file" => {
+                fixture_read_file(&workspace, request["path"].as_str().unwrap_or_default())
             }
-            "send_subagent" => {
-                agent_updates.push(json!({"Agent":{"Model":{"TextDelta":request["message"]}}}));
-                json!({"type":"ok"})
-            }
+            "files" => fixture_files(&workspace, &request),
+            "review" => review::execute(&workspace, &request),
+            "subagents" => child_agents.execute(&workspace, &request),
+            "read_subagent" => child_agents.read(&workspace, &request),
+            "send_subagent" => child_agents.send_legacy(&workspace, &request),
             "steer" => {
                 history.entry(session.clone()).or_default().push(json!({"Agent":{"InputReceived":{"message_id":8,"content":request["message"]}}}));
                 json!({"type":"input_queued","value":{"message_id":8}})
             }
-            "ask" => {
-                side_question = request["question"].as_str().unwrap_or_default().to_string();
-                json!({"type":"questions","value":{"revision":1,"selected":0,"running":true,"records":[{"thread_id":"side-1","model":model,"question":side_question,"answer":"","status":"running","error":null}]}})
-            }
-            "read_questions" => {
-                let question_revision = 2;
-                json!({"type":"questions","value":{"revision":question_revision,"selected":0,"running":false,"records":if request["after"].as_u64() == Some(question_revision) { Value::Null } else { json!([{"thread_id":"side-1","model":model,"question":side_question,"answer":"旁路回答已完成","status":"completed","error":null}]) }}})
+            "ask" | "open_questions" | "read_questions" | "cancel_question" | "close_questions" => {
+                side_questions
+                    .entry(request["session"].as_str().unwrap_or(&session).to_owned())
+                    .or_default()
+                    .execute(request["method"].as_str().unwrap(), &request, &model)
             }
             "session_action" => {
                 json!({"type":"report","value":{"title":"文件变更","text":"## 工作区变更\n\n| 文件 | 状态 |\n| --- | --- |\n| src/workspace.rs | 已修改 |\n\n```diff\n- old_layout()\n+ workspace_layout()\n```"}})
@@ -427,31 +485,58 @@ fn main() -> anyhow::Result<()> {
                 }
             }
             "resources" => {
-                let action = &request["action"];
-                if let Some(save) = action.get("SaveSkill") {
-                    fixture_skills.insert(
-                        save["name"].as_str().unwrap_or_default().into(),
-                        save["content"].as_str().unwrap_or_default().into(),
-                    );
-                }
-                if let Some(memory) = action.get("Memory") {
-                    if memory["action"] == "add" {
-                        let id = fixture_memories.len() + 1;
-                        fixture_memories.push(json!({"id":id,"session_id":session,"category":"fact","title":"事实","content":memory["content"],"active":true,"created_at":0,"updated_at":0}));
-                    }
-                    if memory["action"] == "forget" {
-                        fixture_memories.retain(|m| m["id"] != memory["id"]);
-                    }
-                }
-                let snapshot = if let Some(read) = action.get("ReadSkill") {
-                    let name = read["name"].as_str().unwrap_or_default();
-                    json!({"Skill":{"name":name,"content":fixture_skills.get(name).cloned().unwrap_or_default(),"editable":true}})
-                } else if action == "Memories" || action.get("Memory").is_some() {
-                    json!({"Memories":fixture_memories})
+                if request["expected_workspace"]
+                    .as_str()
+                    .is_some_and(|expected| expected != workspace.as_str())
+                    || request["session"].as_str() != Some(session.as_str())
+                {
+                    json!({"type":"error","value":"工作区已切换，请重新打开当前项目的设置后重试"})
                 } else {
-                    json!({"Skills":fixture_skills.keys().map(|name|json!({"name":name,"title":name,"description":"项目技能","source":"项目技能","editable":true})).collect::<Vec<_>>()})
-                };
-                json!({"type":"resources","value":snapshot})
+                    let action = &request["action"];
+                    if let Some(save) = action.get("SaveSkill") {
+                        fixture_skills.insert(
+                            save["name"].as_str().unwrap_or_default().into(),
+                            save["content"].as_str().unwrap_or_default().into(),
+                        );
+                    }
+                    if let Some(memory) = action.get("Memory") {
+                        if memory["action"] == "add" {
+                            let id = fixture_memories.len() + 1;
+                            let category = memory["category"].as_str().unwrap_or("fact");
+                            let title = match category {
+                                "constraint" => "约束",
+                                "decision" => "决策",
+                                "preference" => "偏好",
+                                _ => "事实",
+                            };
+                            fixture_memories.push(json!({"id":id,"session_id":session,"category":category,"title":title,"content":memory["content"],"active":true,"created_at":0,"updated_at":0}));
+                        }
+                        if memory["action"] == "forget" {
+                            fixture_memories.retain(|m| m["id"] != memory["id"]);
+                        }
+                    }
+                    let snapshot = if let Some(read) = action.get("ReadSkill") {
+                        let name = read["name"].as_str().unwrap_or_default();
+                        json!({"Skill":{"name":name,"content":fixture_skills.get(name).cloned().unwrap_or_default(),"editable":true}})
+                    } else if action == "Memories" || action.get("Memory").is_some() {
+                        json!({"Memories":fixture_memories})
+                    } else if action == "Mcp" {
+                        json!(orbit_protocol::resources::Snapshot::Mcp(vec![
+                            orbit_protocol::resources::McpServer {
+                                name: "fixture".into(),
+                                connected: true,
+                                detail: "已连接".into(),
+                                tools: vec![orbit_protocol::resources::McpTool {
+                                    name: "mcp__fixture__echo".into(),
+                                    description: "Echo input".into(),
+                                }],
+                            }
+                        ]))
+                    } else {
+                        json!({"Skills":fixture_skills.keys().map(|name|json!({"name":name,"title":name,"description":"项目技能","source":"项目技能","editable":true})).collect::<Vec<_>>()})
+                    };
+                    json!({"type":"resources","value":snapshot})
+                }
             }
             "plugins" => plugin_catalog(&workspace, &request["action"])?,
             _ => json!({"type":"ok"}),

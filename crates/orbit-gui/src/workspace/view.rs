@@ -610,7 +610,7 @@ impl Render for Workspace {
         } else {
             body.into_any_element()
         };
-        let body = if self.tasks_open {
+        let body = if self.page == MainPage::Tasks {
             v_flex()
                 .size_full()
                 .min_h_0()
@@ -628,7 +628,7 @@ impl Render for Workspace {
                                 .icon(IconName::ArrowLeft)
                                 .accessibility_label("返回会话")
                                 .on_click(cx.listener(|view, _, window, cx| {
-                                    view.tasks_open = false;
+                                    view.page = MainPage::Conversation;
                                     view.input.update(cx, |input, cx| input.focus(window, cx));
                                     cx.notify();
                                 })),
@@ -653,6 +653,19 @@ impl Render for Workspace {
                 .into_any_element()
         } else {
             body
+        };
+        let body = match self.page {
+            MainPage::Files => div()
+                .size_full()
+                .min_h_0()
+                .children(self.files.clone())
+                .into_any_element(),
+            MainPage::Review => div()
+                .size_full()
+                .min_h_0()
+                .children(self.review.clone())
+                .into_any_element(),
+            _ => body,
         };
         v_flex()
             .size_full()
@@ -690,6 +703,7 @@ impl Render for Workspace {
                 view.sidebar.update(cx, |sidebar, cx| sidebar.toggle(cx));
             }))
             .on_action(cx.listener(|view, _: &FocusComposer, window, cx| {
+                view.page = MainPage::Conversation;
                 view.input.update(cx, |input, cx| input.focus(window, cx))
             }))
             .child(div().flex_1().min_h_0().child(body))

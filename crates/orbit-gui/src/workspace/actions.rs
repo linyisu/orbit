@@ -160,11 +160,22 @@ impl Workspace {
             self.show_project_tasks(matches!(action, WorkspaceCommand::AddTask), window, cx);
             return;
         }
-        self.tasks_open = false;
+        self.page = MainPage::Conversation;
+
+        if matches!(action, WorkspaceCommand::File) {
+            self.show_files(None, window, cx);
+            return;
+        }
+        if matches!(action, WorkspaceCommand::Undo) {
+            self.show_checkpoints(None, window, cx);
+            return;
+        }
+        if matches!(action, WorkspaceCommand::Changes | WorkspaceCommand::Diff) {
+            self.show_review(None, window, cx);
+            return;
+        }
 
         let inspection = match action {
-            WorkspaceCommand::Changes => Some(Inspection::Changes),
-            WorkspaceCommand::Diff => Some(Inspection::Diff { path: None }),
             WorkspaceCommand::Status => Some(Inspection::Status),
             WorkspaceCommand::Context => Some(Inspection::Context),
             WorkspaceCommand::Skills => Some(Inspection::Skills),
@@ -219,83 +230,12 @@ impl Workspace {
                 window,
                 cx,
             ),
-            WorkspaceCommand::DeleteSession => self.prompt(
-                ("删除会话", "输入要删除的会话 ID。删除后无法恢复。"),
-                "",
-                "删除",
-                |id| {
-                    Ok(Request::Admin {
-                        action: orbit_protocol::admin::Action::DeleteSession { id },
-                    })
-                },
-                window,
-                cx,
-            ),
-            WorkspaceCommand::QuestionHistory => {
-                self.command(
-                    Command::Request(Request::UserInputHistory {
-                        session,
-                        before: None,
-                    }),
-                    cx,
-                );
-            }
-            WorkspaceCommand::SideQuestions => {
-                self.command(Command::Request(Request::OpenQuestions { session }), cx);
-            }
-            WorkspaceCommand::CancelQuestion => self.prompt(
-                ("停止旁路提问", "问答编号（从 1 开始）"),
-                "",
-                "停止",
-                move |index| {
-                    Ok(Request::CancelQuestion {
-                        session: session.clone(),
-                        index: index
-                            .parse::<usize>()
-                            .ok()
-                            .and_then(|n| n.checked_sub(1))
-                            .ok_or("请输入有效编号")?,
-                    })
-                },
-                window,
-                cx,
-            ),
-            WorkspaceCommand::FollowQuestion => self.prompt(
-                ("继续旁路提问", "问答编号和问题，例如：1 请解释第二步"),
-                "",
-                "提问",
-                move |value| {
-                    let (index, question) = value.split_once(' ').ok_or("请输入问答编号和问题")?;
-                    Ok(Request::Ask {
-                        session: session.clone(),
-                        question: question.into(),
-                        follow_up: Some(
-                            index
-                                .parse::<usize>()
-                                .ok()
-                                .and_then(|n| n.checked_sub(1))
-                                .ok_or("请输入有效编号")?,
-                        ),
-                    })
-                },
-                window,
-                cx,
-            ),
-            WorkspaceCommand::SendSubagent => self.prompt(
-                ("向子 Agent 发送消息", "Agent ID 和消息"),
-                "",
-                "发送",
-                move |value| {
-                    let (agent, message) = value.split_once(' ').ok_or("请输入 Agent ID 和消息")?;
-                    Ok(Request::SendSubagent {
-                        session: session.clone(),
-                        agent: agent.into(),
-                        message: message.into(),
-                    })
-                },
-                window,
-                cx,
-            ),
+            WorkspaceCommand::DeleteSession => self.delete_session(&session, window, cx),
+            WorkspaceCommand::QuestionHistory => self.open_question_history(window, cx),
+            WorkspaceCommand::SideQuestions
+            | WorkspaceCommand::CancelQuestion
+            | WorkspaceCommand::FollowQuestion => self.open_side_questions(window, cx),
+            WorkspaceCommand::SendSubagent => self.open_child_agents(window, cx),
             WorkspaceCommand::SearchMemory => self.prompt(
                 ("搜索记忆", "关键词"),
                 "",
@@ -374,19 +314,7 @@ impl Workspace {
                     );
                 }
             }
-            WorkspaceCommand::Rename => self.prompt(
-                ("重命名会话", "名称"),
-                &self.title.clone(),
-                "重命名",
-                move |text| {
-                    Ok(Request::SessionAction {
-                        session: session.clone(),
-                        action: SessionAction::Rename { title: text },
-                    })
-                },
-                window,
-                cx,
-            ),
+            WorkspaceCommand::Rename => self.rename_session(&session, window, cx),
             WorkspaceCommand::Directory => self.prompt(
                 ("切换目录", "工作区路径"),
                 &self.location.clone(),
@@ -395,32 +323,6 @@ impl Workspace {
                     Ok(Request::SessionAction {
                         session: session.clone(),
                         action: SessionAction::ChangeDirectory { path },
-                    })
-                },
-                window,
-                cx,
-            ),
-            WorkspaceCommand::File => self.prompt(
-                ("打开文件", "相对工作区或绝对路径"),
-                "",
-                "打开",
-                move |path| {
-                    Ok(Request::ReadFile {
-                        session: session.clone(),
-                        path,
-                    })
-                },
-                window,
-                cx,
-            ),
-            WorkspaceCommand::Undo => self.prompt(
-                ("撤销文件修改", "文件路径（撤销 Orbit 对该文件的修改）"),
-                "",
-                "撤销修改",
-                move |path| {
-                    Ok(Request::Undo {
-                        session: session.clone(),
-                        path: Some(path),
                     })
                 },
                 window,
@@ -474,20 +376,7 @@ impl Workspace {
                 window,
                 cx,
             ),
-            WorkspaceCommand::Subagent => self.prompt(
-                ("子 Agent", "Agent ID"),
-                "",
-                "打开",
-                move |agent| {
-                    Ok(Request::ReadSubagent {
-                        session: session.clone(),
-                        agent,
-                        after: 0,
-                    })
-                },
-                window,
-                cx,
-            ),
+            WorkspaceCommand::Subagent => self.open_child_agents(window, cx),
             _ => {}
         }
     }
@@ -746,9 +635,24 @@ impl Workspace {
             .split_once(char::is_whitespace)
             .unwrap_or((value.trim(), ""));
         let arg = arg.trim();
+        if matches!(name, "/file" | "/diff" | "/changes" | "/undo") {
+            if self.info.is_none() || !self.connected {
+                self.report_error("请先连接工作区，再打开文件或差异", cx);
+                return true;
+            }
+            let path = (!arg.is_empty()).then(|| arg.to_owned());
+            if name == "/file" {
+                self.show_files(path, window, cx);
+            } else if name == "/undo" {
+                self.show_checkpoints(path, window, cx);
+            } else {
+                self.show_review(path, window, cx);
+            }
+            self.input
+                .update(cx, |input, cx| input.set_value("", window, cx));
+            return true;
+        }
         let action = match name {
-            "/changes" => Some(WorkspaceCommand::Changes),
-            "/diff" if arg.is_empty() => Some(WorkspaceCommand::Diff),
             "/status" => Some(WorkspaceCommand::Status),
             "/context" => Some(WorkspaceCommand::Context),
             "/compact" => Some(WorkspaceCommand::Compact),
@@ -806,32 +710,6 @@ impl Workspace {
                         return true;
                     }
                 },
-                "/diff" => Request::SessionAction {
-                    session,
-                    action: SessionAction::Inspect {
-                        section: Inspection::Diff {
-                            path: Some(arg.into()),
-                        },
-                    },
-                },
-                "/undo" => {
-                    self.prompt(
-                        ("撤销文件修改", "文件路径（撤销 Orbit 对该文件的修改）"),
-                        arg,
-                        "撤销修改",
-                        move |path| {
-                            Ok(Request::Undo {
-                                session: session.clone(),
-                                path: Some(path),
-                            })
-                        },
-                        window,
-                        cx,
-                    );
-                    self.input
-                        .update(cx, |input, cx| input.set_value("", window, cx));
-                    return true;
-                }
                 "/mode" if matches!(arg, "plan" | "build") => Request::Plan {
                     session,
                     action: if arg == "plan" {

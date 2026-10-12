@@ -1,6 +1,12 @@
 use super::*;
+#[path = "questions/history.rs"]
+mod history;
+#[path = "questions/side.rs"]
+mod side;
 use gpui_kit::component::checkbox::Checkbox;
+pub(super) use history::QuestionHistory;
 use orbit_protocol::user_input::{Answer, Kind, Record, Status};
+pub(super) use side::SideQuestions;
 
 /// Retained while the request is pending: polling and task renders must not
 /// replace the user's selection or their unfinished written answer.
@@ -17,6 +23,14 @@ pub(super) struct QuestionForm {
     _subscriptions: Vec<Subscription>,
 }
 impl QuestionForm {
+    pub(super) fn disconnected(&mut self, cx: &mut Context<Self>) {
+        if self.pending {
+            self.pending = false;
+            self.error =
+                Some("连接已中断，提交结果未知。恢复后请先确认问题仍待回答，再重试。".into());
+        }
+        cx.notify();
+    }
     pub(super) fn hidden(&self) -> bool {
         self.hidden
     }
@@ -112,6 +126,24 @@ impl QuestionForm {
     }
     fn submit(&mut self, decline: bool, cx: &mut Context<Self>) {
         if self.pending {
+            return;
+        }
+        let current = self.owner.upgrade().is_some_and(|owner| {
+            let workspace = owner.read(cx);
+            workspace.connected
+                && !workspace.opening
+                && workspace
+                    .info
+                    .as_ref()
+                    .is_some_and(|info| info.id == self.session)
+                && workspace
+                    .user_inputs
+                    .iter()
+                    .any(|record| record.id == self.record.id && record.status == Status::Pending)
+        });
+        if !current {
+            self.error = Some("请等待会话恢复并确认问题仍待回答。输入内容已保留。".into());
+            cx.notify();
             return;
         }
         for (answer, input) in self.answers.iter_mut().zip(&self.inputs) {
@@ -411,30 +443,6 @@ impl Workspace {
             });
         }
         cx.notify();
-    }
-    pub(super) fn show_questions(
-        &mut self,
-        questions: orbit_protocol::Questions,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if let Some(records) = questions.records {
-            let text = records
-                .iter()
-                .enumerate()
-                .map(|(index, record)| {
-                    format!(
-                        "## {}. {}\n\n{}\n\n{}",
-                        index + 1,
-                        record.question,
-                        record.answer,
-                        record.error.as_deref().unwrap_or("")
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join("\n\n---\n\n");
-            self.show_report("旁路提问".into(), text, window, cx);
-        }
     }
     pub(super) fn show_plugins(
         &self,

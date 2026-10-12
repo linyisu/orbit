@@ -362,6 +362,7 @@ async fn run(
     let mut interval = tokio::time::interval(Duration::from_millis(80));
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut quota_tasks = tokio::task::JoinSet::new();
+    let mut review_tasks = tokio::task::JoinSet::new();
     let mut questions_revision = None;
     let mut subagent: Option<(String, usize)> = None;
     let mut last_page = None;
@@ -430,6 +431,23 @@ async fn run(
                         events.send(Event::Tasks { session, result }).await?;
                     }
                     Command::Settings { request, result } => {
+                        if matches!(request, Request::Review { action: orbit_protocol::review::Action::Undo { .. } | orbit_protocol::review::Action::Stage { .. } | orbit_protocol::review::Action::Unstage { .. }, .. }) {
+                            // Undo may wait for a permission decision. Keep the
+                            // main connection polling approvals and accepting Cancel.
+                            let connection = connection.clone();
+                            review_tasks.spawn(async move {
+                                let response = async {
+                                    let mut client = connection.connect().await.map_err(|error| format!("{error:#}"))?;
+                                    match client.request(request).await {
+                                        Ok(Response::Error(error)) => Err(error),
+                                        Ok(response) => Ok(response),
+                                        Err(error) => Err(format!("{error:#}")),
+                                    }
+                                }.await;
+                                let _ = result.send(response);
+                            });
+                            continue;
+                        }
                         let response = match client.request(request).await {
                             Ok(Response::Error(error)) => Err(error),
                             Ok(response) => Ok(response),
@@ -485,6 +503,7 @@ async fn run(
                 if client.failed() { bail!("工作区连接已断开。") }
             }
             _ = quota_tasks.join_next(), if !quota_tasks.is_empty() => {}
+            _ = review_tasks.join_next(), if !review_tasks.is_empty() => {}
             _ = async { if !backlog { interval.tick().await; } }, if !session.is_empty() => {
                 let response = client.request(Request::Poll { session: session.clone(), after: cursor }).await?;
                 backlog = matches!(&response, Response::Page(page) if page.more);

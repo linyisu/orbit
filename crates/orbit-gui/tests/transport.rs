@@ -2,6 +2,21 @@
 #[path = "../src/backend.rs"]
 mod backend;
 
+#[path = "support/files_transport.rs"]
+mod files_transport;
+
+#[path = "support/review_transport.rs"]
+mod review_transport;
+
+#[path = "support/side_questions_transport.rs"]
+mod side_questions_transport;
+
+#[path = "support/user_input_history_transport.rs"]
+mod user_input_history_transport;
+
+#[path = "support/subagents_transport.rs"]
+mod subagents_transport;
+
 use backend::{Backend, Command, Event, Options};
 use orbit_client::protocol::{Request, Response};
 use std::time::Duration;
@@ -694,4 +709,257 @@ fn replacement_directory_links_before_resume_and_preserves_ownership_checks() {
             assert!(open.is_none());
         }
     }
+}
+
+#[test]
+fn session_controls_refresh_saved_catalog_and_reject_busy_deletion() {
+    use clap::Parser;
+    use orbit_protocol::admin::Action;
+
+    async fn request(backend: &Backend, request: Request) -> Result<Response, String> {
+        let (result, response) = tokio::sync::oneshot::channel();
+        backend.send(Command::Settings { request, result }).unwrap();
+        tokio::time::timeout(Duration::from_secs(5), response)
+            .await
+            .unwrap()
+            .unwrap()
+    }
+
+    let directory = tempfile::tempdir().unwrap();
+    let mut options = Options::parse_from(["orbit-gui"]);
+    options.config = directory.path().join("unused.toml");
+    options.workspace = Some(directory.path().into());
+    options.server = Some(env!("CARGO_BIN_EXE_orbit-gui-fixture").into());
+    options.database = Some(directory.path().join("unused.db"));
+    options.auth_dir = Some(directory.path().join("auth"));
+    options.model = Some("fixture::local".into());
+    options.resume = Some("demo".into());
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let (backend, mut events) = Backend::start(options.clone(), &runtime);
+    runtime.block_on(async {
+        until(&mut events, |event| matches!(event, Event::Response(Response::Opened(_)))).await;
+        request(&backend, Request::Admin {
+            action: Action::RenameSession { id: "navigation".into(), title: "保存的历史会话".into() },
+        }).await.unwrap();
+        let Response::Sessions(sessions) = request(&backend, Request::AllSessions).await.unwrap() else {
+            panic!("missing saved catalog");
+        };
+        assert_eq!(sessions.iter().find(|session| session.id == "navigation").unwrap().title, "保存的历史会话");
+        assert_eq!(sessions.iter().find(|session| session.id == "notes").unwrap().title, "整理开发笔记");
+        assert!(request(&backend, Request::Admin {
+            action: Action::RenameSession { id: "navigation".into(), title: " ".into() },
+        }).await.unwrap_err().contains("1–120"));
+
+        backend.send(Command::Send {
+            session: "demo".into(), id: "session-controls-approval".into(), prompt: "approve".into(), paths: vec![], steer: false,
+        }).unwrap();
+        until(&mut events, |event| matches!(event, Event::Response(Response::Page(page)) if !page.approvals.is_empty())).await;
+        assert!(request(&backend, Request::Admin {
+            action: Action::DeleteSession { id: "demo".into() },
+        }).await.unwrap_err().contains("会话正在运行"));
+        request(&backend, Request::Admin {
+            action: Action::RenameSession { id: "demo".into(), title: "运行中重命名".into() },
+        }).await.unwrap();
+        let Response::Sessions(sessions) = request(&backend, Request::Sessions).await.unwrap() else {
+            panic!("missing project catalog");
+        };
+        assert_eq!(sessions[0].title, "运行中重命名");
+        request(&backend, Request::Cancel { session: "demo".into() }).await.unwrap();
+        request(&backend, Request::Admin {
+            action: Action::DeleteSession { id: "navigation".into() },
+        }).await.unwrap();
+        let Response::Sessions(sessions) = request(&backend, Request::AllSessions).await.unwrap() else {
+            panic!("missing refreshed catalog");
+        };
+        assert!(!sessions.iter().any(|session| session.id == "navigation"));
+        assert!(sessions.iter().any(|session| session.id == "demo"));
+    });
+    drop(backend);
+
+    // Separate workspace clients read the same test service catalog state.
+    let (_backend, mut events) = Backend::start(options, &runtime);
+    runtime.block_on(async {
+        let Event::Response(Response::Sessions(sessions)) = until(&mut events, |event| {
+            matches!(event, Event::Response(Response::Sessions(_)))
+        })
+        .await
+        else {
+            panic!("missing reopened catalog");
+        };
+        assert!(!sessions.iter().any(|session| session.id == "navigation"));
+        assert_eq!(
+            sessions
+                .iter()
+                .find(|session| session.id == "demo")
+                .unwrap()
+                .title,
+            "运行中重命名"
+        );
+    });
+}
+
+#[test]
+fn settings_resources_round_trip_preserves_memory_category_and_workspace_scope() {
+    use clap::Parser;
+    use orbit_protocol::{
+        project::{MemoryAction, MemoryCategory},
+        resources::{Action, Snapshot},
+    };
+
+    async fn resources(
+        backend: &Backend,
+        workspace: &std::path::Path,
+        action: Action,
+    ) -> Result<Snapshot, String> {
+        let (result, receive) = tokio::sync::oneshot::channel();
+        backend
+            .send(Command::Settings {
+                request: Request::Resources {
+                    session: "demo".into(),
+                    expected_workspace: Some(workspace.to_string_lossy().into_owned()),
+                    action,
+                },
+                result,
+            })
+            .unwrap();
+        match tokio::time::timeout(Duration::from_secs(10), receive)
+            .await
+            .unwrap()
+            .unwrap()?
+        {
+            Response::Resources(snapshot) => Ok(snapshot),
+            other => panic!("expected settings snapshot, got {other:?}"),
+        }
+    }
+
+    let directory = tempfile::tempdir().unwrap();
+    let mut options = Options::parse_from(["orbit-gui"]);
+    options.config = directory.path().join("unused.toml");
+    options.workspace = Some(directory.path().to_path_buf());
+    options.server = Some(env!("CARGO_BIN_EXE_orbit-gui-fixture").into());
+    options.database = Some(directory.path().join("unused.db"));
+    options.auth_dir = Some(directory.path().join("auth"));
+    options.model = Some("fixture::local".into());
+    options.resume = Some("demo".into());
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let (backend, mut events) = Backend::start(options, &runtime);
+    runtime.block_on(async {
+        until(&mut events, |event| {
+            matches!(event, Event::Response(Response::Opened(_)))
+        })
+        .await;
+        let content = "---\ndescription: Review code\n---\nInspect the diff.\n";
+        let Snapshot::Skills(skills) = resources(
+            &backend,
+            directory.path(),
+            Action::SaveSkill {
+                name: "review".into(),
+                original: None,
+                content: content.into(),
+            },
+        )
+        .await
+        .unwrap() else {
+            panic!("skills expected")
+        };
+        assert_eq!(skills.len(), 1);
+        assert_eq!(skills[0].name, "review");
+        let Snapshot::Skill {
+            content: saved,
+            editable,
+            ..
+        } = resources(
+            &backend,
+            directory.path(),
+            Action::ReadSkill {
+                name: "review".into(),
+            },
+        )
+        .await
+        .unwrap()
+        else {
+            panic!("skill expected")
+        };
+        assert_eq!(saved, content);
+        assert!(editable);
+        assert!(
+            resources(
+                &backend,
+                &directory.path().join("previous"),
+                Action::SaveSkill {
+                    name: "stale".into(),
+                    original: None,
+                    content: content.into(),
+                }
+            )
+            .await
+            .unwrap_err()
+            .contains("工作区已切换")
+        );
+        let Snapshot::Skills(skills) = resources(&backend, directory.path(), Action::Skills)
+            .await
+            .unwrap()
+        else {
+            panic!("skills expected")
+        };
+        assert_eq!(skills.len(), 1);
+        for category in MemoryCategory::ALL {
+            let Snapshot::Memories(memories) = resources(
+                &backend,
+                directory.path(),
+                Action::Memory(MemoryAction::Add {
+                    category,
+                    content: format!("saved {}", category.as_str()),
+                }),
+            )
+            .await
+            .unwrap() else {
+                panic!("memories expected")
+            };
+            assert_eq!(memories.last().unwrap().category, category);
+            assert_eq!(memories.last().unwrap().session_id, "demo");
+        }
+        let Snapshot::Memories(memories) = resources(&backend, directory.path(), Action::Memories)
+            .await
+            .unwrap()
+        else {
+            panic!("memories expected")
+        };
+        assert_eq!(memories.len(), 4);
+        let id = memories[0].id;
+        assert!(
+            resources(
+                &backend,
+                &directory.path().join("previous"),
+                Action::Memory(MemoryAction::Forget { id })
+            )
+            .await
+            .is_err()
+        );
+        let Snapshot::Memories(memories) = resources(
+            &backend,
+            directory.path(),
+            Action::Memory(MemoryAction::Forget { id }),
+        )
+        .await
+        .unwrap() else {
+            panic!("memories expected")
+        };
+        assert_eq!(memories.len(), 3);
+        assert!(memories.iter().all(|memory| memory.id != id));
+        let Snapshot::Mcp(servers) = resources(&backend, directory.path(), Action::Mcp)
+            .await
+            .unwrap()
+        else {
+            panic!("MCP expected")
+        };
+        assert!(servers[0].connected);
+        assert_eq!(servers[0].tools[0].name, "mcp__fixture__echo");
+        assert_eq!(servers[0].tools[0].description, "Echo input");
+        assert!(
+            resources(&backend, &directory.path().join("previous"), Action::Mcp)
+                .await
+                .is_err()
+        );
+    });
 }

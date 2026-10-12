@@ -6,7 +6,12 @@ use crate::{
     backend::Options,
     workspace::{Sidebar, Workspace, WorkspaceEvent},
 };
-use gpui_kit::component::WindowExt;
+use gpui_kit::component::{
+    WindowExt,
+    button::{Button, ButtonVariants},
+    h_flex,
+};
+use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use std::{collections::HashSet, sync::Arc};
 
@@ -177,6 +182,29 @@ impl Workbench {
                     workbench.show_workspace(window, cx);
                 }
                 WorkspaceEvent::DraftChanged => workbench.persist(cx),
+                WorkspaceEvent::SessionDeleted { id, options } => {
+                    workbench.tasks.retain(|task| {
+                        let view = task.view.read(cx);
+                        !(view.options().same_host(options)
+                            && view.summary().session.as_ref() == Some(id))
+                    });
+                    if !workbench
+                        .tasks
+                        .iter()
+                        .any(|task| task.view.read(cx).key() == workbench.active)
+                    {
+                        if let Some(task) = workbench.tasks.iter().find(|task| !task.closed) {
+                            let key = task.view.read(cx).key().to_owned();
+                            workbench.activate(&key, window, cx);
+                        } else {
+                            let mut options = workbench.origin.clone();
+                            options.resume = None;
+                            options.recover_draft = false;
+                            workbench.create(options, None, window, cx);
+                        }
+                    }
+                    workbench.publish(cx);
+                }
                 WorkspaceEvent::Changed => {
                     let summary = source.read(cx).summary();
                     let finished = workbench
@@ -243,6 +271,7 @@ impl Workbench {
         // Re-selecting the visible task must leave its pending authentication open.
         if !preserve_dialogs {
             window.close_all_dialogs(cx);
+            window.close_sheet(cx);
         }
         self.unread.remove(key);
         // Suspend the previous task's overlays before the next task presents
@@ -265,6 +294,82 @@ impl Workbench {
         self.publish(cx);
     }
     fn close(&mut self, key: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(task) = self
+            .tasks
+            .iter()
+            .find(|task| task.view.read(cx).key() == key)
+        else {
+            return;
+        };
+        let saving = task.view.read(cx).files_saving(cx);
+        let attention = task.view.read(cx).files_need_attention(cx);
+        if saving || attention {
+            self.confirm_file_close(key.to_owned(), saving, window, cx);
+            return;
+        }
+        self.close_task(key, window, cx);
+    }
+
+    fn confirm_file_close(
+        &mut self,
+        key: String,
+        saving: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let owner = cx.weak_entity();
+        window.open_dialog(cx, move |dialog, _, _| {
+            let keep_owner = owner.clone();
+            let keep_key = key.clone();
+            let discard_owner = owner.clone();
+            let discard_key = key.clone();
+            dialog
+                .title(if saving { "文件正在保存" } else { "关闭未保存文件的任务？" })
+                .child(if saving {
+                    "保存结果尚未确认，任务会继续保留。请等待保存结束后再关闭。"
+                } else {
+                    "任务中有未保存的文件更改，或保存结果尚未确认。放弃并关闭会丢弃本任务保留的文件草稿，包括其他工作区的草稿。"
+                })
+                // Enter outside an explicitly focused button must not discard
+                // file drafts through the Dialog's default Confirm action.
+                .on_ok(|_, _, _| false)
+                .footer(
+                    h_flex().justify_end().gap_2()
+                        .child(Button::new("keep-task-files").label("返回编辑")
+                            .on_click(move |_, window, cx| {
+                                window.close_dialog(cx);
+                                let _ = keep_owner.update(cx, |workbench, cx| {
+                                    let Some(view) = workbench.tasks.iter()
+                                        .find(|task| task.view.read(cx).key() == keep_key)
+                                        .map(|task| task.view.clone()) else { return };
+                                    workbench.activate(&keep_key, window, cx);
+                                    view.update(cx, |view, cx| view.focus_file_edits(window, cx));
+                                });
+                            }))
+                        .when(!saving, |footer| footer.child(
+                            Button::new("discard-task-files").label("放弃并关闭").danger()
+                                .on_click(move |_, window, cx| {
+                                    window.close_dialog(cx);
+                                    let _ = discard_owner.update(cx, |workbench, cx| {
+                                        let Some(task) = workbench.tasks.iter().find(|task| task.view.read(cx).key() == discard_key) else {
+                                            return;
+                                        };
+                                        // A save can start after the confirmation
+                                        // was shown. Its result must remain owned.
+                                        if task.view.read(cx).files_saving(cx) {
+                                            workbench.confirm_file_close(discard_key.clone(), true, window, cx);
+                                        } else {
+                                            task.view.update(cx, |view, cx| view.discard_file_edits(cx));
+                                            workbench.close_task(&discard_key, window, cx);
+                                        }
+                                    });
+                                })
+                        )),
+                )
+        });
+    }
+
+    fn close_task(&mut self, key: &str, window: &mut Window, cx: &mut Context<Self>) {
         let Some(ix) = self
             .tasks
             .iter()
