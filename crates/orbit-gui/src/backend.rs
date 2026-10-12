@@ -240,7 +240,13 @@ async fn run(
     // its fallback instead of blindly recycling a stale tab's launch model.
     let preferred = if resume.is_some() {
         match &connection.local_configuration {
-            Some(local) => local.selected_model().await?.or(options.model),
+            // A missing/corrupt local preference is not an error in the saved
+            // conversation. The service can still choose a configured model.
+            Some(local) => local
+                .selected_model()
+                .await
+                .unwrap_or_default()
+                .or(options.model),
             None => options.model,
         }
     } else {
