@@ -3,6 +3,7 @@ pub(crate) mod auth;
 mod configuration;
 mod controls;
 mod input;
+mod management;
 mod project;
 mod reconnection;
 mod submissions;
@@ -57,6 +58,7 @@ pub(super) struct Tab {
     model_catalog: Vec<orbit_protocol::ModelSummary>,
     pub id: Option<String>,
     pub connection: Option<Arc<Connection>>,
+    keymap: Option<super::keymap::Shared>,
     spec: Option<Spec>,
     connecting: Option<AbortOnDropHandle<Result<Opened>>>,
     updates: Option<workspace::interaction::Updates>,
@@ -79,6 +81,7 @@ pub(super) struct Tab {
     question_closing: bool,
     question_poll: Option<tokio::sync::oneshot::Receiver<Result<Response>>>,
     submissions: Vec<submissions::Submission>,
+    independent_requests: tokio::task::JoinSet<()>,
     completion_input: String,
     next_completion: std::time::Instant,
     next_questions: std::time::Instant,
@@ -214,6 +217,7 @@ impl Tab {
             model_catalog: Vec::new(),
             id: None,
             connection: None,
+            keymap: None,
             spec: None,
             connecting: None,
             updates: None,
@@ -236,6 +240,7 @@ impl Tab {
             question_closing: false,
             question_poll: None,
             submissions: Vec::new(),
+            independent_requests: tokio::task::JoinSet::new(),
             completion_input: String::new(),
             next_completion: std::time::Instant::now(),
             next_questions: std::time::Instant::now(),
@@ -297,6 +302,7 @@ impl Tab {
             && !self.state.btw.has_records()
             && self.state.input.text.is_empty()
             && self.state.attachments.is_empty()
+            && self.state.management.is_empty()
     }
 
     pub fn sibling(&self, resume: Option<String>) -> Self {
@@ -336,6 +342,11 @@ impl Tab {
 
     fn install(&mut self, opened: Opened) {
         self.abandon_submissions();
+        let management = if self.id.as_deref() == Some(&opened.info.id) {
+            std::mem::take(&mut self.state.management)
+        } else {
+            Default::default()
+        };
         let draft = self.state.input.text.clone();
         let pending_input = if self.id.as_deref() == Some(&opened.info.id) {
             std::mem::take(&mut self.state.pending_input)
@@ -358,6 +369,7 @@ impl Tab {
         let cursor_trail = self.state.cursor_motion.enabled;
         self.usage_task = None;
         self.state = UiState::new(&opened.info.model);
+        self.state.management = management;
         self.state.pending_input = pending_input;
         self.state.media = media;
         self.state.user_input = user_input;
@@ -371,6 +383,10 @@ impl Tab {
         self.profile(&opened.info);
         self.id = Some(opened.info.id.clone());
         let mut connection = opened.connection;
+        self.keymap = connection
+            .local_configuration
+            .as_ref()
+            .map(|local| super::keymap::shared(&local.config));
         Arc::make_mut(&mut connection).unattended = true;
         self.model_watcher = connection
             .local_configuration
@@ -841,6 +857,7 @@ impl Tab {
         // A submitted request may have committed before its acknowledgement was lost.
         // Keep that identity; an untouched draft is discarded with its connection.
         if !self.persisted
+            && self.state.management.is_empty()
             && self.starting.is_none()
             && !self.busy
             && !self
@@ -952,6 +969,12 @@ impl Tab {
     }
 
     fn send(&mut self, request: Request) -> bool {
+        if matches!(request, Request::Cancel { .. }) {
+            // A connection still handshaking must not start a reviewed write
+            // after Cancel has already reached the session. Lost receipts use
+            // the existing unknown-result path and retain the panel's draft.
+            self.independent_requests.abort_all();
+        }
         let Some(commands) = &self.commands else {
             self.state.report_local(TranscriptItem::Error(
                 "尚未连接；输入已保留，可用 /reconnect 重试。".into(),

@@ -83,6 +83,7 @@ pub struct ModelPicker {
 
 #[derive(Debug)]
 pub struct MarketplaceDialog {
+    request_identity: String,
     inspections: Option<Vec<orbit_protocol::plugins::Inspection>>,
     market_offset: usize,
     plugin_offset: usize,
@@ -95,6 +96,12 @@ pub struct MarketplaceDialog {
     selected_plugin: usize,
     project_id: String,
     enabled: std::collections::BTreeMap<(String, String), ProjectPlugin>,
+    query: String,
+    searching: bool,
+    enabled_only: bool,
+    removing: Option<String>,
+    pending: Option<String>,
+    error: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -120,6 +127,7 @@ impl MarketplaceDialog {
         enabled: Vec<ProjectPlugin>,
     ) -> Self {
         Self {
+            request_identity: crate::workspace::request_id(),
             inspections: None,
             market_offset: 0,
             plugin_offset: 0,
@@ -143,22 +151,122 @@ impl MarketplaceDialog {
                     )
                 })
                 .collect(),
+            query: String::new(),
+            searching: false,
+            enabled_only: false,
+            removing: None,
+            pending: None,
+            error: None,
         }
+    }
+
+    /// A catalog is authoritative only for the project that opened this dialog.
+    /// Preserve navigation by full source identity across refresh/reordering.
+    pub fn update_catalog(&mut self, catalog: orbit_protocol::plugins::Catalog) -> bool {
+        if catalog.project_id != self.project_id {
+            return false;
+        }
+        let source = self.selected_market().map(|market| market.source.clone());
+        let plugin = self
+            .selected_plugin()
+            .map(|(_, plugin)| plugin.name.clone());
+        let mut next = Self::from_catalog(catalog);
+        next.request_identity = self.request_identity.clone();
+        let selected = source.and_then(|source| {
+            next.marketplaces
+                .iter()
+                .position(|market| market.source == source)
+        });
+        next.selected_market = selected.unwrap_or(
+            self.selected_market
+                .min(next.marketplaces.len().saturating_sub(1)),
+        );
+        next.viewing_plugins = self.viewing_plugins && selected.is_some();
+        next.query = self.query.clone();
+        next.enabled_only = self.enabled_only;
+        if let Some(plugin) = plugin {
+            next.selected_plugin = next
+                .selected_market()
+                .and_then(|market| {
+                    market
+                        .plugins
+                        .iter()
+                        .position(|candidate| candidate.name == plugin)
+                })
+                .unwrap_or(0);
+        }
+        next.normalize_plugin();
+        *self = next;
+        true
+    }
+
+    pub fn pending(&self) -> bool {
+        self.pending.is_some()
+    }
+
+    pub(super) fn identity(&self) -> &str {
+        &self.request_identity
+    }
+
+    pub fn failed(&mut self, error: String) {
+        self.pending = None;
+        self.error = Some(error);
+    }
+
+    fn start(&mut self, operation: &str, source: &str) {
+        self.pending = Some(format!("{operation}\n{source}"));
+        self.error = None;
+        self.removing = None;
+    }
+
+    fn plugin_indices(&self) -> Vec<usize> {
+        let query = self.query.to_lowercase();
+        self.selected_market()
+            .map(|market| {
+                market
+                    .plugins
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, plugin)| {
+                        (!self.enabled_only
+                            || self
+                                .enabled
+                                .contains_key(&(market.source.clone(), plugin.name.clone())))
+                            && (query.is_empty()
+                                || plugin.name.to_lowercase().contains(&query)
+                                || plugin.description.to_lowercase().contains(&query))
+                    })
+                    .map(|(index, _)| index)
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    fn normalize_plugin(&mut self) {
+        let indices = self.plugin_indices();
+        if !indices.contains(&self.selected_plugin) {
+            self.selected_plugin = indices.first().copied().unwrap_or(0);
+        }
+        self.plugin_offset = 0;
     }
 
     fn move_market(&mut self, down: bool) {
         self.selected_market = move_selection(self.selected_market, self.marketplaces.len(), down);
         self.selected_plugin = 0;
+        self.query.clear();
+        self.normalize_plugin();
     }
 
     fn move_plugin(&mut self, down: bool) {
-        let count = self
-            .marketplaces
-            .get(self.selected_market)
-            .map(|market| market.plugins.len())
-            .unwrap_or_default();
-
-        self.selected_plugin = move_selection(self.selected_plugin, count, down);
+        let indices = self.plugin_indices();
+        let selected = indices
+            .iter()
+            .position(|index| *index == self.selected_plugin)
+            .unwrap_or(0);
+        self.selected_plugin = indices
+            .get(move_selection(selected, indices.len(), down))
+            .copied()
+            .unwrap_or(0);
     }
 
     fn selected_market(&self) -> Option<&Marketplace> {
@@ -166,6 +274,9 @@ impl MarketplaceDialog {
     }
 
     fn selected_plugin(&self) -> Option<(&Marketplace, &crate::marketplaces::Plugin)> {
+        if !self.plugin_indices().contains(&self.selected_plugin) {
+            return None;
+        }
         let market = self.selected_market()?;
         market
             .plugins
@@ -213,12 +324,13 @@ impl MarketplaceDialog {
     }
 
     fn inspect_selected_plugin(&mut self) {
-        let selected = self.selected_market().and_then(|market| {
-            market
-                .plugins
-                .get(self.selected_plugin)
-                .map(|plugin| (market.clone(), plugin.clone()))
-        });
+        let selected = self
+            .selected_plugin()
+            .map(|(market, plugin)| (market.clone(), plugin.clone()));
+
+        if selected.is_none() {
+            return;
+        }
 
         self.inspection = Some(match selected {
             Some((market, plugin)) => match &self.inspections {
@@ -640,6 +752,17 @@ pub fn handle(state: &mut UiState, event: Event) -> Option<String> {
         }
         return None;
     }
+    if state
+        .marketplace_dialog
+        .as_ref()
+        .is_some_and(MarketplaceDialog::pending)
+    {
+        if matches!(&event, Event::Key(key) if key.kind != KeyEventKind::Release && (key.code == KeyCode::Esc || key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL)))
+        {
+            state.marketplace_dialog = None;
+        }
+        return None;
+    }
     if let Some(picker) = &mut state.model_picker {
         match &event {
             Event::Mouse(mouse) => {
@@ -705,9 +828,7 @@ pub fn handle(state: &mut UiState, event: Event) -> Option<String> {
             scroll(&mut picker.offset, count);
         } else if let Some(dialog) = &mut state.marketplace_dialog {
             if dialog.viewing_plugins {
-                let count = dialog
-                    .selected_market()
-                    .map_or(0, |market| market.plugins.len());
+                let count = dialog.plugin_indices().len();
                 scroll(&mut dialog.plugin_offset, count);
             } else {
                 scroll(&mut dialog.market_offset, dialog.marketplaces.len());
@@ -727,6 +848,18 @@ pub fn handle(state: &mut UiState, event: Event) -> Option<String> {
         if key.code == KeyCode::Esc
             && let Some(dialog) = &mut state.marketplace_dialog
         {
+            if dialog.removing.take().is_some() {
+                return None;
+            }
+            if dialog.searching {
+                dialog.searching = false;
+                return None;
+            }
+            if dialog.adding {
+                dialog.adding = false;
+                dialog.error = None;
+                return None;
+            }
             if dialog.inspection.take().is_some() {
                 return None;
             }
@@ -776,11 +909,21 @@ pub fn handle(state: &mut UiState, event: Event) -> Option<String> {
             picker.selected = index;
             picker.normalize_effort();
         } else if let Some(dialog) = &mut state.marketplace_dialog {
+            if dialog.adding || dialog.inspection.is_some() || dialog.removing.is_some() {
+                return None;
+            }
             if dialog.viewing_plugins {
-                dialog.selected_plugin = index;
+                if dialog.plugin_indices().contains(&index) {
+                    dialog.selected_plugin = index;
+                }
             } else {
+                if index >= dialog.marketplaces.len() {
+                    return None;
+                }
                 dialog.selected_market = index;
                 dialog.selected_plugin = 0;
+                dialog.query.clear();
+                dialog.normalize_plugin();
             }
         }
 
@@ -929,19 +1072,103 @@ pub fn handle(state: &mut UiState, event: Event) -> Option<String> {
             _ => {}
         }
     } else if let Some(dialog) = &mut state.marketplace_dialog {
+        if let Some(source) = dialog.removing.clone() {
+            if matches!(&event, Event::Key(key) if key.code == KeyCode::Enter) {
+                dialog.start("正在移除市场源", &source);
+                state.pending_plugin_action =
+                    Some(orbit_protocol::plugins::Action::Remove { source });
+            }
+            return None;
+        }
+        if dialog.searching {
+            match event {
+                Event::Key(key) => match key.code {
+                    KeyCode::Enter => dialog.searching = false,
+                    KeyCode::Up => dialog.move_plugin(false),
+                    KeyCode::Down => dialog.move_plugin(true),
+                    KeyCode::Backspace => {
+                        dialog.query.pop();
+                        dialog.normalize_plugin();
+                    }
+                    KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        dialog.query.clear();
+                        dialog.normalize_plugin();
+                    }
+                    KeyCode::Char(c)
+                        if !key
+                            .modifiers
+                            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+                    {
+                        dialog.query.push(c);
+                        dialog.normalize_plugin();
+                    }
+                    _ => {}
+                },
+                Event::Paste(text) => {
+                    dialog
+                        .query
+                        .extend(text.chars().filter(|c| !c.is_control()));
+                    dialog.normalize_plugin();
+                }
+                _ => {}
+            }
+            return None;
+        }
         match event {
             Event::Key(key) => match key.code {
-                KeyCode::Up if dialog.inspection.is_none() && dialog.viewing_plugins => {
+                KeyCode::Up
+                    if !dialog.adding && dialog.inspection.is_none() && dialog.viewing_plugins =>
+                {
                     dialog.move_plugin(false)
                 }
-                KeyCode::Down if dialog.inspection.is_none() && dialog.viewing_plugins => {
+                KeyCode::Down
+                    if !dialog.adding && dialog.inspection.is_none() && dialog.viewing_plugins =>
+                {
                     dialog.move_plugin(true)
                 }
-                KeyCode::Up if !dialog.adding => dialog.move_market(false),
-                KeyCode::Down if !dialog.adding => dialog.move_market(true),
+                KeyCode::Up if !dialog.adding && dialog.inspection.is_none() => {
+                    dialog.move_market(false)
+                }
+                KeyCode::Down if !dialog.adding && dialog.inspection.is_none() => {
+                    dialog.move_market(true)
+                }
+
+                KeyCode::Char('/')
+                    if !dialog.adding && dialog.inspection.is_none() && dialog.viewing_plugins =>
+                {
+                    dialog.searching = true
+                }
+                KeyCode::F(2)
+                    if !dialog.adding && dialog.inspection.is_none() && dialog.viewing_plugins =>
+                {
+                    dialog.enabled_only = !dialog.enabled_only;
+                    dialog.normalize_plugin();
+                }
+                KeyCode::Char('r' | 'R') | KeyCode::F(5)
+                    if !dialog.adding
+                        && dialog.inspection.is_none()
+                        && !key
+                            .modifiers
+                            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+                {
+                    if let Some(source) =
+                        dialog.selected_market().map(|market| market.source.clone())
+                    {
+                        dialog.start("正在刷新市场源", &source);
+                        state.pending_plugin_action =
+                            Some(orbit_protocol::plugins::Action::Refresh { source });
+                    }
+                }
+                KeyCode::Delete
+                    if !dialog.adding && dialog.inspection.is_none() && !dialog.viewing_plugins =>
+                {
+                    dialog.removing = dialog.selected_market().map(|market| market.source.clone());
+                    dialog.error = None;
+                }
 
                 KeyCode::Char('a')
                     if !dialog.adding
+                        && dialog.inspection.is_none()
                         && !key
                             .modifiers
                             .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
@@ -956,25 +1183,54 @@ pub fn handle(state: &mut UiState, event: Event) -> Option<String> {
                             .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
                 {
                     if let Some(change) = dialog.selected_change() {
-                        state.pending_project_plugin_change = Some(change);
-                        state.marketplace_dialog = None;
+                        let (operation, source, action) = match change {
+                            ProjectPluginChange::Enable(plugin) => (
+                                "正在启用插件",
+                                plugin.marketplace_source.clone(),
+                                orbit_protocol::plugins::Action::Enable { plugin },
+                            ),
+                            ProjectPluginChange::Disable {
+                                marketplace_source,
+                                plugin_name,
+                                ..
+                            } => (
+                                "正在停用插件",
+                                marketplace_source.clone(),
+                                orbit_protocol::plugins::Action::Disable {
+                                    marketplace_source,
+                                    plugin_name,
+                                },
+                            ),
+                        };
+                        dialog.start(operation, &source);
+                        state.pending_plugin_action = Some(action);
                     }
                 }
 
-                KeyCode::Enter if dialog.viewing_plugins && dialog.inspection.is_none() => {
+                KeyCode::Enter
+                    if !dialog.adding && dialog.viewing_plugins && dialog.inspection.is_none() =>
+                {
                     dialog.inspect_selected_plugin()
                 }
-                KeyCode::Enter if !dialog.adding && dialog.selected_market().is_some() => {
-                    dialog.viewing_plugins = true
+                KeyCode::Enter
+                    if !dialog.adding
+                        && dialog.inspection.is_none()
+                        && dialog.selected_market().is_some() =>
+                {
+                    dialog.viewing_plugins = true;
+                    dialog.normalize_plugin();
                 }
-                KeyCode::Enter if !dialog.adding => dialog.adding = true,
+                KeyCode::Enter if !dialog.adding && dialog.inspection.is_none() => {
+                    dialog.adding = true
+                }
 
-                KeyCode::Enter => {
-                    let source = dialog.source.trim();
+                KeyCode::Enter if dialog.adding => {
+                    let source = dialog.source.trim().to_string();
 
                     if !source.is_empty() {
-                        state.pending_marketplace_source = Some(source.into());
-                        state.marketplace_dialog = None;
+                        dialog.start("正在添加市场源", &source);
+                        state.pending_plugin_action =
+                            Some(orbit_protocol::plugins::Action::Add { source });
                     }
                 }
 
@@ -1639,7 +1895,42 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
             footer,
         );
     } else if let Some(dialog) = &mut state.marketplace_dialog {
-        if dialog.adding {
+        if let Some(operation) = &dialog.pending {
+            state.ime_cursor = None;
+            frame.render_widget(
+                Paragraph::new(Line::styled(
+                    "插件市场",
+                    Style::default()
+                        .fg(crate::tui::theme::THEME.accent)
+                        .add_modifier(Modifier::BOLD),
+                )),
+                header,
+            );
+            frame.render_widget(
+                Paragraph::new(
+                    operation
+                        .lines()
+                        .map(|line| Line::from(clean(line)))
+                        .collect::<Vec<_>>(),
+                )
+                .wrap(Wrap { trim: false }),
+                body,
+            );
+            frame.render_widget(Paragraph::new("操作中… · Esc 关闭，后台继续"), footer);
+        } else if let Some(source) = &dialog.removing {
+            state.ime_cursor = None;
+            frame.render_widget(
+                Paragraph::new(Line::styled(
+                    "移除市场源？",
+                    Style::default()
+                        .fg(crate::tui::theme::THEME.accent)
+                        .add_modifier(Modifier::BOLD),
+                )),
+                header,
+            );
+            frame.render_widget(Paragraph::new(format!("{}\n\n只移除市场登记，保留本地缓存与目录。\n项目正在使用的市场不能移除，请先停用其中的插件。", clean(source))).wrap(Wrap { trim: false }), body);
+            frame.render_widget(Paragraph::new("Enter 确认移除 · Esc 返回"), footer);
+        } else if dialog.adding {
             let source = super::render::fit_label(
                 &format!("来源：{}", clean(&dialog.source)),
                 header.width.saturating_sub(1) as usize,
@@ -1666,9 +1957,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
                 header,
             );
             frame.render_widget(
-                Paragraph::new(
-                    "可输入本地目录、GitHub owner/repo 或 HTTPS Git URL。\n下载只保存到 Orbit 用户数据目录；安装插件前仍会展示其内容。",
-                )
+                Paragraph::new(format!("可输入本地目录、GitHub owner/repo 或 HTTPS Git URL。\n下载只保存到 Orbit 用户数据目录；安装插件前仍会展示其内容。{}", dialog.error.as_ref().map(|error| format!("\n\n{}", clean(error))).unwrap_or_default()))
                 .wrap(Wrap { trim: false }),
                 body,
             );
@@ -1720,7 +2009,12 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
                             items.join("、")
                         }
                     };
-                    let lines = vec![
+                    let mut lines = Vec::new();
+                    if let Some(error) = &dialog.error {
+                        lines.push(Line::from(clean(error)));
+                        lines.push(Line::from(""));
+                    }
+                    lines.extend([
                         Line::from(format!("技能：{}", list(&package.skills))),
                         Line::from(format!("命令：{}", list(&package.commands))),
                         Line::from(format!("Agent：{}", list(&package.agents))),
@@ -1760,7 +2054,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
                             },
                             Style::default().fg(crate::tui::theme::THEME.secondary),
                         ),
-                    ];
+                    ]);
 
                     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), body);
                 }
@@ -1800,11 +2094,16 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
         } else if dialog.viewing_plugins {
             state.ime_cursor = None;
             let visible = (body.height as usize / 2).max(1);
+            let indices = dialog.plugin_indices();
+            let selected = indices
+                .iter()
+                .position(|index| *index == dialog.selected_plugin)
+                .unwrap_or(0);
             if !state.dialog_manual_scroll {
                 dialog.plugin_offset = dialog
                     .plugin_offset
-                    .min(dialog.selected_plugin)
-                    .max(dialog.selected_plugin.saturating_sub(visible - 1));
+                    .min(selected)
+                    .max(selected.saturating_sub(visible - 1));
             }
 
             let Some(market) = dialog.selected_market() else {
@@ -1820,19 +2119,68 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
                             .add_modifier(Modifier::BOLD),
                     ),
                     Line::styled(
-                        clean(&market.source),
+                        dialog
+                            .error
+                            .as_ref()
+                            .map(|error| clean(error))
+                            .unwrap_or_else(|| {
+                                format!(
+                                    "{} · {}{}",
+                                    if dialog.enabled_only {
+                                        "已启用"
+                                    } else {
+                                        "全部"
+                                    },
+                                    if dialog.searching {
+                                        "搜索："
+                                    } else {
+                                        "筛选："
+                                    },
+                                    clean(&dialog.query)
+                                )
+                            }),
                         Style::default().fg(crate::tui::theme::THEME.secondary),
                     ),
                 ]),
                 header,
             );
+            if dialog.searching {
+                state.ime_cursor = Some(
+                    (
+                        header.x
+                            + unicode_width::UnicodeWidthStr::width(
+                                format!(
+                                    "{} · 搜索：{}",
+                                    if dialog.enabled_only {
+                                        "已启用"
+                                    } else {
+                                        "全部"
+                                    },
+                                    clean(&dialog.query)
+                                )
+                                .as_str(),
+                            )
+                            .min(header.width.saturating_sub(1) as usize)
+                                as u16,
+                        header.y + 1,
+                    )
+                        .into(),
+                );
+            }
             let visible = (body.height as usize / 2).max(1);
             let first = dialog.plugin_offset;
             let mut entries = Vec::new();
 
-            for (index, plugin) in market.plugins.iter().enumerate().skip(first).take(visible) {
+            for (row, index) in indices
+                .iter()
+                .copied()
+                .enumerate()
+                .skip(first)
+                .take(visible)
+            {
+                let plugin = &market.plugins[index];
                 state.dialog_rows.push((
-                    Rect::new(body.x, body.y + ((index - first) * 2) as u16, body.width, 2)
+                    Rect::new(body.x, body.y + ((row - first) * 2) as u16, body.width, 2)
                         .intersection(body),
                     index,
                 ));
@@ -1871,27 +2219,48 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
             }
 
             if entries.is_empty() {
-                entries.push(Line::from("这个市场没有声明插件。"));
+                entries.push(Line::from(
+                    if dialog.query.is_empty() && !dialog.enabled_only {
+                        "这个市场没有声明插件。"
+                    } else {
+                        "没有符合筛选的插件。"
+                    },
+                ));
             }
 
             fit_hit_rows(&mut state.dialog_rows, &entries, body);
             frame.render_widget(Paragraph::new(entries), body);
             frame.render_widget(
                 Paragraph::new(format!(
-                    "{} 个插件 · ↑↓ 浏览 · Enter 检查包 · Esc 返回市场列表",
-                    market.plugins.len()
+                    "{} 个插件 · ↑↓ 浏览 · Enter 检查 · / 搜索 · F2 {} · R 刷新 · Esc 返回",
+                    indices.len(),
+                    if dialog.enabled_only {
+                        "显示全部"
+                    } else {
+                        "只看已启用"
+                    }
                 )),
                 footer,
             );
         } else {
             state.ime_cursor = None;
             frame.render_widget(
-                Paragraph::new(Line::styled(
-                    "已添加的市场",
-                    Style::default()
-                        .fg(crate::tui::theme::THEME.accent)
-                        .add_modifier(Modifier::BOLD),
-                )),
+                Paragraph::new(vec![
+                    Line::styled(
+                        "已添加的市场",
+                        Style::default()
+                            .fg(crate::tui::theme::THEME.accent)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Line::styled(
+                        dialog
+                            .error
+                            .as_ref()
+                            .map(|error| clean(error))
+                            .unwrap_or_default(),
+                        Style::default().fg(crate::tui::theme::THEME.secondary),
+                    ),
+                ]),
                 header,
             );
             let visible = (body.height as usize / 2).max(1);
@@ -1950,7 +2319,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
             frame.render_widget(Paragraph::new(entries), body);
             frame.render_widget(
                 Paragraph::new(format!(
-                    "{} 个市场 · ↑↓ 选择 · Enter 查看插件 · A 添加市场 · Esc 返回",
+                    "{} 个市场 · ↑↓ 选择 · Enter 插件 · A 添加 · R 刷新 · Delete 移除 · Esc 返回",
                     dialog.marketplaces.len()
                 )),
                 footer,

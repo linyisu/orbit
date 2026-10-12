@@ -730,11 +730,11 @@ fn marketplace_dialog_collects_source_before_starting_download() {
     handle(&mut state, Event::Paste("owner/catalog".into()));
     handle(&mut state, key(KeyCode::Enter));
 
-    assert!(state.marketplace_dialog.is_none());
-    assert_eq!(
-        state.pending_marketplace_source.as_deref(),
-        Some("owner/catalog")
+    assert!(state.marketplace_dialog.as_ref().unwrap().pending());
+    assert!(
+        matches!(state.pending_plugin_action.as_ref(), Some(orbit_protocol::plugins::Action::Add { source }) if source == "owner/catalog")
     );
+    assert!(state.pending_marketplace_source.is_none());
 }
 
 fn plugin_marketplace() -> Marketplace {
@@ -765,6 +765,238 @@ fn inspected_plugin() -> PluginPackage {
     }
 }
 
+fn plugin_catalog(
+    marketplaces: Vec<Marketplace>,
+    project: &str,
+) -> orbit_protocol::plugins::Catalog {
+    orbit_protocol::plugins::Catalog {
+        marketplaces,
+        project_id: project.into(),
+        enabled: Vec::new(),
+        inspections: Vec::new(),
+    }
+}
+
+#[test]
+fn marketplace_refresh_and_remove_use_exact_source_and_require_confirmation() {
+    let mut first = plugin_marketplace();
+    first.source = "https://example.test/team/very-long-catalog-name.git".into();
+    let mut second = first.clone();
+    second.source = "https://example.test/team/very-long-catalog-name-2.git".into();
+    let source = second.source.clone();
+    let mut state = UiState::new("model");
+    state.marketplace_dialog = Some(MarketplaceDialog::new(
+        vec![first, second],
+        "project".into(),
+        Vec::new(),
+    ));
+    handle(&mut state, key(KeyCode::Down));
+    handle(&mut state, key(KeyCode::Char('r')));
+    assert!(
+        matches!(state.pending_plugin_action.take(), Some(orbit_protocol::plugins::Action::Refresh { source: selected }) if selected == source)
+    );
+    state
+        .marketplace_dialog
+        .as_mut()
+        .unwrap()
+        .failed("Network unavailable".into());
+    handle(&mut state, key(KeyCode::Delete));
+    assert!(state.pending_plugin_action.is_none());
+    assert_eq!(
+        state
+            .marketplace_dialog
+            .as_ref()
+            .unwrap()
+            .removing
+            .as_deref(),
+        Some(source.as_str())
+    );
+    handle(&mut state, key(KeyCode::Up));
+    handle(&mut state, key(KeyCode::Enter));
+    assert!(
+        matches!(state.pending_plugin_action.as_ref(), Some(orbit_protocol::plugins::Action::Remove { source: selected }) if selected == &source)
+    );
+    assert!(state.marketplace_dialog.as_ref().unwrap().pending());
+}
+
+#[test]
+fn marketplace_remove_cancel_and_pending_guard_do_not_queue_another_action() {
+    let mut state = UiState::new("model");
+    state.marketplace_dialog = Some(MarketplaceDialog::new(
+        vec![plugin_marketplace()],
+        "project".into(),
+        Vec::new(),
+    ));
+    handle(&mut state, key(KeyCode::Delete));
+    handle(&mut state, key(KeyCode::Esc));
+    assert!(
+        state
+            .marketplace_dialog
+            .as_ref()
+            .unwrap()
+            .removing
+            .is_none()
+    );
+    assert!(state.pending_plugin_action.is_none());
+    handle(&mut state, key(KeyCode::F(5)));
+    state.pending_plugin_action.take();
+    handle(&mut state, key(KeyCode::Char('a')));
+    handle(&mut state, Event::Paste("another/source".into()));
+    handle(&mut state, key(KeyCode::Delete));
+    handle(&mut state, key(KeyCode::Enter));
+    assert!(state.pending_plugin_action.is_none());
+    assert!(state.marketplace_dialog.as_ref().unwrap().source.is_empty());
+    handle(&mut state, key(KeyCode::Esc));
+    assert!(state.marketplace_dialog.is_none());
+}
+
+#[test]
+fn marketplace_search_and_enabled_filter_never_inspect_hidden_plugins() {
+    let mut market = plugin_marketplace();
+    market.plugins.push(crate::marketplaces::Plugin {
+        name: "docs".into(),
+        description: "中文 文档".into(),
+        source: Some("plugins/docs".into()),
+    });
+    let configured = ProjectPlugin {
+        project_id: "project".into(),
+        marketplace_source: market.source.clone(),
+        plugin_name: "docs".into(),
+        package_source: "plugins/docs".into(),
+        version: None,
+        marketplace_revision: None,
+        enabled_at: 1,
+    };
+    let mut state = UiState::new("model");
+    state.marketplace_dialog = Some(MarketplaceDialog::new(
+        vec![market],
+        "project".into(),
+        vec![configured],
+    ));
+    handle(&mut state, key(KeyCode::Enter));
+    handle(&mut state, key(KeyCode::F(2)));
+    let dialog = state.marketplace_dialog.as_ref().unwrap();
+    assert_eq!(dialog.plugin_indices(), vec![1]);
+    assert_eq!(dialog.selected_plugin().unwrap().1.name, "docs");
+    handle(&mut state, key(KeyCode::Char('/')));
+    handle(&mut state, Event::Paste("文档".into()));
+    handle(&mut state, key(KeyCode::Enter));
+    assert_eq!(
+        state.marketplace_dialog.as_ref().unwrap().plugin_indices(),
+        vec![1]
+    );
+    handle(&mut state, key(KeyCode::Char('/')));
+    handle(&mut state, Event::Paste("missing".into()));
+    handle(&mut state, key(KeyCode::Enter));
+    handle(&mut state, key(KeyCode::Enter));
+    let dialog = state.marketplace_dialog.as_ref().unwrap();
+    assert!(dialog.plugin_indices().is_empty());
+    assert!(dialog.selected_plugin().is_none());
+    assert!(dialog.inspection.is_none());
+    assert!(state.pending_plugin_action.is_none());
+}
+
+#[test]
+fn marketplace_catalog_updates_preserve_identity_and_reject_other_projects() {
+    let first = plugin_marketplace();
+    let mut second = first.clone();
+    second.source = "owner/another-catalog".into();
+    let mut dialog = MarketplaceDialog::new(
+        vec![first.clone(), second.clone()],
+        "project".into(),
+        Vec::new(),
+    );
+    dialog.selected_market = 1;
+    dialog.viewing_plugins = true;
+    dialog.query = "review".into();
+    let identity = dialog.identity().to_string();
+    assert_ne!(
+        identity,
+        MarketplaceDialog::new(Vec::new(), "project".into(), Vec::new()).identity()
+    );
+    dialog.start("正在刷新市场源", &second.source);
+    assert!(!dialog.update_catalog(plugin_catalog(vec![first.clone()], "different-project")));
+    assert!(dialog.pending());
+    assert_eq!(dialog.selected_market().unwrap().source, second.source);
+    assert!(dialog.update_catalog(plugin_catalog(vec![second.clone(), first], "project")));
+    assert!(!dialog.pending());
+    assert_eq!(dialog.selected_market, 0);
+    assert!(dialog.viewing_plugins);
+    assert_eq!(dialog.query, "review");
+    assert_eq!(dialog.identity(), identity);
+    assert_eq!(dialog.selected_market().unwrap().source, second.source);
+    assert!(dialog.update_catalog(plugin_catalog(Vec::new(), "project")));
+    assert!(!dialog.viewing_plugins);
+    assert!(dialog.selected_market().is_none());
+}
+
+#[test]
+fn marketplace_failed_add_preserves_source_for_retry() {
+    let mut state = UiState::new("model");
+    state.marketplace_dialog = Some(MarketplaceDialog::new(
+        Vec::new(),
+        "project".into(),
+        Vec::new(),
+    ));
+    handle(&mut state, key(KeyCode::Char('a')));
+    handle(&mut state, Event::Paste("owner/catalog".into()));
+    handle(&mut state, key(KeyCode::Enter));
+    state.pending_plugin_action.take();
+    state
+        .marketplace_dialog
+        .as_mut()
+        .unwrap()
+        .failed("Network unavailable".into());
+    assert!(state.marketplace_dialog.as_ref().unwrap().adding);
+    handle(&mut state, key(KeyCode::Enter));
+    assert!(
+        matches!(state.pending_plugin_action.as_ref(), Some(orbit_protocol::plugins::Action::Add { source }) if source == "owner/catalog")
+    );
+}
+
+#[test]
+fn marketplace_filtered_rows_keep_original_plugin_identity() {
+    let mut market = plugin_marketplace();
+    market.plugins.push(crate::marketplaces::Plugin {
+        name: "docs".into(),
+        description: "Write documentation".into(),
+        source: Some("plugins/docs".into()),
+    });
+    let mut state = UiState::new("model");
+    let mut dialog = MarketplaceDialog::new(vec![market], "project".into(), Vec::new());
+    dialog.viewing_plugins = true;
+    dialog.query = "documentation".into();
+    dialog.normalize_plugin();
+    state.marketplace_dialog = Some(dialog);
+    let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+    terminal
+        .draw(|frame| super::super::render::draw(frame, &mut state))
+        .unwrap();
+    assert_eq!(state.dialog_rows.len(), 1);
+    assert_eq!(state.dialog_rows[0].1, 1);
+    let area = state.dialog_rows[0].0;
+    handle(
+        &mut state,
+        Event::Mouse(crossterm::event::MouseEvent {
+            kind: MouseEventKind::Down(crossterm::event::MouseButton::Left),
+            column: area.x,
+            row: area.y,
+            modifiers: KeyModifiers::NONE,
+        }),
+    );
+    assert_eq!(
+        state
+            .marketplace_dialog
+            .as_ref()
+            .unwrap()
+            .selected_plugin()
+            .unwrap()
+            .1
+            .name,
+        "docs"
+    );
+}
+
 #[test]
 fn marketplace_dialog_enables_inspected_plugin_for_current_project() {
     let mut state = UiState::new("model");
@@ -779,10 +1011,15 @@ fn marketplace_dialog_enables_inspected_plugin_for_current_project() {
 
     handle(&mut state, key(KeyCode::Char('e')));
 
-    assert!(state.marketplace_dialog.is_none());
+    assert!(state.marketplace_dialog.as_ref().unwrap().pending());
+    let Some(orbit_protocol::plugins::Action::Enable { plugin }) =
+        state.pending_plugin_action.as_ref()
+    else {
+        panic!("expected plugin enable")
+    };
     assert_eq!(
-        state.pending_project_plugin_change,
-        Some(ProjectPluginChange::Enable(ProjectPlugin {
+        plugin,
+        &ProjectPlugin {
             project_id: "project".into(),
             marketplace_source: "owner/catalog".into(),
             plugin_name: "review".into(),
@@ -790,7 +1027,7 @@ fn marketplace_dialog_enables_inspected_plugin_for_current_project() {
             version: Some("1.2.3".into()),
             marketplace_revision: None,
             enabled_at: 0,
-        }))
+        }
     );
 }
 
@@ -817,13 +1054,9 @@ fn marketplace_dialog_disables_already_enabled_plugin() {
 
     handle(&mut state, key(KeyCode::Char('e')));
 
-    assert_eq!(
-        state.pending_project_plugin_change,
-        Some(ProjectPluginChange::Disable {
-            project_id: "project".into(),
-            marketplace_source: "owner/catalog".into(),
-            plugin_name: "review".into(),
-        })
+    assert!(state.marketplace_dialog.as_ref().unwrap().pending());
+    assert!(
+        matches!(state.pending_plugin_action.as_ref(), Some(orbit_protocol::plugins::Action::Disable { marketplace_source, plugin_name }) if marketplace_source == "owner/catalog" && plugin_name == "review")
     );
 }
 

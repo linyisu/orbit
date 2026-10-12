@@ -69,6 +69,14 @@ impl Tab {
             }
             return Ok(Action::None);
         }
+        if layer == Some(tui::overlay::Layer::Management) {
+            if let Some(panel) = &mut self.state.management.active {
+                let id = panel.id.clone();
+                let action = panel.panel.handle(&event);
+                self.management_action(&id, action);
+            }
+            return Ok(Action::Redraw);
+        }
         if layer == Some(tui::overlay::Layer::Plan) {
             if let Some(action) = self.state.planning.handle(&event) {
                 self.submit_with_receipt(
@@ -177,7 +185,9 @@ impl Tab {
             if std::mem::take(&mut self.state.model_update_requested) {
                 return Ok(Action::RefreshModels);
             }
-            let plugin_action = if let Some(source) = self.state.pending_marketplace_source.take() {
+            let plugin_action = if let Some(action) = self.state.pending_plugin_action.take() {
+                Some(action)
+            } else if let Some(source) = self.state.pending_marketplace_source.take() {
                 Some(orbit_protocol::plugins::Action::Add { source })
             } else {
                 self.state
@@ -198,11 +208,21 @@ impl Tab {
                     })
             };
             if let Some(action) = plugin_action {
-                self.send(Request::Plugins {
-                    session: self.id.clone().unwrap_or_default(),
-                    expected_workspace: Some(self.state.workspace.clone()),
-                    action,
-                });
+                let id = self
+                    .state
+                    .marketplace_dialog
+                    .as_ref()
+                    .map(|dialog| dialog.identity().to_owned())
+                    .unwrap_or_default();
+                let workspace = self.state.workspace.clone();
+                self.submit_with_receipt(
+                    Request::Plugins {
+                        session: self.id.clone().unwrap_or_default(),
+                        expected_workspace: Some(workspace.clone()),
+                        action,
+                    },
+                    submissions::Draft::Plugins { workspace, id },
+                );
             }
             if let Some(id) = self.state.delete_request.take() {
                 self.send(Request::Admin {
@@ -251,6 +271,9 @@ impl Tab {
                 approval::Action::None => {}
             }
             return Ok(Action::None);
+        }
+        if let Some(action) = self.shortcut(&event) {
+            return action;
         }
         if let Event::Mouse(mouse) = &event
             && self
@@ -529,6 +552,9 @@ impl Tab {
             }
         }
         let session = self.id.clone().unwrap_or_default();
+        if self.open_management(command) {
+            return Ok(Action::Redraw);
+        }
         if let Some(question) = tui::btw::question(command) {
             self.ask(question.into(), None);
             return Ok(Action::Redraw);
@@ -596,7 +622,8 @@ impl Tab {
             "/status" => self.inspect(orbit_protocol::Inspection::Status),
             "/context" => self.inspect(orbit_protocol::Inspection::Context),
             "/skills" => self.inspect(orbit_protocol::Inspection::Skills),
-            "/mcp" => self.inspect(orbit_protocol::Inspection::Mcp),
+            "/mcp status" => self.inspect(orbit_protocol::Inspection::Mcp),
+            "/export" => self.inspect(orbit_protocol::Inspection::ExportPatch),
             "/diagnostics" => self.inspect(orbit_protocol::Inspection::Diagnostics),
             "/usage" => self.show_usage(),
             "/changes" => self.inspect(orbit_protocol::Inspection::Changes),

@@ -9,6 +9,8 @@ pub(super) enum Draft {
     Plan,
     Model(String),
     Permissions(Mode),
+    Management(String),
+    Plugins { workspace: String, id: String },
 }
 
 pub(super) struct Submission {
@@ -24,7 +26,29 @@ impl Submission {
 }
 
 impl Tab {
-    fn request(&self, request: Request) -> Result<oneshot::Receiver<Result<Response>>> {
+    fn request(&mut self, request: Request) -> Result<oneshot::Receiver<Result<Response>>> {
+        if matches!(
+            &request,
+            Request::Review {
+                action: orbit_protocol::review::Action::Undo { .. }
+                    | orbit_protocol::review::Action::Stage { .. }
+                    | orbit_protocol::review::Action::Unstage { .. },
+                ..
+            }
+        ) {
+            let connection = self
+                .connection
+                .clone()
+                .ok_or_else(|| anyhow::anyhow!("工作区尚未连接"))?;
+            let (reply, response) = oneshot::channel();
+            self.independent_requests.spawn(async move {
+                // Approval and Cancel travel on the main pump while this
+                // independent handshake waits for the reviewed write result.
+                let result = async { connection.connect().await?.request(request).await }.await;
+                let _ = reply.send(result);
+            });
+            return Ok(response);
+        }
         let commands = self
             .commands
             .as_ref()
@@ -115,6 +139,19 @@ impl Tab {
 
     fn rejected(&mut self, draft: Draft, error: anyhow::Error) {
         match draft {
+            Draft::Plugins { workspace, id } => {
+                if workspace == self.state.workspace
+                    && let Some(dialog) = &mut self.state.marketplace_dialog
+                    && dialog.identity() == id
+                {
+                    dialog.failed(error.to_string());
+                }
+            }
+            Draft::Management(id) => {
+                if let Some(panel) = self.state.management.get_mut(&id) {
+                    panel.panel.error(error.to_string());
+                }
+            }
             Draft::Plan => self.state.planning.failed(error.to_string()),
             Draft::Model(_) | Draft::Permissions(_) => self
                 .state
@@ -138,6 +175,7 @@ impl Tab {
     }
 
     pub(super) fn poll_submissions(&mut self) -> bool {
+        while self.independent_requests.try_join_next().is_some() {}
         let mut changed = false;
         let mut index = 0;
         while index < self.submissions.len() {
@@ -153,6 +191,31 @@ impl Tab {
             };
             let submission = self.submissions.remove(index);
             changed = true;
+            if let Draft::Management(id) = &submission.draft {
+                let id = id.clone();
+                self.management_response(&id, result);
+                continue;
+            }
+            if let Draft::Plugins { workspace, id } = &submission.draft {
+                if workspace == &self.state.workspace
+                    && let Some(dialog) = &mut self.state.marketplace_dialog
+                    && dialog.identity() == id
+                {
+                    match result {
+                        Ok(Response::Plugins(catalog)) => {
+                            if !dialog.update_catalog(catalog) {
+                                dialog.failed(
+                                    "项目已变化；忽略旧插件目录，请重新打开插件市场。".into(),
+                                );
+                            }
+                        }
+                        Ok(Response::Error(error)) => dialog.failed(error),
+                        Err(error) => dialog.failed(format!("{error}；请刷新确认操作结果。")),
+                        _ => dialog.failed("插件响应类型不匹配，请刷新确认。".into()),
+                    }
+                }
+                continue;
+            }
             if let Some(ticket) = submission.pending_input {
                 if let Ok(Response::InputQueued { message_id }) = &result {
                     self.state.pending_input.queued(ticket, *message_id);
@@ -209,6 +272,7 @@ impl Tab {
     }
 
     pub(super) fn abandon_submissions(&mut self) {
+        self.independent_requests.abort_all();
         let pending = std::mem::take(&mut self.submissions);
         for submission in pending {
             if let Some(ticket) = submission.pending_input {

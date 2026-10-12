@@ -15,6 +15,7 @@ pub(super) enum Layer {
     Authentication,
     Connection,
     Image,
+    Management,
     Plan,
     Questions,
     Restore,
@@ -32,6 +33,7 @@ pub(super) fn active(state: &UiState) -> Option<Layer> {
         (state.ssh_prompt.is_some(), Layer::Authentication),
         (state.workspace_wizard.is_some(), Layer::Connection),
         (state.media_preview.is_some(), Layer::Image),
+        (state.management.active.is_some(), Layer::Management),
         (state.planning.visible(), Layer::Plan),
         (state.user_input.visible(), Layer::Questions),
         (state.restore_picker.is_some(), Layer::Restore),
@@ -49,6 +51,7 @@ pub(super) fn active(state: &UiState) -> Option<Layer> {
 /// Called before the frozen-frame shortcut as well as after event dispatch.
 /// Opening through a command, transcript link or server event has one handoff.
 pub(super) fn sync(state: &mut UiState) {
+    state.management.approval(state.approval.is_some());
     let layer = active(state);
     if layer != state.overlay_layer {
         state.overlay_layer = layer;
@@ -65,6 +68,9 @@ pub(super) fn invalidate(state: &mut UiState) {
     state.overlay_needs_layout = true;
     state.planning.invalidate_geometry();
     state.user_input.clear_geometry();
+    if let Some(state) = &mut state.management.active {
+        state.panel.invalidate_geometry();
+    }
     state.dialog_rows.clear();
     state.pending_list_hover = None;
     if let Some(picker) = &mut state.restore_picker {

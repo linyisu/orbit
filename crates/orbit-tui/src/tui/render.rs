@@ -104,6 +104,12 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
         state.ime_cursor.filter(|_| editing),
         now,
     );
+    if super::overlay::active(state) == Some(super::overlay::Layer::Management) {
+        state.ime_cursor = None;
+        if let Some(panel) = &mut state.management.active {
+            panel.draw(frame);
+        }
+    }
     if state.media_preview.is_some()
         || state.workspace_wizard.is_some()
         || state.ssh_prompt.is_some()

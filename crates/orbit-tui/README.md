@@ -189,6 +189,8 @@ TUI 子任务复用普通工具卡片的标题与展开边框，展开后显示�
 
 ## 交互命令
 
+GUI 与 TUI 的对应入口及平台边界见 [功能对照](../../FRONTEND_PARITY.md)。`/file`、`/review`、`/queue`、`/skills`、`/tasks` 打开原生终端管理面板；Esc 收起后保留编辑草稿。`/settings` 编辑本机 Agent／MCP 配置，`/mcp status` 查看会话实际 MCP 连接，`/keys` 编辑终端快捷键。同一配置的所有标签立即共享改绑，Ctrl+C 保留取消／清空／退出行为。
+
 ### 交互式快捷指令 (Slash Commands)
 
 - `/connect`：打开连接配置向导面板。

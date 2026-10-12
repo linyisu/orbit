@@ -60,8 +60,20 @@ pub const COMMANDS: &[Command] = &[
         description: "退出 Orbit",
     },
     Command {
+        name: "/export",
+        description: "导出当前会话的文件补丁，可在详情中复制",
+    },
+    Command {
+        name: "/file",
+        description: "浏览和编辑工作区文件；/file <路径> 直接打开",
+    },
+    Command {
         name: "/help",
         description: "查看命令和快捷键帮助",
+    },
+    Command {
+        name: "/keys",
+        description: "搜索和修改终端快捷键，保存后所有标签立即生效",
     },
     Command {
         name: "/local",
@@ -69,7 +81,7 @@ pub const COMMANDS: &[Command] = &[
     },
     Command {
         name: "/mcp",
-        description: "查看 MCP server 连接状态",
+        description: "配置本机 MCP；/mcp status 查看会话连接状态",
     },
     Command {
         name: "/memory",
@@ -96,6 +108,10 @@ pub const COMMANDS: &[Command] = &[
         description: "管理插件市场与项目启用状态",
     },
     Command {
+        name: "/queue",
+        description: "查看、编辑或移除待发送消息",
+    },
+    Command {
         name: "/reasoning",
         description: "选择当前模型的思考强度；用法 /reasoning high",
     },
@@ -116,8 +132,16 @@ pub const COMMANDS: &[Command] = &[
         description: "搜索并恢复当前项目的历史会话",
     },
     Command {
+        name: "/review",
+        description: "Git 审查、暂存与取消暂存；可选 staged / untracked",
+    },
+    Command {
         name: "/sessions",
         description: "打开会话选择器（同 /resume）",
+    },
+    Command {
+        name: "/settings",
+        description: "编辑本机 Agent 与 MCP 配置；新会话生效",
     },
     Command {
         name: "/skill",
@@ -187,6 +211,14 @@ pub fn available_while_running(name: &str) -> bool {
             | "/restore"
             | "/editor"
             | "/tasks"
+            | "/file"
+            | "/review"
+            | "/changes"
+            | "/diff"
+            | "/export"
+            | "/queue"
+            | "/settings"
+            | "/keys"
             | "/memory"
             | "/ssh"
             | "/wsl"
@@ -270,6 +302,12 @@ pub fn available_in_workspace(name: &str) -> bool {
             | "/restore"
             | "/editor"
             | "/tasks"
+            | "/file"
+            | "/review"
+            | "/export"
+            | "/queue"
+            | "/settings"
+            | "/keys"
             | "/memory"
             | "/plugins"
             | "/ssh"
@@ -325,7 +363,12 @@ mod tests {
         );
         // Adding a command may add valid fuzzy matches. Assert the ranking
         // contract rather than freezing the entire command registry here.
-        assert_eq!(matching("/se")[0].name, "/sessions");
+        assert_eq!(matching("/sess")[0].name, "/sessions");
+        assert!(
+            matching("/se")
+                .iter()
+                .any(|command| command.name == "/settings")
+        );
         assert!(
             matching("/s")
                 .iter()
