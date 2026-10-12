@@ -16,3 +16,10 @@ coexist, scale with the font, and cannot overlap the first code line. Explicitly
 height-capped scrolling blocks keep their existing pinned controls.
 
 Remove this Cargo patch once an upstream revision contains the equivalent fix.
+
+Mixed inline flows honor the final cell's text alignment, including nowrap
+cells and short final lines. Each whole line receives one translation shared
+by glyphs, code backgrounds, formula objects, hit testing and selection; the
+individual fragments stay left-aligned internally. Scrolling nowrap tables
+stop at their measured natural width instead of spreading spare space across
+columns, and still scroll horizontally when the viewport is narrower.

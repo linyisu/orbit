@@ -10,8 +10,9 @@ use gpui::{
     AbsoluteLength, AnyElement, App, AvailableSpace, Bounds, DefiniteLength, Element, ElementId,
     GlobalElementId, Hsla, ImageSource, InspectorElementId, InteractiveElement as _, IntoElement,
     LayoutId, LineFragment as WrapLineFragment, ObjectFit, Pixels, Refineable as _, ShapedLine,
-    SharedString, Size, StatefulInteractiveElement as _, Styled, StyledImage as _, TextRun,
-    TextStyle, WhiteSpace, Window, img, point, prelude::FluentBuilder as _, px, relative, size,
+    SharedString, Size, StatefulInteractiveElement as _, Styled, StyledImage as _, TextAlign,
+    TextRun, TextStyle, WhiteSpace, Window, img, point, prelude::FluentBuilder as _, px, relative,
+    size,
 };
 
 use crate::text::text_view::{LinkClickHandlerFn, handle_link_click};
@@ -169,9 +170,32 @@ struct InlineFlowTypography {
 
 #[derive(Default)]
 struct InlineFlowLayout {
+    lines: Vec<(Range<usize>, Pixels)>,
     fragments: Vec<PositionedFragment>,
     size: Size<Pixels>,
     wrap_width: Option<Pixels>,
+}
+
+impl InlineFlowLayout {
+    // Use the final layout box, including nowrap cells whose measurement has
+    // no wrap width. Paint, hit testing and selection share this translation.
+    fn aligned_fragments(
+        &self,
+        width: Pixels,
+        align: TextAlign,
+    ) -> impl Iterator<Item = (usize, &PositionedFragment, Pixels)> {
+        self.lines.iter().flat_map(move |(range, line_width)| {
+            let spare = (width - *line_width).max(Pixels::ZERO);
+            let offset = match align {
+                TextAlign::Left => Pixels::ZERO,
+                TextAlign::Center => spare / 2.,
+                TextAlign::Right => spare,
+            };
+            range
+                .clone()
+                .map(move |ix| (ix, &self.fragments[ix], offset))
+        })
+    }
 }
 
 enum PositionedFragment {
@@ -464,7 +488,10 @@ impl Element for InlineFlow {
             .map(|(ix, _)| ix);
 
         let mut text_fragment_count = 0;
-        for (fragment_ix, fragment) in layout.fragments.iter().enumerate() {
+        for (fragment_ix, fragment, offset) in
+            layout.aligned_fragments(bounds.size.width, text_style.text_align)
+        {
+            let flow_origin = bounds.origin + point(offset, Pixels::ZERO);
             match fragment {
                 PositionedFragment::Object {
                     item_ix,
@@ -490,10 +517,7 @@ impl Element for InlineFlow {
                         accessibility_label.clone(),
                         (**object).clone(),
                         selected.clone(),
-                        Bounds::new(
-                            bounds.origin + selection_bounds.origin,
-                            selection_bounds.size,
-                        ),
+                        Bounds::new(flow_origin + selection_bounds.origin, selection_bounds.size),
                         Bounds::new(
                             point(bounds.left(), bounds.top() + selection_bounds.top()),
                             size(bounds.size.width, selection_bounds.size.height),
@@ -502,7 +526,7 @@ impl Element for InlineFlow {
                     .link(link.clone(), self.link_click_handler.clone())
                     .into_any_element();
                     element.prepaint_as_root(
-                        bounds.origin + *origin,
+                        flow_origin + *origin,
                         size(
                             AvailableSpace::Definite(object_size.width),
                             AvailableSpace::Definite(object_size.height),
@@ -548,7 +572,7 @@ impl Element for InlineFlow {
                     };
                     let background = code_background.map(|(background, color)| {
                         (
-                            Bounds::new(bounds.origin + background.origin, background.size),
+                            Bounds::new(flow_origin + background.origin, background.size),
                             color,
                         )
                     });
@@ -559,6 +583,8 @@ impl Element for InlineFlow {
                     fragment_style.font_size = font_size.into();
                     fragment_style.line_height = fragment_size.height.into();
                     fragment_style.white_space = WhiteSpace::Nowrap;
+                    // Alignment belongs to the whole line, never each fragment.
+                    fragment_style.text_align = TextAlign::Left;
                     let mut element = Inline::new(
                         state,
                         links.clone(),
@@ -580,14 +606,14 @@ impl Element for InlineFlow {
                     )
                     .text_style(fragment_style.clone())
                     .selection_paint_bounds(Bounds::new(
-                        bounds.origin + selection_bounds.origin,
+                        flow_origin + selection_bounds.origin,
                         selection_bounds.size,
                     ))
                     .selection_bounds(Bounds::new(
                         point(bounds.left(), bounds.top() + selection_bounds.top()),
                         size(bounds.size.width, selection_bounds.size.height),
                     ))
-                    .paint_origin(bounds.origin + origin + point(padding, Pixels::ZERO))
+                    .paint_origin(flow_origin + origin + point(padding, Pixels::ZERO))
                     .into_any_element();
                     // The `Inline` is its own layout root, with no box around
                     // it: its text measures with the window's text style, so
@@ -597,7 +623,7 @@ impl Element for InlineFlow {
                             Some(fragment_style.subtract(&Default::default())),
                             |window| {
                                 element.prepaint_as_root(
-                                    bounds.origin + origin + point(padding, Pixels::ZERO),
+                                    flow_origin + origin + point(padding, Pixels::ZERO),
                                     size(
                                         AvailableSpace::Definite(
                                             fragment_size.width - padding * 2.,
@@ -636,7 +662,7 @@ impl Element for InlineFlow {
                         self.link_click_handler.clone(),
                     );
                     element.prepaint_as_root(
-                        bounds.origin + origin,
+                        flow_origin + origin,
                         size(
                             AvailableSpace::Definite(fragment_size.width),
                             AvailableSpace::Definite(fragment_size.height),
@@ -890,6 +916,7 @@ fn layout_measured_flow(
     let line_ranges = line_ranges(items, image_sizes, &objects, text_style, wrap_width, window);
     let font_size = text_style.font_size.to_pixels(rem_size);
     let mut fragments = Vec::new();
+    let mut lines = Vec::new();
     let mut max_width = Pixels::ZERO;
     let mut y = Pixels::ZERO;
 
@@ -1035,6 +1062,7 @@ fn layout_measured_flow(
             item_start = item_end;
         }
 
+        let first_fragment = fragments.len();
         let mut x = Pixels::ZERO;
         for mut fragment in line_fragments {
             // Give a text run's glyph box equal leading on both sides, as
@@ -1098,11 +1126,13 @@ fn layout_measured_flow(
             fragments.push(positioned);
         }
 
+        lines.push((first_fragment..fragments.len(), line_width));
         max_width = max_width.max(line_width);
         y += line_ascent + line_descent;
     }
 
     InlineFlowLayout {
+        lines,
         fragments,
         size: size(max_width, y),
         wrap_width,
@@ -1745,6 +1775,53 @@ mod tests {
 
             assert!(layouts() > before, "a new text has a new layout");
         }
+    }
+
+    #[test]
+    fn mixed_lines_align_as_a_whole_including_nowrap_and_short_final_lines() {
+        use super::super::inline::test_fonts::{BODY, MONO, WideMonoTextSystem};
+        use gpui::{Empty, TestApp};
+        let mut app = TestApp::with_text_system(Arc::new(WideMonoTextSystem));
+        let mut window = app.open_window(|_, _| Empty);
+        let style = TextStyle {
+            font_family: BODY.into(),
+            font_size: px(16.).into(),
+            ..Default::default()
+        };
+        let items = vec![MeasureItem::Text {
+            text: "code 中文\nshort".into(),
+            links: vec![],
+            highlights: vec![(
+                0..4,
+                InlineHighlight {
+                    style: Default::default(),
+                    font_family: Some(MONO.into()),
+                    font_size_scale: Some(0.875),
+                },
+            )],
+        }];
+        window.update(|_, window, cx| {
+            for wrap in [None, Some(px(120.))] {
+                let layout = layout_flow(&items, &[None], &style, wrap, window, cx);
+                assert!(layout.lines.len() >= 2);
+                for (align, fraction) in [
+                    (TextAlign::Left, 0.),
+                    (TextAlign::Center, 0.5),
+                    (TextAlign::Right, 1.),
+                ] {
+                    for width in [px(1.), px(240.)] {
+                        let aligned = layout.aligned_fragments(width, align).collect::<Vec<_>>();
+                        assert_eq!(aligned.len(), layout.fragments.len());
+                        for (range, line_width) in &layout.lines {
+                            let expected = (width - *line_width).max(Pixels::ZERO) * fraction;
+                            for ix in range.clone() {
+                                assert_eq!(aligned[ix].2, expected);
+                            }
+                        }
+                    }
+                }
+            }
+        });
     }
 
     #[test]

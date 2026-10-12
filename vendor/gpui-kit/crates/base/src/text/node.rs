@@ -2217,7 +2217,10 @@ impl CodeBlock {
             div()
                 .id("actions")
                 .when(scrolling, |slot| {
-                    slot.absolute().top_2().right_2().bg(style.code_background())
+                    slot.absolute()
+                        .top_2()
+                        .right_2()
+                        .bg(style.code_background())
                 })
                 .font_family(cx.theme().tokens.typography.sans.clone())
                 .child(actions(&self, window, cx))
@@ -3667,6 +3670,15 @@ impl BlockNode {
         div()
             .pb(block_gap(options, style))
             .w_full()
+            // No-wrap tables already retain their intrinsic column widths.
+            // Stop at their natural size instead of stretching the empty space.
+            .when(scroll && nowrap, |this| {
+                this.max_w(px(columns
+                    .iter()
+                    .map(|column| column.max + column.divider)
+                    .sum::<f32>()
+                    + TABLE_BORDER_PX))
+            })
             .child(body)
             // Custom actions row (e.g. copy / download) rendered below the
             // table. The hook's element spans full width; alignment is up to
