@@ -40,7 +40,12 @@ resvg.workspace = true
 pulldown-cmark.workspace = true
 tempfile.workspace = true
 tokio.workspace = true
-gpui-kit = { git = "https://github.com/longbridge/gpui-kit", rev = "1ccf011620da24d633f7cd6d3c11ca2e97798dcf" }
+gpui-kit = { git = "https://github.com/longbridge/gpui-kit", rev = "1ccf011620da24d633f7cd6d3c11ca2e97798dcf", features = [
+    "tree-sitter-bash", "tree-sitter-c", "tree-sitter-cpp", "tree-sitter-css",
+    "tree-sitter-go", "tree-sitter-html", "tree-sitter-javascript", "tree-sitter-lua",
+    "tree-sitter-python", "tree-sitter-rust", "tree-sitter-toml",
+    "tree-sitter-tsx", "tree-sitter-typescript", "tree-sitter-yaml",
+] }
 gpui-shell = { git = "https://github.com/longbridge/gpui-kit", rev = "1ccf011620da24d633f7cd6d3c11ca2e97798dcf" }
 gpui-component-shell = { git = "https://github.com/longbridge/gpui-kit", rev = "1ccf011620da24d633f7cd6d3c11ca2e97798dcf" }
 
