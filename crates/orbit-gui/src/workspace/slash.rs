@@ -74,10 +74,31 @@ const ENTRIES: &[Entry] = &[
     ),
     entry!(
         "plan",
-        "计划…",
-        "查看和审阅当前任务计划",
+        "进入计划模式",
+        "先只读分析并制定计划；/plan view 查看方案",
         List,
-        Action::Argument
+        Action::Workspace(Command::EnterPlan)
+    ),
+    entry!(
+        "build",
+        "返回执行模式",
+        "返回执行模式，不会自动批准计划",
+        SquareTerminal,
+        Action::Workspace(Command::LeavePlan)
+    ),
+    entry!(
+        "close",
+        "关闭标签页",
+        "保留会话记录，运行中的任务继续执行",
+        Close,
+        Action::Workspace(Command::CloseTask)
+    ),
+    entry!(
+        "stop",
+        "停止响应",
+        "停止当前会话正在执行的任务",
+        Square,
+        Action::Workspace(Command::StopTask)
     ),
     entry!(
         "changes",
@@ -174,10 +195,10 @@ const ENTRIES: &[Entry] = &[
     ),
     entry!(
         "resume",
-        "恢复会话",
-        "输入会话 ID",
+        "查找会话",
+        "搜索并恢复已有会话，也可输入会话 ID",
         Folder,
-        Action::Argument
+        Action::Workspace(Command::Sessions)
     ),
     entry!(
         "cd",
@@ -191,7 +212,43 @@ const ENTRIES: &[Entry] = &[
 
 fn query(draft: &str) -> Option<&str> {
     let query = draft.strip_prefix('/')?;
-    (!query.chars().any(char::is_whitespace)).then_some(query)
+    query
+        .chars()
+        .all(|ch| ch.is_alphabetic() || matches!(ch, '-' | '_'))
+        .then_some(query)
+}
+fn command_character(ch: char) -> bool {
+    ch.is_ascii_alphabetic() || matches!(ch, '-' | '_')
+}
+
+pub(super) fn is_command_input(input: &str) -> bool {
+    input
+        .split_whitespace()
+        .next()
+        .and_then(|name| name.strip_prefix('/'))
+        .is_some_and(|name| !name.is_empty() && name.chars().all(command_character))
+}
+
+pub(super) fn workspace_action(name: &str, argument: &str) -> Option<Command> {
+    Some(match (name, argument) {
+        ("/status", "") => Command::Status,
+        ("/context", "") => Command::Context,
+        ("/compact", "") => Command::Compact,
+        ("/skills", "") => Command::Skills,
+        ("/mcp", "") => Command::Mcp,
+        ("/diagnostics", "") => Command::Diagnostics,
+        ("/plan", "") | ("/mode", "plan") => Command::EnterPlan,
+        ("/plan", "view") => Command::Plan,
+        ("/build", "") | ("/mode", "build") => Command::LeavePlan,
+        ("/plugins", "") => Command::Plugins,
+        ("/memory", "") => Command::Memory,
+        ("/btw", "") => Command::Ask,
+        ("/queue", "") => Command::InputQueue,
+        ("/close", "") => Command::CloseTask,
+        ("/stop", "") => Command::StopTask,
+        ("/resume" | "/sessions", "") => Command::Sessions,
+        _ => return None,
+    })
 }
 fn matches(draft: &str) -> Vec<&'static Entry> {
     let Some(query) = query(draft) else {
@@ -574,7 +631,7 @@ impl Workspace {
 
 #[cfg(test)]
 mod tests {
-    use super::{matches, query};
+    use super::{Command, is_command_input, matches, query, workspace_action};
     #[test]
     fn completion_only_claims_a_slash_token_and_preserves_argument_drafts() {
         assert_eq!(query("/"), Some(""));
@@ -584,9 +641,41 @@ mod tests {
             "/btw my question",
             "/model ",
             "/tmp/project\nnotes",
+            "/home/user/file.rs",
+            "/tmp/design notes.md",
         ] {
             assert_eq!(query(draft), None);
         }
+    }
+    #[test]
+    fn absolute_paths_and_multiline_path_notes_are_chat_messages() {
+        for draft in [
+            "/home/user/project/main.rs",
+            "/tmp/design notes.md",
+            "/tmp/project\ninspect this directory",
+            "/etc/config.toml",
+            "/",
+            "ordinary text",
+        ] {
+            assert!(!is_command_input(draft), "{draft}");
+        }
+        for draft in ["/plan", "/plan view", "/model provider::model", " /help "] {
+            assert!(is_command_input(draft), "{draft}");
+        }
+    }
+    #[test]
+    fn planning_aliases_and_bare_resume_route_to_the_same_visible_commands() {
+        assert_eq!(workspace_action("/plan", ""), Some(Command::EnterPlan));
+        assert_eq!(workspace_action("/mode", "plan"), Some(Command::EnterPlan));
+        assert_eq!(workspace_action("/plan", "view"), Some(Command::Plan));
+        assert_eq!(workspace_action("/build", ""), Some(Command::LeavePlan));
+        assert_eq!(workspace_action("/mode", "build"), Some(Command::LeavePlan));
+        for name in ["/resume", "/sessions"] {
+            assert_eq!(workspace_action(name, ""), Some(Command::Sessions));
+            assert_eq!(workspace_action(name, "session-id"), None);
+        }
+        assert_eq!(workspace_action("/plan", "unknown"), None);
+        assert_eq!(workspace_action("/build", "unexpected"), None);
     }
     #[test]
     fn filters_by_command_name_and_localized_purpose() {

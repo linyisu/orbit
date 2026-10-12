@@ -172,6 +172,10 @@ impl Workbench {
             |workbench, source, event, window, cx| match event {
                 WorkspaceEvent::Open(options) => workbench.open((**options).clone(), window, cx),
                 WorkspaceEvent::Activate(key) => workbench.activate(key, window, cx),
+                WorkspaceEvent::CloseTask => {
+                    let key = source.read(cx).key().to_owned();
+                    workbench.close(&key, window, cx);
+                }
                 WorkspaceEvent::Settings(page) => {
                     window.close_all_dialogs(cx);
                     source.update(cx, |view, cx| view.set_visible(false, window, cx));
@@ -550,6 +554,21 @@ impl Render for Workbench {
             .text_color(cx.theme().foreground)
             .font_family(cx.theme().font_family.clone())
             .key_context("Orbit")
+            .on_action(
+                cx.listener(|view, _: &crate::workspace::CloseTask, window, cx| {
+                    if view.settings.is_some() {
+                        view.show_workspace(window, cx);
+                    } else {
+                        let key = view.active.clone();
+                        view.close(&key, window, cx);
+                    }
+                }),
+            )
+            .on_action(
+                cx.listener(|view, _: &crate::workspace::StopTask, window, cx| {
+                    view.with_active(window, cx, |view, _, cx| view.stop_task(cx));
+                }),
+            )
             .on_action(
                 cx.listener(|view, _: &crate::workspace::ToggleSidebar, _, cx| {
                     view.sidebar.update(cx, |sidebar, cx| sidebar.toggle(cx))

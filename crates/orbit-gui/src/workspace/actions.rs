@@ -11,7 +11,7 @@ use orbit_protocol::{
     project::{MemoryAction, MemoryCategory, TaskAction},
 };
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum WorkspaceCommand {
     OpenProject,
     RemoteProject,
@@ -57,6 +57,11 @@ pub(crate) enum WorkspaceCommand {
     History,
     Compactions,
     DeleteSession,
+    EnterPlan,
+    LeavePlan,
+    CloseTask,
+    StopTask,
+    Sessions,
 }
 impl WorkspaceCommand {
     pub(super) const ALL: &'static [(Self, &'static str)] = &[
@@ -104,6 +109,11 @@ impl WorkspaceCommand {
         (Self::History, "会话历史"),
         (Self::Compactions, "压缩记录"),
         (Self::DeleteSession, "删除会话…"),
+        (Self::EnterPlan, "进入只读计划模式"),
+        (Self::LeavePlan, "返回执行模式"),
+        (Self::CloseTask, "关闭当前标签页"),
+        (Self::StopTask, "停止当前响应"),
+        (Self::Sessions, "查找会话…"),
     ];
 }
 impl Workspace {
@@ -113,6 +123,32 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        match action {
+            WorkspaceCommand::Sessions => {
+                self.search_sessions(window, cx);
+                return;
+            }
+            WorkspaceCommand::CloseTask => {
+                cx.emit(WorkspaceEvent::CloseTask);
+                return;
+            }
+            WorkspaceCommand::StopTask => {
+                self.stop_task(cx);
+                return;
+            }
+            WorkspaceCommand::EnterPlan | WorkspaceCommand::LeavePlan => {
+                self.plan_action(
+                    if matches!(action, WorkspaceCommand::EnterPlan) {
+                        plan::Action::Enter
+                    } else {
+                        plan::Action::Leave
+                    },
+                    cx,
+                );
+                return;
+            }
+            _ => {}
+        }
         if matches!(action, WorkspaceCommand::OpenProject) {
             self.open_project(cx);
             return;
@@ -655,20 +691,7 @@ impl Workspace {
                 .update(cx, |input, cx| input.set_value("", window, cx));
             return true;
         }
-        let action = match name {
-            "/status" => Some(WorkspaceCommand::Status),
-            "/context" => Some(WorkspaceCommand::Context),
-            "/compact" => Some(WorkspaceCommand::Compact),
-            "/skills" => Some(WorkspaceCommand::Skills),
-            "/mcp" => Some(WorkspaceCommand::Mcp),
-            "/diagnostics" => Some(WorkspaceCommand::Diagnostics),
-            "/plan" if arg.is_empty() || arg == "view" => Some(WorkspaceCommand::Plan),
-            "/plugins" => Some(WorkspaceCommand::Plugins),
-            "/memory" if arg.is_empty() => Some(WorkspaceCommand::Memory),
-            "/btw" if arg.is_empty() => Some(WorkspaceCommand::Ask),
-            "/queue" if arg.is_empty() => Some(WorkspaceCommand::InputQueue),
-            _ => None,
-        };
+        let action = slash::workspace_action(name, arg);
         if let Some(action) = action {
             self.execute(action, window, cx);
         } else {
@@ -714,15 +737,7 @@ impl Workspace {
                         return true;
                     }
                 },
-                "/mode" if matches!(arg, "plan" | "build") => Request::Plan {
-                    session,
-                    action: if arg == "plan" {
-                        plan::Action::Enter
-                    } else {
-                        plan::Action::Leave
-                    },
-                },
-                "/permissions" => {
+                "/permissions" | "/mode" => {
                     let mode = match arg.to_ascii_lowercase().as_str() {
                         "ask" => orbit_protocol::Mode::Ask,
                         "auto" => orbit_protocol::Mode::Auto,

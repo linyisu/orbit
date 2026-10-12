@@ -1,6 +1,7 @@
 mod actions;
 mod approval;
 pub(crate) use actions::WorkspaceCommand;
+mod composer;
 mod connection;
 mod feedback;
 mod files;
@@ -70,7 +71,11 @@ actions!(
         CompletionPrevious,
         CompletionSubmit,
         CompletionConfirm,
-        CompletionDismiss
+        CompletionDismiss,
+        InputHistoryPrevious,
+        InputHistoryNext,
+        CloseTask,
+        StopTask
     ]
 );
 
@@ -141,6 +146,7 @@ pub(crate) struct Workspace {
     _subscriptions: Vec<Subscription>,
     focus: FocusHandle,
     input: Entity<TextareaState>,
+    history: composer::History,
     conversation: Entity<Conversation>,
     info: Option<SessionInfo>,
     title: SharedString,
@@ -208,6 +214,7 @@ impl Workspace {
         let subscription = cx.subscribe_in(&input, window, |view, input, event, window, cx| {
             if matches!(event, InputEvent::Change) {
                 let draft = input.read(cx).value();
+                view.history.changed(&draft);
                 view.update_completions(draft.as_str(), window, cx);
                 cx.emit(WorkspaceEvent::DraftChanged);
                 cx.notify();
@@ -250,6 +257,7 @@ impl Workspace {
             _subscriptions: vec![subscription, focused, blurred, bounds, focus_lost],
             focus: cx.focus_handle(),
             input,
+            history: Default::default(),
             conversation,
             info: None,
             title: "新会话".into(),
@@ -551,6 +559,7 @@ impl Workspace {
                 {
                     let pending = self.pending.take().unwrap();
                     self.retry = None;
+                    self.history.accepted(&pending.text);
                     // Start acknowledges only after the service persists it.
                     // Closing before the next Profile poll must still resume
                     // this session, rather than restore an empty draft.
@@ -844,7 +853,8 @@ impl Workspace {
             self.submit_completion(window, cx);
             return;
         }
-        if self.input.read(cx).value().starts_with('/') && self.dispatch_slash(window, cx) {
+        if slash::is_command_input(&self.input.read(cx).value()) && self.dispatch_slash(window, cx)
+        {
             return;
         }
         if !self.can_send(cx) {
@@ -948,7 +958,12 @@ impl Workspace {
         });
     }
 
-    fn paste_images(&mut self, item: &ClipboardItem, cx: &mut Context<Self>) -> bool {
+    fn paste_images(
+        &mut self,
+        item: &ClipboardItem,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
         if self.pending.is_some() {
             return false;
         }
@@ -960,13 +975,20 @@ impl Workspace {
                 _ => None,
             })
             .collect::<Vec<_>>();
+        let mut handled = false;
+        for entry in item.entries() {
+            if let ClipboardEntry::ExternalPaths(paths) = entry {
+                self.add_paths(&paths.0, window, cx);
+                handled = true;
+            }
+        }
         if images.is_empty() {
-            let mut handled = false;
-            for entry in item.entries() {
-                if let ClipboardEntry::ExternalPaths(paths) = entry {
-                    self.add_images(&paths.0, cx);
-                    handled = true;
-                }
+            if !handled
+                && let Some(text) = item.text()
+                && let Some(paths) = self.pasted_paths(&text)
+            {
+                self.add_images(&paths, cx);
+                return true;
             }
             return handled;
         }
@@ -1014,15 +1036,7 @@ impl Workspace {
             return;
         }
         for path in paths {
-            let supported = path
-                .extension()
-                .and_then(|extension| extension.to_str())
-                .is_some_and(|extension| {
-                    matches!(
-                        extension.to_ascii_lowercase().as_str(),
-                        "png" | "jpg" | "jpeg" | "webp" | "gif"
-                    )
-                });
+            let supported = composer::is_image(path);
             if supported && !self.paths.contains(path) {
                 self.paths.push(path.clone());
             } else if !supported {

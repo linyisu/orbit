@@ -104,7 +104,9 @@ impl Command {
     }
 
     fn contexts(&self) -> &'static [&'static str] {
-        if self.composer {
+        if matches!(self.id, "input_history_previous" | "input_history_next") {
+            &["Orbit > OrbitComposer > Input"]
+        } else if self.composer {
             &["Orbit > (OrbitComposer && !ComposerCompletions) > Input"]
         } else {
             &["Orbit", "Orbit > Input"]
@@ -139,6 +141,20 @@ static COMMANDS: &[Command] = &[
         "ctrl-n",
         "会话",
         workspace::NewConversation
+    ),
+    command!(
+        "close_task",
+        "关闭当前标签页",
+        "ctrl-w",
+        "会话",
+        workspace::CloseTask
+    ),
+    command!(
+        "stop_task",
+        "停止当前响应",
+        "ctrl-.",
+        "会话",
+        workspace::StopTask
     ),
     command!(
         "appearance_settings",
@@ -210,6 +226,22 @@ static COMMANDS: &[Command] = &[
         "工作区",
         workspace::ToggleInspector
     ),
+    Command {
+        id: "input_history_previous",
+        label: "上一条已发送输入",
+        default: "ctrl-up",
+        group: "消息输入",
+        composer: true,
+        action: || Box::new(workspace::InputHistoryPrevious),
+    },
+    Command {
+        id: "input_history_next",
+        label: "下一条输入或返回草稿",
+        default: "ctrl-down",
+        group: "消息输入",
+        composer: true,
+        action: || Box::new(workspace::InputHistoryNext),
+    },
     Command {
         id: "composer_send",
         label: "输入框发送消息",
@@ -976,6 +1008,40 @@ mod tests {
         assert_eq!(
             resolved(&keymap, "ctrl-c", &["Orbit", "OrbitComposer", "Input"])[0],
             workspace::CompletionDismiss.name()
+        );
+    }
+
+    #[test]
+    fn history_is_composer_scoped_and_window_commands_can_be_rebound_and_cleared() {
+        let defaults = bindings(&Overrides::new());
+        let mut keymap = Keymap::new(defaults.clone());
+        for context in ["OrbitComposer", "OrbitComposer ComposerCompletions"] {
+            assert_eq!(
+                resolved(&keymap, "ctrl-up", &["Orbit", context, "Input"])[0],
+                workspace::InputHistoryPrevious.name()
+            );
+            assert_eq!(
+                resolved(&keymap, "ctrl-down", &["Orbit", context, "Input"])[0],
+                workspace::InputHistoryNext.name()
+            );
+        }
+        assert!(resolved(&keymap, "ctrl-up", &["Orbit", "Input"]).is_empty());
+        assert_eq!(
+            resolved(&keymap, "ctrl-w", &["Orbit", "Input"])[0],
+            workspace::CloseTask.name()
+        );
+        assert_eq!(
+            resolved(&keymap, "ctrl-.", &["Orbit", "Input"])[0],
+            workspace::StopTask.name()
+        );
+        let mut custom = edit(&Overrides::new(), "close_task", "ctrl-alt-w", false).unwrap();
+        custom.insert("stop_task".into(), None);
+        keymap.add_bindings(replacement(&defaults, &bindings(&custom)));
+        assert!(resolved(&keymap, "ctrl-w", &["Orbit", "Input"]).is_empty());
+        assert!(resolved(&keymap, "ctrl-.", &["Orbit", "Input"]).is_empty());
+        assert_eq!(
+            resolved(&keymap, "ctrl-alt-w", &["Orbit", "Input"])[0],
+            workspace::CloseTask.name()
         );
     }
 

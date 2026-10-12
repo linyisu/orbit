@@ -35,6 +35,8 @@ impl Workspace {
         v_flex()
             .id("composer")
             .key_context("OrbitComposer")
+            .on_action(cx.listener(|view, _: &InputHistoryPrevious, window, cx| view.input_history(true, window, cx)))
+            .on_action(cx.listener(|view, _: &InputHistoryNext, window, cx| view.input_history(false, window, cx)))
             .relative()
             .when(self.command_open, |view| view.key_context("OrbitComposer ComposerCompletions")
                 .on_action(cx.listener(|view, _: &CompletionNext, window, cx| view.move_completion(1, window, cx)))
@@ -45,7 +47,7 @@ impl Workspace {
                 .child(deferred(self.completion_menu(window, cx)).with_priority(1))
             )
             .on_drop(
-                cx.listener(|view, paths: &ExternalPaths, _, cx| view.add_images(&paths.0, cx)),
+                cx.listener(|view, paths: &ExternalPaths, window, cx| view.add_paths(&paths.0, window, cx)),
             )
             .w_full()
             .gap_2()
@@ -111,9 +113,9 @@ impl Workspace {
                     })
                     .child(
                         Textarea::new(&self.input)
-                            .on_paste(move |item, _, cx| {
+                            .on_paste(move |item, window, cx| {
                                 paste_owner
-                                    .update(cx, |view, cx| view.paste_images(item, cx))
+                                    .update(cx, |view, cx| view.paste_images(item, window, cx))
                                     .unwrap_or(false)
                             })
                             .appearance(false)
@@ -184,7 +186,7 @@ impl Workspace {
                                         Mode::Auto => "自动审批",
                                         Mode::Yolo => "全部允许",
                                     })
-                                    .disabled(controls_disabled)
+                                    .disabled(!self.connected || self.opening || self.pending.is_some())
                                     .dropdown_menu_with_anchor(Anchor::BottomLeft, move |mut menu, _, _| {
                                         menu = menu.check_side(gpui_kit::component::Side::Right);
                                         for (choice, label) in [
@@ -314,17 +316,8 @@ impl Workspace {
                                         .small()
                                         .icon(Icon::new(IconName::Square))
                                         .accessibility_label("停止")
-                                        .tooltip("停止")
-                                        .on_click(cx.listener(|view, _, _, cx| {
-                                            if let Some(info) = &view.info {
-                                                view.command(
-                                                    Command::Request(Request::Cancel {
-                                                        session: info.id.clone(),
-                                                    }),
-                                                    cx,
-                                                );
-                                            }
-                                        })),
+                                        .tooltip(crate::keymap::tooltip("停止", "stop_task", cx))
+                                        .on_click(cx.listener(|view, _, _, cx| view.stop_task(cx))),
                                 )
                             })
                             .when(

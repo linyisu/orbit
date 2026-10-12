@@ -18,6 +18,7 @@ pub(crate) struct WorkspaceSummary {
 pub(crate) enum WorkspaceEvent {
     Open(Box<Options>),
     Activate(String),
+    CloseTask,
     Settings(Entity<SettingsPage>),
     CloseSettings,
     Changed,

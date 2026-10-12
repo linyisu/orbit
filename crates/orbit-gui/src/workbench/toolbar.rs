@@ -92,11 +92,15 @@ impl Workbench {
                             .xsmall()
                             .icon(IconName::Close)
                             .accessibility_label(format!("关闭 {}", task.title))
-                            .tooltip(if task.busy {
-                                "关闭标签页，任务继续运行"
-                            } else {
-                                "关闭标签页，保留会话记录"
-                            })
+                            .tooltip(crate::keymap::tooltip(
+                                if task.busy {
+                                    "关闭标签页，任务继续运行"
+                                } else {
+                                    "关闭标签页，保留会话记录"
+                                },
+                                "close_task",
+                                cx,
+                            ))
                             .on_click(cx.listener(move |view, _, window, cx| {
                                 cx.stop_propagation();
                                 view.close(&key, window, cx);
