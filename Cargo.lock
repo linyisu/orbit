@@ -7329,6 +7329,7 @@ dependencies = [
  "gpui-component-shell",
  "gpui-kit",
  "gpui-shell",
+ "image",
  "orbit-agent",
  "orbit-auth",
  "orbit-build",

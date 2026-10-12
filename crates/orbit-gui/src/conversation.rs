@@ -51,6 +51,7 @@ struct MessageRow {
 struct MessageImage {
     path: SharedString,
     data: Result<Option<Arc<Image>>, SharedString>,
+    dimensions: Option<(u32, u32)>,
 }
 impl Conversation {
     pub(crate) fn new(cx: &mut Context<Self>) -> Self {
@@ -100,6 +101,13 @@ impl Conversation {
         result: Result<Vec<u8>, String>,
         cx: &mut Context<Self>,
     ) {
+        let dimensions = result.as_ref().ok().and_then(|bytes| {
+            image::ImageReader::new(std::io::Cursor::new(bytes))
+                .with_guessed_format()
+                .ok()?
+                .into_dimensions()
+                .ok()
+        });
         let image = result
             .map(|bytes| {
                 let format = if bytes.starts_with(b"\x89PNG") {
@@ -120,6 +128,7 @@ impl Conversation {
                     for attachment in &mut row.images {
                         if attachment.path.as_ref() == path {
                             attachment.data = image.clone();
+                            attachment.dimensions = dimensions;
                             cx.notify();
                         }
                     }
@@ -158,6 +167,7 @@ impl TurnView {
                     .map(|path| MessageImage {
                         path: path.clone().into(),
                         data: Ok(None),
+                        dimensions: None,
                     })
                     .collect();
                 row
@@ -479,13 +489,15 @@ impl Render for MessageRow {
                 view.child(h_flex().gap_2().flex_wrap().children(
                     self.images.iter().enumerate().map(|(index, attachment)| {
                         let data = attachment.data.clone();
-                        let path = attachment.path.clone();
+                        let dimensions = attachment.dimensions.unwrap_or((800, 600));
                         Button::new(("message-image", index))
                             .ghost()
+                            .w_32()
+                            .h_24()
+                            .p_0()
                             .child(match &data {
                                 Ok(Some(image)) => img(image.clone())
-                                    .h_24()
-                                    .max_w_64()
+                                    .size_full()
                                     .object_fit(ObjectFit::Contain)
                                     .into_any_element(),
                                 Ok(None) => div().child("加载图片…").into_any_element(),
@@ -493,17 +505,39 @@ impl Render for MessageRow {
                             })
                             .on_click(move |_, window, cx| {
                                 let data = data.clone();
-                                let path = path.clone();
-                                window.open_dialog(cx, move |dialog, _, _| {
-                                    dialog.title(path.clone()).child(match &data {
-                                        Ok(Some(image)) => img(image.clone())
-                                            .max_w_full()
-                                            .max_h(rems(32.))
-                                            .object_fit(ObjectFit::Contain)
-                                            .into_any_element(),
-                                        Err(error) => div().child(error.clone()).into_any_element(),
-                                        _ => div().child("加载图片…").into_any_element(),
-                                    })
+                                window.open_dialog(cx, move |dialog, window, _| {
+                                    let width = (window.viewport_size().width
+                                        - window.rem_size() * 4.)
+                                        .min(window.rem_size() * 64.);
+                                    let height = (window.viewport_size().height
+                                        - window.rem_size() * 10.)
+                                        .max(window.rem_size() * 8.);
+                                    let (image_width, image_height) = dimensions;
+                                    let scale = (f32::from(width - window.rem_size() * 2.5)
+                                        / image_width.max(1) as f32)
+                                        .min(f32::from(height) / image_height.max(1) as f32)
+                                        .min(1.);
+                                    let fitted_width = (px(image_width as f32 * scale)
+                                        + window.rem_size() * 2.5)
+                                        .max(window.rem_size() * 20.)
+                                        .min(width);
+                                    dialog.title("图片预览").width(fitted_width).child(
+                                        match &data {
+                                            Ok(Some(image)) => h_flex()
+                                                .justify_center()
+                                                .child(
+                                                    img(image.clone())
+                                                        .w(px(image_width as f32 * scale))
+                                                        .h(px(image_height as f32 * scale))
+                                                        .object_fit(ObjectFit::Contain),
+                                                )
+                                                .into_any_element(),
+                                            Err(error) => {
+                                                div().child(error.clone()).into_any_element()
+                                            }
+                                            _ => div().child("加载图片…").into_any_element(),
+                                        },
+                                    )
                                 });
                             })
                     }),

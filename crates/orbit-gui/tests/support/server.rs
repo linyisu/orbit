@@ -1,5 +1,6 @@
 //! Offline protocol peer for integration and native-window checks.
 //! Enabled explicitly with `test-support`; never calls a model.
+use base64::Engine;
 use serde_json::{Value, json};
 use std::{
     collections::{HashMap, VecDeque},
@@ -28,6 +29,8 @@ fn main() -> anyhow::Result<()> {
             json!({"Finished":{"status":"completed"}}),
         ],
     )]);
+    let mut fixture_skills: HashMap<String, String> = HashMap::new();
+    let mut fixture_memories: Vec<Value> = vec![];
     let mut pending = VecDeque::new();
     let mut approvals: Vec<Value> = vec![];
     let mut reject = true;
@@ -187,6 +190,14 @@ fn main() -> anyhow::Result<()> {
                     .map(str::to_owned)
                     .unwrap_or_else(|| format!("draft-{count}"));
                 history.entry(session.clone()).or_default();
+                if session == "demo"
+                    && std::path::Path::new(&workspace)
+                        .join("preview.png")
+                        .is_file()
+                {
+                    history.get_mut("demo").unwrap()[0]["Started"]["presentation"] =
+                        json!({"image_assets":[{"name":"preview.png","path":"preview.png"}]});
+                }
                 if session == "quota" {
                     model = "fixture::gemini-flash".into();
                     std::fs::write(
@@ -368,6 +379,10 @@ fn main() -> anyhow::Result<()> {
             "read_file" if request["path"] == "missing.png" => {
                 json!({"type":"error","value":"图片不存在"})
             }
+            "read_file" if request["path"] == "preview.png" => {
+                let bytes = std::fs::read(std::path::Path::new(&workspace).join("preview.png"))?;
+                json!({"type":"file","value":base64::engine::general_purpose::STANDARD.encode(bytes)})
+            }
             "read_file" => json!({"type":"file","value":"aGVsbG8gZ3VpCg=="}),
             "read_subagent" => {
                 let after = request["after"].as_u64().unwrap_or_default() as usize;
@@ -391,6 +406,33 @@ fn main() -> anyhow::Result<()> {
             }
             "session_action" => {
                 json!({"type":"report","value":{"title":"文件变更","text":"## 工作区变更\n\n| 文件 | 状态 |\n| --- | --- |\n| src/workspace.rs | 已修改 |\n\n```diff\n- old_layout()\n+ workspace_layout()\n```"}})
+            }
+            "resources" => {
+                let action = &request["action"];
+                if let Some(save) = action.get("SaveSkill") {
+                    fixture_skills.insert(
+                        save["name"].as_str().unwrap_or_default().into(),
+                        save["content"].as_str().unwrap_or_default().into(),
+                    );
+                }
+                if let Some(memory) = action.get("Memory") {
+                    if memory["action"] == "add" {
+                        let id = fixture_memories.len() + 1;
+                        fixture_memories.push(json!({"id":id,"session_id":session,"category":"fact","title":"事实","content":memory["content"],"active":true,"created_at":0,"updated_at":0}));
+                    }
+                    if memory["action"] == "forget" {
+                        fixture_memories.retain(|m| m["id"] != memory["id"]);
+                    }
+                }
+                let snapshot = if let Some(read) = action.get("ReadSkill") {
+                    let name = read["name"].as_str().unwrap_or_default();
+                    json!({"Skill":{"name":name,"content":fixture_skills.get(name).cloned().unwrap_or_default(),"editable":true}})
+                } else if action == "Memories" || action.get("Memory").is_some() {
+                    json!({"Memories":fixture_memories})
+                } else {
+                    json!({"Skills":fixture_skills.keys().map(|name|json!({"name":name,"title":name,"description":"项目技能","source":"项目技能","editable":true})).collect::<Vec<_>>()})
+                };
+                json!({"type":"resources","value":snapshot})
             }
             "plugins" => {
                 json!({"type":"plugins","value":{"marketplaces":[],"project_id":"fixture","enabled":[],"inspections":[]}})

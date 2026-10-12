@@ -641,21 +641,42 @@ impl Workspace {
                 state.update(cx, |state, cx| state.focus(window, cx));
             }
             let owner = owner.clone();
-            dialog.title("命令").child(
-                Palette::new(&state)
-                    .placeholder("搜索操作…")
-                    .items(WorkspaceCommand::ALL.iter().map(|(command, label)| {
-                        CommandItem::new()
-                            .label(*label)
-                            .keywords([format!("{command:?}")])
-                    }))
-                    .on_confirm(move |index, window, cx| {
-                        if let Some((command, _)) = WorkspaceCommand::ALL.get(index.row) {
-                            window.close_dialog(cx);
-                            let _ = owner.update(cx, |view, cx| view.execute(*command, window, cx));
-                        }
-                    }),
-            )
+            dialog
+                .close_button(false)
+                .p_0()
+                .width(
+                    (window.rem_size() * 34.)
+                        .min(window.viewport_size().width - window.rem_size() * 4.),
+                )
+                .child(
+                    Palette::new(&state)
+                        .placeholder("搜索命令…")
+                        .bordered(false)
+                        .max_h((window.viewport_size().height * 0.55).min(window.rem_size() * 24.))
+                        .on_cancel(|window, cx| window.close_dialog(cx))
+                        .footer(|_, _, cx| {
+                            h_flex()
+                                .px_3()
+                                .py_2()
+                                .border_t_1()
+                                .border_color(cx.theme().border)
+                                .text_xs()
+                                .text_color(cx.theme().muted_foreground)
+                                .child("↑↓ 选择　Enter 打开　Esc 关闭")
+                        })
+                        .items(WorkspaceCommand::ALL.iter().map(|(command, label)| {
+                            CommandItem::new()
+                                .label(*label)
+                                .keywords([format!("{command:?}")])
+                        }))
+                        .on_confirm(move |index, window, cx| {
+                            if let Some((command, _)) = WorkspaceCommand::ALL.get(index.row) {
+                                window.close_dialog(cx);
+                                let _ =
+                                    owner.update(cx, |view, cx| view.execute(*command, window, cx));
+                            }
+                        }),
+                )
         });
     }
 
