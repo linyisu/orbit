@@ -197,6 +197,19 @@ impl Workspace {
         if !visible && changed {
             window.remove_notification::<Workspace>(cx);
         }
+        if visible {
+            // A retained workspace can return with different tab widths and a
+            // different sidebar split. Reveal against its newly painted bounds.
+            let owner = cx.weak_entity();
+            window.on_next_frame(move |_, cx| {
+                let _ = owner.update(cx, |view, cx| {
+                    if view.visible {
+                        view.reveal_task();
+                        cx.notify();
+                    }
+                });
+            });
+        }
         if visible && changed {
             self.reveal_task();
             self.input.update(cx, |input, cx| input.focus(window, cx));
