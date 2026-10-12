@@ -90,6 +90,10 @@ pub(crate) enum Command {
         path: String,
     },
     Request(Request),
+    Settings {
+        request: Request,
+        result: tokio::sync::oneshot::Sender<Result<Response, String>>,
+    },
     Send {
         session: String,
         id: String,
@@ -339,6 +343,14 @@ async fn run(
                                 let _ = events.send(Event::Usage { session, result }).await;
                             });
                         }
+                    }
+                    Command::Settings { request, result } => {
+                        let response = match client.request(request).await {
+                            Ok(Response::Error(error)) => Err(error),
+                            Ok(response) => Ok(response),
+                            Err(error) => Err(format!("{error:#}")),
+                        };
+                        let _ = result.send(response);
                     }
                     Command::Request(request) => {
                         if matches!(request, Request::CloseQuestions { .. }) { questions_revision = None; }

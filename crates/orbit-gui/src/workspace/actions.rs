@@ -123,6 +123,23 @@ impl Workspace {
             self.settings(true, window, cx);
             return;
         }
+        let resource_page = match action {
+            WorkspaceCommand::Skills => Some(2),
+            WorkspaceCommand::Mcp => Some(3),
+            WorkspaceCommand::Memory => Some(4),
+            WorkspaceCommand::Plugins => Some(5),
+            _ => None,
+        };
+        if let Some(page) = resource_page {
+            self.settings(false, window, cx);
+            if let Some(settings) = &self.settings_page {
+                settings.update(cx, |view, cx| {
+                    view.initial_page = page;
+                    cx.notify();
+                });
+            }
+            return;
+        }
         if matches!(action, WorkspaceCommand::RefreshModels) {
             if self.info.is_none() || !self.connected {
                 self.connect(window, cx);
