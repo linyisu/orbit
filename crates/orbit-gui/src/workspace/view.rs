@@ -123,38 +123,10 @@ impl Workspace {
                             .gap_1()
                             .flex_wrap()
                             .child(
-                                Button::new("work-mode")
-                                    .ghost()
-                                    .small()
-                                    .icon(IconName::SquareTerminal)
-                                    .label(
-                                        if self.planning.mode
-                                            == orbit_protocol::plan::WorkMode::Plan
-                                        {
-                                            "计划"
-                                        } else {
-                                            "Agent"
-                                        },
-                                    )
-                                    .disabled(controls_disabled)
-                                    .child(Icon::new(IconName::ChevronDown).size_3())
-                                    .dropdown_menu(move |mut menu, _, _| {
-                                        for (is_plan, label) in [(false, "Agent · 直接执行"), (true, "计划 · 先审阅再执行")] {
-                                            let owner = work_owner.clone();
-                                            menu = menu.item(PopupMenuItem::new(label).checked(planning == is_plan)
-                                                .on_click(move |_, _, cx| {
-                                                    let _ = owner.update(cx, |view, cx| view.plan_action(
-                                                        if is_plan { orbit_protocol::plan::Action::Enter } else { orbit_protocol::plan::Action::Leave }, cx));
-                                                }));
-                                        }
-                                        menu
-                                    }),
-                            )
-                            .child(
                                 Button::new("attach")
                                     .ghost()
                                     .small()
-                                    .icon(Icon::new(IconName::Plus))
+                                    .icon(IconName::Plus)
                                     .accessibility_label("添加图片")
                                     .tooltip("添加图片")
                                     .disabled(
@@ -168,32 +140,65 @@ impl Workspace {
                                     .on_click(cx.listener(|view, _, _, cx| view.attach(cx))),
                             )
                             .child(
+                                Button::new("work-mode")
+                                    .ghost()
+                                    .small()
+                                    .compact()
+                                    .icon(IconName::SquareTerminal)
+                                    .label(
+                                        if self.planning.mode
+                                            == orbit_protocol::plan::WorkMode::Plan
+                                        {
+                                            "计划"
+                                        } else {
+                                            "执行"
+                                        },
+                                    )
+                                    .disabled(controls_disabled)
+                                    .dropdown_caret(true)
+                                    .tooltip("工作模式：执行任务或先制定计划")
+                                    .dropdown_menu_with_anchor(Anchor::BottomLeft, move |mut menu, _, _| {
+                                        menu = menu.check_side(gpui_kit::component::Side::Right);
+                                        for (is_plan, label) in [(false, "执行"), (true, "计划")] {
+                                            let owner = work_owner.clone();
+                                            menu = menu.item(PopupMenuItem::new(label).checked(planning == is_plan)
+                                                .on_click(move |_, _, cx| {
+                                                    let _ = owner.update(cx, |view, cx| view.plan_action(
+                                                        if is_plan { orbit_protocol::plan::Action::Enter } else { orbit_protocol::plan::Action::Leave }, cx));
+                                                }));
+                                        }
+                                        menu
+                                    }),
+                            )
+                            .child(
                                 Button::new("mode")
                                     .ghost()
                                     .small()
-                                    .icon(IconName::Shield)
-                                    .child(Icon::new(IconName::ChevronDown).size_3())
+                                    .compact()
+                                    .dropdown_caret(true)
+                                    .tooltip("工具操作的审批方式")
                                     .label(match mode {
                                         Mode::Ask => "每次询问",
                                         Mode::Auto => "自动审批",
                                         Mode::Yolo => "全部允许",
                                     })
                                     .disabled(controls_disabled)
-                                    .dropdown_menu(move |mut menu, _, _| {
-                                        for (mode, label) in [
+                                    .dropdown_menu_with_anchor(Anchor::BottomLeft, move |mut menu, _, _| {
+                                        menu = menu.check_side(gpui_kit::component::Side::Right);
+                                        for (choice, label) in [
                                             (Mode::Ask, "每次询问"),
                                             (Mode::Auto, "自动审批"),
                                             (Mode::Yolo, "全部允许"),
                                         ] {
                                             let owner = mode_owner.clone();
                                             let session = mode_session.clone();
-                                            menu = menu.item(PopupMenuItem::new(label).on_click(
+                                            menu = menu.item(PopupMenuItem::new(label).checked(mode == choice).on_click(
                                                 move |_, _, cx| {
                                                     let _ = owner.update(cx, |view, cx| {
                                                         view.command(
                                                             Command::Request(Request::SetMode {
                                                                 session: session.clone(),
-                                                                mode,
+                                                                mode: choice,
                                                             }),
                                                             cx,
                                                         )
@@ -219,14 +224,14 @@ impl Workspace {
                                         Button::new("reasoning-effort")
                                             .ghost()
                                             .small()
-                                            .child(Icon::new(IconName::ChevronDown).size_3())
+                                            .dropdown_caret(true)
                                             .label(
                                                 info.reasoning_effort
                                                     .clone()
                                                     .unwrap_or_else(|| "思考强度".into()),
                                             )
                                             .disabled(controls_disabled)
-                                            .dropdown_menu(move |mut menu, _, _| {
+                                            .dropdown_menu_with_anchor(Anchor::BottomLeft, move |mut menu, _, _| {
                                                 for effort in &efforts {
                                                     let owner = owner.clone();
                                                     let session = session.clone();
@@ -263,7 +268,7 @@ impl Workspace {
                                 Button::new("model")
                                     .ghost()
                                     .small()
-                                    .child(Icon::new(IconName::ChevronDown).size_3())
+                                    .dropdown_caret(true)
                                     .label(
                                         self.model
                                             .rsplit("::")
@@ -272,7 +277,7 @@ impl Workspace {
                                             .to_owned(),
                                     )
                                     .disabled(controls_disabled)
-                                    .dropdown_menu(move |mut menu, window, cx| {
+                                    .dropdown_menu_with_anchor(Anchor::BottomLeft, move |mut menu, window, cx| {
                                         for (provider, models) in &model_groups {
                                             let models = models.clone();
                                             let weak = weak.clone();
