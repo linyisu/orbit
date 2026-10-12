@@ -2197,35 +2197,59 @@ impl CodeBlock {
     ) -> AnyElement {
         let style = &node_cx.style;
         let leaf_key = self.span.map(|span| TextLeafKey::block(span.start));
-        // The language sits quietly in the top-right corner, where custom
-        // actions go instead when the caller provides them; the top padding
-        // keeps the first line clear of it. Like the actions, it stays out of
-        // the scrolled content so it holds its corner.
-        let lang_label = self
+        let scrolling = matches!(style.code_block().overflow.y, Some(Overflow::Scroll));
+        // Normal blocks measure their header in flow. A fixed top inset leaves
+        // a phantom line and lets actions overlap code at larger text scales.
+        // Height-capped blocks retain their pinned corner controls.
+        let mut lang_label = self
             .lang()
-            .filter(|lang| !lang.is_empty() && node_cx.code_block_actions.is_none())
+            .filter(|lang| !lang.is_empty() && (!scrolling || node_cx.code_block_actions.is_none()))
             .map(|lang| {
                 div()
-                    .absolute()
-                    .top(px(7.))
-                    .right_3()
+                    .when(scrolling, |label| label.absolute().top(px(7.)).right_3())
                     .font_family(cx.theme().tokens.typography.sans.clone())
                     .text_size(cx.theme().tokens.typography.xs.size)
-                    .line_height(px(16.))
+                    .line_height(relative(1.4))
                     .text_color(style.muted_foreground())
                     .child(lang)
             });
+        let mut actions = node_cx.code_block_actions.clone().map(|actions| {
+            div()
+                .id("actions")
+                .when(scrolling, |slot| {
+                    slot.absolute().top_2().right_2().bg(style.code_background())
+                })
+                .font_family(cx.theme().tokens.typography.sans.clone())
+                .child(actions(&self, window, cx))
+        });
+        let header = if !scrolling && (lang_label.is_some() || actions.is_some()) {
+            Some(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap_2()
+                    .mb_1()
+                    .children(lang_label.take())
+                    .child(div().flex_1())
+                    .children(actions.take()),
+            )
+        } else {
+            None
+        };
 
         let block = div()
             .w_full()
             .min_w_0()
             .px_4()
-            .pt(if lang_label.is_some() {
-                px(28.)
+            .pt(if !scrolling {
+                rems(0.5)
+            } else if lang_label.is_some() {
+                rems(1.75)
             } else {
-                px(14.)
+                rems(0.875)
             })
-            .pb(px(14.))
+            .pb(if scrolling { rems(0.875) } else { rems(0.5) })
             .bg(style.code_background())
             .border_1()
             .border_color(style.border())
@@ -2234,6 +2258,7 @@ impl CodeBlock {
             .line_height(relative(1.6))
             .relative()
             .refine_style(&style.code_block())
+            .children(header)
             .child(
                 Inline::new(
                     self.state.clone(),
@@ -2254,20 +2279,10 @@ impl CodeBlock {
                 .range_backgrounds(node_cx.range_backgrounds(leaf_key).to_vec())
                 .reveal(node_cx.reveal_at(leaf_key, 0, self.code().len())),
             );
-        let actions = node_cx.code_block_actions.clone().map(|actions| {
-            div()
-                .id("actions")
-                .absolute()
-                .top_2()
-                .right_2()
-                .bg(style.code_background())
-                .rounded(cx.theme().tokens.radius.md)
-                .child(actions(&self, window, cx))
-        });
         // The id scopes the caller's action ids per code block, so plain ids
         // like `"copy"` don't collide across blocks.
         let id = block_element_id("codeblock", self.span, options.ix);
-        let block = if matches!(style.code_block().overflow.y, Some(Overflow::Scroll)) {
+        let block = if scrolling {
             let scroll_handle = window
                 .use_keyed_state(
                     block_element_id("codeblock-scroll", self.span, options.ix),
@@ -2299,11 +2314,7 @@ impl CodeBlock {
                 .children(lang_label)
                 .into_any_element()
         } else {
-            // Without actions nothing under the block needs element state.
-            match actions {
-                Some(actions) => block.id(id).child(actions).into_any_element(),
-                None => block.children(lang_label).into_any_element(),
-            }
+            block.id(id).into_any_element()
         };
 
         gapped(

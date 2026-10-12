@@ -10,4 +10,9 @@ Orbit changes: inline-flow selection uses the shared row height and includes
 inline code padding at selected span boundaries. This keeps mixed prose/code
 selection continuous without changing text typography, wrapping or copied text.
 
+Code blocks measure the language/actions header in normal flow instead of
+reserving a fixed empty line above the code. Language labels and actions can
+coexist, scale with the font, and cannot overlap the first code line. Explicitly
+height-capped scrolling blocks keep their existing pinned controls.
+
 Remove this Cargo patch once an upstream revision contains the equivalent fix.

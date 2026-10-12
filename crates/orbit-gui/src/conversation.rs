@@ -514,6 +514,20 @@ impl Render for MessageRow {
                     TextView::new(&self.text)
                         .when(!self.user, |view| view.w_full())
                         .style(crate::theme::document_style())
+                        .code_block_actions(|block, _, _| {
+                            let code = block.code();
+                            Button::new("copy-code")
+                                .ghost()
+                                .xsmall()
+                                .icon(IconName::Copy)
+                                .label("复制")
+                                .tooltip("复制代码")
+                                .on_click(move |_, _, cx| {
+                                    cx.write_to_clipboard(ClipboardItem::new_string(
+                                        code.to_string(),
+                                    ));
+                                })
+                        })
                         .plugin(crate::math::MathPlugin::inline())
                         .plugin(crate::math::MathPlugin::display())
                         .selectable(true)
