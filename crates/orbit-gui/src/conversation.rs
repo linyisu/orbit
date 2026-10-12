@@ -4,7 +4,7 @@ mod model;
 mod navigation;
 mod process;
 use gpui_kit::component::{
-    ActiveTheme, IconName, Sizable,
+    ActiveTheme, Icon, IconName, Sizable,
     bubble::{Bubble, BubbleContent, BubbleVariant},
     button::{Button, ButtonVariants},
     h_flex,
@@ -326,6 +326,7 @@ impl Render for TurnView {
                             .id("process-viewport")
                             .occlude()
                             .w_full()
+                            .min_w_0()
                             .h(process_height)
                             .border_l_1()
                             .border_color(cx.theme().border)
@@ -531,6 +532,9 @@ impl MessageRow {
 }
 impl Render for MessageRow {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // The title icon owns a column; expanded content starts at the title
+        // text, using the same inset rather than Button's internal padding.
+        let disclosure_inset = rems(1.5);
         let body = v_flex()
             .when(!self.user, |view| view.w_full())
             .items_start()
@@ -541,12 +545,24 @@ impl Render for MessageRow {
                     Button::new("disclose")
                         .ghost()
                         .small()
-                        .icon(if self.expanded {
-                            IconName::ChevronDown
-                        } else {
-                            IconName::ChevronRight
-                        })
-                        .label(self.title.clone())
+                        .accessibility_label(self.title.clone())
+                        .px_0()
+                        .max_w_full()
+                        .child(
+                            h_flex()
+                                .min_w_0()
+                                .child(
+                                    div().w(disclosure_inset).flex_none().child(
+                                        Icon::new(if self.expanded {
+                                            IconName::ChevronDown
+                                        } else {
+                                            IconName::ChevronRight
+                                        })
+                                        .small(),
+                                    ),
+                                )
+                                .child(div().min_w_0().truncate().child(self.title.clone())),
+                        )
                         .on_click(cx.listener(|view, _, _, cx| {
                             view.expanded = !view.expanded;
                             if view.expanded
@@ -591,31 +607,33 @@ impl Render for MessageRow {
                 ))
             })
             .when(self.expanded, |view| {
-                view.child(
-                    TextView::new(&self.text)
-                        .when(!self.user, |view| view.w_full())
-                        .style(crate::theme::document_style())
-                        .code_block_actions(|block, _, _| {
-                            let code = block.code();
-                            Button::new("copy-code")
-                                .ghost()
-                                .xsmall()
-                                .icon(IconName::Copy)
-                                .label("复制")
-                                .tooltip("复制代码")
-                                .on_click(move |_, _, cx| {
-                                    cx.write_to_clipboard(ClipboardItem::new_string(
-                                        code.to_string(),
-                                    ));
-                                })
-                        })
-                        .plugin(crate::math::MathPlugin::inline())
-                        .plugin(crate::math::MathPlugin::display())
-                        .selectable(true)
-                        .when(self.muted, |view| {
-                            view.text_color(cx.theme().muted_foreground)
-                        }),
-                )
+                let text = TextView::new(&self.text)
+                    .when(!self.user, |view| view.w_full())
+                    .min_w_0()
+                    .style(crate::theme::document_style())
+                    .code_block_actions(|block, _, _| {
+                        let code = block.code();
+                        Button::new("copy-code")
+                            .ghost()
+                            .xsmall()
+                            .icon(IconName::Copy)
+                            .label("复制")
+                            .tooltip("复制代码")
+                            .on_click(move |_, _, cx| {
+                                cx.write_to_clipboard(ClipboardItem::new_string(code.to_string()));
+                            })
+                    })
+                    .plugin(crate::math::MathPlugin::inline())
+                    .plugin(crate::math::MathPlugin::display())
+                    .selectable(true)
+                    .when(self.muted, |view| {
+                        view.text_color(cx.theme().muted_foreground)
+                    });
+                if self.muted {
+                    view.child(div().w_full().min_w_0().pl(disclosure_inset).child(text))
+                } else {
+                    view.child(text)
+                }
             });
         if self.user {
             Message::new()
