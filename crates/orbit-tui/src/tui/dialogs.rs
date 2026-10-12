@@ -72,6 +72,9 @@ impl From<orbit_protocol::ModelSummary> for ModelChoice {
 pub struct ModelPicker {
     offset: usize,
     models: Vec<ModelChoice>,
+    provider: Option<String>,
+    back_area: Option<Rect>,
+    back_hover: bool,
     query: String,
     selected: usize,
     current: String,
@@ -249,14 +252,20 @@ impl ModelPicker {
     ) -> Self {
         let mut models: Vec<ModelChoice> = models.into_iter().map(Into::into).collect();
         models.sort_by(|a, b| a.model.cmp(&b.model).then(a.provider.cmp(&b.provider)));
-        let selected = models
+        let current_provider = current.split_once("::").map(|(provider, _)| provider);
+        let providers: std::collections::BTreeSet<_> =
+            models.iter().map(|model| model.provider.as_str()).collect();
+        let selected = providers
             .iter()
-            .position(|model| model.qualified_name() == current)
+            .position(|provider| Some(*provider) == current_provider)
             .unwrap_or_default();
 
         Self {
             offset: 0,
             models,
+            provider: None,
+            back_area: None,
+            back_hover: false,
             query: String::new(),
             selected,
             current,
@@ -264,9 +273,51 @@ impl ModelPicker {
         }
     }
 
+    fn providers(&self) -> Vec<(String, usize)> {
+        let mut groups = std::collections::BTreeMap::<String, usize>::new();
+        for model in self.matches() {
+            *groups.entry(model.provider.clone()).or_default() += 1;
+        }
+        groups.into_iter().collect()
+    }
+    fn row_count(&self) -> usize {
+        if self.provider.is_some() {
+            self.matches().len()
+        } else {
+            self.providers().len()
+        }
+    }
+    fn enter_provider(&mut self) {
+        if self.provider.is_some() {
+            return;
+        }
+        let Some((provider, _)) = self.providers().get(self.selected).cloned() else {
+            return;
+        };
+        self.provider = Some(provider);
+        self.selected = self
+            .matches()
+            .iter()
+            .position(|model| model.qualified_name() == self.current)
+            .unwrap_or_default();
+        self.offset = 0;
+        self.normalize_effort();
+    }
+    fn back(&mut self) -> bool {
+        let Some(provider) = self.provider.take() else {
+            return false;
+        };
+        self.selected = self
+            .providers()
+            .iter()
+            .position(|(name, _)| *name == provider)
+            .unwrap_or_default();
+        self.offset = 0;
+        true
+    }
+
     fn first_visible(&mut self, height: usize) -> usize {
-        let rows = self.matches();
-        let selected = self.selected.min(rows.len().saturating_sub(1));
+        let selected = self.selected.min(self.row_count().saturating_sub(1));
         let mut first = self.offset.min(selected);
         while first < selected {
             let required = selected - first + 1;
@@ -281,20 +332,27 @@ impl ModelPicker {
     }
 
     fn matches(&self) -> Vec<&ModelChoice> {
-        super::search::ranked(self.models.iter(), |model| {
-            [
-                model.qualified_name().as_str(),
-                &model.model,
-                &model.provider,
-            ]
-            .into_iter()
-            .filter_map(|text| super::search::rank(text, &self.query))
-            .min()
-        })
+        super::search::ranked(
+            self.models.iter().filter(|model| {
+                self.provider
+                    .as_ref()
+                    .is_none_or(|provider| model.provider == *provider)
+            }),
+            |model| {
+                [
+                    model.qualified_name().as_str(),
+                    &model.model,
+                    &model.provider,
+                ]
+                .into_iter()
+                .filter_map(|text| super::search::rank(text, &self.query))
+                .min()
+            },
+        )
     }
 
     fn move_by(&mut self, down: bool) {
-        let count = self.matches().len();
+        let count = self.row_count();
         self.selected = if down {
             self.selected.saturating_add(1).min(count.saturating_sub(1))
         } else {
@@ -313,6 +371,9 @@ impl ModelPicker {
     }
 
     fn normalize_effort(&mut self) {
+        if self.provider.is_none() {
+            return;
+        }
         let efforts = self.selected_efforts();
 
         if efforts.is_empty() {
@@ -579,9 +640,19 @@ pub fn handle(state: &mut UiState, event: Event) -> Option<String> {
         }
         return None;
     }
-    if state.model_picker.is_some() {
+    if let Some(picker) = &mut state.model_picker {
         match &event {
             Event::Mouse(mouse) => {
+                picker.back_hover = picker
+                    .back_area
+                    .is_some_and(|area| area.contains((mouse.column, mouse.row).into()));
+                if picker.back_hover {
+                    if mouse.kind == MouseEventKind::Down(crossterm::event::MouseButton::Left) {
+                        picker.back();
+                        state.dialog_manual_scroll = false;
+                    }
+                    return None;
+                }
                 let hit = state
                     .model_update_area
                     .is_some_and(|area| area.contains((mouse.column, mouse.row).into()));
@@ -630,7 +701,7 @@ pub fn handle(state: &mut UiState, event: Event) -> Option<String> {
             let count = picker.matches().len();
             scroll(&mut picker.offset, count);
         } else if let Some(picker) = &mut state.model_picker {
-            let count = picker.matches().len();
+            let count = picker.row_count();
             scroll(&mut picker.offset, count);
         } else if let Some(dialog) = &mut state.marketplace_dialog {
             if dialog.viewing_plugins {
@@ -664,6 +735,13 @@ pub fn handle(state: &mut UiState, event: Event) -> Option<String> {
                 dialog.selected_plugin = 0;
                 return None;
             }
+        }
+
+        if key.code == KeyCode::Esc
+            && let Some(picker) = &mut state.model_picker
+            && picker.back()
+        {
+            return None;
         }
 
         if key.code == KeyCode::Esc
@@ -800,6 +878,11 @@ pub fn handle(state: &mut UiState, event: Event) -> Option<String> {
             Event::Key(key) => match key.code {
                 KeyCode::Up => picker.move_by(false),
                 KeyCode::Down => picker.move_by(true),
+                KeyCode::Right => picker.enter_provider(),
+                KeyCode::Left => {
+                    picker.back();
+                }
+                KeyCode::Enter if picker.provider.is_none() => picker.enter_provider(),
                 KeyCode::Enter => {
                     if let Some(model) = picker.matches().get(picker.selected) {
                         state.chosen_model = Some(model.qualified_name());
@@ -815,12 +898,17 @@ pub fn handle(state: &mut UiState, event: Event) -> Option<String> {
                 {
                     picker.query.push(c);
                     picker.selected = 0;
+                    picker.offset = 0;
                     picker.normalize_effort();
                 }
 
+                KeyCode::Backspace if picker.query.is_empty() => {
+                    picker.back();
+                }
                 KeyCode::Backspace => {
                     picker.query.pop();
                     picker.selected = 0;
+                    picker.offset = 0;
                     picker.normalize_effort();
                 }
 
@@ -832,6 +920,7 @@ pub fn handle(state: &mut UiState, event: Event) -> Option<String> {
                     .query
                     .extend(text.chars().filter(|c| !c.is_control()));
                 picker.selected = 0;
+                picker.offset = 0;
                 picker.normalize_effort();
             }
 
@@ -990,7 +1079,11 @@ fn model_row(
     selected: bool,
 ) -> Line<'static> {
     use unicode_width::UnicodeWidthStr;
-    let provider_width = (width / 3).min(28);
+    let provider_width = if provider.is_empty() {
+        0
+    } else {
+        (width / 3).min(28)
+    };
     let name_width = width.saturating_sub(provider_width + 6);
     let name = super::render::fit_label(&clean(model), name_width, false);
     let provider = super::render::fit_label(&clean(provider), provider_width, false);
@@ -1038,7 +1131,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
         centered_size(
             frame.area(),
             96,
-            picker.models.len().saturating_add(8).min(28) as u16,
+            picker.row_count().saturating_add(8).min(28) as u16,
         )
     } else {
         centered_area(frame.area())
@@ -1354,6 +1447,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
             footer,
         );
     } else if let Some(picker) = &mut state.model_picker {
+        picker.back_area = None;
         let column_header = Rect {
             height: 1.min(body.height),
             ..body
@@ -1365,8 +1459,16 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
         };
         frame.render_widget(
             Paragraph::new(model_row(
-                "模型",
-                "连接",
+                if picker.provider.is_some() {
+                    "模型"
+                } else {
+                    "供应商 / 连接"
+                },
+                if picker.provider.is_some() {
+                    ""
+                } else {
+                    "模型数"
+                },
                 " ",
                 column_header.width as usize,
                 false,
@@ -1374,7 +1476,15 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
             column_header,
         );
         let search = super::render::fit_label(
-            &format!("筛选模型：{}", clean(&picker.query)),
+            &format!(
+                "筛选{}：{}",
+                if picker.provider.is_some() {
+                    "模型"
+                } else {
+                    "供应商或模型"
+                },
+                clean(&picker.query)
+            ),
             header.width.saturating_sub(1) as usize,
             true,
         );
@@ -1413,13 +1523,53 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
                 ..Default::default()
             },
         );
+        if let Some(provider) = &picker.provider {
+            picker.back_area = super::components::button(
+                frame,
+                Rect::new(
+                    header.x,
+                    header.y,
+                    header.width.saturating_sub(update_width + 1),
+                    header.height.min(1),
+                ),
+                &format!("‹ 供应商 · {}", clean(provider)),
+                super::components::Control {
+                    highlighted: picker.back_hover,
+                    ..Default::default()
+                },
+            );
+        }
         let visible = body.height as usize;
         let first = if state.dialog_manual_scroll {
             picker.offset
         } else {
             picker.first_visible(visible)
         };
-        let rows = picker.matches();
+        let models = picker.matches();
+        let rows: Vec<(String, String, bool)> = if picker.provider.is_some() {
+            models
+                .iter()
+                .map(|model| {
+                    (
+                        model.model.clone(),
+                        String::new(),
+                        model.qualified_name() == picker.current,
+                    )
+                })
+                .collect()
+        } else {
+            picker
+                .providers()
+                .into_iter()
+                .map(|(provider, count)| {
+                    let current = picker
+                        .current
+                        .split_once("::")
+                        .is_some_and(|(name, _)| name == provider);
+                    (provider, format!("{count} 个  ›"), current)
+                })
+                .collect()
+        };
         let mut lines = Vec::new();
         for (index, model) in rows.iter().enumerate().skip(first).take(visible) {
             state.dialog_rows.push((
@@ -1427,7 +1577,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
                 index,
             ));
             let selected = index == picker.selected;
-            let current = model.qualified_name() == picker.current;
+            let current = model.2;
             let style = if selected {
                 super::components::highlighted()
             } else {
@@ -1436,8 +1586,8 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
 
             lines.push(
                 model_row(
-                    &model.model,
-                    &model.provider,
+                    &model.0,
+                    &model.1,
                     if current { "✓" } else { " " },
                     body.width as usize,
                     selected,
@@ -1454,20 +1604,36 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
         frame.render_widget(Paragraph::new(lines), body);
         frame.render_widget(
             Paragraph::new(vec![
-                Line::from(rows.get(picker.selected).map_or_else(String::new, |model| {
-                    format!(
-                        "{}{}",
-                        clean(&model.qualified_name()),
-                        if model.supports_vision {
-                            " · 支持图片"
-                        } else {
-                            ""
-                        }
-                    )
-                })),
+                Line::from(if picker.provider.is_none() {
+                    "先选择供应商 / 连接，再选择模型".into()
+                } else {
+                    models
+                        .get(picker.selected)
+                        .map_or_else(String::new, |model| {
+                            format!(
+                                "{}{}",
+                                clean(&model.qualified_name()),
+                                if model.supports_vision {
+                                    " · 支持图片"
+                                } else {
+                                    ""
+                                }
+                            )
+                        })
+                }),
                 Line::from(format!(
-                    "{} 个模型 · ↑↓ 选择 · Enter 使用 · Esc 返回",
-                    rows.len()
+                    "{} 个{} · ↑↓ 选择 · Enter {} · Esc 返回",
+                    rows.len(),
+                    if picker.provider.is_some() {
+                        "模型"
+                    } else {
+                        "连接"
+                    },
+                    if picker.provider.is_some() {
+                        "使用"
+                    } else {
+                        "展开"
+                    }
                 )),
             ]),
             footer,

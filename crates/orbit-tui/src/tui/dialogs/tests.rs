@@ -413,12 +413,11 @@ fn model_refresh_button_and_f5_request_an_update_without_selecting_a_model() {
 #[test]
 fn models_keep_current_row_visible_and_support_mouse_selection() {
     let models: Vec<_> = (0..30)
-        .map(|index| {
-            TestModel::new(format!("model-{index:02}")).option(format!("provider-{}", index / 3))
-        })
+        .map(|index| TestModel::new(format!("model-{index:02}")).option("provider"))
         .collect();
-    let mut state = UiState::new("provider-9::model-29");
+    let mut state = UiState::new("provider::model-29");
     state.model_picker = Some(ModelPicker::new(models, state.model.clone(), None));
+    handle(&mut state, key(KeyCode::Enter));
     let mut terminal = Terminal::new(TestBackend::new(100, 20)).unwrap();
 
     terminal.draw(|frame| draw(frame, &mut state)).unwrap();
@@ -477,7 +476,7 @@ fn models_keep_current_row_visible_and_support_mouse_selection() {
     assert!(state.model_picker.is_none());
     assert_eq!(
         state.chosen_model,
-        Some(format!("provider-{}::model-{index:02}", index / 3))
+        Some(format!("provider::model-{index:02}"))
     );
 }
 
@@ -488,6 +487,7 @@ fn scrolling_recomputes_hover_from_the_new_rows_without_pointer_motion() {
         .collect();
     let mut state = UiState::new("provider::model-0");
     state.model_picker = Some(ModelPicker::new(models, state.model.clone(), None));
+    handle(&mut state, key(KeyCode::Enter));
     let mut terminal = Terminal::new(TestBackend::new(100, 20)).unwrap();
     terminal
         .draw(|frame| super::super::render::draw(frame, &mut state))
@@ -629,6 +629,7 @@ fn model_picker_arrows_do_not_change_thinking_effort() {
     ));
     handle(&mut state, key(KeyCode::Left));
     handle(&mut state, key(KeyCode::Enter));
+    handle(&mut state, key(KeyCode::Enter));
 
     assert!(state.model_picker.is_none());
     assert_eq!(
@@ -652,6 +653,7 @@ fn model_picker_arrows_do_not_change_thinking_effort() {
         Some(orbit_model::types::ReasoningEffort::Low),
     ));
     handle(&mut state, key(KeyCode::Left));
+    handle(&mut state, key(KeyCode::Enter));
     handle(&mut state, key(KeyCode::Enter));
 
     assert_eq!(
@@ -1058,4 +1060,55 @@ fn model_rows_use_terminal_columns_and_fill_the_clickable_width() {
     let first = model_row("short", "local", " ", 80, false).to_string();
     let second = model_row("longer-model-name", "local", " ", 80, false).to_string();
     assert_eq!(first.find("local"), second.find("local"));
+}
+
+#[test]
+fn model_picker_enters_connections_before_models_and_supports_back_navigation() {
+    let mut state = UiState::new("beta::shared");
+    state.model_picker = Some(ModelPicker::new(
+        [
+            TestModel::new("shared").option("alpha"),
+            TestModel::new("alpha-only").option("alpha"),
+            TestModel::new("shared").option("beta"),
+        ],
+        state.model.clone(),
+        None,
+    ));
+    let mut terminal = Terminal::new(TestBackend::new(96, 24)).unwrap();
+    terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+    assert_eq!(state.dialog_rows.len(), 2);
+    assert_eq!(state.model_picker.as_ref().unwrap().selected, 1);
+    handle(&mut state, Event::Paste("shared".into()));
+    assert_eq!(state.model_picker.as_ref().unwrap().row_count(), 2);
+    handle(&mut state, key(KeyCode::Enter));
+    assert_eq!(
+        state.model_picker.as_ref().unwrap().provider.as_deref(),
+        Some("alpha")
+    );
+    assert_eq!(state.model_picker.as_ref().unwrap().matches().len(), 1);
+    assert!(state.chosen_model.is_none());
+    terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+    let back = state.model_picker.as_ref().unwrap().back_area.unwrap();
+    handle(
+        &mut state,
+        Event::Mouse(crossterm::event::MouseEvent {
+            kind: MouseEventKind::Down(crossterm::event::MouseButton::Left),
+            column: back.x,
+            row: back.y,
+            modifiers: KeyModifiers::NONE,
+        }),
+    );
+    assert!(state.model_picker.as_ref().unwrap().provider.is_none());
+    handle(&mut state, key(KeyCode::Down));
+    handle(&mut state, key(KeyCode::Right));
+    assert_eq!(
+        state.model_picker.as_ref().unwrap().provider.as_deref(),
+        Some("beta")
+    );
+    handle(&mut state, key(KeyCode::Esc));
+    assert!(state.model_picker.as_ref().unwrap().provider.is_none());
+    handle(&mut state, key(KeyCode::Enter));
+    handle(&mut state, key(KeyCode::Enter));
+    assert_eq!(state.chosen_model.as_deref(), Some("beta::shared"));
+    assert!(state.model_picker.is_none());
 }
