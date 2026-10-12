@@ -198,6 +198,7 @@ impl Workspace {
             window.remove_notification::<Workspace>(cx);
         }
         if visible && changed {
+            self.reveal_task();
             self.input.update(cx, |input, cx| input.focus(window, cx));
             if self.connected {
                 self.command(Command::Request(Request::AllSessions), cx);
@@ -243,9 +244,24 @@ impl Workspace {
         navigation_tasks: Vec<WorkspaceSummary>,
         cx: &mut Context<Self>,
     ) {
+        let layout_changed = self.open_tasks.len() != tasks.len()
+            || self
+                .open_tasks
+                .iter()
+                .zip(&tasks)
+                .any(|(old, new)| old.key != new.key || old.title != new.title);
         self.open_tasks = tasks;
         self.navigation_tasks = navigation_tasks;
+        if layout_changed {
+            self.reveal_task();
+        }
         cx.notify();
+    }
+
+    fn reveal_task(&self) {
+        if let Some(index) = self.open_tasks.iter().position(|task| task.key == self.key) {
+            self.task_scroll.scroll_to_item(index);
+        }
     }
 }
 

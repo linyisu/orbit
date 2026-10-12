@@ -36,6 +36,7 @@ impl Workspace {
         TabBar::new("open-tasks")
             .w_full()
             .segmented()
+            .track_scroll(&self.task_scroll)
             .max_width(window.rem_size() * 14.)
             .menu(true)
             .selected_index(active)
