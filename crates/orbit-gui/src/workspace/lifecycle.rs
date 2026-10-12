@@ -18,7 +18,8 @@ pub(crate) struct WorkspaceSummary {
 pub(crate) enum WorkspaceEvent {
     Open(Box<Options>),
     Activate(String),
-    Close(String),
+    Settings(Entity<SettingsPage>),
+    CloseSettings,
     Changed,
     DraftChanged,
     Catalog(Vec<SessionEntry>),
@@ -127,6 +128,7 @@ impl Workspace {
                 || self.busy
                 || self.pending.is_some(),
             attention: self.error.is_some()
+                || !self.connection_challenges.is_empty()
                 || !self.approvals.is_empty()
                 || self
                     .user_inputs
@@ -141,6 +143,9 @@ impl Workspace {
         }
     }
     pub(crate) fn status(&self) -> &'static str {
+        if !self.connection_challenges.is_empty() {
+            return "等待 SSH 验证";
+        }
         if self.recovery.is_active() {
             return "正在重新连接";
         }
@@ -195,16 +200,17 @@ impl Workspace {
         let changed = self.visible != visible;
         self.visible = visible;
         if !visible && changed {
+            self.suspend_connection_challenge(window, cx);
             window.remove_notification::<Workspace>(cx);
-        }
-        if visible {
-            self.task_reveal = true;
         }
         if visible && changed {
             self.input.update(cx, |input, cx| input.focus(window, cx));
             if self.connected {
                 self.command(Command::Request(Request::AllSessions), cx);
             }
+        }
+        if visible {
+            self.show_connection_challenge(window, cx);
         }
         cx.notify();
     }
@@ -245,37 +251,100 @@ impl Workspace {
         navigation_tasks: Vec<WorkspaceSummary>,
         cx: &mut Context<Self>,
     ) {
-        let layout_changed = self.open_tasks.len() != tasks.len()
-            || self
-                .open_tasks
-                .iter()
-                .zip(&tasks)
-                .any(|(old, new)| old.key != new.key || old.title != new.title);
         self.open_tasks = tasks;
         self.navigation_tasks = navigation_tasks;
-        if layout_changed {
-            self.task_reveal = true;
-        }
         cx.notify();
     }
 
-    pub(super) fn reveal_task(&self) {
-        if let Some(index) = self.open_tasks.iter().position(|task| task.key == self.key) {
-            // The retained scroll viewport may already have consumed its
-            // layout request before this workspace becomes visible again.
-            if let Some(tab) = self.task_scroll.bounds_for_item(index) {
-                let viewport = self.task_scroll.bounds();
-                let mut offset = self.task_scroll.offset();
-                if tab.right() + offset.x > viewport.right() {
-                    offset.x = viewport.right() - tab.right();
-                }
-                if tab.left() + offset.x < viewport.left() {
-                    offset.x = viewport.left() - tab.left();
-                }
-                offset.x = offset.x.clamp(-self.task_scroll.max_offset().x, px(0.));
-                self.task_scroll.set_offset(offset);
-            }
+    pub(crate) fn new_task(&mut self, cx: &mut Context<Self>) {
+        self.open(None, cx);
+    }
+    pub(crate) fn reconnect_if_needed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.connected && !self.opening && !self.recovery.is_active() {
+            self.connect(window, cx);
         }
+    }
+    pub(crate) fn connection_unestablished(&self) -> bool {
+        self.info.is_none() && !self.connected
+    }
+    pub(crate) fn has_draft(&self, cx: &App) -> bool {
+        self.pending.is_some()
+            || self.retry.is_some()
+            || !self.paths.is_empty()
+            || !self.input.read(cx).value().is_empty()
+    }
+    pub(crate) fn window_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.settings(false, window, cx);
+    }
+    pub(crate) fn window_commands(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.commands(window, cx);
+    }
+    pub(crate) fn window_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.search_sessions(window, cx);
+    }
+    pub(crate) fn focus_composer(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.tasks_open = false;
+        self.input.update(cx, |input, cx| input.focus(window, cx));
+        cx.notify();
+    }
+    pub(crate) fn window_command(
+        &mut self,
+        command: actions::WorkspaceCommand,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.execute(command, window, cx);
+    }
+    pub(crate) fn toggle_inspector(&mut self, cx: &mut Context<Self>) {
+        self.inspector = if self.inspector.is_some() {
+            None
+        } else {
+            Some(inspector::Section::Execution)
+        };
+        self.panel = None;
+        cx.notify();
+    }
+    pub(crate) fn environment(&self) -> String {
+        self.options
+            .ssh
+            .as_ref()
+            .map(|host| format!("SSH · {host}"))
+            .or_else(|| {
+                self.options
+                    .wsl
+                    .as_ref()
+                    .map(|host| format!("WSL · {host}"))
+            })
+            .unwrap_or_else(|| "本地".into())
+    }
+    pub(super) fn show_project_tasks(
+        &mut self,
+        create: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(info) = &self.info else {
+            return;
+        };
+        if let Some(tasks) = &self.tasks {
+            tasks.update(cx, |tasks, cx| tasks.activate(cx));
+        } else {
+            let owner = cx.weak_entity();
+            let session = info.id.clone();
+            let workspace = info.workspace.clone();
+            self.tasks =
+                Some(cx.new(|cx| tasks::Tasks::new(owner, session, workspace, window, cx)));
+        }
+        self.tasks_open = true;
+        self.panel = None;
+        self.inspector = None;
+        if create {
+            self.tasks
+                .as_ref()
+                .unwrap()
+                .update(cx, |tasks, cx| tasks.start_create(window, cx));
+        }
+        cx.notify();
     }
 }
 

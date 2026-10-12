@@ -2,7 +2,7 @@
 //! in masked inputs and the authentication store, never in Shell or reports.
 use crate::backend::Options;
 use gpui_kit::component::{
-    ActiveTheme, Disableable, Sizable,
+    ActiveTheme, Disableable, IconName, Sizable,
     button::{Button, ButtonVariants},
     h_flex,
     input::{Input, InputState},
@@ -22,6 +22,7 @@ pub(crate) struct Accounts {
     entries: Vec<orbit_auth::CredentialInfo>,
     error: Option<String>,
     busy: bool,
+    loading: bool,
     task: Task<()>,
     operation: Option<tokio::task::JoinHandle<()>>,
     format: orbit_model::client::ApiFormat,
@@ -69,6 +70,7 @@ impl Accounts {
             api_form: false,
             error,
             busy: false,
+            loading: false,
             task: Task::ready(()),
             operation: None,
             format: orbit_model::client::ApiFormat::OpenaiChatCompletions,
@@ -79,9 +81,11 @@ impl Accounts {
         view
     }
     fn load(&mut self, cx: &mut Context<Self>) {
-        if self.auth.as_os_str().is_empty() {
+        if self.auth.as_os_str().is_empty() || self.busy || self.loading {
             return;
         }
+        self.loading = true;
+        self.error = None;
         let auth = self.auth.clone();
         let job = self
             .runtime
@@ -89,6 +93,7 @@ impl Accounts {
         self.task = cx.spawn(async move |weak, cx| {
             let result = job.await;
             let _ = weak.update(cx, |view, cx| {
+                view.loading = false;
                 match result {
                     Ok(Ok(entries)) => view.entries = entries,
                     Ok(Err(error)) => view.error = Some(error.to_string()),
@@ -97,6 +102,7 @@ impl Accounts {
                 cx.notify();
             });
         });
+        cx.notify();
     }
     fn receive(
         &mut self,
@@ -134,7 +140,7 @@ impl Accounts {
         cx.notify();
     }
     fn login(&mut self, provider: OAuthProvider, cx: &mut Context<Self>) {
-        if self.busy {
+        if self.busy || self.loading {
             return;
         }
         let auth = self.auth.clone();
@@ -172,7 +178,7 @@ impl Accounts {
         self.receive(receiver, cx);
     }
     fn save_key(&mut self, cx: &mut Context<Self>) {
-        if self.busy {
+        if self.busy || self.loading {
             return;
         }
         let values = self
@@ -253,6 +259,21 @@ impl Render for Accounts {
                                 "已连接的账号"
                             }),
                     )
+                    .when(!self.adding, |view| {
+                        view.child(
+                            Button::new("refresh-connections")
+                                .ghost()
+                                .small()
+                                .icon(IconName::RefreshCw)
+                                .label(if self.loading {
+                                    "刷新中…"
+                                } else {
+                                    "刷新"
+                                })
+                                .disabled(self.busy || self.loading)
+                                .on_click(cx.listener(|view, _, _, cx| view.load(cx))),
+                        )
+                    })
                     .child(
                         Button::new("add-connection")
                             .small()
@@ -261,7 +282,7 @@ impl Render for Accounts {
                             } else {
                                 "添加连接…"
                             })
-                            .disabled(self.busy)
+                            .disabled(self.busy || self.loading)
                             .on_click(cx.listener(|view, _, _, cx| {
                                 view.adding = !view.adding;
                                 view.api_form = false;

@@ -416,6 +416,16 @@ fn main() -> anyhow::Result<()> {
             "session_action" => {
                 json!({"type":"report","value":{"title":"文件变更","text":"## 工作区变更\n\n| 文件 | 状态 |\n| --- | --- |\n| src/workspace.rs | 已修改 |\n\n```diff\n- old_layout()\n+ workspace_layout()\n```"}})
             }
+            "tasks" => {
+                if request["expected_workspace"]
+                    .as_str()
+                    .is_some_and(|expected| expected != workspace.as_str())
+                {
+                    json!({"type":"error","value":"工作区已切换，请重新打开当前项目的任务页后重试"})
+                } else {
+                    task_snapshot(&workspace, &request["action"])
+                }
+            }
             "resources" => {
                 let action = &request["action"];
                 if let Some(save) = action.get("SaveSkill") {
@@ -540,4 +550,183 @@ fn plugin_catalog(workspace: &str, action: &Value) -> anyhow::Result<Value> {
     }
     std::fs::write(path, serde_json::to_vec(&catalog)?)?;
     Ok(json!({"type":"plugins","value":catalog}))
+}
+
+fn task_snapshot(workspace: &str, action: &Value) -> Value {
+    use orbit_protocol::project::{ProjectTask, TaskAction, TaskSnapshot, TaskStatus};
+    let result = (|| -> anyhow::Result<TaskSnapshot> {
+        let path = std::path::Path::new(workspace).join(".fixture-tasks.json");
+        let mut tasks: Vec<ProjectTask> = match std::fs::read(&path) {
+            Ok(bytes) => serde_json::from_slice(&bytes)?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => vec![],
+            Err(error) => return Err(error.into()),
+        };
+        let action: TaskAction = serde_json::from_value(action.clone())?;
+        let changed = match action {
+            TaskAction::List { include_completed } => {
+                let tasks = tasks
+                    .into_iter()
+                    .filter(|task| {
+                        include_completed
+                            || !matches!(task.status, TaskStatus::Completed | TaskStatus::Cancelled)
+                    })
+                    .collect();
+                return Ok(TaskSnapshot {
+                    tasks,
+                    changed: None,
+                });
+            }
+            TaskAction::Add { title } => {
+                let id = tasks.iter().map(|task| task.id).max().unwrap_or(0) + 1;
+                tasks.push(ProjectTask {
+                    id,
+                    project_id: "fixture".into(),
+                    parent_id: None,
+                    title,
+                    details: String::new(),
+                    priority: 0,
+                    status: TaskStatus::Pending,
+                    owner_session_id: None,
+                    depends_on: vec![],
+                    blocked_by: vec![],
+                    created_at: 0,
+                    updated_at: 0,
+                });
+                Some(id)
+            }
+            TaskAction::Create {
+                title,
+                details,
+                priority,
+                parent_id,
+                depends_on,
+            } => {
+                let id = tasks.iter().map(|task| task.id).max().unwrap_or(0) + 1;
+                tasks.push(ProjectTask {
+                    id,
+                    project_id: "fixture".into(),
+                    parent_id,
+                    title,
+                    details,
+                    priority,
+                    status: TaskStatus::Pending,
+                    owner_session_id: None,
+                    depends_on,
+                    blocked_by: vec![],
+                    created_at: 0,
+                    updated_at: 0,
+                });
+                Some(id)
+            }
+            TaskAction::Update {
+                id,
+                title,
+                details,
+                status,
+                priority,
+                depends_on,
+            } => {
+                let task = tasks
+                    .iter_mut()
+                    .find(|task| task.id == id)
+                    .ok_or_else(|| anyhow::anyhow!("项目中没有这个任务"))?;
+                if let Some(title) = title {
+                    task.title = title;
+                }
+                if let Some(details) = details {
+                    task.details = details;
+                }
+                if let Some(status) = status {
+                    task.status = status;
+                }
+                if let Some(priority) = priority {
+                    task.priority = priority;
+                }
+                if let Some(depends_on) = depends_on {
+                    task.depends_on = depends_on;
+                }
+                Some(id)
+            }
+            TaskAction::SetStatus { id, status } => {
+                tasks
+                    .iter_mut()
+                    .find(|task| task.id == id)
+                    .ok_or_else(|| anyhow::anyhow!("项目中没有这个任务"))?
+                    .status = status;
+                Some(id)
+            }
+            TaskAction::Release { id } => {
+                let task = tasks
+                    .iter_mut()
+                    .find(|task| task.id == id)
+                    .ok_or_else(|| anyhow::anyhow!("项目中没有这个任务"))?;
+                task.owner_session_id = None;
+                if task.status == TaskStatus::InProgress {
+                    task.status = TaskStatus::Pending;
+                }
+                Some(id)
+            }
+        };
+        for task in &tasks {
+            anyhow::ensure!(
+                !task.title.trim().is_empty() && task.title.len() <= 512,
+                "请填写有效任务标题"
+            );
+            anyhow::ensure!(
+                task.details.len() <= 8192 && (-100..=100).contains(&task.priority),
+                "任务说明或优先级超出范围"
+            );
+            anyhow::ensure!(task.depends_on.len() <= 64, "一个任务最多选择 64 个依赖");
+            let mut pending = task.depends_on.clone();
+            let mut visited = std::collections::BTreeSet::new();
+            while let Some(id) = pending.pop() {
+                anyhow::ensure!(id != task.id, "任务依赖不能形成循环");
+                let dependency = tasks
+                    .iter()
+                    .find(|task| task.id == id)
+                    .ok_or_else(|| anyhow::anyhow!("依赖任务不存在"))?;
+                if visited.insert(id) {
+                    pending.extend(dependency.depends_on.iter().copied());
+                }
+            }
+            if matches!(task.status, TaskStatus::InProgress | TaskStatus::Completed) {
+                anyhow::ensure!(
+                    task.depends_on.iter().all(|id| tasks
+                        .iter()
+                        .any(|task| task.id == *id && task.status == TaskStatus::Completed)),
+                    "还有未完成的依赖任务"
+                );
+            }
+        }
+        let completed: std::collections::BTreeSet<_> = tasks
+            .iter()
+            .filter(|task| task.status == TaskStatus::Completed)
+            .map(|task| task.id)
+            .collect();
+        for task in &mut tasks {
+            task.blocked_by = task
+                .depends_on
+                .iter()
+                .copied()
+                .filter(|id| !completed.contains(id))
+                .collect();
+        }
+        tasks.sort_by_key(|task| {
+            (
+                match task.status {
+                    TaskStatus::InProgress => 0,
+                    TaskStatus::Blocked => 1,
+                    _ => 2,
+                },
+                std::cmp::Reverse(task.priority),
+                task.id,
+            )
+        });
+        std::fs::write(path, serde_json::to_vec(&tasks)?)?;
+        Ok(TaskSnapshot { tasks, changed })
+    })();
+    match result {
+        Ok(tasks) => json!({"type":"tasks","value":tasks}),
+        Err(error) => json!({"type":"error","value":format!("{error:#}")}),
+    }
 }

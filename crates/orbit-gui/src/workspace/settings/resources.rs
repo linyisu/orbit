@@ -14,6 +14,7 @@ pub(super) enum Kind {
 pub(super) struct Resources {
     owner: WeakEntity<Workspace>,
     session: Option<String>,
+    workspace: String,
     kind: Kind,
     skills: Vec<Skill>,
     memories: Vec<SessionMemory>,
@@ -30,6 +31,7 @@ impl Resources {
     pub(super) fn new(
         owner: WeakEntity<Workspace>,
         session: Option<String>,
+        workspace: String,
         kind: Kind,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -41,6 +43,7 @@ impl Resources {
         Self {
             owner,
             session,
+            workspace,
             kind,
             skills: vec![],
             memories: vec![],
@@ -59,7 +62,14 @@ impl Resources {
             return;
         }
         let (result, receiver) = tokio::sync::oneshot::channel();
+        let session = self.session.clone();
+        let workspace = self.workspace.clone();
         let sent = self.owner.update(cx, |view, _| {
+            if !view.info.as_ref().is_some_and(|info| {
+                Some(&info.id) == session.as_ref() && info.workspace == workspace
+            }) {
+                anyhow::bail!("工作区已切换，请在当前项目的设置中重新打开资源。");
+            }
             view.backend
                 .as_ref()
                 .ok_or_else(|| anyhow::anyhow!("请先连接工作区"))?
@@ -114,7 +124,14 @@ impl Resources {
     }
     fn action(&mut self, action: Action, cx: &mut Context<Self>) {
         if let Some(session) = self.session.clone() {
-            self.request(Request::Resources { session, action }, cx);
+            self.request(
+                Request::Resources {
+                    session,
+                    expected_workspace: Some(self.workspace.clone()),
+                    action,
+                },
+                cx,
+            );
         } else {
             self.error = Some("请先打开工作区".into());
             cx.notify();

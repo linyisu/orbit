@@ -12,7 +12,7 @@ use orbit_protocol::{
 };
 
 #[derive(Clone, Copy, Debug)]
-pub(super) enum WorkspaceCommand {
+pub(crate) enum WorkspaceCommand {
     OpenProject,
     RemoteProject,
     Changes,
@@ -134,9 +134,9 @@ impl Workspace {
             self.settings(false, window, cx);
             if let Some(settings) = &self.settings_page {
                 settings.update(cx, |view, cx| {
-                    view.initial_page = page;
-                    cx.notify();
+                    view.select_page(page, window, cx);
                 });
+                cx.emit(WorkspaceEvent::Settings(settings.clone()));
             }
             return;
         }
@@ -150,6 +150,18 @@ impl Workspace {
         }
         let Some(info) = &self.info else { return };
         let session = info.id.clone();
+        if matches!(
+            action,
+            WorkspaceCommand::Tasks
+                | WorkspaceCommand::AddTask
+                | WorkspaceCommand::TaskStatus
+                | WorkspaceCommand::ReleaseTask
+        ) {
+            self.show_project_tasks(matches!(action, WorkspaceCommand::AddTask), window, cx);
+            return;
+        }
+        self.tasks_open = false;
+
         let inspection = match action {
             WorkspaceCommand::Changes => Some(Inspection::Changes),
             WorkspaceCommand::Diff => Some(Inspection::Diff { path: None }),
@@ -172,6 +184,10 @@ impl Workspace {
             return;
         }
         match action {
+            WorkspaceCommand::Tasks
+            | WorkspaceCommand::AddTask
+            | WorkspaceCommand::TaskStatus
+            | WorkspaceCommand::ReleaseTask => unreachable!("handled above"),
             WorkspaceCommand::Projects
             | WorkspaceCommand::Storage
             | WorkspaceCommand::History
@@ -280,23 +296,6 @@ impl Workspace {
                 window,
                 cx,
             ),
-            WorkspaceCommand::ReleaseTask => self.prompt(
-                ("释放任务", "任务 ID"),
-                "",
-                "释放",
-                move |id| {
-                    Ok(Request::SessionAction {
-                        session: session.clone(),
-                        action: SessionAction::Task {
-                            task: TaskAction::Release {
-                                id: id.parse().map_err(|_| "请输入任务 ID")?,
-                            },
-                        },
-                    })
-                },
-                window,
-                cx,
-            ),
             WorkspaceCommand::SearchMemory => self.prompt(
                 ("搜索记忆", "关键词"),
                 "",
@@ -306,43 +305,6 @@ impl Workspace {
                         session: session.clone(),
                         action: SessionAction::Memory {
                             memory: MemoryAction::Search { query },
-                        },
-                    })
-                },
-                window,
-                cx,
-            ),
-            WorkspaceCommand::AddTask => self.prompt(
-                ("添加任务", "任务名称"),
-                "",
-                "添加",
-                move |title| {
-                    Ok(Request::SessionAction {
-                        session: session.clone(),
-                        action: SessionAction::Task {
-                            task: TaskAction::Add { title },
-                        },
-                    })
-                },
-                window,
-                cx,
-            ),
-            WorkspaceCommand::TaskStatus => self.prompt(
-                (
-                    "更新任务状态",
-                    "任务 ID 和状态：pending / in_progress / blocked / completed / cancelled",
-                ),
-                "",
-                "更新",
-                move |value| {
-                    let (id, status) = value.split_once(' ').ok_or("填写任务 ID 和状态")?;
-                    let id = id.parse().map_err(|_| "任务 ID 应为数字")?;
-                    let status = orbit_protocol::project::TaskStatus::parse(status.trim())
-                        .ok_or("无效的任务状态")?;
-                    Ok(Request::SessionAction {
-                        session: session.clone(),
-                        action: SessionAction::Task {
-                            task: TaskAction::SetStatus { id, status },
                         },
                     })
                 },
@@ -464,19 +426,6 @@ impl Workspace {
                 window,
                 cx,
             ),
-            WorkspaceCommand::Tasks => {
-                self.command(
-                    Command::Request(Request::SessionAction {
-                        session,
-                        action: SessionAction::Task {
-                            task: TaskAction::List {
-                                include_completed: true,
-                            },
-                        },
-                    }),
-                    cx,
-                );
-            }
             WorkspaceCommand::Memory => {
                 self.command(
                     Command::Request(Request::SessionAction {
@@ -494,6 +443,7 @@ impl Workspace {
                 self.command(
                     Command::Request(Request::Plugins {
                         session,
+                        expected_workspace: Some(info.workspace.clone()),
                         action: orbit_protocol::plugins::Action::List,
                     }),
                     cx,

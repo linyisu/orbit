@@ -3,7 +3,6 @@
 use super::*;
 use actions::WorkspaceCommand;
 use gpui_kit::component::{
-    ElementExt,
     scroll::{ScrollableElement, Scrollbar},
     tab::{Tab, TabBar},
 };
@@ -28,80 +27,6 @@ impl Section {
 }
 
 impl Workspace {
-    pub(super) fn task_tabs(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let active = self
-            .open_tasks
-            .iter()
-            .position(|task| task.key == self.key)
-            .unwrap_or(0);
-        let tabs = TabBar::new("open-tasks")
-            .w_full()
-            .segmented()
-            .track_scroll(&self.task_scroll)
-            .max_width(window.rem_size() * 14.)
-            .menu(true)
-            .selected_index(active)
-            .children(self.open_tasks.iter().map(|task| {
-                let key = task.key.clone();
-                let title = task.title.clone();
-                Tab::new()
-                    .px_2()
-                    .label(task.title.clone())
-                    .prefix(Icon::new(IconName::BookOpen).size_4())
-                    .tooltip(move |window, cx| {
-                        gpui_kit::component::tooltip::Tooltip::new(title.clone()).build(window, cx)
-                    })
-                    .when(task.attention, |tab| {
-                        tab.prefix(Icon::new(IconName::CircleAlert).size_3())
-                    })
-                    .when(task.loading && !task.attention, |tab| {
-                        tab.prefix(gpui_kit::component::spinner::Spinner::new().small())
-                    })
-                    .when(task.unread && !task.attention && !task.loading, |tab| {
-                        tab.prefix(div().size_1p5().rounded_full().bg(cx.theme().primary))
-                    })
-                    .suffix(
-                        Button::new(SharedString::from(format!("close-task-{key}")))
-                            .ghost()
-                            .xsmall()
-                            .icon(IconName::Close)
-                            .accessibility_label(format!("关闭 {}", task.title))
-                            .tooltip(if task.busy {
-                                "任务仍在运行，请先停止任务"
-                            } else {
-                                "关闭标签页，保留会话记录"
-                            })
-                            .disabled(task.busy)
-                            .on_click(cx.listener(move |_, _, _, cx| {
-                                cx.stop_propagation();
-                                cx.emit(WorkspaceEvent::Close(key.clone()));
-                            })),
-                    )
-            }))
-            .on_click(cx.listener(|view, ix: &usize, _, cx| {
-                if let Some(task) = view.open_tasks.get(*ix) {
-                    cx.emit(WorkspaceEvent::Activate(task.key.clone()));
-                }
-            }));
-        let owner = cx.weak_entity();
-        div()
-            .w_full()
-            .child(tabs)
-            .on_prepaint(move |bounds, _, cx| {
-                let _ = owner.update(cx, |view, cx| {
-                    if view.task_reveal || view.task_width != Some(bounds.size.width) {
-                        view.task_reveal = false;
-                        view.task_width = Some(bounds.size.width);
-                        let before = view.task_scroll.offset();
-                        view.reveal_task();
-                        if view.task_scroll.offset() != before {
-                            cx.notify();
-                        }
-                    }
-                });
-            })
-    }
-
     pub(super) fn inspector_view(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let section = self.inspector.unwrap_or(Section::Execution);
         let content = match section {

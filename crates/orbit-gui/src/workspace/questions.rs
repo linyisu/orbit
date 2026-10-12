@@ -444,10 +444,12 @@ impl Workspace {
     ) {
         let Some(info) = &self.info else { return };
         let session = info.id.clone();
+        let workspace = info.workspace.clone();
         let owner = cx.weak_entity();
         window.open_dialog(cx, move |dialog, _, cx| {
             let owner2 = owner.clone();
             let session2 = session.clone();
+            let workspace2 = workspace.clone();
             dialog
                 .title("项目插件")
                 .child(
@@ -463,6 +465,7 @@ impl Workspace {
                                     let source = source.clone();
                                     let owner = owner.clone();
                                     let session = session.clone();
+                                    let workspace = workspace.clone();
                                     let enabled = catalog.enabled.iter().any(|entry| {
                                         entry.plugin_name == name
                                             && entry.marketplace_source == source
@@ -510,6 +513,9 @@ impl Workspace {
                                                     view.command(
                                                         Command::Request(Request::Plugins {
                                                             session: session.clone(),
+                                                            expected_workspace: Some(
+                                                                workspace.clone(),
+                                                            ),
                                                             action,
                                                         }),
                                                         cx,
@@ -532,6 +538,7 @@ impl Workspace {
                     move |_, window, cx| {
                         window.close_dialog(cx);
                         let session = session2.clone();
+                        let workspace = workspace2.clone();
                         let _ = owner2.update(cx, |view, cx| {
                             view.prompt(
                                 ("添加插件来源", "Git 地址或本地目录"),
@@ -540,6 +547,7 @@ impl Workspace {
                                 move |source| {
                                     Ok(Request::Plugins {
                                         session: session.clone(),
+                                        expected_workspace: Some(workspace.clone()),
                                         action: orbit_protocol::plugins::Action::Add { source },
                                     })
                                 },

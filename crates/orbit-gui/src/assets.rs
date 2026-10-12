@@ -17,7 +17,10 @@ gpui_kit::assets::icon_assets!(
         Brain,
         X,
         Wrench,
-        Command
+        Command,
+        Monitor,
+        Laptop,
+        ListTodo
     ]
 );
 pub(crate) struct AppAssets;

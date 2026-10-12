@@ -6,7 +6,6 @@ use gpui_kit::component::{list::ListItem, spinner::Spinner, tooltip::Tooltip};
 pub(crate) struct Sidebar {
     owner: Option<WeakEntity<Workspace>>,
     visible: bool,
-    settings_open: bool,
     hosts: Vec<HostNavigation>,
     host: Option<usize>,
     info: Option<SessionInfo>,
@@ -24,7 +23,6 @@ impl Sidebar {
         Self {
             owner: None,
             visible: true,
-            settings_open: false,
             hosts: vec![],
             host: None,
             info: None,
@@ -42,7 +40,6 @@ impl Sidebar {
         let location = view.location.clone();
         self.info = view.info.clone();
         self.navigation_tasks = view.navigation_tasks.clone();
-        self.settings_open = view.settings_page.is_some();
         let host = self
             .hosts
             .iter()
@@ -92,7 +89,7 @@ impl Sidebar {
         cx.notify();
     }
     pub(crate) fn visible(&self) -> bool {
-        self.visible && !self.settings_open
+        self.visible
     }
     fn navigation(&self) -> &Entity<TreeState> {
         &self.hosts[self.host.expect("bound sidebar")].tree
@@ -347,6 +344,104 @@ impl Render for Sidebar {
                     .p_3()
                     .gap_1()
                     .child(
+                        Button::new("environment-switcher")
+                            .ghost()
+                            .small()
+                            .w_full()
+                            .child(
+                                h_flex()
+                                    .w_full()
+                                    .gap_2()
+                                    .child(
+                                        Icon::new(
+                                            if active.options.ssh.is_some()
+                                                || active.options.wsl.is_some()
+                                            {
+                                                IconName::Monitor
+                                            } else {
+                                                IconName::Laptop
+                                            },
+                                        )
+                                        .size_4(),
+                                    )
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .min_w_0()
+                                            .text_ellipsis()
+                                            .child(active.environment()),
+                                    )
+                                    .child(Icon::new(IconName::ChevronDown).size_3()),
+                            )
+                            .accessibility_label("切换连接环境")
+                            .dropdown_menu({
+                                let owner = cx.weak_entity();
+                                let hosts: Vec<_> = self
+                                    .hosts
+                                    .iter()
+                                    .map(|host| {
+                                        let label = host
+                                            .options
+                                            .ssh
+                                            .as_ref()
+                                            .map(|host| format!("SSH · {host}"))
+                                            .or_else(|| {
+                                                host.options
+                                                    .wsl
+                                                    .as_ref()
+                                                    .map(|host| format!("WSL · {host}"))
+                                            })
+                                            .unwrap_or_else(|| "本地".into());
+                                        (label, host.options.clone())
+                                    })
+                                    .collect();
+                                move |menu, _, _| {
+                                    let mut menu = menu;
+                                    for (label, options) in &hosts {
+                                        let owner = owner.clone();
+                                        let mut options = options.clone();
+                                        options.resume = None;
+                                        options.recover_draft = false;
+                                        options.relink_on_resume = false;
+                                        menu =
+                                            menu.item(PopupMenuItem::new(label.clone()).on_click(
+                                                move |_, window, cx| {
+                                                    let _ = owner.update(cx, |view, cx| {
+                                                        view.with_owner(
+                                                            cx,
+                                                            |_, _, cx| {
+                                                                cx.emit(WorkspaceEvent::Open(
+                                                                    Box::new(options.clone()),
+                                                                ))
+                                                            },
+                                                            window,
+                                                        )
+                                                    });
+                                                },
+                                            ));
+                                    }
+                                    let owner = owner.clone();
+                                    menu.separator().item(
+                                        PopupMenuItem::new("连接远程项目…").on_click(
+                                            move |_, window, cx| {
+                                                let _ = owner.update(cx, |view, cx| {
+                                                    view.with_owner(
+                                                        cx,
+                                                        |view, window, cx| {
+                                                            view.remote_connection_dialog(
+                                                                window, cx,
+                                                            )
+                                                        },
+                                                        window,
+                                                    )
+                                                });
+                                            },
+                                        ),
+                                    )
+                                }
+                            }),
+                    )
+                    .child(
                         Button::new("new-session")
                             .ghost()
                             .small()
@@ -385,6 +480,27 @@ impl Render for Sidebar {
                             })),
                     )
                     .child(
+                        Button::new("connect-remote")
+                            .ghost()
+                            .small()
+                            .w_full()
+                            .accessibility_label("连接远程项目")
+                            .child(
+                                h_flex()
+                                    .w_full()
+                                    .gap_2()
+                                    .child(Icon::new(IconName::Monitor).size_4())
+                                    .child("连接远程项目…"),
+                            )
+                            .on_click(cx.listener(|view, _, window, cx| {
+                                view.with_owner(
+                                    cx,
+                                    |view, window, cx| view.remote_connection_dialog(window, cx),
+                                    window,
+                                )
+                            })),
+                    )
+                    .child(
                         Button::new("find-task")
                             .ghost()
                             .small()
@@ -401,6 +517,28 @@ impl Render for Sidebar {
                                 view.with_owner(
                                     cx,
                                     |view, window, cx| view.search_sessions(window, cx),
+                                    window,
+                                )
+                            })),
+                    )
+                    .child(
+                        Button::new("project-tasks")
+                            .ghost()
+                            .small()
+                            .w_full()
+                            .accessibility_label("项目任务")
+                            .disabled(active.info.is_none())
+                            .child(
+                                h_flex()
+                                    .w_full()
+                                    .gap_2()
+                                    .child(Icon::new(IconName::ListTodo).size_4())
+                                    .child("项目任务"),
+                            )
+                            .on_click(cx.listener(|view, _, window, cx| {
+                                view.with_owner(
+                                    cx,
+                                    |view, window, cx| view.show_project_tasks(false, window, cx),
                                     window,
                                 )
                             })),

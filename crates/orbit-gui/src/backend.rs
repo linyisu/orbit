@@ -45,16 +45,26 @@ pub(crate) struct Options {
     pub(crate) preferences: Option<PathBuf>,
     #[arg(long, conflicts_with = "wsl")]
     pub(crate) ssh: Option<String>,
+    #[arg(long, requires = "ssh")]
+    #[serde(default)]
+    pub(crate) ssh_user: Option<String>,
+    #[arg(long, requires = "ssh", value_parser = clap::value_parser!(u16).range(1..))]
+    #[serde(default)]
+    pub(crate) ssh_port: Option<u16>,
+    #[arg(long, requires = "ssh")]
+    #[serde(default)]
+    pub(crate) identity: Option<String>,
     #[arg(long, conflicts_with = "ssh")]
     pub(crate) wsl: Option<String>,
+    #[arg(long, requires = "wsl")]
+    #[serde(default)]
+    pub(crate) wsl_user: Option<String>,
 }
 
 impl Options {
     pub(crate) fn resolve_paths(&mut self) -> Result<()> {
         let directory = std::env::current_dir()?;
         for path in std::iter::once(&mut self.config)
-            .chain(self.workspace.iter_mut())
-            .chain(self.database.iter_mut())
             .chain(self.auth_dir.iter_mut())
             .chain(self.preferences.iter_mut())
             .chain(self.appearance.iter_mut())
@@ -63,22 +73,77 @@ impl Options {
                 *path = directory.join(&*path);
             }
         }
+        // Workspace and database paths are interpreted by the target service.
+        // Prefixing ~/project with the desktop's cwd corrupts a remote target.
+        if self.ssh.is_none() && self.wsl.is_none() {
+            for path in self.workspace.iter_mut().chain(self.database.iter_mut()) {
+                if path.is_relative() {
+                    *path = directory.join(&*path);
+                }
+            }
+        }
+        if let Some(identity) = &mut self.identity {
+            let path = PathBuf::from(&*identity);
+            if path.is_relative() && !identity.starts_with('~') {
+                *identity = directory.join(path).to_string_lossy().into_owned();
+            }
+        }
         Ok(())
     }
 
     /// Session IDs and paths are meaningful only within the same service/data
     /// source. Never activate a local tab for an identically named remote one.
     pub(crate) fn same_host(&self, other: &Self) -> bool {
+        // The service resolves an ordinary relative database against its
+        // workspace. Home-relative paths instead identify one host-wide store.
+        let workspace_database = (self.ssh.is_some() || self.wsl.is_some())
+            && self.database.as_ref().is_some_and(|path| {
+                path.is_relative()
+                    && !path
+                        .to_str()
+                        .is_some_and(|path| path == "~" || path.starts_with("~/"))
+            });
         self.ssh == other.ssh
+            && self.ssh_user == other.ssh_user
+            && self.ssh_port == other.ssh_port
+            && self.identity == other.identity
             && self.wsl == other.wsl
+            && self.wsl_user == other.wsl_user
             && self.server == other.server
             && self.database == other.database
+            && (!workspace_database || self.workspace == other.workspace)
             && self.auth_dir == other.auth_dir
             && self.config == other.config
+    }
+
+    pub(crate) fn connection_options(&self) -> Result<ConnectionOptions> {
+        anyhow::ensure!(
+            self.ssh.is_none() || self.wsl.is_none(),
+            "请选择一种远程连接方式"
+        );
+        let workspace = match &self.workspace {
+            Some(path) => path.clone(),
+            None if self.ssh.is_some() || self.wsl.is_some() => PathBuf::from("~"),
+            None => std::env::current_dir()?,
+        };
+        let mut connection = ConnectionOptions::local(workspace.to_string_lossy().into_owned());
+        connection.server = self.server.clone();
+        connection.ssh = self.ssh.clone();
+        connection.ssh_user = self.ssh_user.clone();
+        connection.ssh_port = self.ssh_port;
+        connection.identity = self.identity.clone();
+        connection.wsl = self.wsl.clone();
+        connection.wsl_user = self.wsl_user.clone();
+        Ok(connection)
     }
 }
 
 pub(crate) enum Command {
+    Tasks {
+        session: String,
+        workspace: String,
+        action: orbit_protocol::project::TaskAction,
+    },
     Complete {
         session: String,
         input: String,
@@ -104,6 +169,11 @@ pub(crate) enum Command {
 }
 
 pub(crate) enum Event {
+    Tasks {
+        session: String,
+        result: Result<orbit_protocol::project::TaskSnapshot, String>,
+    },
+    ConnectionStage(String),
     Completions {
         session: String,
         input: String,
@@ -179,20 +249,23 @@ async fn run(
     mut commands: mpsc::Receiver<Command>,
     events: &mpsc::Sender<Event>,
 ) -> Result<()> {
-    let workspace = options
-        .workspace
-        .clone()
-        .unwrap_or(std::env::current_dir()?);
-    let mut connection_options = ConnectionOptions::local(workspace.to_string_lossy().into_owned());
-    connection_options.server = options.server.clone();
-    connection_options.ssh = options.ssh.clone();
-    connection_options.wsl = options.wsl.clone();
+    let connection_options = options.connection_options()?;
     let (progress, mut updates) = orbit_client::interaction::channel();
+    let initial_stage = updates.stage.borrow_and_update().clone();
+    events.send(Event::ConnectionStage(initial_stage)).await?;
     let prompts = events.clone();
     let _prompts = AbortTask(tokio::spawn(async move {
-        while let Some(challenge) = updates.prompts.recv().await {
-            if prompts.send(Event::Challenge(challenge)).await.is_err() {
-                break;
+        loop {
+            tokio::select! {
+                changed = updates.stage.changed() => {
+                    if changed.is_err() { break; }
+                    let stage = updates.stage.borrow_and_update().clone();
+                    if prompts.send(Event::ConnectionStage(stage)).await.is_err() { break; }
+                }
+                challenge = updates.prompts.recv() => {
+                    let Some(challenge) = challenge else { break; };
+                    if prompts.send(Event::Challenge(challenge)).await.is_err() { break; }
+                }
             }
         }
     }));
@@ -201,11 +274,13 @@ async fn run(
         options.config,
         options.database,
         options.auth_dir,
-        Some(progress),
+        Some(progress.clone()),
     )
     .await?;
-    let mut client = connection.connect().await?;
+    progress.report("启动工作区服务并等待握手");
+    let mut client = connection.connect_progress(Some(&progress)).await?;
     events.send(Event::Connected).await?;
+    progress.report("读取会话并打开工作区");
     let mut history = client.request(Request::AllSessions).await?;
     if options.relink_on_resume {
         anyhow::ensure!(
@@ -283,6 +358,7 @@ async fn run(
         bail!(error);
     }
     deliver(opened, &mut session, &mut cursor, events).await?;
+    progress.report("已连接");
     let mut interval = tokio::time::interval(Duration::from_millis(80));
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut quota_tasks = tokio::task::JoinSet::new();
@@ -343,6 +419,15 @@ async fn run(
                                 let _ = events.send(Event::Usage { session, result }).await;
                             });
                         }
+                    }
+                    Command::Tasks { session, workspace, action } => {
+                        let result = match client.request(Request::Tasks { session: session.clone(), expected_workspace: Some(workspace), action }).await {
+                            Ok(Response::Tasks(tasks)) => Ok(tasks),
+                            Ok(Response::Error(error)) => Err(error),
+                            Ok(_) => Err("服务没有返回任务数据，请更新工作区服务后重试。".into()),
+                            Err(error) => Err(format!("{error:#}")),
+                        };
+                        events.send(Event::Tasks { session, result }).await?;
                     }
                     Command::Settings { request, result } => {
                         let response = match client.request(request).await {

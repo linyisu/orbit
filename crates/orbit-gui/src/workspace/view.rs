@@ -405,94 +405,13 @@ impl Workspace {
 
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        if let Some(settings) = &self.settings_page {
-            return settings.clone().into_any_element();
-        }
         use super::actions::WorkspaceCommand;
-        use gpui_kit::component::TitleBar;
-        let title_bar = TitleBar::new().child(
-            h_flex()
-                .flex_1()
-                .min_w_0()
-                .gap_2()
-                .child(div().text_sm().child(self.project.clone()))
-                .when_some(
-                    self.info.as_ref().and_then(|info| info.branch.clone()),
-                    |view, branch| {
-                        view.child(
-                            div()
-                                .text_xs()
-                                .text_color(cx.theme().muted_foreground)
-                                .child(format!("/ {branch}")),
-                        )
-                    },
-                ),
-        );
         let empty = !self.opening && self.conversation.read(cx).is_empty();
         let body =
             v_flex()
                 .size_full()
                 .min_w_0()
                 .min_h_0()
-                .child(
-                    h_flex()
-                        .h_9()
-                        .px_2()
-                        .gap_2()
-                        .flex_shrink_0()
-                        .border_b_1()
-                        .border_color(cx.theme().border)
-                        .child(
-                            Button::new("toggle-sidebar")
-                                .ghost()
-                                .small()
-                                .icon(IconName::PanelLeft)
-                                .accessibility_label("切换侧栏")
-                                .tooltip("切换侧栏 · Ctrl+B")
-                                .on_click(cx.listener(|view, _, _, cx| {
-                                    view.sidebar.update(cx, |sidebar, cx| sidebar.toggle(cx));
-                                })),
-                        )
-                        .child(div().flex_1().min_w_0().child(self.task_tabs(window, cx)))
-                        .when(self.error.is_some() && self.info.is_none(), |bar| {
-                            bar.child(
-                                Button::new("project-error")
-                                    .ghost()
-                                    .small()
-                                    .icon(IconName::CircleAlert)
-                                    .label("查看错误")
-                                    .on_click(cx.listener(|view, _, window, cx| {
-                                        view.show_error(window, cx)
-                                    })),
-                            )
-                        })
-                        .child(
-                            Button::new("new-task-tab")
-                                .ghost()
-                                .small()
-                                .icon(IconName::Plus)
-                                .accessibility_label("新任务")
-                                .tooltip("新任务 · Ctrl+N")
-                                .on_click(cx.listener(|view, _, _, cx| view.open(None, cx))),
-                        )
-                        .child(
-                            Button::new("toggle-inspector")
-                                .ghost()
-                                .small()
-                                .icon(IconName::PanelRight)
-                                .label("工作面板")
-                                .accessibility_label("工作面板")
-                                .tooltip("执行、计划、变更与 Agent")
-                                .on_click(cx.listener(|view, _, _, cx| {
-                                    view.inspector = if view.inspector.is_some() {
-                                        None
-                                    } else {
-                                        Some(super::inspector::Section::Execution)
-                                    };
-                                    cx.notify();
-                                })),
-                        ),
-                )
                 .child(div().flex_1().min_h_0().child(
                     if self.opening && !self.recovery.is_active() {
                         v_flex()
@@ -501,13 +420,24 @@ impl Render for Workspace {
                             .justify_center()
                             .gap_2()
                             .child(gpui_kit::component::spinner::Spinner::new())
+                            .child(div().text_sm().child(self.connection_stage.clone()))
                             .child(
                                 div()
-                                    .text_sm()
+                                    .text_xs()
                                     .text_color(cx.theme().muted_foreground)
-                                    .child("正在恢复会话…"),
+                                    .child(self.environment()),
+                            )
+                            .child(
+                                Button::new("cancel-connection")
+                                    .small()
+                                    .label("取消连接")
+                                    .on_click(cx.listener(|view, _, window, cx| {
+                                        view.cancel_connection(window, cx)
+                                    })),
                             )
                             .into_any_element()
+                    } else if self.info.is_none() && self.error.is_some() {
+                        self.connection_failure(cx).into_any_element()
                     } else if empty {
                         v_flex()
                             .size_full()
@@ -680,6 +610,50 @@ impl Render for Workspace {
         } else {
             body.into_any_element()
         };
+        let body = if self.tasks_open {
+            v_flex()
+                .size_full()
+                .min_h_0()
+                .child(
+                    h_flex()
+                        .h_10()
+                        .px_3()
+                        .gap_2()
+                        .border_b_1()
+                        .border_color(cx.theme().border)
+                        .child(
+                            Button::new("tasks-back")
+                                .ghost()
+                                .small()
+                                .icon(IconName::ArrowLeft)
+                                .accessibility_label("返回会话")
+                                .on_click(cx.listener(|view, _, window, cx| {
+                                    view.tasks_open = false;
+                                    view.input.update(cx, |input, cx| input.focus(window, cx));
+                                    cx.notify();
+                                })),
+                        )
+                        .child(
+                            div()
+                                .text_sm()
+                                .font_weight(FontWeight::MEDIUM)
+                                .child("项目任务"),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .text_sm()
+                                .text_ellipsis()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(self.location.clone()),
+                        ),
+                )
+                .child(div().flex_1().min_h_0().children(self.tasks.clone()))
+                .into_any_element()
+        } else {
+            body
+        };
         v_flex()
             .size_full()
             .bg(cx.theme().background)
@@ -718,7 +692,6 @@ impl Render for Workspace {
             .on_action(cx.listener(|view, _: &FocusComposer, window, cx| {
                 view.input.update(cx, |input, cx| input.focus(window, cx))
             }))
-            .child(title_bar)
             .child(div().flex_1().min_h_0().child(body))
             .into_any_element()
     }

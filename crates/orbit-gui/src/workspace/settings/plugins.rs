@@ -3,7 +3,7 @@ use super::super::*;
 use gpui_kit::component::{
     StyledExt, VirtualListScrollHandle,
     input::{Input, InputState},
-    scroll::Scrollbar,
+    scroll::{ScrollableElement, Scrollbar},
     spinner::Spinner,
     tooltip::Tooltip,
     v_virtual_list,
@@ -14,12 +14,15 @@ use std::rc::Rc;
 pub(super) struct Plugins {
     owner: WeakEntity<Workspace>,
     session: Option<String>,
+    workspace: String,
     catalog: Option<protocol::Catalog>,
     query: Entity<InputState>,
     busy: bool,
     error: Option<String>,
     task: Task<()>,
     scroll: VirtualListScrollHandle,
+    enabled_expanded: bool,
+    enabled_scroll: ScrollHandle,
     _query: Subscription,
 }
 
@@ -32,6 +35,7 @@ impl Plugins {
     pub(super) fn new(
         owner: WeakEntity<Workspace>,
         session: Option<String>,
+        workspace: String,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -51,19 +55,22 @@ impl Plugins {
         Self {
             owner,
             session,
+            workspace,
             catalog: None,
             query,
             busy: false,
             error: None,
             task: Task::ready(()),
             scroll: VirtualListScrollHandle::new(),
+            enabled_expanded: false,
+            enabled_scroll: ScrollHandle::new(),
             _query: subscription,
         }
     }
     fn request(
         &mut self,
         action: protocol::Action,
-        close_after: Option<WeakEntity<Sources>>,
+        completion: Option<WeakEntity<Sources>>,
         cx: &mut Context<Self>,
     ) {
         if self.busy {
@@ -75,12 +82,24 @@ impl Plugins {
             return;
         };
         let (result, receiver) = tokio::sync::oneshot::channel();
+        let workspace = self.workspace.clone();
         let sent = self.owner.update(cx, |view, _| {
+            if !view
+                .info
+                .as_ref()
+                .is_some_and(|info| info.id == session && info.workspace == workspace)
+            {
+                anyhow::bail!("工作区已切换，请在当前项目的设置中重新打开插件。");
+            }
             view.backend
                 .as_ref()
                 .ok_or_else(|| anyhow::anyhow!("请先连接工作区"))?
                 .send(Command::Settings {
-                    request: Request::Plugins { session, action },
+                    request: Request::Plugins {
+                        session,
+                        expected_workspace: Some(workspace),
+                        action,
+                    },
                     result,
                 })
         });
@@ -96,13 +115,16 @@ impl Plugins {
         self.error = None;
         self.task = cx.spawn(async move |owner, cx| {
             let result = receiver.await.map_err(|e| e.to_string()).and_then(|r| r);
-            let _ = owner.update_in(cx, |view, window, cx| {
+            let _ = owner.update(cx, |view, cx| {
                 view.busy = false;
                 match result {
                     Ok(Response::Plugins(catalog)) => {
                         view.catalog = Some(catalog);
-                        if close_after.and_then(|dialog| dialog.upgrade()).is_some() {
-                            window.close_dialog(cx);
+                        if let Some(dialog) = completion.and_then(|dialog| dialog.upgrade()) {
+                            dialog.update(cx, |source, cx| {
+                                source.added = true;
+                                cx.notify();
+                            });
                         }
                     }
                     Ok(_) => {
@@ -129,6 +151,9 @@ impl Plugins {
             dialog
                 .on_ok(move |_, _, cx| {
                     if adding {
+                        if confirm.read(cx).added {
+                            return true;
+                        }
                         confirm.update(cx, |view, cx| view.add(cx));
                     }
                     false
@@ -372,13 +397,15 @@ fn package_summary(package: &protocol::PluginPackage) -> String {
         fields.join(" · ")
     }
 }
-impl Render for Plugins {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+impl Plugins {
+    fn page(&self, width: Pixels, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let mut content = v_flex()
             .w_full()
+            .flex_shrink_0()
             .min_w_0()
             .max_w(rems(60.))
             .mx_auto()
+            .p_6()
             .gap_6()
             .child(
                 h_flex()
@@ -474,51 +501,67 @@ impl Render for Plugins {
                 .into_any_element();
         };
         if !catalog.enabled.is_empty() {
-            content = content.child(
-                v_flex()
-                    .gap_3()
-                    .child(
-                        h_flex()
-                            .gap_2()
-                            .child(div().font_semibold().child("当前项目已启用"))
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child(catalog.enabled.len().to_string()),
-                            ),
-                    )
-                    .child(
-                        h_flex()
-                            .flex_wrap()
-                            .gap_2()
-                            .children(catalog.enabled.iter().map(|plugin| {
-                                let name = plugin.plugin_name.clone();
-                                let source = plugin.marketplace_source.clone();
-                                Button::new(SharedString::from(format!("enabled:{source}:{name}")))
-                                    .outline()
+            content =
+                content.child(
+                    v_flex()
+                        .gap_3()
+                        .child(
+                            h_flex().gap_2().child(
+                                Button::new("toggle-enabled-plugins")
+                                    .ghost()
                                     .small()
-                                    .icon(IconName::X)
-                                    .label(name.clone())
-                                    .accessibility_label(format!("停用插件 {name}"))
-                                    .tooltip(format!("{source} · 点击停用 {name}"))
-                                    .disabled(self.busy)
-                                    .on_click(cx.listener(move |v, _, _, cx| {
-                                        v.request(
-                                            protocol::Action::Disable {
-                                                marketplace_source: source.clone(),
-                                                plugin_name: name.clone(),
-                                            },
-                                            None,
-                                            cx,
-                                        )
-                                    }))
-                            })),
-                    ),
-            );
+                                    .icon(if self.enabled_expanded {
+                                        IconName::ChevronDown
+                                    } else {
+                                        IconName::ChevronRight
+                                    })
+                                    .label(format!("当前项目已启用 · {}", catalog.enabled.len()))
+                                    .on_click(cx.listener(|view, _, _, cx| {
+                                        view.enabled_expanded = !view.enabled_expanded;
+                                        cx.notify();
+                                    })),
+                            ),
+                        )
+                        .when(self.enabled_expanded, |view| {
+                            view.child(
+                                div()
+                                    .id("enabled-plugins")
+                                    .max_h(rems(6.))
+                                    .overflow_y_scroll()
+                                    .track_scroll(&self.enabled_scroll)
+                                    .vertical_scrollbar(&self.enabled_scroll)
+                                    .child(h_flex().flex_wrap().gap_2().children(
+                                        catalog.enabled.iter().map(|plugin| {
+                                            let name = plugin.plugin_name.clone();
+                                            let source = plugin.marketplace_source.clone();
+                                            Button::new(SharedString::from(format!(
+                                                "enabled:{source}:{name}"
+                                            )))
+                                            .outline()
+                                            .small()
+                                            .icon(IconName::X)
+                                            .label(name.clone())
+                                            .accessibility_label(format!("停用插件 {name}"))
+                                            .tooltip(format!("{source} · 点击停用 {name}"))
+                                            .disabled(self.busy)
+                                            .on_click(cx.listener(move |v, _, _, cx| {
+                                                v.request(
+                                                    protocol::Action::Disable {
+                                                        marketplace_source: source.clone(),
+                                                        plugin_name: name.clone(),
+                                                    },
+                                                    None,
+                                                    cx,
+                                                )
+                                            }))
+                                        }),
+                                    )),
+                            )
+                        }),
+                );
         }
         let query = self.query.read(cx).value().trim().to_lowercase();
-        let columns = if window.viewport_size().width / window.rem_size() >= 64. {
+        let columns = if width / window.rem_size() >= 40. {
             2
         } else {
             1
@@ -578,20 +621,33 @@ impl Render for Plugins {
                 .collect(),
         );
         let rows = Rc::new(rows);
-        content
+        v_flex()
+            .size_full()
+            .min_h_0()
+            .min_w_0()
+            .child(content)
             .child(
                 div()
                     .relative()
                     .w_full()
-                    .h((window.rem_size() * 34.).min(window.viewport_size().height * 0.6))
-                    .min_h(rems(12.))
+                    .flex_1()
+                    .min_h_0()
                     .child(
                         v_virtual_list(
                             cx.entity(),
                             "plugin-catalog",
                             sizes,
                             move |view, range, _, cx| {
-                                range.map(|ix| view.row(&rows[ix], cx)).collect::<Vec<_>>()
+                                range
+                                    .map(|ix| {
+                                        div()
+                                            .w_full()
+                                            .max_w(rems(60.))
+                                            .mx_auto()
+                                            .px_6()
+                                            .child(view.row(&rows[ix], cx))
+                                    })
+                                    .collect::<Vec<_>>()
                             },
                         )
                         .track_scroll(&self.scroll),
@@ -602,9 +658,23 @@ impl Render for Plugins {
     }
 }
 
+impl Render for Plugins {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let owner = cx.entity();
+        div()
+            .size_full()
+            .min_h_0()
+            .min_w_0()
+            .child(container_query(move |size, window, cx| {
+                owner.update(cx, |view, cx| view.page(size.width, window, cx))
+            }))
+    }
+}
+
 struct Sources {
     owner: WeakEntity<Plugins>,
     adding: bool,
+    added: bool,
     source: Entity<InputState>,
     picker: Task<()>,
     _owner: Subscription,
@@ -620,14 +690,16 @@ impl Sources {
         let source =
             cx.new(|cx| InputState::new(window, cx).placeholder("Git 地址或本地插件市场目录"));
         let observer = cx.observe(&owner, |_, _, cx| cx.notify());
-        let subscription = cx.subscribe(&source, |_, _, event, cx| {
+        let subscription = cx.subscribe(&source, |view, _, event, cx| {
             if matches!(event, InputEvent::Change) {
+                view.added = false;
                 cx.notify();
             }
         });
         Self {
             owner: owner.downgrade(),
             adding,
+            added: false,
             source,
             picker: Task::ready(()),
             _owner: observer,
@@ -636,12 +708,12 @@ impl Sources {
     }
     fn add(&mut self, cx: &mut Context<Self>) {
         let source = self.source.read(cx).value().trim().to_string();
-        if source.is_empty() {
+        if source.is_empty() || self.added {
             return;
         }
-        let close_after = cx.weak_entity();
+        let completion = cx.weak_entity();
         let _ = self.owner.update(cx, |v, cx| {
-            v.request(protocol::Action::Add { source }, Some(close_after), cx)
+            v.request(protocol::Action::Add { source }, Some(completion), cx)
         });
     }
     fn choose_directory(&mut self, cx: &mut Context<Self>) {
@@ -683,6 +755,15 @@ impl Render for Sources {
         });
         if self.adding {
             body = body
+                .when(self.added, |view| {
+                    view.child(
+                        h_flex().gap_2().child(Icon::new(IconName::Check)).child(
+                            div()
+                                .text_sm()
+                                .child("插件市场已添加，可关闭窗口浏览插件。"),
+                        ),
+                    )
+                })
                 .child(
                     v_flex()
                         .gap_2()
@@ -715,12 +796,17 @@ impl Render for Sources {
                             Button::new("add-plugin-market")
                                 .primary()
                                 .small()
-                                .label(if busy {
+                                .label(if self.added {
+                                    "已添加"
+                                } else if busy {
                                     "正在添加…"
                                 } else {
                                     "添加市场"
                                 })
-                                .disabled(busy || self.source.read(cx).value().trim().is_empty())
+                                .disabled(
+                                    busy || self.added
+                                        || self.source.read(cx).value().trim().is_empty(),
+                                )
                                 .on_click(cx.listener(|v, _, _, cx| v.add(cx))),
                         ),
                 );

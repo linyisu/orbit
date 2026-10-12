@@ -8,6 +8,180 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 
 #[test]
+fn remote_options_preserve_target_paths_and_forward_authentication() {
+    use clap::Parser;
+    let mut options = Options::parse_from([
+        "orbit-gui",
+        "--ssh",
+        "dev-alias",
+        "--ssh-user",
+        "builder",
+        "--ssh-port",
+        "2222",
+        "--identity",
+        "keys/development key",
+        "--workspace",
+        "~/workspace/项目 'one'",
+        "--database",
+        "state/orbit.db",
+        "--server",
+        "/opt/Orbit Service/orbit",
+    ]);
+    options.resolve_paths().unwrap();
+    assert!(options.config.is_absolute());
+    assert_eq!(
+        options.workspace.as_deref(),
+        Some(std::path::Path::new("~/workspace/项目 'one'"))
+    );
+    assert_eq!(
+        options.database.as_deref(),
+        Some(std::path::Path::new("state/orbit.db"))
+    );
+    let connection = options.connection_options().unwrap();
+    assert_eq!(connection.workspace, "~/workspace/项目 'one'");
+    assert_eq!(connection.ssh.as_deref(), Some("dev-alias"));
+    assert_eq!(connection.ssh_user.as_deref(), Some("builder"));
+    assert_eq!(connection.ssh_port, Some(2222));
+    assert_eq!(
+        connection.server.as_deref(),
+        Some("/opt/Orbit Service/orbit")
+    );
+    assert_eq!(connection.identity.as_deref(), options.identity.as_deref());
+    assert!(std::path::Path::new(connection.identity.as_ref().unwrap()).is_absolute());
+    let mut other = options.clone();
+    other.ssh_user = Some("another-user".into());
+    assert!(!options.same_host(&other));
+    other = options.clone();
+    other.ssh_port = Some(22);
+    assert!(!options.same_host(&other));
+    other = options.clone();
+    other.identity = Some("~/.ssh/other-key".into());
+    assert!(!options.same_host(&other));
+
+    let mut wsl = Options::parse_from([
+        "orbit-gui",
+        "--wsl",
+        "Ubuntu 24.04",
+        "--wsl-user",
+        "linux-user",
+    ]);
+    wsl.resolve_paths().unwrap();
+    let connection = wsl.connection_options().unwrap();
+    assert_eq!(connection.workspace, "~");
+    assert_eq!(connection.wsl.as_deref(), Some("Ubuntu 24.04"));
+    assert_eq!(connection.wsl_user.as_deref(), Some("linux-user"));
+}
+
+#[test]
+fn remote_relative_databases_are_isolated_by_workspace() {
+    use clap::Parser;
+    for arguments in [
+        ["orbit-gui", "--ssh", "dev"],
+        ["orbit-gui", "--wsl", "Ubuntu"],
+    ] {
+        for database in [
+            "state.db",
+            "state/orbit.db",
+            "./state.db",
+            "~other/state.db",
+        ] {
+            let mut first = Options::parse_from(arguments);
+            first.workspace = Some("/workspace/first".into());
+            first.database = Some(database.into());
+            first.resolve_paths().unwrap();
+            let mut second = first.clone();
+            assert!(first.same_host(&second));
+            second.workspace = Some("/workspace/second".into());
+            assert!(!first.same_host(&second), "{arguments:?}: {database}");
+            assert!(!second.same_host(&first), "{arguments:?}: {database}");
+        }
+    }
+}
+
+#[test]
+fn remote_shared_databases_can_span_workspaces() {
+    use clap::Parser;
+    for arguments in [
+        ["orbit-gui", "--ssh", "dev"],
+        ["orbit-gui", "--wsl", "Ubuntu"],
+    ] {
+        for database in [
+            None,
+            Some("/state/orbit.db"),
+            Some("~/state/orbit.db"),
+            Some("~"),
+        ] {
+            let mut first = Options::parse_from(arguments);
+            first.workspace = Some("/workspace/first".into());
+            first.database = database.map(Into::into);
+            first.resolve_paths().unwrap();
+            let mut second = first.clone();
+            second.workspace = Some("/workspace/second".into());
+            assert!(first.same_host(&second), "{arguments:?}: {database:?}");
+            assert!(second.same_host(&first), "{arguments:?}: {database:?}");
+        }
+    }
+}
+
+#[test]
+fn saved_remote_targets_restore_new_and_legacy_connection_fields() {
+    use clap::Parser;
+    let mut options = Options::parse_from(["orbit-gui", "--ssh", "dev"]);
+    options.ssh_user = Some("builder".into());
+    options.ssh_port = Some(2222);
+    options.identity = Some("~/.ssh/custom".into());
+    let mut saved = serde_json::to_value(&options).unwrap();
+    let restored: Options = serde_json::from_value(saved.clone()).unwrap();
+    assert!(restored.same_host(&options));
+    assert_eq!(
+        restored.connection_options().unwrap().identity.as_deref(),
+        Some("~/.ssh/custom")
+    );
+    for key in ["ssh_user", "ssh_port", "identity", "wsl_user"] {
+        saved.as_object_mut().unwrap().remove(key);
+    }
+    let legacy: Options = serde_json::from_value(saved).unwrap();
+    assert_eq!(legacy.ssh.as_deref(), Some("dev"));
+    assert!(
+        legacy.ssh_user.is_none()
+            && legacy.ssh_port.is_none()
+            && legacy.identity.is_none()
+            && legacy.wsl_user.is_none()
+    );
+    assert!(Options::try_parse_from(["orbit-gui", "--ssh-user", "orphan"]).is_err());
+    assert!(Options::try_parse_from(["orbit-gui", "--ssh", "dev", "--ssh-port", "0"]).is_err());
+    assert!(Options::try_parse_from(["orbit-gui", "--ssh", "dev", "--wsl", "Ubuntu"]).is_err());
+}
+
+#[test]
+fn connection_progress_precedes_workspace_open_on_controlled_service() {
+    use clap::Parser;
+    let directory = tempfile::tempdir().unwrap();
+    let mut options = Options::parse_from(["orbit-gui"]);
+    options.config = directory.path().join("unused.toml");
+    options.workspace = Some(directory.path().into());
+    options.server = Some(env!("CARGO_BIN_EXE_orbit-gui-fixture").into());
+    options.database = Some(directory.path().join("unused.db"));
+    options.auth_dir = Some(directory.path().join("auth"));
+    options.model = Some("fixture::local".into());
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let (_backend, mut events) = Backend::start(options, &runtime);
+    runtime.block_on(async {
+        let first = events.recv().await.expect("initial connection event");
+        assert!(matches!(first, Event::ConnectionStage(stage) if stage == "准备连接"));
+        until(&mut events, |event| {
+            matches!(event, Event::Response(Response::Opened(_)))
+        })
+        .await;
+        until(
+            &mut events,
+            |event| matches!(event, Event::Response(Response::Page(page)) if !page.more),
+        )
+        .await;
+    });
+}
+
+#[test]
 fn first_send_recovery_checks_persistence_without_sending_a_message() {
     use clap::Parser;
     for (resume, recover_draft, expected) in [
@@ -75,6 +249,178 @@ async fn until(events: &mut mpsc::Receiver<Event>, accept: impl Fn(&Event) -> bo
 }
 
 #[test]
+fn project_tasks_use_typed_snapshots_and_report_dependency_errors() {
+    use clap::Parser;
+    use orbit_protocol::project::{TaskAction, TaskSnapshot, TaskStatus};
+    async fn tasks(
+        backend: &Backend,
+        events: &mut mpsc::Receiver<Event>,
+        workspace: &std::path::Path,
+        action: TaskAction,
+    ) -> Result<TaskSnapshot, String> {
+        backend
+            .send(Command::Tasks {
+                session: "demo".into(),
+                workspace: workspace.to_string_lossy().into_owned(),
+                action,
+            })
+            .unwrap();
+        let Event::Tasks { session, result } =
+            until(events, |event| matches!(event, Event::Tasks { .. })).await
+        else {
+            unreachable!()
+        };
+        assert_eq!(session, "demo");
+        result
+    }
+    let directory = tempfile::tempdir().unwrap();
+    let mut options = Options::parse_from(["orbit-gui"]);
+    options.config = directory.path().join("unused.toml");
+    options.workspace = Some(directory.path().to_path_buf());
+    options.server = Some(env!("CARGO_BIN_EXE_orbit-gui-fixture").into());
+    options.database = Some(directory.path().join("unused.db"));
+    options.auth_dir = Some(directory.path().join("auth"));
+    options.model = Some("fixture::local".into());
+    options.resume = Some("demo".into());
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let (backend, mut events) = Backend::start(options, &runtime);
+    runtime.block_on(async {
+        until(&mut events, |event| {
+            matches!(event, Event::Response(Response::Opened(_)))
+        })
+        .await;
+        let error = tasks(
+            &backend,
+            &mut events,
+            &directory.path().join("previous-workspace"),
+            TaskAction::Create {
+                title: "陈旧表单不能创建这个任务".into(),
+                details: String::new(),
+                priority: 0,
+                parent_id: None,
+                depends_on: vec![],
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(error.contains("工作区已切换"));
+        assert!(
+            tasks(
+                &backend,
+                &mut events,
+                directory.path(),
+                TaskAction::List {
+                    include_completed: true
+                }
+            )
+            .await
+            .unwrap()
+            .tasks
+            .is_empty()
+        );
+        let first_snapshot = tasks(
+            &backend,
+            &mut events,
+            directory.path(),
+            TaskAction::Create {
+                title: "基础任务".into(),
+                details: "先完成接口".into(),
+                priority: 1,
+                parent_id: None,
+                depends_on: vec![],
+            },
+        )
+        .await
+        .unwrap();
+        let first = first_snapshot.tasks.into_iter().next().unwrap();
+        assert_eq!(first_snapshot.changed, Some(first.id));
+        let all = tasks(
+            &backend,
+            &mut events,
+            directory.path(),
+            TaskAction::Create {
+                title: "后续任务".into(),
+                details: "依赖接口".into(),
+                priority: 2,
+                parent_id: None,
+                depends_on: vec![first.id],
+            },
+        )
+        .await
+        .unwrap();
+        let second = all
+            .tasks
+            .iter()
+            .find(|task| task.id != first.id)
+            .unwrap()
+            .clone();
+        assert_eq!(all.changed, Some(second.id));
+        assert_eq!(second.blocked_by, [first.id]);
+        assert!(
+            tasks(
+                &backend,
+                &mut events,
+                directory.path(),
+                TaskAction::SetStatus {
+                    id: second.id,
+                    status: TaskStatus::InProgress
+                }
+            )
+            .await
+            .unwrap_err()
+            .contains("未完成")
+        );
+        tasks(
+            &backend,
+            &mut events,
+            directory.path(),
+            TaskAction::SetStatus {
+                id: first.id,
+                status: TaskStatus::Completed,
+            },
+        )
+        .await
+        .unwrap();
+        let all = tasks(
+            &backend,
+            &mut events,
+            directory.path(),
+            TaskAction::Update {
+                id: second.id,
+                title: Some("继续实现".into()),
+                details: Some("保留草稿中的说明".into()),
+                status: Some(TaskStatus::InProgress),
+                priority: Some(3),
+                depends_on: Some(vec![]),
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(all.changed, Some(second.id));
+        let task = all.tasks.iter().find(|task| task.id == second.id).unwrap();
+        assert_eq!(task.title, "继续实现");
+        assert_eq!(task.details, "保留草稿中的说明");
+        assert_eq!(task.priority, 3);
+        assert!(task.blocked_by.is_empty());
+        assert_eq!(
+            tasks(
+                &backend,
+                &mut events,
+                directory.path(),
+                TaskAction::List {
+                    include_completed: false
+                }
+            )
+            .await
+            .unwrap()
+            .tasks
+            .len(),
+            1
+        );
+    });
+}
+
+#[test]
 fn transport_retries_sends_and_resolves_approvals() {
     let directory = tempfile::tempdir().unwrap();
     let runtime = tokio::runtime::Runtime::new().unwrap();
@@ -92,7 +438,11 @@ fn transport_retries_sends_and_resolves_approvals() {
             appearance: None,
             preferences: None,
             ssh: None,
+            ssh_user: None,
+            ssh_port: None,
+            identity: None,
             wsl: None,
+            wsl_user: None,
         },
         &runtime,
     );
@@ -181,7 +531,11 @@ fn independent_tasks_keep_running_and_scope_approvals_to_their_connection() {
         appearance: None,
         preferences: None,
         ssh: None,
+        ssh_user: None,
+        ssh_port: None,
+        identity: None,
         wsl: None,
+        wsl_user: None,
     };
     let (first, mut first_events) = Backend::start(options.clone(), &runtime);
     runtime.block_on(async {
@@ -229,7 +583,11 @@ fn history_pages_drain_without_live_poll_delays_and_keep_cursor_order() {
             appearance: None,
             preferences: None,
             ssh: None,
+            ssh_user: None,
+            ssh_port: None,
+            identity: None,
             wsl: None,
+            wsl_user: None,
         },
         &runtime,
     );
@@ -275,7 +633,11 @@ fn replacement_directory_links_before_resume_and_preserves_ownership_checks() {
                 appearance: None,
                 preferences: None,
                 ssh: None,
+                ssh_user: None,
+                ssh_port: None,
+                identity: None,
                 wsl: None,
+                wsl_user: None,
             },
             &runtime,
         );

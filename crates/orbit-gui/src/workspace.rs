@@ -1,4 +1,5 @@
 mod actions;
+pub(crate) use actions::WorkspaceCommand;
 mod connection;
 mod feedback;
 mod inspector;
@@ -12,7 +13,9 @@ mod panel;
 mod questions;
 mod recovery;
 mod settings;
+pub(crate) use settings::SettingsPage;
 mod slash;
+mod tasks;
 mod view;
 
 use crate::{
@@ -136,9 +139,6 @@ pub(crate) struct Workspace {
     navigation_tasks: Vec<WorkspaceSummary>,
     execution: crate::execution::Execution,
     execution_scroll: UniformListScrollHandle,
-    task_scroll: ScrollHandle,
-    task_reveal: bool,
-    task_width: Option<Pixels>,
     inspector: Option<inspector::Section>,
     options: Options,
     runtime: Arc<tokio::runtime::Runtime>,
@@ -168,6 +168,9 @@ pub(crate) struct Workspace {
     error: Option<SharedString>,
     connected: bool,
     opening: bool,
+    connection_stage: SharedString,
+    connection_challenges: std::collections::VecDeque<connection::ConnectionChallenge>,
+    auth_dialog_open: bool,
     busy: bool,
     approvals: Vec<Approval>,
     usage: Entity<crate::usage::Usage>,
@@ -185,6 +188,8 @@ pub(crate) struct Workspace {
     replaying: bool,
     panel: Option<Entity<panel::Panel>>,
     subagent: Option<(String, Entity<Conversation>)>,
+    tasks: Option<Entity<tasks::Tasks>>,
+    tasks_open: bool,
 }
 
 impl Workspace {
@@ -230,9 +235,6 @@ impl Workspace {
             navigation_tasks: Vec::new(),
             execution: Default::default(),
             execution_scroll: UniformListScrollHandle::new(),
-            task_scroll: ScrollHandle::new(),
-            task_reveal: true,
-            task_width: None,
             inspector: None,
             options,
             runtime,
@@ -262,6 +264,9 @@ impl Workspace {
             error: None,
             connected: false,
             opening: true,
+            connection_stage: "准备连接".into(),
+            connection_challenges: Default::default(),
+            auth_dialog_open: false,
             busy: false,
             approvals: Vec::new(),
             usage: cx.new(crate::usage::Usage::new),
@@ -280,6 +285,8 @@ impl Workspace {
             replaying: false,
             panel: None,
             subagent: None,
+            tasks: None,
+            tasks_open: false,
         };
         view.input.update(cx, |input, cx| input.focus(window, cx));
         view.connect(window, cx);
@@ -316,12 +323,17 @@ impl Workspace {
     }
 
     fn start_connection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.clear_connection_challenges(window, cx);
+        if let Some(tasks) = &self.tasks {
+            tasks.update(cx, |tasks, cx| tasks.disconnected(window, cx));
+        }
         if self.error.is_some() {
             window.remove_notification::<Workspace>(cx);
         }
         self.error = None;
         self.opening = true;
         self.connected = false;
+        self.connection_stage = "准备连接".into();
         let mut options = self.options.clone();
         if let Some(info) = &self.info {
             options.resume = (info.persisted || self.retry.is_some() || self.pending.is_some())
@@ -363,7 +375,16 @@ impl Workspace {
     fn event(&mut self, event: Event, window: &mut Window, cx: &mut Context<Self>) {
         let previous = self.summary();
         match event {
-            Event::Connected => self.connected = true,
+            Event::Tasks { session, result } => {
+                if let Some(tasks) = &self.tasks {
+                    tasks.update(cx, |tasks, cx| tasks.receive(&session, result, window, cx));
+                }
+            }
+            Event::Connected => {
+                self.connected = true;
+                self.connection_stage = "正在恢复会话…".into();
+            }
+            Event::ConnectionStage(stage) => self.connection_stage = stage.into(),
             Event::Subagent { agent, page, reset } => {
                 if reset {
                     let conversation = cx.new(Conversation::new);
@@ -430,6 +451,10 @@ impl Workspace {
                 }
             }
             Event::Disconnected(error) => {
+                self.clear_connection_challenges(window, cx);
+                if let Some(tasks) = &self.tasks {
+                    tasks.update(cx, |tasks, cx| tasks.disconnected(window, cx));
+                }
                 self.connected = false;
                 self.opening = false;
                 self.retry = self.pending.take().or(self.retry.take());
@@ -493,7 +518,19 @@ impl Workspace {
         cx.notify();
     }
 
-    fn profile(&mut self, info: SessionInfo, cx: &mut Context<Self>) {
+    fn profile(&mut self, info: SessionInfo, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(previous) = &self.info {
+            if previous.workspace != info.workspace {
+                self.tasks = None;
+                self.tasks_open = false;
+            } else if previous.id != info.id
+                && let Some(tasks) = &self.tasks
+            {
+                tasks.update(cx, |tasks, cx| {
+                    tasks.bind_session(info.id.clone(), window, cx)
+                });
+            }
+        }
         if let Some(entry) = self
             .sessions
             .iter_mut()
@@ -512,6 +549,11 @@ impl Workspace {
             .to_string_lossy()
             .into_owned()
             .into();
+        if let Some(settings) = &self.settings_page {
+            settings.update(cx, |settings, cx| {
+                settings.bind_context(Some(info.id.clone()), info.workspace.clone(), window, cx)
+            });
+        }
         self.info = Some(info);
         self.refresh_title(cx);
     }
@@ -523,7 +565,7 @@ impl Workspace {
                 self.options.recover_draft = false;
                 // This entity owns one task's composer. Restoring transport
                 // history must never overwrite text edited while offline.
-                self.profile(info, cx);
+                self.profile(info, window, cx);
                 self.opening = true;
                 self.busy = false;
                 self.error = None;
@@ -549,7 +591,7 @@ impl Workspace {
             }
             Response::Profile(info) => {
                 self.usage = cx.new(crate::usage::Usage::new);
-                self.profile(*info, cx);
+                self.profile(*info, window, cx);
                 self.refresh_usage(cx);
             }
             Response::Sessions(sessions) => {
@@ -599,7 +641,7 @@ impl Workspace {
                         let changed = self.info.as_ref().is_none_or(|current| {
                             current.model != info.model || current.workspace != info.workspace
                         });
-                        self.profile(*info, cx);
+                        self.profile(*info, window, cx);
                         if changed {
                             self.usage = cx.new(crate::usage::Usage::new);
                             self.refresh_usage(cx);
@@ -701,6 +743,9 @@ impl Workspace {
     }
 
     fn send(&mut self, _: &SendMessage, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.visible || self.tasks_open {
+            return;
+        }
         if self.command_open {
             self.submit_completion(window, cx);
             return;

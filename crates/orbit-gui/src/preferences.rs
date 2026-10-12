@@ -1,7 +1,7 @@
 //! Application appearance preferences. The UI owns the current values; one
 //! background writer serializes updates so older writes cannot win a race.
 use gpui_kit::component::ThemeMode;
-use gpui_kit::{App, Global, SharedString, WindowAppearance};
+use gpui_kit::{App, Global, SharedString, Subscription, Window, WindowAppearance};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tokio::sync::watch;
@@ -23,6 +23,23 @@ pub(crate) struct Preferences {
     _writer: tokio::task::JoinHandle<()>,
 }
 impl Global for Preferences {}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ColorMode {
+    System,
+    Light,
+    Dark,
+}
+
+impl Values {
+    fn color_mode(&self) -> ColorMode {
+        match self.dark {
+            None => ColorMode::System,
+            Some(false) => ColorMode::Light,
+            Some(true) => ColorMode::Dark,
+        }
+    }
+}
 
 impl Preferences {
     pub(crate) fn load(
@@ -65,11 +82,40 @@ impl Preferences {
     }
 
     pub(crate) fn mode(&self, system: WindowAppearance) -> ThemeMode {
-        match self.values.dark {
-            Some(true) => ThemeMode::Dark,
-            Some(false) => ThemeMode::Light,
-            None => system.into(),
+        match self.values.color_mode() {
+            ColorMode::System => system.into(),
+            ColorMode::Light => ThemeMode::Light,
+            ColorMode::Dark => ThemeMode::Dark,
         }
+    }
+
+    pub(crate) fn color_mode(cx: &App) -> ColorMode {
+        cx.global::<Self>().values.color_mode()
+    }
+
+    pub(crate) fn set_color_mode(mode: ColorMode, window: &mut Window, cx: &mut App) {
+        let this = cx.global_mut::<Self>();
+        // The existing nullable value already represents all three choices,
+        // so old preference files retain their exact meaning.
+        this.values.dark = match mode {
+            ColorMode::System => None,
+            ColorMode::Light => Some(false),
+            ColorMode::Dark => Some(true),
+        };
+        this.changes.send_replace(this.values.clone());
+        let resolved = cx.global::<Self>().mode(window.appearance());
+        gpui_kit::component::Theme::change(resolved, Some(window), cx);
+        Self::apply_font(cx);
+    }
+
+    pub(crate) fn watch_appearance(window: &Window, _: &mut App) -> Subscription {
+        window.observe_window_appearance(|window, cx| {
+            if Self::color_mode(cx) == ColorMode::System {
+                let mode = cx.global::<Self>().mode(window.appearance());
+                gpui_kit::component::Theme::change(mode, Some(window), cx);
+                Self::apply_font(cx);
+            }
+        })
     }
 
     pub(crate) fn sidebar(cx: &App) -> f32 {
@@ -198,5 +244,21 @@ mod tests {
         assert_eq!(restored.ui_font_family, values.ui_font_family);
         assert_eq!(restored.code_font_family, values.code_font_family);
         assert_eq!(restored.font_size, values.font_size);
+    }
+
+    #[test]
+    fn color_modes_preserve_existing_preferences_and_system_choice() {
+        for (json, expected) in [
+            (r#"{}"#, ColorMode::System),
+            (r#"{"dark":null}"#, ColorMode::System),
+            (r#"{"dark":false}"#, ColorMode::Light),
+            (r#"{"dark":true}"#, ColorMode::Dark),
+        ] {
+            let values: Values = serde_json::from_str(json).unwrap();
+            assert_eq!(values.color_mode(), expected);
+            let restored: Values =
+                serde_json::from_slice(&serde_json::to_vec(&values).unwrap()).unwrap();
+            assert_eq!(restored.color_mode(), expected);
+        }
     }
 }

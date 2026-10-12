@@ -22,6 +22,7 @@ pub(super) struct Mcp {
     busy: bool,
     error: Option<String>,
     saved: bool,
+    base_reloaded: bool,
     task: Task<()>,
 }
 impl Mcp {
@@ -54,6 +55,7 @@ impl Mcp {
             busy: false,
             error: None,
             saved: false,
+            base_reloaded: false,
             task: Task::ready(()),
         };
         view.load(cx);
@@ -67,6 +69,37 @@ impl Mcp {
         let job = self.runtime.spawn_blocking(move || McpDraft::load(&path));
         self.receive(job, false, cx);
     }
+    fn reload_base(&mut self, cx: &mut Context<Self>) {
+        if self.busy {
+            return;
+        }
+        let path = self.path.clone();
+        let job = self.runtime.spawn_blocking(move || McpDraft::load(&path));
+        self.busy = true;
+        self.error = None;
+        self.base_reloaded = false;
+        self.task = cx.spawn(async move |owner, cx| {
+            let result = job.await;
+            let _ = owner.update(cx, |view, cx| {
+                view.busy = false;
+                match result {
+                    Ok(Ok(draft)) => {
+                        // Preserve edited fields, but retain current unexposed server options.
+                        view.template = view
+                            .existing
+                            .as_ref()
+                            .and_then(|name| draft.servers().get(name).cloned());
+                        view.draft = Some(draft);
+                        view.base_reloaded = true;
+                    }
+                    Ok(Err(e)) => view.error = Some(format!("{e:#}")),
+                    Err(e) => view.error = Some(e.to_string()),
+                }
+                cx.notify();
+            });
+        });
+        cx.notify();
+    }
     fn receive(
         &mut self,
         job: tokio::task::JoinHandle<anyhow::Result<McpDraft>>,
@@ -75,6 +108,7 @@ impl Mcp {
     ) {
         self.busy = true;
         self.error = None;
+        self.base_reloaded = false;
         self.task = cx.spawn(async move |owner, cx| {
             let result = job.await;
             let _ = owner.update(cx, |view, cx| {
@@ -102,6 +136,7 @@ impl Mcp {
         self.editing = true;
         self.error = None;
         self.saved = false;
+        self.base_reloaded = false;
         self.name.update(cx, |input, cx| {
             input.set_value(name.unwrap_or_default(), window, cx)
         });
@@ -204,6 +239,7 @@ impl Mcp {
         // Return the draft on failure so validation never discards unsaved form values.
         self.busy = true;
         self.error = None;
+        self.base_reloaded = false;
         let job = self.runtime.spawn_blocking(move || {
             let result = draft.save(&path, &name, server);
             (draft, result)
@@ -236,7 +272,13 @@ impl Render for Mcp {
             .child(h_flex().gap_3().child(div().flex_1().text_sm().text_color(cx.theme().muted_foreground).child("配置 MCP 工具服务器。保存后新会话生效；连接远程工作区时，命令在远程运行。"))
                 .child(Button::new("mcp-refresh").ghost().small().label("刷新").disabled(self.busy||self.editing).on_click(cx.listener(|v,_,_,cx|v.load(cx)))))
             .when(self.saved,|v|v.child(div().text_sm().text_color(cx.theme().muted_foreground).child("已保存。新建会话以应用 MCP 配置。")))
-            .when_some(self.error.clone(),|v,e|v.child(div().text_sm().text_color(cx.theme().danger).child(e)));
+            .when(self.base_reloaded,|v|v.child(div().text_sm().text_color(cx.theme().muted_foreground).child("已重载最新配置，表单内容已保留。请检查后再次保存。")))
+            .when_some(self.error.clone(),|v,e|v.child(div().text_sm().text_color(cx.theme().danger).child(e)))
+            .when(self.editing && self.error.is_some(), |v| v.child(
+                h_flex().child(Button::new("mcp-reload-base")
+                    .small().label("保留表单并重载配置")
+                    .disabled(self.busy).on_click(cx.listener(|v, _, _, cx| v.reload_base(cx))))
+            ));
         if self.editing {
             return content.child(
                 v_flex()
@@ -281,7 +323,7 @@ impl Render for Mcp {
                             .child(
                                 Button::new("mcp-save")
                                     .primary()
-                                    .label(if self.busy { "保存中…" } else { "保存" })
+                                    .label(if self.busy { "处理中…" } else { "保存" })
                                     .disabled(self.busy)
                                     .on_click(cx.listener(|v, _, _, cx| v.save(cx))),
                             )
@@ -292,6 +334,7 @@ impl Render for Mcp {
                                     .on_click(cx.listener(|v, _, _, cx| {
                                         v.editing = false;
                                         v.error = None;
+                                        v.base_reloaded = false;
                                         cx.notify();
                                     })),
                             ),

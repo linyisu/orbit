@@ -1,6 +1,9 @@
 use super::*;
 use gpui_kit::component::input::{Input, InputState};
 
+#[path = "remote.rs"]
+mod remote;
+
 impl Workspace {
     pub(super) fn open_project(&mut self, cx: &mut Context<Self>) {
         self.choose_project_directory(None, cx);
@@ -57,8 +60,16 @@ impl Workspace {
     ) {
         let mut options = self.options.clone();
         if local {
+            if options.ssh.is_some() || options.wsl.is_some() {
+                options.server = None;
+                options.database = None;
+            }
             options.ssh = None;
+            options.ssh_user = None;
+            options.ssh_port = None;
+            options.identity = None;
             options.wsl = None;
+            options.wsl_user = None;
         }
         options.workspace = Some(path);
         options.resume = resume;
@@ -67,66 +78,15 @@ impl Workspace {
         cx.emit(WorkspaceEvent::Open(Box::new(options)));
     }
 
-    pub(super) fn remote_connection_dialog(&self, window: &mut Window, cx: &mut Context<Self>) {
-        let path = self
-            .options
-            .workspace
-            .as_ref()
-            .map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or_else(|| self.location.to_string());
-        let fields = [
-            ("工作区目录", path),
-            ("SSH 主机", self.options.ssh.clone().unwrap_or_default()),
-            ("WSL 发行版", self.options.wsl.clone().unwrap_or_default()),
-        ];
-        let inputs = fields
-            .iter()
-            .map(|(_, value)| {
-                cx.new(|cx| {
-                    let mut state = InputState::new(window, cx);
-                    state.set_value(value.clone(), window, cx);
-                    state
-                })
-            })
-            .collect::<Vec<_>>();
-        let owner = cx.weak_entity();
-        window.open_dialog(cx, move |dialog, _, _| {
-            let inputs2 = inputs.clone();
-            let owner = owner.clone();
-            dialog
-                .title("打开远程项目")
-                .child(v_flex().gap_3().children(fields.iter().zip(&inputs).map(
-                    |((label, _), input)| v_flex().gap_1().child(*label).child(Input::new(input)),
-                )))
-                .footer(
-                    Button::new("connect-project")
-                        .primary()
-                        .label("连接")
-                        .on_click(move |_, window, cx| {
-                            let values = inputs2
-                                .iter()
-                                .map(|input| input.read(cx).value().trim().to_string())
-                                .collect::<Vec<_>>();
-                            if values[0].is_empty()
-                                || (values[1].is_empty() == values[2].is_empty())
-                            {
-                                window.push_notification("填写目录，并只选择一种远程连接方式", cx);
-                                return;
-                            }
-                            let _ = owner.update(cx, |view, cx| {
-                                let mut options = view.options.clone();
-                                options.ssh = (!values[1].is_empty()).then(|| values[1].clone());
-                                options.wsl = (!values[2].is_empty()).then(|| values[2].clone());
-                                options.workspace = Some(PathBuf::from(&values[0]));
-                                options.resume = None;
-                                options.recover_draft = false;
-                                options.relink_on_resume = false;
-                                cx.emit(WorkspaceEvent::Open(Box::new(options)));
-                            });
-                            window.close_dialog(cx);
-                        }),
-                )
-        });
+    pub(super) fn remote_connection_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.suspend_connection_challenge(window, cx);
+        remote::open(
+            self.options.clone(),
+            self.runtime.clone(),
+            cx.weak_entity(),
+            window,
+            cx,
+        );
     }
     pub(super) fn search_sessions(&self, window: &mut Window, cx: &mut Context<Self>) {
         use gpui_kit::component::command::{Command as Palette, CommandItem, CommandState};
@@ -158,45 +118,265 @@ impl Workspace {
     }
 }
 
+// The queue owns replies while a tab is hidden. Dialogs hold a clone so closing
+// a modal for navigation never cancels authentication on another workspace.
+#[derive(Clone)]
+pub(super) struct ConnectionChallenge {
+    prompt: String,
+    confirm: bool,
+    reply: std::rc::Rc<std::cell::RefCell<Option<tokio::sync::oneshot::Sender<Option<String>>>>>,
+}
+
+impl From<orbit_client::interaction::Challenge> for ConnectionChallenge {
+    fn from(challenge: orbit_client::interaction::Challenge) -> Self {
+        Self {
+            prompt: challenge.prompt,
+            confirm: challenge.confirm,
+            reply: std::rc::Rc::new(std::cell::RefCell::new(Some(challenge.reply))),
+        }
+    }
+}
+impl ConnectionChallenge {
+    fn pending(&self) -> bool {
+        self.reply
+            .borrow()
+            .as_ref()
+            .is_some_and(|reply| !reply.is_closed())
+    }
+    fn answer(&self, answer: Option<String>) -> bool {
+        self.reply
+            .borrow_mut()
+            .take()
+            .is_some_and(|reply| reply.send(answer).is_ok())
+    }
+}
+
 impl Workspace {
     pub(super) fn connection_challenge(
-        &self,
+        &mut self,
         challenge: orbit_client::interaction::Challenge,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let input = cx.new(|cx| InputState::new(window, cx).masked(true));
-        let sender = std::rc::Rc::new(std::cell::RefCell::new(Some(challenge.reply)));
-        let on_close = sender.clone();
-        window.open_dialog(cx, move |dialog, _, _| {
-            let sender = sender.clone();
-            let input2 = input.clone();
+        self.connection_challenges.push_back(challenge.into());
+        self.show_connection_challenge(window, cx);
+    }
+
+    pub(super) fn suspend_connection_challenge(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.auth_dialog_open {
+            self.auth_dialog_open = false;
+            // Navigation may have opened another modal above authentication.
+            // Never leave an old environment's authentication underneath it.
+            window.close_all_dialogs(cx);
+        }
+    }
+
+    pub(super) fn clear_connection_challenges(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        for challenge in self.connection_challenges.drain(..) {
+            challenge.answer(None);
+        }
+        self.suspend_connection_challenge(window, cx);
+    }
+
+    fn finish_connection_challenge(
+        &mut self,
+        challenge: &ConnectionChallenge,
+        answer: Option<String>,
+        close: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self
+            .connection_challenges
+            .front()
+            .is_some_and(|current| std::rc::Rc::ptr_eq(&current.reply, &challenge.reply))
+        {
+            return;
+        }
+        self.connection_challenges.pop_front();
+        challenge.answer(answer);
+        self.auth_dialog_open = false;
+        cx.emit(WorkspaceEvent::Changed);
+        cx.notify();
+        if close {
+            window.close_dialog(cx);
+        }
+        // Native Escape/Confirm invokes its close request after the callback.
+        cx.defer_in(window, |view, window, cx| {
+            view.show_connection_challenge(window, cx)
+        });
+    }
+
+    pub(super) fn show_connection_challenge(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.visible || self.auth_dialog_open {
+            return;
+        }
+        while self
+            .connection_challenges
+            .front()
+            .is_some_and(|challenge| !challenge.pending())
+        {
+            self.connection_challenges.pop_front();
+        }
+        let Some(challenge) = self.connection_challenges.front().cloned() else {
+            return;
+        };
+        self.auth_dialog_open = true;
+        let input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .masked(true)
+                .placeholder("密码或密钥口令")
+        });
+        let owner = cx.weak_entity();
+        let environment = self.environment();
+        let first = std::cell::Cell::new(true);
+        window.open_dialog(cx, move |dialog, window, cx| {
+            let keyboard_owner = owner.clone();
+            let keyboard_challenge = challenge.clone();
+            let keyboard_input = input.clone();
+            let close_owner = owner.clone();
+            let close_challenge = challenge.clone();
+            let cancel_owner = owner.clone();
+            let cancel_challenge = challenge.clone();
+            let answer_owner = owner.clone();
+            let answer_challenge = challenge.clone();
+            let answer_input = input.clone();
             let confirm = challenge.confirm;
-            let on_close = on_close.clone();
+            if first.replace(false) && !confirm {
+                input.update(cx, |input, cx| input.focus(window, cx));
+            }
             dialog
-                .title("SSH 验证")
+                .title(if confirm {
+                    "验证 SSH 主机"
+                } else {
+                    "SSH 身份验证"
+                })
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(environment.clone()),
+                )
                 .child(challenge.prompt.clone())
-                .when(!confirm, |dialog| dialog.child(Input::new(&input)))
-                .on_close(move |_, _, _| {
-                    if let Some(sender) = on_close.borrow_mut().take() {
-                        let _ = sender.send(None);
-                    }
+                .when(!confirm, |dialog| {
+                    dialog.child(Input::new(&input).aria_label("密码或密钥口令"))
+                })
+                .on_ok(move |_, window, cx| {
+                    let answer = if confirm {
+                        "yes".into()
+                    } else {
+                        keyboard_input.read(cx).value().to_string()
+                    };
+                    let _ = keyboard_owner.update(cx, |view, cx| {
+                        view.finish_connection_challenge(
+                            &keyboard_challenge,
+                            Some(answer),
+                            false,
+                            window,
+                            cx,
+                        )
+                    });
+                    true
+                })
+                .on_close(move |_, window, cx| {
+                    let _ = close_owner.update(cx, |view, cx| {
+                        view.finish_connection_challenge(&close_challenge, None, false, window, cx)
+                    });
                 })
                 .footer(
-                    Button::new("ssh-answer")
-                        .primary()
-                        .label(if confirm { "信任并连接" } else { "继续" })
-                        .on_click(move |_, window, cx| {
-                            if let Some(sender) = sender.borrow_mut().take() {
-                                let _ = sender.send(Some(if confirm {
-                                    "yes".into()
-                                } else {
-                                    input2.read(cx).value().to_string()
-                                }));
-                            }
-                            window.close_dialog(cx);
-                        }),
+                    h_flex()
+                        .gap_2()
+                        .child(Button::new("ssh-cancel").label("取消").on_click(
+                            move |_, window, cx| {
+                                let _ = cancel_owner.update(cx, |view, cx| {
+                                    view.finish_connection_challenge(
+                                        &cancel_challenge,
+                                        None,
+                                        true,
+                                        window,
+                                        cx,
+                                    )
+                                });
+                            },
+                        ))
+                        .child(
+                            Button::new("ssh-answer")
+                                .primary()
+                                .label(if confirm { "信任并连接" } else { "继续" })
+                                .on_click(move |_, window, cx| {
+                                    let answer = if confirm {
+                                        "yes".into()
+                                    } else {
+                                        answer_input.read(cx).value().to_string()
+                                    };
+                                    let _ = answer_owner.update(cx, |view, cx| {
+                                        view.finish_connection_challenge(
+                                            &answer_challenge,
+                                            Some(answer),
+                                            true,
+                                            window,
+                                            cx,
+                                        )
+                                    });
+                                }),
+                        ),
                 )
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ConnectionChallenge;
+    use orbit_client::interaction::Challenge;
+    use tokio::sync::oneshot;
+
+    #[test]
+    fn hidden_authentication_survives_dialog_drop_and_answers_once() {
+        let (reply, mut response) = oneshot::channel();
+        let queued = ConnectionChallenge::from(Challenge {
+            prompt: "test password".into(),
+            confirm: false,
+            reply,
+        });
+        let dialog = queued.clone();
+        drop(dialog);
+        assert!(matches!(
+            response.try_recv(),
+            Err(oneshot::error::TryRecvError::Empty)
+        ));
+        assert!(queued.answer(Some("test-only-answer".into())));
+        assert_eq!(
+            response.try_recv().unwrap(),
+            Some("test-only-answer".into())
+        );
+        assert!(!queued.answer(None));
+    }
+
+    #[test]
+    fn cancelling_authentication_releases_queued_and_visible_replies() {
+        let (reply, mut response) = oneshot::channel();
+        let queued = ConnectionChallenge::from(Challenge {
+            prompt: "trust test host".into(),
+            confirm: true,
+            reply,
+        });
+        let visible = queued.clone();
+        assert!(queued.answer(None));
+        assert_eq!(response.try_recv().unwrap(), None);
+        assert!(!visible.pending());
+        assert!(!visible.answer(Some("yes".into())));
     }
 }

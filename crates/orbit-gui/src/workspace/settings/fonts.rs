@@ -133,12 +133,15 @@ impl Fonts {
                     .child(
                         h_flex()
                             .gap_2()
+                            .flex_wrap()
+                            .min_w_0()
+                            .max_w_full()
                             .flex_shrink_0()
                             .child(
                                 // Select's behavioral root fills its parent;
                                 // the form owns its frame instead of refining
                                 // only the inner trigger width.
-                                div().w_64().h_8().child(
+                                div().w_64().max_w_full().h_8().child(
                                     Select::new(picker)
                                         .accessibility_label(title)
                                         .menu_width(rems(24.))

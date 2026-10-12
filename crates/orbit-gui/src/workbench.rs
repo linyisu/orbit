@@ -1,10 +1,12 @@
 //! Window-level ownership of independent task workspaces. Changing selection
 //! changes only the visible entity, never a task's transport or input state.
 pub(crate) mod storage;
+mod toolbar;
 use crate::{
     backend::Options,
     workspace::{Sidebar, Workspace, WorkspaceEvent},
 };
+use gpui_kit::component::WindowExt;
 use gpui_kit::*;
 use std::{collections::HashSet, sync::Arc};
 
@@ -13,15 +15,21 @@ struct OpenTask {
     _subscription: Subscription,
     was_busy: bool,
     _observer: Subscription,
+    closed: bool,
 }
 pub(crate) struct Workbench {
     sidebar: Entity<Sidebar>,
     panes: Entity<gpui_kit::component::resizable::ResizableState>,
     _sidebar_observer: Subscription,
+    _appearance_subscription: Subscription,
     runtime: Arc<tokio::runtime::Runtime>,
     tasks: Vec<OpenTask>,
     active: String,
     unread: HashSet<String>,
+    task_scroll: ScrollHandle,
+    task_reveal: bool,
+    task_width: Option<Pixels>,
+    settings: Option<Entity<crate::workspace::SettingsPage>>,
     origin: Options,
     storage: storage::Storage,
     restoring: bool,
@@ -49,10 +57,15 @@ impl Workbench {
             sidebar,
             panes: cx.new(|_| Default::default()),
             _sidebar_observer: sidebar_observer,
+            _appearance_subscription: crate::preferences::Preferences::watch_appearance(window, cx),
             runtime,
             tasks: Vec::new(),
             active: String::new(),
             unread: HashSet::new(),
+            task_scroll: ScrollHandle::new(),
+            task_reveal: true,
+            task_width: None,
+            settings: None,
             origin: options.clone(),
             storage,
             restoring: true,
@@ -115,6 +128,14 @@ impl Workbench {
             })
             .map(|task| task.view.read(cx).key().to_owned());
         if let Some(key) = existing {
+            if let Some(task) = self
+                .tasks
+                .iter()
+                .find(|task| task.view.read(cx).key() == key)
+            {
+                task.view
+                    .update(cx, |view, cx| view.reconnect_if_needed(window, cx));
+            }
             self.activate(&key, window, cx);
             return;
         }
@@ -146,7 +167,15 @@ impl Workbench {
             |workbench, source, event, window, cx| match event {
                 WorkspaceEvent::Open(options) => workbench.open((**options).clone(), window, cx),
                 WorkspaceEvent::Activate(key) => workbench.activate(key, window, cx),
-                WorkspaceEvent::Close(key) => workbench.close(key, window, cx),
+                WorkspaceEvent::Settings(page) => {
+                    window.close_all_dialogs(cx);
+                    source.update(cx, |view, cx| view.set_visible(false, window, cx));
+                    workbench.settings = Some(page.clone());
+                    cx.notify();
+                }
+                WorkspaceEvent::CloseSettings => {
+                    workbench.show_workspace(window, cx);
+                }
                 WorkspaceEvent::DraftChanged => workbench.persist(cx),
                 WorkspaceEvent::Changed => {
                     let summary = source.read(cx).summary();
@@ -157,6 +186,9 @@ impl Workbench {
                         .is_some_and(|task| {
                             let finished = task.was_busy && !summary.busy;
                             task.was_busy = summary.busy;
+                            if task.closed && summary.attention {
+                                task.closed = false;
+                            }
                             finished
                         });
                     if summary.key != workbench.active && (summary.attention || finished) {
@@ -184,6 +216,7 @@ impl Workbench {
             _subscription: subscription,
             was_busy: false,
             _observer: observer,
+            closed: false,
         });
         self.activate(&key, window, cx);
     }
@@ -195,15 +228,39 @@ impl Workbench {
         {
             return;
         }
+        let preserve_dialogs = self.active == key && self.settings.is_none();
         self.active = key.to_owned();
+        self.settings = None;
+        self.task_reveal = true;
+        for task in &mut self.tasks {
+            if task.view.read(cx).key() == key {
+                task.closed = false;
+            }
+        }
         if self.restoring {
             return;
         }
+        // Re-selecting the visible task must leave its pending authentication open.
+        if !preserve_dialogs {
+            window.close_all_dialogs(cx);
+        }
         self.unread.remove(key);
+        // Suspend the previous task's overlays before the next task presents
+        // its queued authentication. Tab insertion order must not decide which
+        // environment's dialog remains on screen.
         for task in &self.tasks {
-            let visible = task.view.read(cx).key() == key;
+            if task.view.read(cx).key() != key {
+                task.view
+                    .update(cx, |view, cx| view.set_visible(false, window, cx));
+            }
+        }
+        if let Some(task) = self
+            .tasks
+            .iter()
+            .find(|task| task.view.read(cx).key() == key)
+        {
             task.view
-                .update(cx, |view, cx| view.set_visible(visible, window, cx));
+                .update(cx, |view, cx| view.set_visible(true, window, cx));
         }
         self.publish(cx);
     }
@@ -215,10 +272,8 @@ impl Workbench {
         else {
             return;
         };
-        // Keep active transports alive; stopping a run is an explicit action.
-        if self.tasks[ix].view.read(cx).summary().busy {
-            return;
-        }
+        let busy = self.tasks[ix].view.read(cx).summary().busy;
+        let failed = self.tasks[ix].view.read(cx).connection_unestablished();
         let mut options = self.tasks[ix].view.read(cx).options().clone();
         // A failed restored tab may still carry a removed model in its launch
         // options. Closing it must leave a usable blank task with the default.
@@ -227,12 +282,48 @@ impl Workbench {
         options.recover_draft = false;
         options.relink_on_resume = false;
         let was_active = self.active == key;
-        self.tasks.remove(ix);
+        if busy {
+            // Closing a tab is navigation. Keep its transport and event
+            // subscription alive until the user explicitly stops the run.
+            self.tasks[ix].closed = true;
+            self.tasks[ix]
+                .view
+                .update(cx, |view, cx| view.set_visible(false, window, cx));
+        } else {
+            self.tasks[ix]
+                .view
+                .update(cx, |view, cx| view.set_visible(false, window, cx));
+            self.tasks.remove(ix);
+        }
         self.unread.remove(key);
-        if self.tasks.is_empty() {
+        if self.tasks.iter().all(|task| task.closed) {
+            if failed {
+                options = self.origin.clone();
+                if options.ssh.is_some() || options.wsl.is_some() {
+                    options.server = None;
+                    options.database = None;
+                }
+                options.ssh = None;
+                options.ssh_user = None;
+                options.ssh_port = None;
+                options.identity = None;
+                options.wsl = None;
+                options.wsl_user = None;
+                options.workspace = None;
+                options.model = None;
+                options.resume = None;
+                options.recover_draft = false;
+                options.relink_on_resume = false;
+            }
             self.open(options, window, cx);
         } else if was_active {
-            let next = self.tasks[ix.min(self.tasks.len() - 1)]
+            let next = self
+                .tasks
+                .iter()
+                .skip(ix)
+                .chain(self.tasks.iter().take(ix))
+                .find(|task| !task.closed)
+                .expect("an open task")
                 .view
                 .read(cx)
                 .key()
@@ -242,10 +333,11 @@ impl Workbench {
             self.publish(cx);
         }
     }
-    fn publish(&self, cx: &mut Context<Self>) {
+    fn publish(&mut self, cx: &mut Context<Self>) {
         let summaries: Vec<_> = self
             .tasks
             .iter()
+            .filter(|task| !task.closed)
             .map(|task| {
                 let mut summary = task.view.read(cx).summary();
                 summary.unread = self.unread.contains(&summary.key);
@@ -258,15 +350,19 @@ impl Workbench {
             let navigation_tasks = self
                 .tasks
                 .iter()
-                .zip(&summaries)
-                .filter(|(other, _)| other.view.read(cx).options().same_host(options))
-                .map(|(_, summary)| summary.clone())
+                .filter(|other| other.view.read(cx).options().same_host(options))
+                .map(|other| {
+                    let mut summary = other.view.read(cx).summary();
+                    summary.unread = self.unread.contains(&summary.key);
+                    summary
+                })
                 .collect();
             task.view.update(cx, |view, cx| {
                 view.set_open_tasks(summaries.clone(), navigation_tasks, cx)
             });
         }
         self.sync_sidebar(cx);
+        self.task_reveal = true;
         cx.notify();
         self.persist(cx);
     }
@@ -289,46 +385,144 @@ impl Workbench {
             self.active.clone(),
             self.tasks
                 .iter()
+                .filter(|task| !task.closed || task.view.read(cx).has_draft(cx))
                 .map(|task| task.view.read(cx).saved(cx))
                 .collect(),
         ));
     }
+    fn show_workspace(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.settings.take().is_some() {
+            window.close_all_dialogs(cx);
+            self.with_active(window, cx, |view, window, cx| {
+                view.set_visible(true, window, cx)
+            });
+            cx.notify();
+        }
+    }
 }
 impl Render for Workbench {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        use gpui_kit::component::resizable::{h_resizable, resizable_panel};
-        let body = div().size_full().children(
-            self.tasks
-                .iter()
-                .find(|task| task.view.read(cx).key() == self.active)
-                .map(|task| task.view.clone()),
-        );
-        if !self.sidebar.read(cx).visible() {
-            return body.into_any_element();
-        }
-        use gpui_kit::component::ActiveTheme;
-        div()
+        use gpui_kit::component::{
+            ActiveTheme,
+            resizable::{h_resizable, resizable_panel},
+            v_flex,
+        };
+        let body = if let Some(settings) = &self.settings {
+            div().size_full().child(settings.clone()).into_any_element()
+        } else {
+            div()
+                .size_full()
+                .children(
+                    self.tasks
+                        .iter()
+                        .find(|task| task.view.read(cx).key() == self.active)
+                        .map(|task| task.view.clone()),
+                )
+                .into_any_element()
+        };
+        let body = if self.settings.is_none() && self.sidebar.read(cx).visible() {
+            h_resizable("window-panes")
+                .with_state(&self.panes)
+                .on_resize(|state, window, cx| {
+                    if let Some(width) = state.read(cx).sizes().first().copied() {
+                        crate::preferences::Preferences::set_sidebar(width / window.rem_size(), cx);
+                    }
+                })
+                .child(
+                    resizable_panel()
+                        .size(window.rem_size() * crate::preferences::Preferences::sidebar(cx))
+                        .size_range(window.rem_size() * 12. ..window.rem_size() * 24.)
+                        .child(self.sidebar.clone()),
+                )
+                .child(resizable_panel().child(body))
+                .into_any_element()
+        } else {
+            body
+        };
+        v_flex()
             .size_full()
+            .bg(cx.theme().background)
+            .text_color(cx.theme().foreground)
             .font_family(cx.theme().font_family.clone())
-            .child(
-                h_resizable("window-panes")
-                    .with_state(&self.panes)
-                    .on_resize(|state, window, cx| {
-                        if let Some(width) = state.read(cx).sizes().first().copied() {
-                            crate::preferences::Preferences::set_sidebar(
-                                width / window.rem_size(),
-                                cx,
-                            );
-                        }
-                    })
-                    .child(
-                        resizable_panel()
-                            .size(window.rem_size() * crate::preferences::Preferences::sidebar(cx))
-                            .size_range(window.rem_size() * 12. ..window.rem_size() * 24.)
-                            .child(self.sidebar.clone()),
-                    )
-                    .child(resizable_panel().child(body)),
+            .key_context("Orbit")
+            .on_action(
+                cx.listener(|view, _: &crate::workspace::ToggleSidebar, _, cx| {
+                    view.sidebar.update(cx, |sidebar, cx| sidebar.toggle(cx))
+                }),
             )
-            .into_any_element()
+            .on_action(
+                cx.listener(|view, _: &crate::workspace::NewConversation, window, cx| {
+                    view.with_active(window, cx, |view, _, cx| view.new_task(cx))
+                }),
+            )
+            .on_action(cx.listener(
+                |view, _: &crate::workspace::AppearanceSettings, window, cx| {
+                    view.with_active(window, cx, |view, window, cx| {
+                        view.window_settings(window, cx)
+                    })
+                },
+            ))
+            .on_action(cx.listener(
+                |view, _: &crate::workspace::WorkspaceCommands, window, cx| {
+                    view.show_workspace(window, cx);
+                    view.with_active(window, cx, |view, window, cx| {
+                        view.window_commands(window, cx)
+                    })
+                },
+            ))
+            .on_action(
+                cx.listener(|view, _: &crate::workspace::SearchSessions, window, cx| {
+                    view.with_active(window, cx, |view, window, cx| {
+                        view.window_search(window, cx)
+                    })
+                }),
+            )
+            .on_action(
+                cx.listener(|view, _: &crate::workspace::OpenProject, window, cx| {
+                    view.with_active(window, cx, |view, window, cx| {
+                        view.window_command(
+                            crate::workspace::WorkspaceCommand::OpenProject,
+                            window,
+                            cx,
+                        )
+                    })
+                }),
+            )
+            .on_action(
+                cx.listener(|view, _: &crate::workspace::ShowChanges, window, cx| {
+                    view.show_workspace(window, cx);
+                    view.with_active(window, cx, |view, window, cx| {
+                        view.window_command(crate::workspace::WorkspaceCommand::Changes, window, cx)
+                    })
+                }),
+            )
+            .on_action(
+                cx.listener(|view, _: &crate::workspace::FocusComposer, window, cx| {
+                    view.show_workspace(window, cx);
+                    view.with_active(window, cx, |view, window, cx| {
+                        view.focus_composer(window, cx)
+                    });
+                    cx.notify();
+                }),
+            )
+            .on_action(
+                cx.listener(|view, _: &crate::workspace::ToggleInspector, window, cx| {
+                    view.show_workspace(window, cx);
+                    view.with_active(window, cx, |view, _, cx| view.toggle_inspector(cx));
+                    cx.notify();
+                }),
+            )
+            .on_action(
+                cx.listener(|view, _: &crate::workspace::NextTask, window, cx| {
+                    view.adjacent(true, window, cx)
+                }),
+            )
+            .on_action(
+                cx.listener(|view, _: &crate::workspace::PreviousTask, window, cx| {
+                    view.adjacent(false, window, cx)
+                }),
+            )
+            .child(self.toolbar(window, cx))
+            .child(div().flex_1().min_h_0().child(body))
     }
 }
