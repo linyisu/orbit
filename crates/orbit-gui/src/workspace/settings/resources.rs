@@ -28,6 +28,7 @@ pub(super) struct Resources {
     readonly: bool,
     busy: bool,
     error: Option<String>,
+    status: Option<String>,
     task: Task<()>,
     _query_events: Subscription,
 }
@@ -66,6 +67,7 @@ impl Resources {
             readonly: false,
             busy: false,
             error: None,
+            status: None,
             task: Task::ready(()),
             _query_events: query_events,
         }
@@ -77,12 +79,21 @@ impl Resources {
         let (result, receiver) = tokio::sync::oneshot::channel();
         let session = self.session.clone();
         let workspace = self.workspace.clone();
+        let loading_skill = match &request {
+            Request::SessionAction {
+                action: orbit_protocol::SessionAction::LoadSkill { name },
+                ..
+            } => Some(name.clone()),
+            _ => None,
+        };
+        self.status = None;
         let sent = self.owner.update(cx, |view, _| {
             if !view.info.as_ref().is_some_and(|info| {
                 Some(&info.id) == session.as_ref() && info.workspace == workspace
             }) {
                 anyhow::bail!("工作区已切换，请在当前项目的设置中重新打开资源。");
             }
+            anyhow::ensure!(view.connected, "连接已断开，请重新连接后重试。");
             view.backend
                 .as_ref()
                 .ok_or_else(|| anyhow::anyhow!("请先连接工作区"))?
@@ -98,24 +109,50 @@ impl Resources {
         }
         self.busy = true;
         self.error = None;
+        self.status = loading_skill
+            .as_ref()
+            .map(|name| format!("正在将 /{name} 载入当前会话…"));
         self.task = cx.spawn(async move |owner, cx| {
             let result = receiver.await.map_err(|e| e.to_string()).and_then(|r| r);
             let _ = owner.update_in(cx, |view, window, cx| {
                 view.busy = false;
-                match result {
-                    Ok(Response::Resources(Snapshot::Skills(skills))) => {
+                view.status = None;
+                if loading_skill.is_some()
+                    && !view.owner.upgrade().is_some_and(|owner| {
+                        let owner = owner.read(cx);
+                        owner.connected
+                            && owner.info.as_ref().is_some_and(|info| {
+                                Some(&info.id) == session.as_ref() && info.workspace == workspace
+                            })
+                    })
+                {
+                    view.error = Some(
+                        "连接或目标会话已改变，加载结果尚未确认。请返回原会话核对；不会自动重发。"
+                            .into(),
+                    );
+                    cx.notify();
+                    return;
+                }
+                match (loading_skill, result) {
+                    (Some(_), Ok(Response::Report(report))) => {
+                        view.status = Some(report.text);
+                    }
+                    (None, Ok(Response::Resources(Snapshot::Skills(skills)))) => {
                         view.skills = skills;
                         view.editing = false;
                     }
-                    Ok(Response::Resources(Snapshot::Memories(memories))) => {
+                    (None, Ok(Response::Resources(Snapshot::Memories(memories)))) => {
                         view.memories = memories;
                         view.editing = false;
                     }
-                    Ok(Response::Resources(Snapshot::Skill {
-                        name,
-                        content,
-                        editable,
-                    })) => {
+                    (
+                        None,
+                        Ok(Response::Resources(Snapshot::Skill {
+                            name,
+                            content,
+                            editable,
+                        })),
+                    ) => {
                         view.name
                             .update(cx, |input, cx| input.set_value(name, window, cx));
                         view.body
@@ -125,10 +162,10 @@ impl Resources {
                         view.readonly = !editable;
                     }
 
-                    Ok(_) => {
+                    (_, Ok(_)) => {
                         view.error = Some("服务没有返回设置数据，请更新工作区服务后重试".into())
                     }
-                    Err(error) => view.error = Some(error),
+                    (_, Err(error)) => view.error = Some(error),
                 }
                 cx.notify();
             });
@@ -157,11 +194,26 @@ impl Resources {
             Kind::Memory => self.action(Action::Memories, cx),
         }
     }
+    fn load_skill(&mut self, name: String, cx: &mut Context<Self>) {
+        let Some(session) = self.session.clone() else {
+            self.error = Some("请先打开工作区会话。".into());
+            cx.notify();
+            return;
+        };
+        self.request(
+            Request::SessionAction {
+                session,
+                action: orbit_protocol::SessionAction::LoadSkill { name },
+            },
+            cx,
+        );
+    }
     fn new_item(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.editing = true;
         self.original = None;
         self.readonly = false;
         self.error = None;
+        self.status = None;
         self.name
             .update(cx, |input, cx| input.set_value("", window, cx));
         self.body.update(cx,|input,cx|input.set_value(if matches!(self.kind,Kind::Skills) { "---\nname: 新技能\ndescription: 描述这个技能的用途\n---\n\n在这里编写 Agent 执行步骤。\n" } else { "" },window,cx));
@@ -232,6 +284,9 @@ impl Render for Resources {
             )
             .when_some(self.error.clone(), |v, e| {
                 v.child(div().text_sm().text_color(cx.theme().danger).child(e))
+            })
+            .when_some(self.status.clone(), |view, status| {
+                view.child(div().text_sm().whitespace_normal().child(status))
             });
         if self.editing {
             let mut form = v_flex().gap_3();
@@ -347,9 +402,11 @@ impl Render for Resources {
                         continue;
                     }
                     let name = skill.name.clone();
+                    let load_name = name.clone();
                     rows.push(
                         h_flex()
                             .gap_4()
+                            .flex_wrap()
                             .py_3()
                             .border_b_1()
                             .border_color(cx.theme().border)
@@ -371,6 +428,30 @@ impl Render for Resources {
                                             .text_color(cx.theme().muted_foreground)
                                             .child(format!("{} · /{}", skill.source, skill.name)),
                                     ),
+                            )
+                            .child(
+                                Button::new(SharedString::from(format!(
+                                    "load-skill-{}",
+                                    skill.name
+                                )))
+                                .small()
+                                .outline()
+                                .label("加载到当前会话")
+                                .accessibility_label(format!(
+                                    "将技能 /{} 加载到当前会话",
+                                    skill.name
+                                ))
+                                .tooltip(format!(
+                                    "会话：{} · 工作区：{}",
+                                    self.session.as_deref().unwrap_or("尚未连接"),
+                                    self.workspace
+                                ))
+                                .disabled(self.busy || self.session.is_none())
+                                .on_click(cx.listener(
+                                    move |view, _, _, cx| {
+                                        view.load_skill(load_name.clone(), cx);
+                                    },
+                                )),
                             )
                             .child(
                                 Button::new(SharedString::from(format!("skill-{}", skill.name)))
