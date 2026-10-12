@@ -514,7 +514,7 @@ impl Workspace {
             .into_owned()
             .into();
         self.info = Some(info);
-        self.refresh_title();
+        self.refresh_title(cx);
         self.regroup(cx);
         if changed {
             let item = TreeItem::new(
@@ -567,15 +567,11 @@ impl Workspace {
                     .into_iter()
                     .map(|session| SessionEntry {
                         id: session.id.into(),
-                        title: if session.title.is_empty() {
-                            "新会话".into()
-                        } else {
-                            session.title.into()
-                        },
+                        title: session.title.into(),
                         workspace: session.workspace.into(),
                     })
                     .collect();
-                self.refresh_title();
+                self.refresh_title(cx);
                 self.regroup(cx);
                 cx.emit(WorkspaceEvent::Catalog(self.sessions.clone()));
             }
@@ -626,6 +622,7 @@ impl Workspace {
                             .update(cx, |conversation, cx| conversation.apply(update, cx));
                     }
                 }
+                self.refresh_title(cx);
                 if finished && !restoring {
                     self.command(Command::Request(Request::AllSessions), cx);
                 }

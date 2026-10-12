@@ -66,6 +66,13 @@ impl Conversation {
     pub(crate) fn is_empty(&self) -> bool {
         self.rows.is_empty()
     }
+    pub(crate) fn first_prompt(&self) -> Option<&str> {
+        self.transcript
+            .turns
+            .iter()
+            .filter_map(|turn| turn.prompt.as_deref())
+            .find(|prompt| !prompt.trim().is_empty())
+    }
     pub(crate) fn apply(&mut self, update: Update, cx: &mut Context<Self>) {
         let Some(change) = self.transcript.apply(update) else {
             return;

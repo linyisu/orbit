@@ -164,6 +164,7 @@ impl Workbench {
                                 .update(cx, |view, cx| view.set_catalog(catalog.clone(), cx));
                         }
                     }
+                    workbench.publish(cx);
                 }
             },
         );

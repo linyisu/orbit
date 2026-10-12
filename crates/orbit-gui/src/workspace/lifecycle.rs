@@ -207,12 +207,12 @@ impl Workspace {
     }
     pub(crate) fn set_catalog(&mut self, catalog: Vec<SessionEntry>, cx: &mut Context<Self>) {
         self.sessions = catalog;
-        self.refresh_title();
+        self.refresh_title(cx);
         self.regroup(cx);
         cx.notify();
     }
 
-    pub(super) fn refresh_title(&mut self) {
+    pub(super) fn refresh_title(&mut self, cx: &App) {
         let id = self
             .info
             .as_ref()
@@ -229,17 +229,13 @@ impl Workspace {
                     .find(|entry| Some(entry.id.as_ref()) == id)
                     .map(|entry| entry.title.as_ref())
             });
-        self.title = title
-            .map(|title| title.split_whitespace().collect::<Vec<_>>().join(" "))
-            .filter(|title| !title.is_empty())
-            .unwrap_or_else(|| {
-                if id.is_some() {
-                    "历史会话".into()
-                } else {
-                    "新会话".into()
-                }
-            })
-            .into();
+        self.title = session_title(
+            self.info.as_ref().is_some_and(|info| info.persisted) || self.options.resume.is_some(),
+            title,
+            self.conversation.read(cx).first_prompt(),
+            &self.title,
+        )
+        .into();
     }
     pub(crate) fn set_open_tasks(
         &mut self,
@@ -250,5 +246,51 @@ impl Workspace {
         self.open_tasks = tasks;
         self.navigation_tasks = navigation_tasks;
         cx.notify();
+    }
+}
+
+fn session_title(
+    persisted: bool,
+    title: Option<&str>,
+    prompt: Option<&str>,
+    previous: &str,
+) -> String {
+    title
+        .filter(|title| !title.trim().is_empty())
+        .or_else(|| {
+            (!matches!(previous, "" | "新会话" | "历史会话" | "未命名会话")).then_some(previous)
+        })
+        .or(prompt)
+        .unwrap_or(if persisted {
+            "未命名会话"
+        } else {
+            "新会话"
+        })
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::session_title;
+
+    #[test]
+    fn draft_ids_do_not_turn_new_tasks_into_history() {
+        assert_eq!(session_title(false, None, None, "历史会话"), "新会话");
+    }
+
+    #[test]
+    fn untitled_history_keeps_its_saved_title_or_uses_the_first_prompt() {
+        assert_eq!(session_title(true, Some(""), None, "创建目录"), "创建目录");
+        assert_eq!(
+            session_title(true, None, Some("查看\n项目结构"), "历史会话"),
+            "查看 项目结构"
+        );
+        assert_eq!(
+            session_title(true, Some("新的标题"), Some("旧的问题"), "旧的标题"),
+            "新的标题"
+        );
+        assert_eq!(session_title(true, None, None, "历史会话"), "未命名会话");
     }
 }
