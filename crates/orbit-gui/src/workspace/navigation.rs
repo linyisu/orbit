@@ -98,18 +98,15 @@ impl Workspace {
                             .w_full()
                             .min_w_0()
                             .gap_2()
-                            .child(div().w_3().flex_shrink_0().when(folder, |slot| {
+                            .child(div().w_4().flex_shrink_0().when(folder, |slot| {
                                 slot.child(
                                     Icon::new(if expanded {
-                                        IconName::ChevronDown
+                                        IconName::FolderOpen
                                     } else {
-                                        IconName::ChevronRight
+                                        IconName::Folder
                                     })
-                                    .size_3(),
+                                    .size_4(),
                                 )
-                            }))
-                            .child(div().w_4().flex_shrink_0().when(folder, |slot| {
-                                slot.child(Icon::new(IconName::Folder).size_4())
                             }))
                             .child(
                                 div()
