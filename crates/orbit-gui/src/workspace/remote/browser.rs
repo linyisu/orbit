@@ -11,6 +11,7 @@ pub(super) struct DirectoryBrowser {
     runtime: Arc<tokio::runtime::Runtime>,
     connection: Option<Arc<Connection>>,
     progress: interaction::Progress,
+    focus: FocusHandle,
     path: Entity<InputState>,
     password: Entity<InputState>,
     tree: Entity<TreeState>,
@@ -90,6 +91,7 @@ impl DirectoryBrowser {
             runtime,
             connection: None,
             progress,
+            focus: cx.focus_handle().tab_stop(false),
             path,
             password,
             tree: cx.new(|cx| TreeState::new(cx)),
@@ -105,6 +107,10 @@ impl DirectoryBrowser {
         };
         browser.load(initial, cx);
         browser
+    }
+
+    pub(super) fn focus(&self, window: &mut Window, cx: &mut App) {
+        self.focus.focus(window, cx);
     }
 
     fn load(&mut self, path: String, cx: &mut Context<Self>) {
@@ -188,12 +194,16 @@ impl DirectoryBrowser {
             }
         });
         let _ = challenge.reply.send(value);
+        let needs_password = self.challenges.front().is_some_and(|item| !item.confirm);
         self.password.update(cx, |input, cx| {
             input.set_value("", window, cx);
-            if !self.challenges.is_empty() {
+            if needs_password {
                 input.focus(window, cx);
             }
         });
+        if !needs_password {
+            self.focus.focus(window, cx);
+        }
         cx.notify();
     }
 }
@@ -224,6 +234,8 @@ impl Render for DirectoryBrowser {
         let current = self.listing.as_ref().map(|listing| listing.path.clone());
         let parent = current.as_deref().map(parent_path).map(str::to_owned);
         v_flex()
+            .track_focus(&self.focus)
+            .flex_shrink_0()
             .gap_2()
             .child(
                 h_flex()
@@ -362,6 +374,7 @@ impl Render for DirectoryBrowser {
                     view.child(
                         div()
                             .h_40()
+                            .flex_shrink_0()
                             .min_h_0()
                             .capture_key_down(cx.listener(|view, event: &KeyDownEvent, _, cx| {
                                 if event.keystroke.key == "enter" && !view.busy {

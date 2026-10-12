@@ -361,6 +361,15 @@ impl Workspace {
                         Button::new("reconnect-task").ghost().xsmall().label("重新连接")
                             .on_click(cx.listener(|view, _, window, cx| view.connect(window, cx)))
                     ))
+                    .when(self.options.ssh.is_some() || self.options.wsl.is_some(), |row| row.child(
+                        Button::new("retained-connection-logs")
+                            .ghost()
+                            .xsmall()
+                            .label("连接日志")
+                            .on_click(cx.listener(|view, _, window, cx| {
+                                view.open_connection_logs(window, cx)
+                            })),
+                    ))
                     .child(
                         Button::new("composer-context")
                             .ghost()
@@ -428,6 +437,15 @@ impl Render for Workspace {
                                     .text_xs()
                                     .text_color(cx.theme().muted_foreground)
                                     .child(self.environment()),
+                            )
+                            .child(
+                                Button::new("show-connection-logs")
+                                    .small()
+                                    .ghost()
+                                    .label("连接日志")
+                                    .on_click(cx.listener(|view, _, window, cx| {
+                                        view.open_connection_logs(window, cx)
+                                    })),
                             )
                             .child(
                                 Button::new("cancel-connection")

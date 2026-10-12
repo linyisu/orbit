@@ -53,6 +53,16 @@ impl Workspace {
             .child(
                 h_flex()
                     .gap_2()
+                    .flex_wrap()
+                    .child(
+                        Button::new("failed-connection-logs")
+                            .small()
+                            .ghost()
+                            .label("连接日志")
+                            .on_click(cx.listener(|view, _, window, cx| {
+                                view.open_connection_logs(window, cx)
+                            })),
+                    )
                     .child(
                         Button::new("connection-edit")
                             .small()

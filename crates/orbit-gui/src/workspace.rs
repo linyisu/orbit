@@ -184,6 +184,7 @@ pub(crate) struct Workspace {
     connected: bool,
     opening: bool,
     connection_stage: SharedString,
+    connection_logs: Entity<connection::ConnectionLogs>,
     connection_challenges: std::collections::VecDeque<connection::ConnectionChallenge>,
     auth_dialog_open: bool,
     busy: bool,
@@ -294,6 +295,7 @@ impl Workspace {
             connected: false,
             opening: true,
             connection_stage: "准备连接".into(),
+            connection_logs: cx.new(|cx| connection::ConnectionLogs::new(window, cx)),
             connection_challenges: Default::default(),
             auth_dialog_open: false,
             busy: false,
@@ -387,6 +389,9 @@ impl Workspace {
         self.opening = true;
         self.connected = false;
         self.connection_stage = "准备连接".into();
+        let environment = self.environment();
+        self.connection_logs
+            .update(cx, |logs, cx| logs.reset(environment, window, cx));
         let mut options = self.options.clone();
         if let Some(info) = &self.info {
             options.resume = (info.persisted || self.retry.is_some() || self.pending.is_some())
@@ -438,6 +443,10 @@ impl Workspace {
                 self.connection_stage = "正在恢复会话…".into();
             }
             Event::ConnectionStage(stage) => self.connection_stage = stage.into(),
+            Event::ConnectionLogs(logs) => {
+                self.connection_logs
+                    .update(cx, |view, cx| view.sync(logs, window, cx));
+            }
             Event::Subagent { agent, page, reset } => {
                 if reset {
                     let conversation = cx.new(Conversation::new);

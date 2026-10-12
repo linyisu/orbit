@@ -433,12 +433,14 @@ impl RemoteConnection {
                 let browser = cx.new(|cx| {
                     browser::DirectoryBrowser::new(options, self.runtime.clone(), window, cx)
                 });
+                browser.update(cx, |view, cx| view.focus(window, cx));
                 self.browser_subscription = Some(cx.subscribe_in(
                     &browser,
                     window,
                     |view, _, event: &browser::Selected, window, cx| {
                         view.workspace.update(cx, |input, cx| {
                             input.set_value(event.0.clone(), window, cx);
+                            input.focus(window, cx);
                         });
                         view.browser = None;
                         view.browser_subscription = None;
@@ -613,6 +615,9 @@ impl Render for RemoteConnection {
                                     if view.browser.is_some() {
                                         view.browser = None;
                                         view.browser_subscription = None;
+                                        view.workspace.update(cx, |input, cx| {
+                                            input.focus(window, cx);
+                                        });
                                         cx.notify();
                                     } else {
                                         view.browse(window, cx);
@@ -621,7 +626,7 @@ impl Render for RemoteConnection {
                         ),
                 )
                 .when_some(self.browser.clone(), |view, browser| {
-                    view.child(div().pt_2().child(browser))
+                    view.child(div().flex_shrink_0().pt_2().child(browser))
                 })
                 .into_any_element(),
         );

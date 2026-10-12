@@ -174,6 +174,7 @@ pub(crate) enum Event {
         result: Result<orbit_protocol::project::TaskSnapshot, String>,
     },
     ConnectionStage(String),
+    ConnectionLogs(Vec<String>),
     Completions {
         session: String,
         input: String,
@@ -224,7 +225,7 @@ impl Backend {
         let (sender, commands) = mpsc::channel(32);
         let (events, receiver) = mpsc::channel(64);
         let task = runtime.spawn(async move {
-            if let Err(error) = run(options, commands, &events).await {
+            if let Err(error) = Box::pin(run(options, commands, &events)).await {
                 let _ = events.send(Event::Disconnected(format!("{error:#}"))).await;
             }
         });
@@ -246,17 +247,27 @@ impl Drop for Backend {
 
 async fn run(
     options: Options,
-    mut commands: mpsc::Receiver<Command>,
+    commands: mpsc::Receiver<Command>,
     events: &mpsc::Sender<Event>,
 ) -> Result<()> {
-    let connection_options = options.connection_options()?;
     let (progress, mut updates) = orbit_client::interaction::channel();
+    let logs = updates.logs.clone();
     let initial_stage = updates.stage.borrow_and_update().clone();
     events.send(Event::ConnectionStage(initial_stage)).await?;
     let prompts = events.clone();
-    let _prompts = AbortTask(tokio::spawn(async move {
+    let mut forwarding = AbortTask(tokio::spawn(async move {
+        let mut last_logs = Vec::new();
+        let mut interval = tokio::time::interval(Duration::from_millis(200));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             tokio::select! {
+                _ = interval.tick() => {
+                    let logs = log_snapshot(&updates.logs);
+                    if logs != last_logs {
+                        last_logs.clone_from(&logs);
+                        if prompts.send(Event::ConnectionLogs(logs)).await.is_err() { break; }
+                    }
+                }
                 changed = updates.stage.changed() => {
                     if changed.is_err() { break; }
                     let stage = updates.stage.borrow_and_update().clone();
@@ -269,6 +280,32 @@ async fn run(
             }
         }
     }));
+    // The transport loop's future is large in debug builds. Do not embed its
+    // state machine in this wrapper and again in the runtime's spawned future.
+    let result = Box::pin(run_connection(options, commands, events, progress)).await;
+    forwarding.0.abort();
+    let _ = (&mut forwarding.0).await;
+    // The diagnostics reader may append immediately before a connect error.
+    // Flush after the forwarding task stops, before Disconnected is delivered.
+    let _ = events
+        .send(Event::ConnectionLogs(log_snapshot(&logs)))
+        .await;
+    result
+}
+
+fn log_snapshot(logs: &std::sync::Mutex<std::collections::VecDeque<String>>) -> Vec<String> {
+    logs.lock()
+        .map(|logs| logs.iter().cloned().collect())
+        .unwrap_or_default()
+}
+
+async fn run_connection(
+    options: Options,
+    mut commands: mpsc::Receiver<Command>,
+    events: &mpsc::Sender<Event>,
+    progress: orbit_client::interaction::Progress,
+) -> Result<()> {
+    let connection_options = options.connection_options()?;
     let connection = orbit_client::prepare_connection(
         &connection_options,
         options.config,
