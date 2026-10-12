@@ -34,8 +34,9 @@ impl Workspace {
         let planning = self.planning.mode == orbit_protocol::plan::WorkMode::Plan;
         v_flex()
             .id("composer")
+            .key_context("OrbitComposer")
             .relative()
-            .when(self.command_open, |view| view.key_context("ComposerCompletions")
+            .when(self.command_open, |view| view.key_context("OrbitComposer ComposerCompletions")
                 .on_action(cx.listener(|view, _: &CompletionNext, window, cx| view.move_completion(1, window, cx)))
                 .on_action(cx.listener(|view, _: &CompletionPrevious, window, cx| view.move_completion(-1, window, cx)))
                 .on_action(cx.listener(|view, _: &CompletionSubmit, window, cx| view.submit_completion(window, cx)))
@@ -335,11 +336,11 @@ impl Workspace {
                                             .small()
                                             .icon(Icon::new(IconName::ArrowUp))
                                             .accessibility_label("发送")
-                                            .tooltip(if self.busy {
-                                                "补充指令 · Enter"
-                                            } else {
-                                                "发送 · Enter"
-                                            })
+                                            .tooltip(crate::keymap::tooltip(
+                                                if self.busy { "补充指令" } else { "发送" },
+                                                "composer_send",
+                                                cx,
+                                            ))
                                             .disabled(!self.can_send(cx))
                                             .on_click(cx.listener(|view, _, window, cx| {
                                                 view.send(&SendMessage, window, cx)

@@ -4,6 +4,7 @@ mod fonts;
 mod mcp;
 mod plugins;
 mod resources;
+mod shortcuts;
 use super::actions::WorkspaceCommand;
 use super::*;
 use crate::preferences::{ColorMode, Preferences};
@@ -109,6 +110,7 @@ impl Workspace {
             )
         });
         let fonts = cx.new(|cx| fonts::Fonts::new(window, cx));
+        let shortcuts = cx.new(|cx| shortcuts::Shortcuts::new(window, cx));
         let advanced =
             cx.new(|cx| advanced::Advanced::new(&self.options, self.runtime.clone(), window, cx));
         let mcp = cx.new(|cx| {
@@ -134,17 +136,22 @@ impl Workspace {
                 },
             );
             let query = cx.new(|cx| InputState::new(window, cx).placeholder("搜索设置…"));
-            let query_events = cx.subscribe(&query, |page: &mut SettingsPage, input, event, cx| {
-                if matches!(event, InputEvent::Change) {
-                    let query = input.read(cx).value().trim().to_lowercase();
-                    if !page_matches(page.initial_page, &query)
-                        && let Some(ix) = (0..PAGES.len()).find(|ix| page_matches(*ix, &query))
-                    {
-                        page.initial_page = ix;
+            let query_events = cx.subscribe_in(
+                &query,
+                window,
+                |page: &mut SettingsPage, input, event, window, cx| {
+                    if matches!(event, InputEvent::Change) {
+                        let query = input.read(cx).value().trim().to_lowercase();
+                        if !page_matches(page.initial_page, &query)
+                            && let Some(ix) = (0..PAGES.len()).find(|ix| page_matches(*ix, &query))
+                        {
+                            page.deactivate_shortcuts(window, cx);
+                            page.initial_page = ix;
+                        }
+                        cx.notify();
                     }
-                    cx.notify();
-                }
-            });
+                },
+            );
             let font_size = cx.new(|cx| {
                 InputState::new(window, cx)
                     .default_value(Preferences::font_size(cx).to_string())
@@ -191,6 +198,7 @@ impl Workspace {
                 memory,
                 plugins,
                 fonts,
+                shortcuts,
                 mcp,
                 advanced,
                 query,
@@ -220,6 +228,7 @@ pub(crate) struct SettingsPage {
     mcp: Entity<mcp::Mcp>,
     advanced: Entity<advanced::Advanced>,
     fonts: Entity<fonts::Fonts>,
+    shortcuts: Entity<shortcuts::Shortcuts>,
     query: Entity<InputState>,
     font_size: Entity<InputState>,
     applied_font_size: u8,
@@ -301,10 +310,22 @@ impl SettingsPage {
     }
 
     pub(super) fn select_page(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if ix != 6 {
+            self.deactivate_shortcuts(window, cx);
+        }
         self.initial_page = ix.min(PAGES.len() - 1);
         self.query
             .update(cx, |input, cx| input.set_value("", window, cx));
         cx.notify();
+    }
+
+    fn deactivate_shortcuts(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self
+            .shortcuts
+            .update(cx, |shortcuts, cx| shortcuts.deactivate(window, cx))
+        {
+            self.query.update(cx, |input, cx| input.focus(window, cx));
+        }
     }
 
     fn appearance_page(&self, cx: &App) -> impl IntoElement + use<> {
@@ -399,7 +420,7 @@ impl SettingsPage {
             2 => self.skills.clone().into_any_element(),
             3 => self.mcp.clone().into_any_element(),
             4 => self.memory.clone().into_any_element(),
-            6 => shortcut_rows(cx).into_any_element(),
+            6 => self.shortcuts.clone().into_any_element(),
             7 => self.advanced.clone().into_any_element(),
             _ => div().into_any_element(),
         }
@@ -433,7 +454,10 @@ impl Render for SettingsPage {
                         SidebarMenuItem::new(PAGES[ix].0)
                             .icon(PAGES[ix].1)
                             .active(self.initial_page == ix)
-                            .on_click(cx.listener(move |view, _, _, cx| {
+                            .on_click(cx.listener(move |view, _, window, cx| {
+                                if ix != 6 {
+                                    view.deactivate_shortcuts(window, cx);
+                                }
                                 view.initial_page = ix;
                                 cx.notify();
                             }))
@@ -469,7 +493,7 @@ impl Render for SettingsPage {
                     "高级 Agent",
                     "应用设置 · 调整运行预算、能力上限与子 Agent 参数。",
                 ),
-                _ => ("快捷键", "应用快捷键 · 常用操作的键盘入口。"),
+                _ => ("快捷键", "应用快捷键 · 修改后立即应用，并保存到本机设置。"),
             };
             let content = self.content(cx);
             let scroll = &self.scrolls[self.initial_page.min(PAGES.len() - 1)];
@@ -507,6 +531,7 @@ impl Render for SettingsPage {
                 .into_any_element()
         };
         let back = self.owner.clone();
+        let shortcuts = self.shortcuts.clone();
         let scope = format!(
             "{} · {}",
             self.environment, self.contexts[self.context].workspace
@@ -534,6 +559,8 @@ impl Render for SettingsPage {
                             .accessibility_label("返回会话")
                             .tooltip("返回会话")
                             .on_click(move |_, window, cx| {
+                                shortcuts
+                                    .update(cx, |shortcuts, cx| shortcuts.deactivate(window, cx));
                                 let _ = back.update(cx, |view, cx| {
                                     cx.emit(WorkspaceEvent::CloseSettings);
                                     view.input.update(cx, |input, cx| input.focus(window, cx));
@@ -710,37 +737,6 @@ fn theme_previews(cx: &App) -> impl IntoElement + use<> {
                     ),
             )
             .on_click(move |_, window, cx| Preferences::set_color_mode(mode, window, cx))
-        }),
-    )
-}
-
-fn shortcut_rows(cx: &App) -> impl IntoElement + use<> {
-    v_flex().w_full().children(
-        [
-            ("发送消息", "Enter"),
-            ("换行", "Shift+Enter"),
-            ("新任务", "Ctrl+N"),
-            ("搜索命令", "Ctrl+Shift+P"),
-            ("搜索会话", "Ctrl+P"),
-            ("切换任务", "Ctrl+Tab / Ctrl+Shift+Tab"),
-            ("聚焦输入框", "Ctrl+L"),
-            ("工作面板", "Ctrl+Shift+E"),
-            ("设置", "Ctrl+,"),
-        ]
-        .into_iter()
-        .map(|(label, shortcut)| {
-            h_flex()
-                .gap_4()
-                .py_3()
-                .border_b_1()
-                .border_color(cx.theme().border)
-                .child(div().flex_1().child(label))
-                .child(
-                    div()
-                        .text_sm()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(shortcut),
-                )
         }),
     )
 }

@@ -495,7 +495,7 @@ impl Render for Sidebar {
                                     .child(Icon::new(IconName::Plus).size_4())
                                     .child("新任务"),
                             )
-                            .tooltip("Ctrl+N")
+                            .tooltip(crate::keymap::tooltip("新任务", "new_conversation", cx))
                             .disabled(active.opening || !active.connected)
                             .on_click(cx.listener(|view, _, window, cx| {
                                 view.with_owner(cx, |view, _, cx| view.open(None, cx), window)
@@ -514,7 +514,7 @@ impl Render for Sidebar {
                                     .child(Icon::new(IconName::Folder).size_4())
                                     .child("打开项目…"),
                             )
-                            .tooltip("Ctrl+O")
+                            .tooltip(crate::keymap::tooltip("打开项目", "open_project", cx))
                             .disabled(active.choosing_project || active.pending.is_some())
                             .on_click(cx.listener(|view, _, window, cx| {
                                 view.with_owner(cx, |view, _, cx| view.open_project(cx), window)
@@ -553,7 +553,7 @@ impl Render for Sidebar {
                                     .child(Icon::new(IconName::Search).size_4())
                                     .child("搜索任务"),
                             )
-                            .tooltip("搜索任务 · Ctrl+P")
+                            .tooltip(crate::keymap::tooltip("搜索任务", "search_sessions", cx))
                             .on_click(cx.listener(|view, _, window, cx| {
                                 view.with_owner(
                                     cx,
@@ -663,7 +663,7 @@ impl Render for Sidebar {
                                     .child("设置"),
                             )
                             .accessibility_label("设置")
-                            .tooltip("设置 · Ctrl+,")
+                            .tooltip(crate::keymap::tooltip("设置", "appearance_settings", cx))
                             .on_click(cx.listener(|view, _, window, cx| {
                                 view.with_owner(
                                     cx,

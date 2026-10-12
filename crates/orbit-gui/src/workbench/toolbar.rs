@@ -120,7 +120,7 @@ impl Workbench {
                         .small()
                         .icon(IconName::PanelLeft)
                         .accessibility_label("切换侧栏")
-                        .tooltip("切换侧栏 · Ctrl+B")
+                        .tooltip(crate::keymap::tooltip("切换侧栏", "toggle_sidebar", cx))
                         .on_click(cx.listener(|view, _, _, cx| {
                             view.sidebar.update(cx, |sidebar, cx| sidebar.toggle(cx))
                         })),
@@ -163,7 +163,7 @@ impl Workbench {
                         .small()
                         .icon(IconName::Plus)
                         .accessibility_label("新任务")
-                        .tooltip("新任务 · Ctrl+N")
+                        .tooltip(crate::keymap::tooltip("新任务", "new_conversation", cx))
                         .on_click(cx.listener(|view, _, window, cx| {
                             view.with_active(window, cx, |view, _, cx| view.new_task(cx))
                         })),
@@ -210,7 +210,11 @@ impl Workbench {
                         .small()
                         .icon(IconName::PanelRight)
                         .accessibility_label("工作面板")
-                        .tooltip("执行、计划、变更与 Agent · Ctrl+Shift+E")
+                        .tooltip(crate::keymap::tooltip(
+                            "执行、计划、变更与 Agent",
+                            "toggle_inspector",
+                            cx,
+                        ))
                         .on_click(cx.listener(|view, _, window, cx| {
                             view.show_workspace(window, cx);
                             view.with_active(window, cx, |view, window, cx| {

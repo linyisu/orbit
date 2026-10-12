@@ -102,33 +102,8 @@ pub(crate) fn bind_keys(cx: &mut App) {
             CompletionDismiss,
             Some("Orbit > ComposerCompletions > Input"),
         ),
-        KeyBinding::new("ctrl-enter", SendMessage, Some("Orbit")),
-        KeyBinding::new("ctrl-n", NewConversation, Some("Orbit")),
-        KeyBinding::new("ctrl-,", AppearanceSettings, Some("Orbit")),
-        KeyBinding::new("ctrl-l", FocusComposer, Some("Orbit")),
-        KeyBinding::new("ctrl-b", ToggleSidebar, Some("Orbit")),
-        KeyBinding::new("ctrl-shift-p", WorkspaceCommands, Some("Orbit")),
-        KeyBinding::new("ctrl-shift-d", ShowChanges, Some("Orbit")),
-        KeyBinding::new("ctrl-p", SearchSessions, Some("Orbit")),
-        KeyBinding::new("ctrl-o", OpenProject, Some("Orbit")),
-        KeyBinding::new("ctrl-tab", NextTask, Some("Orbit")),
-        KeyBinding::new("ctrl-shift-tab", PreviousTask, Some("Orbit")),
-        KeyBinding::new("ctrl-shift-e", ToggleInspector, Some("Orbit")),
-        // Input has its own Enter and editing actions. Bind at that context
-        // so it cannot consume the composer's commands first.
-        KeyBinding::new("ctrl-enter", SendMessage, Some("Orbit > Input")),
-        KeyBinding::new("ctrl-n", NewConversation, Some("Orbit > Input")),
-        KeyBinding::new("ctrl-,", AppearanceSettings, Some("Orbit > Input")),
-        KeyBinding::new("ctrl-l", FocusComposer, Some("Orbit > Input")),
-        KeyBinding::new("ctrl-b", ToggleSidebar, Some("Orbit > Input")),
-        KeyBinding::new("ctrl-shift-p", WorkspaceCommands, Some("Orbit > Input")),
-        KeyBinding::new("ctrl-shift-d", ShowChanges, Some("Orbit > Input")),
-        KeyBinding::new("ctrl-p", SearchSessions, Some("Orbit > Input")),
-        KeyBinding::new("ctrl-o", OpenProject, Some("Orbit > Input")),
-        KeyBinding::new("ctrl-tab", NextTask, Some("Orbit > Input")),
-        KeyBinding::new("ctrl-shift-tab", PreviousTask, Some("Orbit > Input")),
-        KeyBinding::new("ctrl-shift-e", ToggleInspector, Some("Orbit > Input")),
     ]);
+    crate::keymap::init(cx);
 }
 
 struct PendingSend {
@@ -227,7 +202,7 @@ impl Workspace {
         let input = cx.new(|cx| {
             TextareaState::new(window, cx)
                 .placeholder("描述任务，输入 / 查看命令…")
-                .submit_on_enter(true)
+                .submit_on_enter(false)
                 .auto_grow(3, 8)
         });
         let subscription = cx.subscribe_in(&input, window, |view, input, event, window, cx| {
@@ -236,8 +211,6 @@ impl Workspace {
                 view.update_completions(draft.as_str(), window, cx);
                 cx.emit(WorkspaceEvent::DraftChanged);
                 cx.notify();
-            } else if matches!(event, InputEvent::PressEnter { shift: false, .. }) {
-                view.send(&SendMessage, window, cx);
             }
         });
         let input_focus = input.read(cx).focus_handle(cx);

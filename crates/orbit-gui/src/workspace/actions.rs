@@ -751,7 +751,10 @@ impl Workspace {
                     return true;
                 }
                 _ => {
-                    self.report_error("未知命令。使用 Ctrl+Shift+P 查看可用操作。", cx);
+                    let hint = crate::keymap::label_for("workspace_commands", cx)
+                        .map(|keys| format!("未知命令。使用 {keys} 查看可用操作。"))
+                        .unwrap_or_else(|| "未知命令。输入 /help 查看可用操作。".into());
+                    self.report_error(hint, cx);
                     cx.notify();
                     return true;
                 }
