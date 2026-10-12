@@ -89,6 +89,15 @@ impl Review {
         self.session == session && self.workspace == workspace
     }
 
+    pub(super) fn focus(&self, window: &mut Window, cx: &mut App) {
+        let list = self.list.focus_handle(cx);
+        if !list.contains_focused(window, cx)
+            && !self.diff.focus_handle(cx).contains_focused(window, cx)
+        {
+            list.focus(window, cx);
+        }
+    }
+
     pub(super) fn activate(&mut self, path: Option<String>, cx: &mut Context<Self>) {
         if self.mutating() {
             return;
@@ -460,10 +469,9 @@ impl Render for Review {
                             .icon(IconName::ArrowLeft)
                             .accessibility_label("返回会话")
                             .disabled(self.mutating())
-                            .on_click(cx.listener(|view, _, _, cx| {
+                            .on_click(cx.listener(|view, _, window, cx| {
                                 let _ = view.owner.update(cx, |owner, cx| {
-                                    owner.page = MainPage::Conversation;
-                                    cx.notify();
+                                    owner.focus_composer(window, cx);
                                 });
                             })),
                     )

@@ -407,13 +407,15 @@ impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         use super::actions::WorkspaceCommand;
         let empty = !self.opening && self.conversation.read(cx).is_empty();
-        let body =
-            v_flex()
-                .size_full()
-                .min_w_0()
-                .min_h_0()
-                .child(div().flex_1().min_h_0().child(
-                    if self.opening && !self.recovery.is_active() {
+        let body = v_flex()
+            .size_full()
+            .min_w_0()
+            .min_h_0()
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .child(if self.opening && !self.recovery.is_active() {
                         v_flex()
                             .size_full()
                             .items_center()
@@ -474,117 +476,118 @@ impl Render for Workspace {
                             .into_any_element()
                     } else {
                         self.conversation.clone().into_any_element()
-                    },
-                ))
-                .when(
-                    !self.approvals.is_empty()
-                        || self
-                            .question_form
-                            .as_ref()
-                            .is_some_and(|form| form.read(cx).hidden())
-                        || self
-                            .planning
-                            .plan
-                            .as_ref()
-                            .is_some_and(|p| p.status == orbit_protocol::plan::Status::Review),
-                    |view| {
-                        view.child(
-                            h_flex()
-                                .px(rems(CONTENT_GUTTER_REM))
-                                .py_2()
-                                .gap_2()
-                                .flex_wrap()
-                                .children(self.approvals.iter().map(|approval| {
-                                    let approval = approval.clone();
-                                    Button::new(("approval", approval.id))
-                                        .small()
-                                        .label("审批操作…")
-                                        .on_click(cx.listener(move |view, _, window, cx| {
-                                            view.approval(&approval, window, cx)
-                                        }))
-                                }))
-                                .when(
-                                    self.question_form
-                                        .as_ref()
-                                        .is_some_and(|form| form.read(cx).hidden()),
-                                    |view| {
-                                        view.child(
-                                            Button::new("answer-agent")
-                                                .small()
-                                                .label("回答 Agent…")
-                                                .on_click(cx.listener(|view, _, window, cx| {
-                                                    view.questions(window, cx)
-                                                })),
-                                        )
-                                    },
-                                )
-                                .when(
-                                    self.planning.plan.as_ref().is_some_and(|p| {
-                                        p.status == orbit_protocol::plan::Status::Review
-                                    }),
-                                    |view| {
-                                        view.child(
-                                            Button::new("review-plan")
-                                                .small()
-                                                .label("审阅计划…")
-                                                .on_click(cx.listener(|view, _, window, cx| {
-                                                    view.show_plan(window, cx)
-                                                })),
-                                        )
-                                    },
-                                ),
-                        )
-                    },
-                )
-                .when(
-                    self.info.is_some() && (!self.opening || self.recovery.is_active()),
-                    |view| {
-                        view.child(
-                            v_flex()
-                                .w_full()
-                                .flex_shrink_0()
-                                .items_center()
-                                .px(rems(CONTENT_GUTTER_REM))
-                                .pt_2()
-                                .pb_3()
-                                .when(self.busy, |view| {
+                    }),
+            )
+            .when(
+                !self.approvals.is_empty()
+                    || self
+                        .question_form
+                        .as_ref()
+                        .is_some_and(|form| form.read(cx).hidden())
+                    || self
+                        .planning
+                        .plan
+                        .as_ref()
+                        .is_some_and(|p| p.status == orbit_protocol::plan::Status::Review),
+                |view| {
+                    view.child(
+                        h_flex()
+                            .px(rems(CONTENT_GUTTER_REM))
+                            .py_2()
+                            .gap_2()
+                            .flex_wrap()
+                            .children(self.approvals.iter().map(|approval| {
+                                let approval = approval.clone();
+                                Button::new(("approval", approval.id))
+                                    .small()
+                                    .label("审批操作…")
+                                    .on_click(cx.listener(move |view, _, window, cx| {
+                                        view.approval(&approval, window, cx)
+                                    }))
+                            }))
+                            .when(
+                                self.question_form
+                                    .as_ref()
+                                    .is_some_and(|form| form.read(cx).hidden()),
+                                |view| {
                                     view.child(
-                                        h_flex()
-                                            .w_full()
-                                            .when(Preferences::comfortable_width(cx), |view| {
-                                                view.max_w(rems(CONTENT_WIDTH_REM))
-                                            })
-                                            .pb_2()
-                                            .child(
-                                                Button::new("run-progress")
-                                                    .ghost()
-                                                    .xsmall()
-                                                    .label(format!(
-                                                        "{}  ·  {} 次工具调用  ·  {} 个文件",
-                                                        self.status(),
-                                                        self.execution.tools().len(),
-                                                        self.execution.files().len()
-                                                    ))
-                                                    .on_click(cx.listener(|view, _, _, cx| {
-                                                        view.inspector = Some(
-                                                            super::inspector::Section::Execution,
-                                                        );
-                                                        cx.notify();
-                                                    })),
-                                            ),
+                                        Button::new("answer-agent")
+                                            .small()
+                                            .label("回答 Agent…")
+                                            .on_click(cx.listener(|view, _, window, cx| {
+                                                view.questions(window, cx)
+                                            })),
                                     )
-                                })
-                                .child(
-                                    div()
+                                },
+                            )
+                            .when(
+                                self.planning.plan.as_ref().is_some_and(|p| {
+                                    p.status == orbit_protocol::plan::Status::Review
+                                }),
+                                |view| {
+                                    view.child(
+                                        Button::new("review-plan")
+                                            .small()
+                                            .label("审阅计划…")
+                                            .on_click(cx.listener(|view, _, window, cx| {
+                                                view.show_plan(window, cx)
+                                            })),
+                                    )
+                                },
+                            ),
+                    )
+                },
+            )
+            .when(
+                self.info.is_some() && (!self.opening || self.recovery.is_active()),
+                |view| {
+                    view.child(
+                        v_flex()
+                            .w_full()
+                            .flex_shrink_0()
+                            .items_center()
+                            .px(rems(CONTENT_GUTTER_REM))
+                            .pt_2()
+                            .pb_3()
+                            .when(self.busy, |view| {
+                                view.child(
+                                    h_flex()
                                         .w_full()
                                         .when(Preferences::comfortable_width(cx), |view| {
                                             view.max_w(rems(CONTENT_WIDTH_REM))
                                         })
-                                        .child(self.composer(window, cx)),
-                                ),
-                        )
-                    },
-                );
+                                        .pb_2()
+                                        .child(
+                                            Button::new("run-progress")
+                                                .ghost()
+                                                .xsmall()
+                                                .label(format!(
+                                                    "{}  ·  {} 次工具调用  ·  {} 个文件",
+                                                    self.status(),
+                                                    self.execution.tools().len(),
+                                                    self.execution.files().len()
+                                                ))
+                                                .on_click(cx.listener(|view, _, window, cx| {
+                                                    view.set_inspector(
+                                                        Some(super::inspector::Section::Execution),
+                                                        window,
+                                                        cx,
+                                                    );
+                                                })),
+                                        ),
+                                )
+                            })
+                            .child(
+                                div()
+                                    .w_full()
+                                    .when(Preferences::comfortable_width(cx), |view| {
+                                        view.max_w(rems(CONTENT_WIDTH_REM))
+                                    })
+                                    .child(self.composer(window, cx)),
+                            ),
+                    )
+                },
+            );
         let accessory = self
             .panel
             .as_ref()
@@ -628,9 +631,7 @@ impl Render for Workspace {
                                 .icon(IconName::ArrowLeft)
                                 .accessibility_label("返回会话")
                                 .on_click(cx.listener(|view, _, window, cx| {
-                                    view.page = MainPage::Conversation;
-                                    view.input.update(cx, |input, cx| input.focus(window, cx));
-                                    cx.notify();
+                                    view.focus_composer(window, cx);
                                 })),
                         )
                         .child(
@@ -677,13 +678,8 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::send))
             .on_action(cx.listener(|view, _: &NextTask, _, cx| view.adjacent_task(true, cx)))
             .on_action(cx.listener(|view, _: &PreviousTask, _, cx| view.adjacent_task(false, cx)))
-            .on_action(cx.listener(|view, _: &ToggleInspector, _, cx| {
-                view.inspector = if view.inspector.is_some() {
-                    None
-                } else {
-                    Some(super::inspector::Section::Execution)
-                };
-                cx.notify();
+            .on_action(cx.listener(|view, _: &ToggleInspector, window, cx| {
+                view.toggle_inspector(window, cx)
             }))
             .on_action(cx.listener(|view, _: &NewConversation, _, cx| view.open(None, cx)))
             .on_action(cx.listener(Self::appearance))
@@ -702,10 +698,9 @@ impl Render for Workspace {
             .on_action(cx.listener(|view, _: &ToggleSidebar, _, cx| {
                 view.sidebar.update(cx, |sidebar, cx| sidebar.toggle(cx));
             }))
-            .on_action(cx.listener(|view, _: &FocusComposer, window, cx| {
-                view.page = MainPage::Conversation;
-                view.input.update(cx, |input, cx| input.focus(window, cx))
-            }))
+            .on_action(
+                cx.listener(|view, _: &FocusComposer, window, cx| view.focus_composer(window, cx)),
+            )
             .child(div().flex_1().min_h_0().child(body))
             .into_any_element()
     }

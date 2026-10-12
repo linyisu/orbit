@@ -613,7 +613,9 @@ impl Render for Workbench {
             .on_action(
                 cx.listener(|view, _: &crate::workspace::ToggleInspector, window, cx| {
                     view.show_workspace(window, cx);
-                    view.with_active(window, cx, |view, _, cx| view.toggle_inspector(cx));
+                    view.with_active(window, cx, |view, window, cx| {
+                        view.toggle_inspector(window, cx)
+                    });
                     cx.notify();
                 }),
             )

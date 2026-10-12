@@ -4,6 +4,7 @@ pub(crate) use actions::WorkspaceCommand;
 mod connection;
 mod feedback;
 mod files;
+mod input_queue;
 mod inspector;
 mod lifecycle;
 pub(crate) use lifecycle::{WorkspaceEvent, WorkspaceSummary};
@@ -20,6 +21,7 @@ pub(crate) use settings::SettingsPage;
 mod slash;
 mod subagents;
 mod tasks;
+mod tool_output;
 mod view;
 
 use crate::{
@@ -102,7 +104,7 @@ pub(crate) fn bind_keys(cx: &mut App) {
         ),
         KeyBinding::new("ctrl-enter", SendMessage, Some("Orbit")),
         KeyBinding::new("ctrl-n", NewConversation, Some("Orbit")),
-        KeyBinding::new("ctrl-comma", AppearanceSettings, Some("Orbit")),
+        KeyBinding::new("ctrl-,", AppearanceSettings, Some("Orbit")),
         KeyBinding::new("ctrl-l", FocusComposer, Some("Orbit")),
         KeyBinding::new("ctrl-b", ToggleSidebar, Some("Orbit")),
         KeyBinding::new("ctrl-shift-p", WorkspaceCommands, Some("Orbit")),
@@ -116,7 +118,7 @@ pub(crate) fn bind_keys(cx: &mut App) {
         // so it cannot consume the composer's commands first.
         KeyBinding::new("ctrl-enter", SendMessage, Some("Orbit > Input")),
         KeyBinding::new("ctrl-n", NewConversation, Some("Orbit > Input")),
-        KeyBinding::new("ctrl-comma", AppearanceSettings, Some("Orbit > Input")),
+        KeyBinding::new("ctrl-,", AppearanceSettings, Some("Orbit > Input")),
         KeyBinding::new("ctrl-l", FocusComposer, Some("Orbit > Input")),
         KeyBinding::new("ctrl-b", ToggleSidebar, Some("Orbit > Input")),
         KeyBinding::new("ctrl-shift-p", WorkspaceCommands, Some("Orbit > Input")),
@@ -194,6 +196,8 @@ pub(crate) struct Workspace {
     side_questions: Option<Entity<questions::SideQuestions>>,
     question_history: Option<Entity<questions::QuestionHistory>>,
     child_agents: Option<Entity<subagents::ChildAgents>>,
+    input_queue: Option<Entity<input_queue::InputQueue>>,
+    tool_output: Option<Entity<tool_output::ToolOutput>>,
     command_search: Entity<gpui_kit::component::command::CommandState>,
     command_open: bool,
     arguments: slash::Arguments,
@@ -238,6 +242,12 @@ impl Workspace {
         let input_focus = input.read(cx).focus_handle(cx);
         let focused = cx.on_focus(&input_focus, window, |_, _, cx| cx.notify());
         let blurred = cx.on_blur(&input_focus, window, |_, _, cx| cx.notify());
+        let bounds = cx.observe_window_bounds(window, |view, window, cx| {
+            view.repair_hidden_focus(window, cx);
+        });
+        let focus_lost = cx.on_focus_lost(window, |view, window, cx| {
+            view.repair_hidden_focus(window, cx);
+        });
         let conversation = cx.new(Conversation::new);
         let location = options
             .workspace
@@ -263,7 +273,7 @@ impl Workspace {
             recovery: Default::default(),
             timer: Task::ready(()),
             picker: Task::ready(()),
-            _subscriptions: vec![subscription, focused, blurred],
+            _subscriptions: vec![subscription, focused, blurred, bounds, focus_lost],
             focus: cx.focus_handle(),
             input,
             conversation,
@@ -296,6 +306,8 @@ impl Workspace {
             side_questions: None,
             question_history: None,
             child_agents: None,
+            input_queue: None,
+            tool_output: None,
             command_search: cx
                 .new(|cx| gpui_kit::component::command::CommandState::new(window, cx)),
             command_open: false,
@@ -348,6 +360,10 @@ impl Workspace {
     }
 
     fn start_connection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.disconnect_tool_output(cx);
+        if let Some(panel) = &self.input_queue {
+            panel.update(cx, |panel, cx| panel.disconnected(cx));
+        }
         if let Some(panel) = &self.child_agents {
             panel.update(cx, |panel, cx| panel.disconnected(cx));
         }
@@ -493,6 +509,10 @@ impl Workspace {
                 }
             }
             Event::Disconnected(error) => {
+                self.disconnect_tool_output(cx);
+                if let Some(panel) = &self.input_queue {
+                    panel.update(cx, |panel, cx| panel.disconnected(cx));
+                }
                 if let Some(panel) = &self.child_agents {
                     panel.update(cx, |panel, cx| panel.disconnected(cx));
                 }
@@ -579,11 +599,16 @@ impl Workspace {
             .is_some_and(|previous| previous.workspace != info.workspace || previous.id != info.id)
         {
             self.question_form = None;
+            self.disconnect_tool_output(cx);
+            if let Some(panel) = &self.input_queue {
+                panel.update(cx, |panel, cx| panel.disconnected(cx));
+            }
         }
         if self.visible
             && (self.side_questions.is_some()
                 || self.question_history.is_some()
-                || self.child_agents.is_some())
+                || self.child_agents.is_some()
+                || self.input_queue.is_some())
             && self.info.as_ref().is_some_and(|previous| {
                 previous.workspace != info.workspace || previous.id != info.id
             })
@@ -603,10 +628,12 @@ impl Workspace {
                 self.side_questions = None;
                 self.question_history = None;
                 self.child_agents = None;
+                self.input_queue = None;
             } else if previous.id != info.id {
                 self.side_questions = None;
                 self.question_history = None;
                 self.child_agents = None;
+                self.input_queue = None;
                 if let Some(tasks) = &self.tasks {
                     tasks.update(cx, |tasks, cx| {
                         tasks.bind_session(info.id.clone(), window, cx)
@@ -651,6 +678,7 @@ impl Workspace {
     fn response(&mut self, response: Response, window: &mut Window, cx: &mut Context<Self>) {
         match response {
             Response::Opened(info) => {
+                self.disconnect_tool_output(cx);
                 self.options.relink_on_resume = false;
                 self.options.recover_draft = false;
                 // This entity owns one task's composer. Restoring transport
@@ -668,6 +696,18 @@ impl Workspace {
                 }
                 self.side_questions = None;
                 self.question_history = None;
+                if let (Some(panel), Some(info)) = (&self.input_queue, &self.info) {
+                    let retained = panel.update(cx, |panel, cx| {
+                        let retained = panel.rebind(&info.id, &info.workspace, &self.options, cx);
+                        if retained {
+                            panel.reconnected(cx);
+                        }
+                        retained
+                    });
+                    if !retained {
+                        self.input_queue = None;
+                    }
+                }
                 if let (Some(panel), Some(info)) = (&self.child_agents, &self.info) {
                     let retained = panel.update(cx, |panel, cx| {
                         let retained = panel.rebind(&info.id, &info.workspace, &self.options, cx);
@@ -761,6 +801,8 @@ impl Workspace {
                             .update(cx, |conversation, cx| conversation.apply(update, cx));
                     }
                 }
+                self.execution.apply_progress(&page.tool_progress);
+                self.sync_tool_output(restoring, window, cx);
                 self.refresh_title(cx);
                 if finished && !restoring {
                     self.command(Command::Request(Request::AllSessions), cx);

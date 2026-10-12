@@ -318,11 +318,7 @@ impl Render for Sidebar {
             .key_context("Orbit")
             .on_action(cx.listener(|view, _: &ToggleSidebar, window, cx| {
                 view.toggle(cx);
-                view.with_owner(
-                    cx,
-                    |view, window, cx| view.input.update(cx, |input, cx| input.focus(window, cx)),
-                    window,
-                );
+                view.with_owner(cx, |view, window, cx| view.focus_page(window, cx), window);
             }))
             .on_action(cx.listener(|view, _: &NextTask, window, cx| {
                 view.with_owner(cx, |view, _, cx| view.adjacent_task(true, cx), window)
@@ -358,7 +354,7 @@ impl Render for Sidebar {
             .on_action(cx.listener(|view, _: &FocusComposer, window, cx| {
                 view.with_owner(
                     cx,
-                    |view, window, cx| view.input.update(cx, |input, cx| input.focus(window, cx)),
+                    |view, window, cx| view.focus_composer(window, cx),
                     window,
                 )
             }))
@@ -377,14 +373,7 @@ impl Render for Sidebar {
             .on_action(cx.listener(|view, _: &ToggleInspector, window, cx| {
                 view.with_owner(
                     cx,
-                    |view, _, cx| {
-                        view.inspector = if view.inspector.is_some() {
-                            None
-                        } else {
-                            Some(super::inspector::Section::Execution)
-                        };
-                        cx.notify();
-                    },
+                    |view, window, cx| view.toggle_inspector(window, cx),
                     window,
                 )
             }))

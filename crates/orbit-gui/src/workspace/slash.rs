@@ -116,6 +116,13 @@ const ENTRIES: &[Entry] = &[
         Action::Argument
     ),
     entry!(
+        "queue",
+        "待处理输入",
+        "查看、编辑或移除尚未处理的消息",
+        List,
+        Action::Workspace(Command::InputQueue)
+    ),
+    entry!(
         "status",
         "会话状态",
         "查看会话和工作区状态",

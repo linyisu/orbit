@@ -73,9 +73,8 @@ impl Workspace {
         cx.notify();
     }
 
-    pub(super) fn close_files(&mut self, cx: &mut Context<Self>) {
-        self.page = MainPage::Conversation;
-        cx.notify();
+    pub(super) fn close_files(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.focus_composer(window, cx);
     }
 
     pub(super) fn show_review(
@@ -98,7 +97,10 @@ impl Workspace {
         }
         self.page = MainPage::Review;
         if let Some(review) = &self.review {
-            review.update(cx, |review, cx| review.activate(path, cx));
+            review.update(cx, |review, cx| {
+                review.activate(path, cx);
+                review.focus(window, cx);
+            });
         }
         cx.notify();
     }
@@ -319,7 +321,7 @@ impl Workspace {
             window.remove_notification::<Workspace>(cx);
         }
         if visible && changed {
-            self.input.update(cx, |input, cx| input.focus(window, cx));
+            self.focus_page(window, cx);
             if self.connected {
                 self.command(Command::Request(Request::AllSessions), cx);
             }
@@ -399,8 +401,70 @@ impl Workspace {
     }
     pub(crate) fn focus_composer(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.page = MainPage::Conversation;
-        self.input.update(cx, |input, cx| input.focus(window, cx));
+        if window.viewport_size().width < window.rem_size() * 72. {
+            // At this width the accessory replaces the conversation, including
+            // its composer. Returning to the conversation must reveal it first.
+            self.panel = None;
+            self.inspector = None;
+        }
+        self.focus_page(window, cx);
         cx.notify();
+    }
+
+    pub(super) fn focus_page(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        match self.page {
+            MainPage::Conversation
+                if self.info.is_none()
+                    || (self.opening && !self.recovery.is_active())
+                    || (window.viewport_size().width < window.rem_size() * 72.
+                        && (self.panel.is_some() || self.inspector.is_some()))
+                    || self
+                        .question_form
+                        .as_ref()
+                        .is_some_and(|form| !form.read(cx).hidden()) =>
+            {
+                // Loading, an accessory, or a question form hides the ordinary input.
+                self.focus.focus(window, cx);
+            }
+            MainPage::Conversation => self.input.update(cx, |input, cx| input.focus(window, cx)),
+            MainPage::Files => {
+                if let Some(files) = &self.files {
+                    files.update(cx, |files, cx| files.focus(window, cx));
+                } else {
+                    self.focus.focus(window, cx);
+                }
+            }
+            MainPage::Review => {
+                if let Some(review) = &self.review {
+                    review.update(cx, |review, cx| review.focus(window, cx));
+                } else {
+                    self.focus.focus(window, cx);
+                }
+            }
+            MainPage::Tasks => self.focus.focus(window, cx),
+        }
+    }
+
+    pub(super) fn repair_hidden_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.visible || window.has_active_sheet(cx) || window.has_active_dialog(cx) {
+            return;
+        }
+        let hidden_composer = self.page != MainPage::Conversation
+            || self.info.is_none()
+            || (self.opening && !self.recovery.is_active())
+            || (window.viewport_size().width < window.rem_size() * 72.
+                && (self.panel.is_some() || self.inspector.is_some()))
+            || self
+                .question_form
+                .as_ref()
+                .is_some_and(|form| !form.read(cx).hidden());
+        let stale_input = hidden_composer && self.input.focus_handle(cx).is_focused(window);
+        // A retained handle can outlive its rendered focus node. Bounds changes
+        // catch the imminent compact layout; focus-lost catches font changes
+        // and a Sheet restoring a handle that disappeared while it was open.
+        if stale_input || !window.is_action_available(&WorkspaceCommands, cx) {
+            self.focus_page(window, cx);
+        }
     }
     pub(crate) fn window_command(
         &mut self,
@@ -410,13 +474,32 @@ impl Workspace {
     ) {
         self.execute(command, window, cx);
     }
-    pub(crate) fn toggle_inspector(&mut self, cx: &mut Context<Self>) {
-        self.inspector = if self.inspector.is_some() {
+    pub(crate) fn toggle_inspector(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let section = if self.inspector.is_some() {
             None
         } else {
             Some(inspector::Section::Execution)
         };
+        self.set_inspector(section, window, cx);
+    }
+
+    pub(super) fn set_inspector(
+        &mut self,
+        section: Option<inspector::Section>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.inspector = section;
         self.panel = None;
+        if self.page == MainPage::Conversation {
+            if self.inspector.is_some() && window.viewport_size().width < window.rem_size() * 72. {
+                // The compact inspector replaces the composer. Sheets opened
+                // from it must restore a focus target that remains visible.
+                self.focus.focus(window, cx);
+            } else if self.inspector.is_none() {
+                self.focus_page(window, cx);
+            }
+        }
         cx.notify();
     }
     pub(crate) fn environment(&self) -> String {
@@ -450,6 +533,7 @@ impl Workspace {
             self.tasks =
                 Some(cx.new(|cx| tasks::Tasks::new(owner, session, workspace, window, cx)));
         }
+        let changed = self.page != MainPage::Tasks;
         self.page = MainPage::Tasks;
         self.panel = None;
         self.inspector = None;
@@ -458,6 +542,8 @@ impl Workspace {
                 .as_ref()
                 .unwrap()
                 .update(cx, |tasks, cx| tasks.start_create(window, cx));
+        } else if changed {
+            self.focus_page(window, cx);
         }
         cx.notify();
     }

@@ -1,9 +1,11 @@
 //! Offline protocol peer for integration and native-window checks.
 //! Enabled explicitly with `test-support`; never calls a model.
 mod files;
+mod input_queue;
 mod review;
 mod side_questions;
 mod subagents;
+mod tool_output;
 mod user_input_history;
 use base64::Engine;
 use files::{execute as fixture_files, read_file as fixture_read_file};
@@ -62,7 +64,7 @@ fn main() -> anyhow::Result<()> {
     )]);
     let mut fixture_skills: HashMap<String, String> = HashMap::new();
     let mut fixture_memories: Vec<Value> = vec![];
-    let mut pending = VecDeque::new();
+    let mut pending: VecDeque<Value> = VecDeque::new();
     let mut approvals: Vec<Value> = vec![];
     let mut reject = true;
     let mut count = 0;
@@ -308,7 +310,13 @@ fn main() -> anyhow::Result<()> {
             }
             "poll" => {
                 let events = history.entry(session.clone()).or_default();
+                let hold_command = pending.front().is_some_and(|event| {
+                    event["Agent"]["ToolFinished"]["call"]["id"] == "output-command"
+                }) && std::path::Path::new(&workspace)
+                    .join(".fixture-command-output-hold")
+                    .exists();
                 if approvals.is_empty()
+                    && !hold_command
                     && let Some(event) = pending.pop_front()
                 {
                     events.push(event);
@@ -319,7 +327,7 @@ fn main() -> anyhow::Result<()> {
                 } else {
                     events.len()
                 };
-                json!({"type":"page","value":{"next":next,"more":next < events.len(),"busy":!pending.is_empty()||!approvals.is_empty(),"model":model,"updates":&events[after.min(events.len())..next],"approvals":approvals,"planning":planning,"user_inputs":user_inputs.live(&session)}})
+                json!({"type":"page","value":{"next":next,"more":next < events.len(),"busy":!pending.is_empty()||!approvals.is_empty(),"model":model,"updates":&events[after.min(events.len())..next],"approvals":approvals,"planning":planning,"user_inputs":user_inputs.live(&session),"tool_progress":tool_output::progress(events)}})
             }
             "usage" => {
                 let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
@@ -382,6 +390,12 @@ fn main() -> anyhow::Result<()> {
                     }
                     if prompt == "workbench" {
                         pending = workbench_events();
+                    }
+                    if matches!(prompt, "command-output" | "command-output-fast") {
+                        pending = tool_output::events(
+                            &workspace,
+                            if prompt == "command-output" { 120 } else { 5 },
+                        );
                     }
                     if prompt == "sidebar" {
                         pending = (0..80)
@@ -457,6 +471,7 @@ fn main() -> anyhow::Result<()> {
                 fixture_read_file(&workspace, request["path"].as_str().unwrap_or_default())
             }
             "files" => fixture_files(&workspace, &request),
+            "input_queue" => input_queue::execute(&workspace, &request),
             "review" => review::execute(&workspace, &request),
             "subagents" => child_agents.execute(&workspace, &request),
             "read_subagent" => child_agents.read(&workspace, &request),

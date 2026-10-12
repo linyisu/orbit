@@ -213,7 +213,9 @@ impl Workbench {
                         .tooltip("执行、计划、变更与 Agent · Ctrl+Shift+E")
                         .on_click(cx.listener(|view, _, window, cx| {
                             view.show_workspace(window, cx);
-                            view.with_active(window, cx, |view, _, cx| view.toggle_inspector(cx))
+                            view.with_active(window, cx, |view, window, cx| {
+                                view.toggle_inspector(window, cx)
+                            })
                         })),
                 ),
         )

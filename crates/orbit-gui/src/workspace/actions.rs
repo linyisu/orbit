@@ -44,6 +44,7 @@ pub(crate) enum WorkspaceCommand {
     ForgetMemory,
     LoadSkill,
     QuestionHistory,
+    InputQueue,
     SideQuestions,
     FollowQuestion,
     CancelQuestion,
@@ -90,6 +91,7 @@ impl WorkspaceCommand {
         (Self::Accounts, "账号与模型连接…"),
         (Self::RefreshModels, "刷新模型"),
         (Self::QuestionHistory, "Agent 问答历史"),
+        (Self::InputQueue, "待处理输入"),
         (Self::SideQuestions, "旁路问答历史"),
         (Self::FollowQuestion, "继续旁路提问…"),
         (Self::CancelQuestion, "停止旁路提问…"),
@@ -232,6 +234,7 @@ impl Workspace {
             ),
             WorkspaceCommand::DeleteSession => self.delete_session(&session, window, cx),
             WorkspaceCommand::QuestionHistory => self.open_question_history(window, cx),
+            WorkspaceCommand::InputQueue => self.open_input_queue(window, cx),
             WorkspaceCommand::SideQuestions
             | WorkspaceCommand::CancelQuestion
             | WorkspaceCommand::FollowQuestion => self.open_side_questions(window, cx),
@@ -663,6 +666,7 @@ impl Workspace {
             "/plugins" => Some(WorkspaceCommand::Plugins),
             "/memory" if arg.is_empty() => Some(WorkspaceCommand::Memory),
             "/btw" if arg.is_empty() => Some(WorkspaceCommand::Ask),
+            "/queue" if arg.is_empty() => Some(WorkspaceCommand::InputQueue),
             _ => None,
         };
         if let Some(action) = action {

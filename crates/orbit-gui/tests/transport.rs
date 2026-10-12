@@ -17,6 +17,12 @@ mod user_input_history_transport;
 #[path = "support/subagents_transport.rs"]
 mod subagents_transport;
 
+#[path = "support/input_queue_transport.rs"]
+mod input_queue_transport;
+
+#[path = "support/tool_output_transport.rs"]
+mod tool_output_transport;
+
 use backend::{Backend, Command, Event, Options};
 use orbit_client::protocol::{Request, Response};
 use std::time::Duration;

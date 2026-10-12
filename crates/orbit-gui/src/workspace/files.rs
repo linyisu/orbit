@@ -150,7 +150,22 @@ impl Files {
     }
 
     pub(super) fn focus(&self, window: &mut Window, cx: &mut App) {
-        self.focus.focus(window, cx);
+        if !self.focus.contains_focused(window, cx) {
+            self.focus_document(window, cx);
+        }
+    }
+
+    fn focus_document(&self, window: &mut Window, cx: &mut App) {
+        if self
+            .document
+            .as_ref()
+            .is_some_and(|document| document.original.is_some())
+        {
+            self.editor.focus_handle(cx).focus(window, cx);
+        } else {
+            // Binary previews and an empty editor do not render EditorState.
+            self.tree.update(cx, |tree, cx| tree.focus(window, cx));
+        }
     }
 
     pub(super) fn bind_session(&mut self, session: String, cx: &mut Context<Self>) {
@@ -553,7 +568,27 @@ impl Files {
         self.draft.discard();
         self.error = None;
         self.status = None;
-        self.editor.read(cx).focus_handle(cx).focus(window, cx);
+        let editor = self.editor.entity_id();
+        cx.defer_in(window, move |files, window, cx| {
+            let current = files.owner.upgrade().is_some_and(|owner| {
+                let owner = owner.read(cx);
+                owner.visible
+                    && owner.page == MainPage::Files
+                    && owner
+                        .files
+                        .as_ref()
+                        .is_some_and(|current| current.entity_id() == cx.entity_id())
+            });
+            // A delayed read must not move focus back to a hidden page, an
+            // obsolete editor, or behind a newly opened modal surface.
+            if current
+                && files.editor.entity_id() == editor
+                && !window.has_active_dialog(cx)
+                && !window.has_active_sheet(cx)
+            {
+                files.focus_document(window, cx);
+            }
+        });
         if self.entries.is_empty() {
             let entity = cx.weak_entity();
             cx.defer(move |cx| {
@@ -652,13 +687,13 @@ impl Files {
                                         window.close_dialog(cx);
                                         let _ = entity
                                             .update(cx, |files, cx| files.discard(window, cx));
-                                        let _ = owner.update(cx, |view, cx| view.close_files(cx));
+                                        let _ = owner.update(cx, |view, cx| view.close_files(window, cx));
                                     }),
                             ),
                     )
             });
         } else {
-            let _ = owner.update(cx, |view, cx| view.close_files(cx));
+            let _ = owner.update(cx, |view, cx| view.close_files(window, cx));
         }
     }
 

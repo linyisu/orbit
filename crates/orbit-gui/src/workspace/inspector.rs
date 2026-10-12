@@ -68,9 +68,8 @@ impl Workspace {
                             .icon(IconName::Close)
                             .accessibility_label("收起工作面板")
                             .tooltip("收起工作面板")
-                            .on_click(cx.listener(|view, _, _, cx| {
-                                view.inspector = None;
-                                cx.notify();
+                            .on_click(cx.listener(|view, _, window, cx| {
+                                view.set_inspector(None, window, cx);
                             })),
                     ),
             )
@@ -94,6 +93,7 @@ impl Workspace {
             .gap_3()
             .child(
                 h_flex()
+                    .flex_wrap()
                     .gap_2()
                     .child(
                         div()
@@ -109,7 +109,16 @@ impl Workspace {
                                 .text_color(cx.theme().muted_foreground)
                                 .child(format!("第 {} 轮", self.execution.turns())),
                         )
-                    }),
+                    })
+                    .child(
+                        Button::new("open-input-queue-inspector")
+                            .small()
+                            .ghost()
+                            .label("待处理输入")
+                            .on_click(cx.listener(|view, _, window, cx| {
+                                view.open_input_queue(window, cx);
+                            })),
+                    ),
             )
             .when(self.execution.tools().is_empty(), |view| {
                 view.child(hint("工具调用会随任务执行显示在这里。", cx))
@@ -144,14 +153,12 @@ impl Workspace {
 
     fn tool_row(&self, ix: usize, cx: &mut Context<Self>) -> AnyElement {
         let tool = &self.execution.tools()[ix];
-        let title = tool.name.clone();
         let id = tool.id.clone();
         Button::new(SharedString::from(format!("tool-evidence:{}", tool.id)))
             .ghost()
             .w_full()
             .h_16()
             .py_2()
-            .disabled(tool.output.is_none())
             .accessibility_label(format!("{} · {}", tool.name, tool.status.label()))
             .child(
                 v_flex()
@@ -187,18 +194,89 @@ impl Workspace {
                     }),
             )
             .on_click(cx.listener(move |view, _, window, cx| {
-                if let Some(output) = view
-                    .execution
-                    .tools()
-                    .iter()
-                    .find(|tool| tool.id == id)
-                    .and_then(|tool| tool.output.as_ref())
-                {
-                    let text = format!("````text\n{output}\n````");
-                    view.show_report(title.clone(), text, window, cx);
-                }
+                view.open_tool_output(id.clone(), window, cx);
             }))
             .into_any_element()
+    }
+
+    pub(super) fn open_tool_output(
+        &mut self,
+        call_id: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(info) = &self.info else { return };
+        let Some(tool) = self
+            .execution
+            .tools()
+            .iter()
+            .find(|tool| tool.id == call_id)
+            .cloned()
+        else {
+            return;
+        };
+        let existing = self.tool_output.as_ref().filter(|panel| {
+            let panel = panel.read(cx);
+            panel.belongs_to(&self.options, &info.id, &info.workspace) && panel.matches(&tool)
+        });
+        let panel = if let Some(panel) = existing {
+            panel.update(cx, |panel, cx| panel.sync(&tool, false, window, cx));
+            panel.clone()
+        } else {
+            let options = self.options.clone();
+            let owner = cx.weak_entity();
+            let session = info.id.clone();
+            let workspace = info.workspace.clone();
+            cx.new(|cx| {
+                tool_output::ToolOutput::new(owner, options, session, workspace, tool, window, cx)
+            })
+        };
+        if !self.connected {
+            panel.update(cx, |panel, cx| panel.disconnected(cx));
+        }
+        self.tool_output = Some(panel.clone());
+        tool_output::present(panel, window, cx);
+    }
+
+    pub(super) fn sync_tool_output(
+        &mut self,
+        restoring: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if restoring {
+            return;
+        }
+        let Some(panel) = self.tool_output.clone() else {
+            return;
+        };
+        let current = self.info.as_ref().is_some_and(|info| {
+            panel
+                .read(cx)
+                .belongs_to(&self.options, &info.id, &info.workspace)
+        });
+        let tool = current
+            .then(|| {
+                self.execution
+                    .tools()
+                    .iter()
+                    .find(|tool| panel.read(cx).matches(tool))
+                    .cloned()
+            })
+            .flatten();
+        panel.update(cx, |panel, cx| {
+            if let Some(tool) = tool {
+                panel.sync(&tool, false, window, cx);
+            } else {
+                panel.disconnected(cx);
+            }
+        });
+    }
+
+    pub(super) fn disconnect_tool_output(&mut self, cx: &mut Context<Self>) {
+        if let Some(panel) = &self.tool_output {
+            panel.update(cx, |panel, cx| panel.disconnected(cx));
+        }
     }
 
     fn plan_view(&self, cx: &mut Context<Self>) -> impl IntoElement {
