@@ -43,6 +43,51 @@ pub async fn task(
                     .await?,
             )
         }
+        TaskAction::Create {
+            title,
+            details,
+            priority,
+            parent_id,
+            depends_on,
+        } => TaskResult::Added(
+            session
+                .store
+                .create_task(
+                    project,
+                    orbit_store::tasks::NewTask {
+                        title: title.trim().into(),
+                        details,
+                        priority,
+                        parent_id,
+                        depends_on,
+                    },
+                )
+                .await?,
+        ),
+        TaskAction::Update {
+            id,
+            title,
+            details,
+            status,
+            priority,
+            depends_on,
+        } => TaskResult::Updated(
+            session
+                .store
+                .update_task(
+                    project,
+                    id,
+                    orbit_store::tasks::TaskChanges {
+                        title: title.map(|title| title.trim().into()),
+                        details,
+                        status,
+                        priority,
+                        depends_on,
+                    },
+                    orbit_store::tasks::TaskActor::User,
+                )
+                .await?,
+        ),
         TaskAction::SetStatus { id, status } => TaskResult::Updated(
             session
                 .store

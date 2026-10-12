@@ -56,13 +56,11 @@ pub async fn serve(
     } else {
         directory.join(config)
     };
-    let database = crate::session::database_path(database.map(|path| {
-        if path.is_absolute() {
-            path
-        } else {
-            directory.join(path)
-        }
-    }))?;
+    let database = crate::session::database_path(
+        database
+            .map(|path| resolve_database(path, &directory))
+            .transpose()?,
+    )?;
     fs::create_dir_all(database.parent().context("database has no parent")?)?;
     OpenOptions::new()
         .create(true)
@@ -205,6 +203,18 @@ fn expand_home(path: &str) -> Result<PathBuf> {
         return Ok(PathBuf::from(home).join(path.strip_prefix("~/").unwrap_or("")));
     }
     Ok(path.into())
+}
+
+fn resolve_database(path: PathBuf, workspace: &Path) -> Result<PathBuf> {
+    let path = match path.to_str() {
+        Some(path) if path == "~" || path.starts_with("~/") => expand_home(path)?,
+        _ => path,
+    };
+    Ok(if path.is_absolute() {
+        path
+    } else {
+        workspace.join(path)
+    })
 }
 
 struct Service {
@@ -444,16 +454,38 @@ impl Service {
                 self.sessions.lock().await.insert(info.id.clone(), handle);
                 Ok(Response::Opened(info))
             }
-            Request::Plugins { session, action } => {
+            Request::Plugins {
+                session,
+                expected_workspace,
+                action,
+            } => {
                 let handle = self.session(&session).await?;
-                let catalog = super::plugins::execute(&handle, action).await?;
+                let catalog =
+                    super::plugins::execute(&handle, action, expected_workspace.as_deref()).await?;
                 handle
                     .action(orbit_protocol::SessionAction::RefreshSkills)
                     .await?;
                 Ok(Response::Plugins(catalog))
             }
-            Request::Resources { session, action } => Ok(Response::Resources(
-                self.session(&session).await?.resources(action).await?,
+            Request::Resources {
+                session,
+                expected_workspace,
+                action,
+            } => Ok(Response::Resources(
+                self.session(&session)
+                    .await?
+                    .resources(action, expected_workspace)
+                    .await?,
+            )),
+            Request::Tasks {
+                session,
+                expected_workspace,
+                action,
+            } => Ok(Response::Tasks(
+                self.session(&session)
+                    .await?
+                    .tasks(action, expected_workspace)
+                    .await?,
             )),
             Request::Admin { action } => {
                 let _opening = self.opening.lock().await;

@@ -13,6 +13,7 @@ mod run;
 mod server;
 mod session;
 pub mod setup;
+mod tasks;
 mod usage;
 
 pub use orbit_protocol::request_id;

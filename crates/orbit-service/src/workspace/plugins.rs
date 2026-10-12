@@ -1,7 +1,16 @@
 use anyhow::{Context, Result, ensure};
 use orbit_protocol::plugins::{Action, Catalog, Inspection};
 
-pub(super) async fn execute(handle: &super::session::Handle, action: Action) -> Result<Catalog> {
+pub(super) async fn execute(
+    handle: &super::session::Handle,
+    action: Action,
+    expected_workspace: Option<&str>,
+) -> Result<Catalog> {
+    let info = handle.current_info().await;
+    ensure!(
+        expected_workspace.is_none_or(|expected| expected == info.workspace),
+        "工作区已切换，请重新打开当前项目的设置后重试"
+    );
     // Enabling a package and changing its source must not interleave between
     // the usage check and the atomic catalogue replacement.
     let _catalog_lock = if matches!(&action, Action::List) {
@@ -9,7 +18,8 @@ pub(super) async fn execute(handle: &super::session::Handle, action: Action) -> 
     } else {
         Some(crate::marketplaces::lock_current()?)
     };
-    let info = handle.current_info().await;
+    // Capture the project once: another client moving this session later must
+    // not redirect a plugin operation into its new workspace.
     let project_id = if matches!(&action, Action::Enable { .. }) {
         handle.store.resolve_project(&info.workspace).await?.id
     } else {

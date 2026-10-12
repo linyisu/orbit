@@ -1,6 +1,13 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TaskSnapshot {
+    pub tasks: Vec<ProjectTask>,
+    /// The task changed by this request; list requests have no changed task.
+    pub changed: Option<i64>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ProjectTask {
     pub id: i64,
     pub project_id: String,
@@ -120,10 +127,35 @@ impl MemoryCategory {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum TaskAction {
-    List { include_completed: bool },
-    Add { title: String },
-    SetStatus { id: i64, status: TaskStatus },
-    Release { id: i64 },
+    List {
+        include_completed: bool,
+    },
+    Add {
+        title: String,
+    },
+    Create {
+        title: String,
+        details: String,
+        priority: i64,
+        parent_id: Option<i64>,
+        depends_on: Vec<i64>,
+    },
+    Update {
+        id: i64,
+        title: Option<String>,
+        details: Option<String>,
+        status: Option<TaskStatus>,
+        priority: Option<i64>,
+        /// None leaves dependencies unchanged; Some([]) clears them.
+        depends_on: Option<Vec<i64>>,
+    },
+    SetStatus {
+        id: i64,
+        status: TaskStatus,
+    },
+    Release {
+        id: i64,
+    },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

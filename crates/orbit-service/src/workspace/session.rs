@@ -62,7 +62,13 @@ pub enum Command {
     },
     Resources {
         action: orbit_protocol::resources::Action,
+        expected_workspace: Option<String>,
         result: oneshot::Sender<Result<orbit_protocol::resources::Snapshot>>,
+    },
+    Tasks {
+        action: orbit_protocol::project::TaskAction,
+        expected_workspace: Option<String>,
+        result: oneshot::Sender<Result<orbit_protocol::project::TaskSnapshot>>,
     },
     Start {
         request_id: String,
@@ -395,9 +401,30 @@ impl Handle {
     pub async fn resources(
         &self,
         action: orbit_protocol::resources::Action,
+        expected_workspace: Option<String>,
     ) -> Result<orbit_protocol::resources::Snapshot> {
         let (result, response) = oneshot::channel();
-        self.command(Command::Resources { action, result }).await?;
+        self.command(Command::Resources {
+            action,
+            expected_workspace,
+            result,
+        })
+        .await?;
+        response.await?
+    }
+
+    pub async fn tasks(
+        &self,
+        action: orbit_protocol::project::TaskAction,
+        expected_workspace: Option<String>,
+    ) -> Result<orbit_protocol::project::TaskSnapshot> {
+        let (result, response) = oneshot::channel();
+        self.command(Command::Tasks {
+            action,
+            expected_workspace,
+            result,
+        })
+        .await?;
         response.await?
     }
 

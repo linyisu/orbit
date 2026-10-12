@@ -98,32 +98,7 @@ pub(super) async fn execute(
             Ok(report("Skills", setup.resources.budget.skills.render()))
         }
         SessionAction::Task { task } => {
-            ensure!(
-                !setup
-                    .resources
-                    .policy
-                    .disabled(orbit_protocol::Capability::ProjectState),
-                "任务功能已禁用"
-            );
-            let project = if matches!(&task, orbit_protocol::project::TaskAction::Add { .. }) {
-                Some(
-                    setup
-                        .session
-                        .store
-                        .resolve_project(&setup.session.snapshot.session.workspace)
-                        .await?,
-                )
-            } else {
-                setup
-                    .session
-                    .store
-                    .project_at(&setup.session.snapshot.session.workspace)
-                    .await?
-            };
-            setup.session.snapshot.session.project_id = project.map(|p| p.id).unwrap_or_default();
-            let mut history = Vec::new();
-            let result =
-                crate::project_state::actions::task(&setup.session, &mut history, task).await?;
+            let result = super::tasks::execute(setup, task).await?;
             Ok(project::task_report(result))
         }
         SessionAction::Memory { memory } => {

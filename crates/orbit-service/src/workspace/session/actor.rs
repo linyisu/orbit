@@ -395,10 +395,39 @@ impl Actor {
                 }
                 let _ = result.send(response);
             }
-            Command::Resources { action, result } => {
+            Command::Resources {
+                action,
+                expected_workspace,
+                result,
+            } => {
                 let busy = self.active() || self.questions.running().await;
-                let response =
-                    crate::workspace::resources::execute(&mut self.setup, action, busy).await;
+                let response = async {
+                    ensure!(
+                        expected_workspace.as_ref().is_none_or(|expected| {
+                            expected == &self.setup.session.snapshot.session.workspace
+                        }),
+                        "工作区已切换，请重新打开当前项目的设置后重试"
+                    );
+                    crate::workspace::resources::execute(&mut self.setup, action, busy).await
+                }
+                .await;
+                let _ = result.send(response);
+            }
+            Command::Tasks {
+                action,
+                expected_workspace,
+                result,
+            } => {
+                let response = async {
+                    ensure!(
+                        expected_workspace.as_ref().is_none_or(|expected| {
+                            expected == &self.setup.session.snapshot.session.workspace
+                        }),
+                        "工作区已切换，请重新打开当前项目的任务页后重试"
+                    );
+                    crate::workspace::tasks::snapshot(&mut self.setup, action).await
+                }
+                .await;
                 let _ = result.send(response);
             }
             Command::SetModel { model, effort } => {

@@ -2,9 +2,29 @@
 use orbit_config::test_support::{TestConfig, TestModel, TestProvider};
 mod drafts;
 mod permissions;
+mod settings;
+mod tasks;
 use orbit_protocol::{Mode, SessionInfo};
 
 use super::*;
+
+#[test]
+fn database_paths_use_the_target_home_or_workspace() {
+    let home = PathBuf::from(std::env::var_os("HOME").expect("test target HOME"));
+    let workspace = Path::new("/workspace/project");
+    assert_eq!(
+        resolve_database("~/state/orbit.db".into(), workspace).unwrap(),
+        home.join("state/orbit.db")
+    );
+    assert_eq!(
+        resolve_database("state/orbit.db".into(), workspace).unwrap(),
+        workspace.join("state/orbit.db")
+    );
+    assert_eq!(
+        resolve_database("/state/orbit.db".into(), workspace).unwrap(),
+        PathBuf::from("/state/orbit.db")
+    );
+}
 
 struct Fixture {
     _root: tempfile::TempDir,

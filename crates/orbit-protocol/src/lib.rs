@@ -12,7 +12,7 @@ use std::io;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
-pub const VERSION: u32 = 19;
+pub const VERSION: u32 = 20;
 // Steering receipts identify the durable input independently of its consumption.
 pub const MIN_COMPATIBLE_VERSION: u32 = 15;
 
@@ -77,11 +77,23 @@ pub enum Request {
     },
     Plugins {
         session: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        expected_workspace: Option<String>,
         action: plugins::Action,
     },
     Resources {
         session: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        expected_workspace: Option<String>,
         action: resources::Action,
+    },
+    /// Structured project tasks for desktop clients. SessionAction::Task
+    /// continues to return a report for terminal clients.
+    Tasks {
+        session: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        expected_workspace: Option<String>,
+        action: project::TaskAction,
     },
     Admin {
         action: admin::Action,
@@ -351,6 +363,7 @@ pub enum Response<E, A> {
     Report(Report),
     Plugins(plugins::Catalog),
     Resources(resources::Snapshot),
+    Tasks(project::TaskSnapshot),
     File(String),
     InputQueued {
         message_id: i64,
@@ -392,6 +405,55 @@ pub async fn write<T: Serialize>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn settings_workspace_guards_are_optional_for_legacy_clients() {
+        for legacy in [
+            serde_json::json!({
+                "method": "resources", "session": "session", "action": "Skills"
+            }),
+            serde_json::json!({
+                "method": "plugins", "session": "session", "action": { "action": "list" }
+            }),
+            serde_json::json!({
+                "method": "tasks", "session": "session", "action": { "action": "list", "include_completed": true }
+            }),
+        ] {
+            let request: Request = serde_json::from_value(legacy.clone()).unwrap();
+            assert!(match &request {
+                Request::Resources {
+                    expected_workspace, ..
+                }
+                | Request::Plugins {
+                    expected_workspace, ..
+                }
+                | Request::Tasks {
+                    expected_workspace, ..
+                } => expected_workspace.is_none(),
+                _ => unreachable!(),
+            });
+            assert_eq!(serde_json::to_value(request).unwrap(), legacy);
+
+            let mut guarded = legacy;
+            guarded["expected_workspace"] = "/project".into();
+            let request: Request = serde_json::from_value(guarded.clone()).unwrap();
+            assert!(match &request {
+                Request::Resources {
+                    expected_workspace, ..
+                }
+                | Request::Plugins {
+                    expected_workspace, ..
+                }
+                | Request::Tasks {
+                    expected_workspace, ..
+                } => {
+                    expected_workspace.as_deref() == Some("/project")
+                }
+                _ => unreachable!(),
+            });
+            assert_eq!(serde_json::to_value(request).unwrap(), guarded);
+        }
+    }
 
     #[test]
     fn legacy_hello_has_unknown_build_generation() {

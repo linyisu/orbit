@@ -200,6 +200,7 @@ impl Tab {
             if let Some(action) = plugin_action {
                 self.send(Request::Plugins {
                     session: self.id.clone().unwrap_or_default(),
+                    expected_workspace: Some(self.state.workspace.clone()),
                     action,
                 });
             }
@@ -580,6 +581,7 @@ impl Tab {
             "/plugins" => {
                 self.send(Request::Plugins {
                     session,
+                    expected_workspace: Some(self.state.workspace.clone()),
                     action: orbit_protocol::plugins::Action::List,
                 });
             }
