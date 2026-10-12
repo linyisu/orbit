@@ -1,7 +1,7 @@
 //! Application appearance preferences. The UI owns the current values; one
 //! background writer serializes updates so older writes cannot win a race.
 use gpui_kit::component::ThemeMode;
-use gpui_kit::{App, Global, WindowAppearance};
+use gpui_kit::{App, Global, SharedString, WindowAppearance};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tokio::sync::watch;
@@ -13,6 +13,8 @@ struct Values {
     sidebar_rem: Option<f32>,
     comfortable_width: bool,
     font_size: Option<u8>,
+    ui_font_family: Option<String>,
+    code_font_family: Option<String>,
 }
 
 pub(crate) struct Preferences {
@@ -115,12 +117,52 @@ impl Preferences {
 
     pub(crate) fn apply_font(cx: &mut App) {
         let size = Self::font_size(cx);
-        gpui_kit::component::Theme::update(cx, |theme| theme.font_size = gpui_kit::px(size as f32));
+        let values = &cx.global::<Self>().values;
+        let (ui, code) = crate::theme::resolve_fonts(
+            values.ui_font_family.as_deref(),
+            values.code_font_family.as_deref(),
+            cx,
+        );
+        gpui_kit::component::Theme::update(cx, |theme| {
+            theme.font_size = gpui_kit::px(size as f32);
+            theme.font_family = ui;
+            theme.mono_font_family = code;
+        });
     }
 
     pub(crate) fn set_font_size(size: u8, cx: &mut App) {
         let this = cx.global_mut::<Self>();
         this.values.font_size = Some(size.clamp(12, 20));
+        this.changes.send_replace(this.values.clone());
+        Self::apply_font(cx);
+    }
+
+    pub(crate) fn ui_font(cx: &App) -> Option<SharedString> {
+        cx.global::<Self>()
+            .values
+            .ui_font_family
+            .as_ref()
+            .map(|family| family.clone().into())
+    }
+
+    pub(crate) fn code_font(cx: &App) -> Option<SharedString> {
+        cx.global::<Self>()
+            .values
+            .code_font_family
+            .as_ref()
+            .map(|family| family.clone().into())
+    }
+
+    pub(crate) fn set_ui_font(family: Option<SharedString>, cx: &mut App) {
+        let this = cx.global_mut::<Self>();
+        this.values.ui_font_family = family.map(|family| family.to_string());
+        this.changes.send_replace(this.values.clone());
+        Self::apply_font(cx);
+    }
+
+    pub(crate) fn set_code_font(family: Option<SharedString>, cx: &mut App) {
+        let this = cx.global_mut::<Self>();
+        this.values.code_font_family = family.map(|family| family.to_string());
         this.changes.send_replace(this.values.clone());
         Self::apply_font(cx);
     }
@@ -137,4 +179,24 @@ fn save(path: &Path, values: &Values) -> anyhow::Result<()> {
     std::fs::write(&temporary, serde_json::to_vec_pretty(values)?)?;
     std::fs::rename(temporary, path)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn older_preferences_keep_default_fonts_and_font_choices_roundtrip() {
+        let mut values: Values = serde_json::from_str(r#"{"font_size":18,"dark":true}"#).unwrap();
+        assert!(values.ui_font_family.is_none());
+        assert!(values.code_font_family.is_none());
+        assert_eq!(values.font_size, Some(18));
+        values.ui_font_family = Some("Noto Sans CJK SC".into());
+        values.code_font_family = Some("JetBrains Mono".into());
+        let restored: Values =
+            serde_json::from_slice(&serde_json::to_vec(&values).unwrap()).unwrap();
+        assert_eq!(restored.ui_font_family, values.ui_font_family);
+        assert_eq!(restored.code_font_family, values.code_font_family);
+        assert_eq!(restored.font_size, values.font_size);
+    }
 }

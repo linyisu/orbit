@@ -1,4 +1,5 @@
 //! Searchable settings with retained, inline editors for each resource type.
+mod fonts;
 mod mcp;
 mod resources;
 use super::actions::WorkspaceCommand;
@@ -55,6 +56,7 @@ impl Workspace {
         let plugins = cx.new(|cx| {
             resources::Resources::new(owner.clone(), session, resources::Kind::Plugins, window, cx)
         });
+        let fonts = cx.new(|cx| fonts::Fonts::new(window, cx));
         let mcp = cx.new(|cx| mcp::Mcp::new(&self.options, self.runtime.clone(), window, cx));
         self.settings_page = Some(cx.new(|_| SettingsPage {
             owner,
@@ -64,6 +66,7 @@ impl Workspace {
             skills,
             memory,
             plugins,
+            fonts,
             mcp,
         }));
         cx.notify();
@@ -78,6 +81,7 @@ pub(super) struct SettingsPage {
     memory: Entity<resources::Resources>,
     plugins: Entity<resources::Resources>,
     mcp: Entity<mcp::Mcp>,
+    fonts: Entity<fonts::Fonts>,
 }
 impl Render for SettingsPage {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -88,6 +92,7 @@ impl Render for SettingsPage {
         let memory = self.memory.clone();
         let plugins = self.plugins.clone();
         let mcp = self.mcp.clone();
+        let fonts = self.fonts.clone();
         let back = self.owner.clone();
         v_flex().size_full().min_h_0().bg(cx.theme().background).text_color(cx.theme().foreground)
             .child(gpui_kit::component::TitleBar::new().child(h_flex().gap_2()
@@ -117,7 +122,8 @@ impl Render for SettingsPage {
                                 .item(SettingItem::new("居中窄栏", SettingField::switch(
                                     crate::preferences::Preferences::comfortable_width,
                                     crate::preferences::Preferences::set_comfortable_width,
-                                ).default_value(false)).description("对话内容与输入框使用相同宽度；关闭时随窗口展开").keywords(["宽度", "对话", "布局"]))))
+                                ).default_value(false)).description("对话内容与输入框使用相同宽度；关闭时随窗口展开").keywords(["宽度", "对话", "布局"])))
+                            .group(SettingGroup::new().title("字体").item(SettingItem::render(move |_, _, _| fonts.clone()).keywords(["字体", "font", "等宽", "代码"]))))
                         .page(SettingPage::new("账号与模型").icon(IconName::User).resettable(false)
                             .group(SettingGroup::new().item(SettingItem::render(move |_, _, _| accounts.clone()).keywords(["账号", "API", "连接", "模型", "密钥"])))
                             .group(SettingGroup::new().item(SettingItem::render(move |_, _, _| {
