@@ -1,0 +1,48 @@
+[package]
+name = "orbit-gui"
+version.workspace = true
+edition.workspace = true
+default-run = "orbit-gui"
+
+[features]
+test-support = []
+
+[[bin]]
+name = "orbit-gui-fixture"
+path = "tests/support/server.rs"
+required-features = ["test-support"]
+test = false
+bench = false
+
+[[test]]
+name = "transport"
+required-features = ["test-support"]
+
+[dependencies]
+anyhow.workspace = true
+base64.workspace = true
+clap.workspace = true
+chrono.workspace = true
+orbit-client.workspace = true
+orbit-auth.workspace = true
+orbit-config.workspace = true
+orbit-agent.workspace = true
+orbit-model.workspace = true
+orbit-protocol.workspace = true
+orbit-tools.workspace = true
+serde_json.workspace = true
+serde.workspace = true
+ratex-layout.workspace = true
+ratex-parser.workspace = true
+ratex-svg.workspace = true
+ratex-types.workspace = true
+resvg.workspace = true
+pulldown-cmark.workspace = true
+tempfile.workspace = true
+tokio.workspace = true
+gpui-kit = { git = "https://github.com/longbridge/gpui-kit", rev = "1ccf011620da24d633f7cd6d3c11ca2e97798dcf" }
+gpui-shell = { git = "https://github.com/longbridge/gpui-kit", rev = "1ccf011620da24d633f7cd6d3c11ca2e97798dcf" }
+gpui-component-shell = { git = "https://github.com/longbridge/gpui-kit", rev = "1ccf011620da24d633f7cd6d3c11ca2e97798dcf" }
+
+[build-dependencies]
+orbit-build.workspace = true

@@ -1,0 +1,283 @@
+#[allow(dead_code)]
+#[path = "../src/backend.rs"]
+mod backend;
+
+use backend::{Backend, Command, Event, Options};
+use orbit_client::protocol::{Request, Response};
+use std::time::Duration;
+use tokio::sync::mpsc;
+
+async fn until(events: &mut mpsc::Receiver<Event>, accept: impl Fn(&Event) -> bool) -> Event {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let event = events
+                .recv()
+                .await
+                .expect("backend dropped its event stream");
+            if let Event::Disconnected(error) = &event {
+                panic!("fixture disconnected: {error}");
+            }
+            if accept(&event) {
+                return event;
+            }
+        }
+    })
+    .await
+    .expect("fixture event timed out")
+}
+
+#[test]
+fn transport_retries_sends_and_resolves_approvals() {
+    let directory = tempfile::tempdir().unwrap();
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let (backend, mut events) = Backend::start(
+        Options {
+            config: directory.path().join("unused.toml"),
+            workspace: Some(directory.path().to_path_buf()),
+            server: Some(env!("CARGO_BIN_EXE_orbit-gui-fixture").into()),
+            database: Some(directory.path().join("unused.db")),
+            auth_dir: Some(directory.path().join("auth")),
+            model: Some("fixture::local".into()),
+            resume: None,
+            relink_on_resume: false,
+            appearance: None,
+            preferences: None,
+            ssh: None,
+            wsl: None,
+        },
+        &runtime,
+    );
+    runtime.block_on(async {
+        let Event::Response(Response::Sessions(sessions)) = until(&mut events, |event| matches!(event, Event::Response(Response::Sessions(_)))).await else { unreachable!() };
+        assert_eq!(sessions.len(), 3);
+        assert!(sessions.iter().any(|session| session.workspace == "/tmp/orbit-gui-notes"));
+        let Event::Response(Response::Opened(info)) = until(&mut events, |event| matches!(event, Event::Response(Response::Opened(_)))).await else { unreachable!() };
+        let session = info.id;
+        until(&mut events, |event| matches!(event, Event::Response(Response::Page(page)) if page.updates.is_empty())).await;
+        for (input, expected) in [("/cd ", "/cd src/"), ("/cd src/", "/cd src/nested/"), ("/tasks done ", "/tasks done 42"), ("/diff src", "/diff src/main.rs"), ("/resume ", "/resume demo")] {
+            backend.send(Command::Complete { session: session.clone(), input: input.into() }).unwrap();
+            let Event::Completions { session: returned_session, input: returned_input, result } = until(&mut events, |event| matches!(event, Event::Completions { .. })).await else { unreachable!() };
+            assert_eq!(returned_session, session);
+            assert_eq!(returned_input, input);
+            assert_eq!(result.unwrap()[0].name, expected);
+        }
+        backend.send(Command::Complete { session: session.clone(), input: "/cd denied".into() }).unwrap();
+        until(&mut events, |event| matches!(event, Event::Completions { result: Err(error), .. } if error == "目录不可访问")).await;
+
+        let send = |id: &str, prompt: &str| Command::Send { session: session.clone(), id: id.into(), prompt: prompt.into(), paths: vec![], steer: false };
+        backend.send(send("retry-id", "fail")).unwrap();
+        until(&mut events, |event| matches!(event, Event::SendFailed { id, .. } if id == "retry-id")).await;
+        backend.send(send("retry-id", "fail")).unwrap();
+        until(&mut events, |event| matches!(event, Event::Sent { id } if id == "retry-id")).await;
+        until(&mut events, |event| matches!(event, Event::Response(Response::Page(page)) if !page.busy && !page.updates.is_empty())).await;
+        backend.send(Command::Request(Request::Usage { session: session.clone() })).unwrap();
+        until(&mut events, |event| matches!(event, Event::Usage { result: Ok(snapshot), .. } if snapshot.account.limits.len() == 2)).await;
+        backend.send(send("approval-id", "approve")).unwrap();
+        until(&mut events, |event| matches!(event, Event::Response(Response::Page(page)) if page.approvals.len() == 1)).await;
+        backend.send(Command::Request(Request::Approve { session: session.clone(), approval: 7, allow: false, remember: false })).unwrap();
+        until(&mut events, |event| matches!(event, Event::Response(Response::Page(page)) if page.approvals.is_empty())).await;
+        backend.send(Command::Request(Request::Cancel { session: session.clone() })).unwrap();
+        until(&mut events, |event| matches!(event, Event::Response(Response::Page(page)) if !page.busy)).await;
+        // Plan and question changes can arrive without transcript events.
+        backend.send(Command::Request(Request::Plan { session: session.clone(), action: orbit_protocol::plan::Action::Enter })).unwrap();
+        until(&mut events, |event| matches!(event, Event::Response(Response::Page(page)) if page.planning.mode == orbit_protocol::plan::WorkMode::Plan)).await;
+        backend.send(Command::Request(Request::Plan { session: session.clone(), action: orbit_protocol::plan::Action::Approve { generation: 1 } })).unwrap();
+        until(&mut events, |event| matches!(event, Event::Response(Response::Page(page)) if page.planning.plan.as_ref().is_some_and(|plan| plan.status == orbit_protocol::plan::Status::Approved))).await;
+        backend.send(send("question-id", "question")).unwrap();
+        until(&mut events, |event| matches!(event, Event::Response(Response::Page(page)) if !page.user_inputs.is_empty())).await;
+        backend.send(Command::Request(Request::AnswerUserInput { session: session.clone(), request: "question-1".into(), answers: Some(vec![orbit_protocol::user_input::Answer { question_id: "choice".into(), selected: vec!["full".into()], ..Default::default() }]) })).unwrap();
+        until(&mut events, |event| matches!(event, Event::Response(Response::Page(page)) if page.user_inputs.first().is_some_and(|record| record.status == orbit_protocol::user_input::Status::Answered))).await;
+        backend.send(send("custom-question-id", "questions")).unwrap();
+        until(&mut events, |event| matches!(event, Event::Response(Response::Page(page)) if page.user_inputs.first().is_some_and(|record| record.status == orbit_protocol::user_input::Status::Pending && record.form.questions.len() == 2))).await;
+        let answers = vec![
+            orbit_protocol::user_input::Answer { question_id: "choice".into(), text: "先验证交互".into(), ..Default::default() },
+            orbit_protocol::user_input::Answer { question_id: "details".into(), selected: vec!["docs".into(), "tests".into()], text: "保留已有配置".into(), ..Default::default() },
+        ];
+        backend.send(Command::Request(Request::AnswerUserInput { session: session.clone(), request: "question-1".into(), answers: Some(answers.clone()) })).unwrap();
+        until(&mut events, |event| matches!(event, Event::Response(Response::Page(page)) if page.user_inputs.first().is_some_and(|record| record.answers == answers))).await;
+        backend.send(send("skip-question-id", "question")).unwrap();
+        until(&mut events, |event| matches!(event, Event::Response(Response::Page(page)) if page.user_inputs.first().is_some_and(|record| record.status == orbit_protocol::user_input::Status::Pending))).await;
+        backend.send(Command::Request(Request::AnswerUserInput { session: session.clone(), request: "question-1".into(), answers: None })).unwrap();
+        until(&mut events, |event| matches!(event, Event::Response(Response::Page(page)) if page.user_inputs.first().is_some_and(|record| record.status == orbit_protocol::user_input::Status::Declined && record.answers.is_empty()))).await;
+        backend.send(Command::Request(Request::ReadFile { session: session.clone(), path: "README.md".into() })).unwrap();
+        until(&mut events, |event| matches!(event, Event::File { path, bytes } if path == "README.md" && bytes == b"hello gui\n")).await;
+        backend.send(Command::Request(Request::Ask { session: session.clone(), question: "旁路问题".into(), follow_up: None })).unwrap();
+        until(&mut events, |event| matches!(event, Event::Response(Response::Questions(questions)) if questions.records.as_ref().is_some_and(|records| records.iter().any(|record| record.answer == "旁路回答已完成")))).await;
+        backend.send(Command::ReadImage { session: session.clone(), path: "missing.png".into() }).unwrap();
+        until(&mut events, |event| matches!(event, Event::Image { path, result: Err(error), .. } if path == "missing.png" && error == "图片不存在")).await;
+        backend.send(Command::Request(Request::ReadSubagent { session: session.clone(), agent: "child".into(), after: 0 })).unwrap();
+        until(&mut events, |event| matches!(event, Event::Subagent { agent, reset: true, page } if agent == "child" && page.next == 1)).await;
+        backend.send(Command::Request(Request::SendSubagent { session: session.clone(), agent: "child".into(), message: "后续输入".into() })).unwrap();
+        until(&mut events, |event| matches!(event, Event::Subagent { reset: false, page, .. } if page.next == 2 && page.updates.len() == 1)).await;
+        backend.send(Command::CloseSubagent).unwrap();
+        backend.send(Command::Send { session, id: "steer-id".into(), prompt: "补充指令".into(), paths: vec![], steer: true }).unwrap();
+        until(&mut events, |event| matches!(event, Event::Sent { id } if id == "steer-id")).await;
+    });
+}
+
+#[test]
+fn independent_tasks_keep_running_and_scope_approvals_to_their_connection() {
+    let directory = tempfile::tempdir().unwrap();
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let options = Options {
+        config: directory.path().join("unused.toml"),
+        workspace: Some(directory.path().to_path_buf()),
+        server: Some(env!("CARGO_BIN_EXE_orbit-gui-fixture").into()),
+        database: Some(directory.path().join("unused.db")),
+        auth_dir: Some(directory.path().join("auth")),
+        model: Some("fixture::local".into()),
+        resume: Some("task-a".into()),
+        relink_on_resume: false,
+        appearance: None,
+        preferences: None,
+        ssh: None,
+        wsl: None,
+    };
+    let (first, mut first_events) = Backend::start(options.clone(), &runtime);
+    runtime.block_on(async {
+        until(&mut first_events, |event| matches!(event, Event::Response(Response::Page(_)))).await;
+        first.send(Command::Send { session: "task-a".into(), id: "a".into(), prompt: "approve".into(), paths: vec![], steer: false }).unwrap();
+        until(&mut first_events, |event| matches!(event, Event::Response(Response::Page(page)) if page.busy && page.approvals.len() == 1)).await;
+        let mut second_options = options.clone();
+        second_options.resume = Some("task-b".into());
+        let (second, mut second_events) = Backend::start(second_options, &runtime);
+        until(&mut second_events, |event| matches!(event, Event::Response(Response::Page(page)) if !page.busy && page.approvals.is_empty())).await;
+        second.send(Command::Send { session: "task-b".into(), id: "b".into(), prompt: "finish this task".into(), paths: vec![], steer: false }).unwrap();
+        until(&mut second_events, |event| matches!(event, Event::Response(Response::Page(page)) if !page.busy && page.updates.iter().any(|update| matches!(update, orbit_client::protocol::Update::Finished { .. })))).await;
+        // The first task was neither cancelled nor replaced by opening the second.
+        first.send(Command::Request(Request::Poll { session: "task-a".into(), after: 0 })).unwrap();
+        until(&mut first_events, |event| matches!(event, Event::Response(Response::Page(page)) if page.busy && page.approvals.len() == 1)).await;
+        first.send(Command::Request(Request::Approve { session: "task-a".into(), approval: 7, allow: false, remember: false })).unwrap();
+        until(&mut first_events, |event| matches!(event, Event::Response(Response::Page(page)) if !page.busy && page.approvals.is_empty())).await;
+    });
+    let mut other = options.clone();
+    other.workspace = Some(directory.path().join("other-project"));
+    other.resume = Some("task-b".into());
+    assert!(options.same_host(&other));
+    other.ssh = Some("different-host".into());
+    assert!(!options.same_host(&other));
+    other.ssh = None;
+    other.database = Some(directory.path().join("another.db"));
+    assert!(!options.same_host(&other));
+}
+
+#[test]
+fn history_pages_drain_without_live_poll_delays_and_keep_cursor_order() {
+    let directory = tempfile::tempdir().unwrap();
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let (_backend, mut events) = Backend::start(
+        Options {
+            config: directory.path().join("unused.toml"),
+            workspace: Some(directory.path().to_path_buf()),
+            server: Some(env!("CARGO_BIN_EXE_orbit-gui-fixture").into()),
+            database: Some(directory.path().join("unused.db")),
+            auth_dir: Some(directory.path().join("auth")),
+            model: Some("fixture::local".into()),
+            resume: Some("paged".into()),
+            relink_on_resume: false,
+            appearance: None,
+            preferences: None,
+            ssh: None,
+            wsl: None,
+        },
+        &runtime,
+    );
+    runtime.block_on(async {
+        until(&mut events, |event| matches!(event, Event::Response(Response::Opened(_)))).await;
+        let started = std::time::Instant::now();
+        for cursor in 1..=100 {
+            let Event::Response(Response::Page(page)) = until(&mut events, |event|
+                matches!(event, Event::Response(Response::Page(_)))).await else { unreachable!() };
+            assert_eq!(page.next, cursor);
+            assert_eq!(page.updates.len(), 1);
+            assert_eq!(page.more, cursor < 100);
+            let orbit_protocol::Update::Agent(event) = &page.updates[0] else { panic!("missing replay event") };
+            assert!(matches!(event.as_ref(), orbit_agent::events::AgentEvent::Model(orbit_model::types::StreamEvent::TextDelta(text)) if text == &format!("{}\n", cursor - 1)));
+        }
+        // Old behavior spent at least 7.9 seconds sleeping between these pages.
+        assert!(started.elapsed() < Duration::from_secs(3), "history took {:?}", started.elapsed());
+    });
+}
+
+#[test]
+fn replacement_directory_links_before_resume_and_preserves_ownership_checks() {
+    for (mode, explicit, succeeds, should_link) in [
+        ("moved", true, true, true),
+        ("moved", false, false, false),
+        ("reject", true, false, true),
+        ("linked", true, true, false),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join(".fixture-relocation"), mode).unwrap();
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let (_backend, mut events) = Backend::start(
+            Options {
+                config: directory.path().join("unused.toml"),
+                workspace: Some(directory.path().to_path_buf()),
+                server: Some(env!("CARGO_BIN_EXE_orbit-gui-fixture").into()),
+                database: Some(directory.path().join("unused.db")),
+                auth_dir: Some(directory.path().join("auth")),
+                model: Some("fixture::local".into()),
+                resume: Some("demo".into()),
+                relink_on_resume: explicit,
+                appearance: None,
+                preferences: None,
+                ssh: None,
+                wsl: None,
+            },
+            &runtime,
+        );
+        runtime.block_on(async {
+            tokio::time::timeout(Duration::from_secs(10), async {
+                loop {
+                    match events.recv().await.expect("backend stopped") {
+                        Event::Response(Response::Sessions(sessions)) if succeeds => {
+                            assert!(
+                                sessions
+                                    .iter()
+                                    .filter(|s| s.project_id == "fixture")
+                                    .all(|s| s.workspace == directory.path().to_string_lossy())
+                            );
+                        }
+                        Event::Response(Response::Opened(info)) => {
+                            assert!(succeeds);
+                            assert_eq!(info.id, "demo");
+                            assert_eq!(info.workspace, directory.path().to_string_lossy());
+                            break;
+                        }
+                        Event::Disconnected(error) => {
+                            assert!(!succeeds, "{error}");
+                            assert!(
+                                error.contains(if explicit {
+                                    "another project's conversations"
+                                } else {
+                                    "session belongs to workspace"
+                                }),
+                                "{error}"
+                            );
+                            break;
+                        }
+                        _ => {}
+                    }
+                }
+            })
+            .await
+            .unwrap();
+        });
+        let requests: Vec<serde_json::Value> =
+            std::fs::read_to_string(directory.path().join(".fixture-requests"))
+                .unwrap()
+                .lines()
+                .map(|line| serde_json::from_str(line).unwrap())
+                .collect();
+        let link = requests.iter().position(|r| r["method"] == "admin");
+        let open = requests.iter().position(|r| r["method"] == "open");
+        assert_eq!(link.is_some(), should_link);
+        if should_link && succeeds {
+            assert!(link.unwrap() < open.unwrap());
+        }
+        if mode == "reject" {
+            assert!(open.is_none());
+        }
+    }
+}

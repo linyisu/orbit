@@ -1,6 +1,6 @@
 # Orbit
 
-Orbit 是用 Rust 编写的终端编码 Agent。它提供交互式 TUI 和单次命令行任务，支持多供应商模型、文件工具、原生命令执行、持久化会话、后台命令与探索、审查、开发子代理。
+Orbit 是用 Rust 编写的编码 Agent。它提供交互式 TUI、单次命令行任务和实验性的 GPUI Kit 桌面客户端，支持多供应商模型、文件工具、原生命令执行、持久化会话、后台命令与探索、审查、开发子代理。
 
 ## 启动
 
@@ -42,10 +42,13 @@ TUI 图标需要 Nerd Font 字体。图片按终端能力选择 Kitty、Sixel �
 
 ## 工作区结构
 
+桌面客户端的构建依赖、启动参数、功能入口和 Shell 外观扩展见 [GUI 文档](crates/orbit-gui/README.md)。支持本地、SSH、WSL 工作区连接，GUI 暂不参加 CLI/TUI 的便携打包。
+
 | Crate | 职责 | 文档 |
 | --- | --- | --- |
 | `orbit-cli` | 命令行参数、入口分发、输出与信号 | [README](crates/orbit-cli/README.md) |
 | `orbit-tui` | 终端绘制、排版、键鼠交互、标签与弹窗 | [README](crates/orbit-tui/README.md) |
+| `orbit-gui` | GPUI Kit 原生会话、消息、输入、额度与 Shell 外观 | [README](crates/orbit-gui/README.md) |
 | `orbit-client` | 本地、SSH、WSL 连接、部署和事件订阅 | [README](crates/orbit-client/README.md) |
 | `orbit-protocol` | 请求、事件封装、能力与分帧 | [README](crates/orbit-protocol/README.md) |
 | `orbit-config` | 共享配置、模型目录与连接编辑 | [README](crates/orbit-config/README.md) |
@@ -66,6 +69,7 @@ CLI 和 TUI 通过 `orbit-client` 连接目标端的 `orbit-server`，本地、S
 flowchart TD
     CLI[orbit-cli] --> CLIENT[orbit-client]
     TUI[orbit-tui] --> CLIENT
+    GUI[orbit-gui] --> CLIENT
     CLIENT --> LOCAL[本地进程]
     CLIENT --> SSH[SSH]
     CLIENT --> WSL[WSL]

@@ -24,7 +24,9 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y musl-tools build-essential
+          sudo apt-get install -y musl-tools build-essential clang pkg-config \
+            libfontconfig-dev libwayland-dev libxkbcommon-x11-dev libx11-xcb-dev \
+            libssl-dev libzstd-dev libasound2-dev libvulkan-dev
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -49,6 +51,9 @@ jobs:
 
       - name: Run tests
         run: cargo test --workspace
+
+      - name: GUI transport regression
+        run: cargo test -p orbit-gui --features test-support --test transport --locked
 
       - name: Report build resources on failure
         if: failure()

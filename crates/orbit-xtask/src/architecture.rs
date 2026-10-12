@@ -77,6 +77,19 @@ const DEPENDENCIES: &[(&str, &[&str])] = &[
         ],
     ),
     (
+        "orbit-gui",
+        &[
+            "orbit-build",
+            "orbit-client",
+            "orbit-auth",
+            "orbit-config",
+            "orbit-protocol",
+            "orbit-agent",
+            "orbit-model",
+            "orbit-tools",
+        ],
+    ),
+    (
         "orbit-cli",
         &[
             "orbit-build",
@@ -99,6 +112,9 @@ const PRESENTATION: &[&str] = &[
     "ratatui",
     "ratatui-image",
     "syntect",
+    "gpui-kit",
+    "gpui-shell",
+    "gpui-component-shell",
 ];
 
 fn manifest(path: &Path) -> Result<Value> {
@@ -207,7 +223,7 @@ pub fn check(root: &Path) -> Result<Vec<String>> {
                 ));
             }
         }
-        let deps = if name == "orbit-tui" {
+        let deps = if matches!(name, "orbit-tui" | "orbit-gui") {
             dependencies(
                 &config,
                 &["dependencies", "build-dependencies", "dev-dependencies"],
@@ -247,7 +263,7 @@ pub fn check(root: &Path) -> Result<Vec<String>> {
     }
     let execution =
         Regex::new(r"\b(?:Agent::new|run_with_agent_events|compact_configured|workspace_tools)\b")?;
-    for package in ["orbit-cli", "orbit-tui"] {
+    for package in ["orbit-cli", "orbit-tui", "orbit-gui"] {
         for source in sources(&root.join("crates").join(package).join("src"), "rs")? {
             inspect(
                 root,
