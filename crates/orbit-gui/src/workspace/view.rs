@@ -553,7 +553,7 @@ impl Render for Workspace {
                                     cx.notify();
                                 })),
                         )
-                        .child(div().flex_1().min_w_0().child(self.task_tabs(cx)))
+                        .child(div().flex_1().min_w_0().child(self.task_tabs(window, cx)))
                         .when(self.error.is_some() && self.info.is_none(), |bar| {
                             bar.child(
                                 Button::new("project-error")

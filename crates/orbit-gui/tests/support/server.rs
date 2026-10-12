@@ -86,7 +86,25 @@ fn main() -> anyhow::Result<()> {
         {
             return Ok(());
         }
-        let profile = |session: &str, model: &str, mode: &str| json!({"id":session,"persisted":session=="demo","title":if session=="demo" {"梳理项目结构"} else {"新会话"},"workspace":workspace,"model":model,"models":if session == "models" { vec!["acm::shared", "acm::qwen", "antigravity-account::claude-opus", "antigravity-account::gemini-flash", "chatgpt-account::astra", "deepseek-account::shared", "deepseek-account::deepseek-flash"] } else { vec!["fixture::local","fixture::other","fixture::gemini-flash","fixture::claude-opus"] },"mode":mode,"supports_vision":true,"reasoning_effort":null,"reasoning_efforts":[],"context_tokens":128000,"input_context_tokens":120000,"max_output_tokens":8000});
+        let tab_layout = std::path::Path::new(&workspace)
+            .join(".fixture-tabs")
+            .exists();
+        let title = |session: &str| {
+            if tab_layout {
+                match session {
+                    "demo" => "请检查当前项目结构，读取 Cargo.toml 和完整的依赖关系并给出建议",
+                    "navigation" => {
+                        "请直接使用 read_file 读取 src/main.rs，然后运行 pwd，继续检查项目"
+                    }
+                    _ => "",
+                }
+            } else if session == "demo" {
+                "梳理项目结构"
+            } else {
+                "新会话"
+            }
+        };
+        let profile = |session: &str, model: &str, mode: &str| json!({"id":session,"persisted":session=="demo","title":title(session),"workspace":workspace,"model":model,"models":if session == "models" { vec!["acm::shared", "acm::qwen", "antigravity-account::claude-opus", "antigravity-account::gemini-flash", "chatgpt-account::astra", "deepseek-account::shared", "deepseek-account::deepseek-flash"] } else { vec!["fixture::local","fixture::other","fixture::gemini-flash","fixture::claude-opus"] },"mode":mode,"supports_vision":true,"reasoning_effort":null,"reasoning_efforts":[],"context_tokens":128000,"input_context_tokens":120000,"max_output_tokens":8000});
         let response = match request["method"].as_str().unwrap_or_default() {
             "complete" => {
                 let input = request["input"].as_str().unwrap_or_default();

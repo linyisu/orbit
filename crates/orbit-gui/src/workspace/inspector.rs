@@ -27,22 +27,28 @@ impl Section {
 }
 
 impl Workspace {
-    pub(super) fn task_tabs(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(super) fn task_tabs(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let active = self
             .open_tasks
             .iter()
             .position(|task| task.key == self.key)
             .unwrap_or(0);
         TabBar::new("open-tasks")
-            .folder()
-            .small()
-            .menu(self.open_tasks.len() > 3)
+            .w_full()
+            .segmented()
+            .max_width(window.rem_size() * 14.)
+            .menu(true)
             .selected_index(active)
             .children(self.open_tasks.iter().map(|task| {
                 let key = task.key.clone();
+                let title = task.title.clone();
                 Tab::new()
+                    .px_2()
                     .label(task.title.clone())
-                    .max_w(rems(14.))
+                    .prefix(Icon::new(IconName::BookOpen).size_4())
+                    .tooltip(move |window, cx| {
+                        gpui_kit::component::tooltip::Tooltip::new(title.clone()).build(window, cx)
+                    })
                     .when(task.attention, |tab| {
                         tab.prefix(Icon::new(IconName::CircleAlert).size_3())
                     })
