@@ -26,6 +26,8 @@ impl Workspace {
             .unwrap_or_default();
         let controls_disabled =
             !self.connected || self.opening || self.busy || self.pending.is_some();
+        let show_stop =
+            self.busy && !draft_ready(&self.input.read(cx).value(), &self.paths, self.busy);
         let mode = self.info.as_ref().map(|info| info.mode).unwrap_or_default();
         let mode_owner = cx.weak_entity();
         let mode_session = session.clone();
@@ -304,36 +306,39 @@ impl Workspace {
                                         menu
                                     }),
                             )
-                            .when(self.busy, |view| {
-                                view.child(
-                                    Button::new("stop")
-                                        .small()
-                                        .icon(Icon::new(IconName::Square))
-                                        .accessibility_label("停止")
-                                        .tooltip(crate::keymap::tooltip("停止", "stop_task", cx))
-                                        .on_click(cx.listener(|view, _, _, cx| view.stop_task(cx))),
-                                )
-                            })
-                            .when(
-                                !self.busy || !self.input.read(cx).value().trim().is_empty() || !self.paths.is_empty(),
-                                |view| {
-                                    view.child(
-                                        Button::new("send")
-                                            .primary()
-                                            .small()
-                                            .icon(Icon::new(IconName::ArrowUp))
-                                            .accessibility_label("发送")
-                                            .tooltip(crate::keymap::tooltip(
-                                                if self.busy { "补充指令" } else { "发送" },
-                                                "composer_send",
-                                                cx,
-                                            ))
-                                            .disabled(!self.can_send(cx))
-                                            .on_click(cx.listener(|view, _, window, cx| {
-                                                view.send(&SendMessage, window, cx)
-                                            })),
-                                    )
-                                },
+                            .child(
+                                Button::new("composer-action")
+                                    .small()
+                                    .when(!show_stop, |button| button.primary())
+                                    .icon(Icon::new(if show_stop {
+                                        IconName::Square
+                                    } else {
+                                        IconName::ArrowUp
+                                    }))
+                                    .accessibility_label(if show_stop { "停止" } else { "发送" })
+                                    .tooltip(if show_stop {
+                                        crate::keymap::tooltip("停止", "stop_task", cx)
+                                    } else {
+                                        crate::keymap::tooltip(
+                                            if self.busy { "补充指令" } else { "发送" },
+                                            "composer_send",
+                                            cx,
+                                        )
+                                    })
+                                    .disabled(!show_stop && !self.can_send(cx))
+                                    .on_click(cx.listener(|view, _, window, cx| {
+                                        if view.busy
+                                            && !draft_ready(
+                                                &view.input.read(cx).value(),
+                                                &view.paths,
+                                                view.busy,
+                                            )
+                                        {
+                                            view.stop_task(cx);
+                                        } else {
+                                            view.send(&SendMessage, window, cx);
+                                        }
+                                    })),
                             ),
                     ),
             )
