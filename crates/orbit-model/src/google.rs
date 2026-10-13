@@ -444,7 +444,12 @@ mod tests {
             )
             .unwrap();
             assert!(!body.to_string().contains("inlineData"));
-            assert!(!body["request"]["contents"][0]["parts"].as_array().unwrap().is_empty());
+            assert!(
+                !body["request"]["contents"][0]["parts"]
+                    .as_array()
+                    .unwrap()
+                    .is_empty()
+            );
         }
     }
 
