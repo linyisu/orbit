@@ -338,6 +338,15 @@ fn main() -> anyhow::Result<()> {
             }
             "poll" => {
                 let events = history.entry(session.clone()).or_default();
+                if std::fs::remove_file(
+                    std::path::Path::new(&workspace).join(".fixture-input-queue-consume-all"),
+                )
+                .is_ok()
+                {
+                    for entry in input_queue::consume(&workspace)? {
+                        events.push(json!({"Agent":{"InputReceived":{"message_id":entry.id,"content":entry.content}}}));
+                    }
+                }
                 let hold_command = pending.front().is_some_and(|event| {
                     event["Agent"]["ToolFinished"]["call"]["id"] == "output-command"
                 }) && std::path::Path::new(&workspace)
@@ -359,6 +368,9 @@ fn main() -> anyhow::Result<()> {
                     && !hold_disclosure
                     && !hold_disclosure_flow
                     && !hold_inspector
+                    && !std::path::Path::new(&workspace)
+                        .join(".fixture-input-queue-hold")
+                        .exists()
                     && let Some(event) = pending.pop_front()
                 {
                     events.push(event);
@@ -540,8 +552,20 @@ fn main() -> anyhow::Result<()> {
             "read_subagent" => child_agents.read(&workspace, &request),
             "send_subagent" => child_agents.send_legacy(&workspace, &request),
             "steer" => {
-                history.entry(session.clone()).or_default().push(json!({"Agent":{"InputReceived":{"message_id":8,"content":request["message"]}}}));
-                json!({"type":"input_queued","value":{"message_id":8}})
+                let id = if std::path::Path::new(&workspace)
+                    .join(".fixture-input-queue-live")
+                    .exists()
+                {
+                    input_queue::enqueue(
+                        &workspace,
+                        &session,
+                        request["message"].as_str().unwrap_or_default(),
+                    )?
+                } else {
+                    history.entry(session.clone()).or_default().push(json!({"Agent":{"InputReceived":{"message_id":8,"content":request["message"]}}}));
+                    8
+                };
+                json!({"type":"input_queued","value":{"message_id":id}})
             }
             "ask" | "open_questions" | "read_questions" | "cancel_question" | "close_questions" => {
                 side_questions

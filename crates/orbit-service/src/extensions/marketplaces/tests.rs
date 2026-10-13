@@ -269,7 +269,7 @@ fn enabled_plugin_skills_require_the_checked_package_version() {
         std::slice::from_ref(&market),
     );
 
-    assert_eq!(roots.roots, vec![package.join("skills")]);
+    assert_eq!(roots.roots, vec![package.join("skills/check")]);
     assert!(roots.diagnostics.is_empty());
 
     let stale = ProjectPlugin {
@@ -352,4 +352,239 @@ fn accepts_github_shorthand_but_not_credential_urls() {
         "https://github.com/owner/catalog.git"
     );
     assert!(git_url("https://token@example.com/catalog.git").is_err());
+}
+
+fn write_catalog(root: &Path, plugins: serde_json::Value) {
+    fs::create_dir_all(root.join(".claude-plugin")).unwrap();
+    fs::write(
+        root.join(".claude-plugin/marketplace.json"),
+        serde_json::to_vec(&serde_json::json!({"name":"inline-skills", "plugins":plugins}))
+            .unwrap(),
+    )
+    .unwrap();
+}
+
+fn write_skill(root: &Path, path: &str) {
+    fs::create_dir_all(root).unwrap();
+    fs::create_dir_all(root.join(path)).unwrap();
+    fs::write(
+        root.join(path).join("SKILL.md"),
+        "---\ndescription: Test skill metadata\n---\nTest body.\n",
+    )
+    .unwrap();
+}
+
+#[tokio::test]
+async fn manifestless_cached_entries_enable_only_their_declared_skills() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("market");
+    // Same shared-source layout as anthropics/skills, with disjoint bundles.
+    let bundles = [
+        ("document-skills", vec!["xlsx", "docx", "pptx", "pdf"]),
+        ("example-skills", vec!["frontend-design", "skill-creator"]),
+        ("claude-api", vec!["claude-api"]),
+        ("academy-guide", vec!["academy-guide"]),
+        ("discernment-nudge", vec!["discernment-nudge"]),
+    ];
+    let entries = bundles
+        .iter()
+        .map(|(name, skills)| {
+            for skill in skills {
+                write_skill(&root, &format!("skills/{skill}"));
+            }
+            serde_json::json!({"name":name, "source":"./", "strict":false,
+            "description":"Inline skill bundle", "version":"1.0",
+            "skills":skills.iter().map(|skill| format!("./skills/{skill}")).collect::<Vec<_>>()})
+        })
+        .collect::<Vec<_>>();
+    write_skill(&root, "skills/not-selected");
+    write_catalog(&root, serde_json::json!(entries));
+    let store = Store::at(temp.path().join("cache"));
+    let registered = store
+        .add(root.to_string_lossy().into_owned())
+        .await
+        .unwrap();
+    // Stored catalogs from older Orbit versions have no strict/skills fields.
+    let market: Marketplace =
+        serde_json::from_slice(&serde_json::to_vec(&registered).unwrap()).unwrap();
+    let repo = temp.path().join("project");
+    fs::create_dir_all(repo.join(".git")).unwrap();
+    let mut enabled = Vec::new();
+    for (plugin, (_, expected)) in market.plugins.iter().zip(&bundles) {
+        let package = inspect_plugin(&market, plugin).unwrap();
+        let mut expected = expected.clone();
+        expected.sort();
+        assert_eq!(package.skills, expected);
+        assert_eq!(package.version.as_deref(), Some("1.0"));
+        assert_eq!(package.description.as_deref(), Some("Inline skill bundle"));
+        let configured = ProjectPlugin {
+            project_id: "project".into(),
+            marketplace_source: market.source.clone(),
+            plugin_name: plugin.name.clone(),
+            package_source: plugin.source.clone().unwrap(),
+            version: package.version,
+            marketplace_revision: None,
+            enabled_at: 0,
+        };
+        let roots = enabled_skill_roots_from_markets(
+            std::slice::from_ref(&configured),
+            std::slice::from_ref(&market),
+        );
+        assert!(roots.diagnostics.is_empty(), "{:?}", roots.diagnostics);
+        let skills =
+            crate::skills::Skills::discover_with_plugin_roots(&repo, None, None, roots.roots);
+        assert_eq!(
+            skills
+                .completions()
+                .iter()
+                .map(|(name, _)| name.as_str())
+                .collect::<Vec<_>>(),
+            expected
+        );
+        enabled.push(configured);
+    }
+    let roots = enabled_skill_roots_from_markets(&enabled, &[market]);
+    let skills = crate::skills::Skills::discover_with_plugin_roots(&repo, None, None, roots.roots);
+    assert_eq!(skills.len(), 9);
+    assert!(skills.get("not-selected").is_none());
+}
+
+#[test]
+fn manifest_and_entry_skill_paths_preserve_defaults_and_metadata_precedence() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    let package = root.join("plugins/review");
+    write_skill(&package, "skills/default");
+    write_skill(&package, "extra/custom");
+    write_skill(&package, "catalog/selected");
+    fs::create_dir_all(package.join(".claude-plugin")).unwrap();
+    fs::write(
+        package.join(".claude-plugin/plugin.json"),
+        r#"{"name":"review","version":"2.0","description":"Manifest metadata","skills":"./extra"}"#,
+    )
+    .unwrap();
+    write_catalog(
+        root,
+        serde_json::json!([{"name":"review","source":"plugins/review",
+        "version":"1.0","description":"Entry metadata","skills":["./catalog/selected"]}]),
+    );
+    let market = parse_catalog(root).unwrap();
+    let inspected = package::inspect(&market, &market.plugins[0]).unwrap();
+    assert_eq!(inspected.package.skills, ["custom", "default", "selected"]);
+    assert_eq!(inspected.package.version.as_deref(), Some("2.0"));
+    assert_eq!(
+        inspected.package.description.as_deref(),
+        Some("Manifest metadata")
+    );
+    assert_eq!(inspected.skill_directories.len(), 3);
+    // strict=false cannot combine an inline component declaration with plugin.json.
+    write_catalog(
+        root,
+        serde_json::json!([{"name":"review","source":"plugins/review",
+        "strict":false,"skills":["./catalog/selected"]}]),
+    );
+    assert!(
+        inspect_plugin(&market, &market.plugins[0])
+            .unwrap_err()
+            .to_string()
+            .contains("conflicting")
+    );
+    fs::write(package.join(".claude-plugin/plugin.json"), "invalid JSON").unwrap();
+    assert!(
+        inspect_plugin(&market, &market.plugins[0])
+            .unwrap_err()
+            .to_string()
+            .contains("invalid plugin JSON")
+    );
+}
+
+#[test]
+fn root_skills_and_manifestless_standard_layout_work_without_strict_flag() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("single-skill");
+    write_skill(&root, ".");
+    write_catalog(
+        &root,
+        serde_json::json!([{"name":"single","source":"./","skills":"."}]),
+    );
+    let market = parse_catalog(&root).unwrap();
+    assert_eq!(
+        inspect_plugin(&market, &market.plugins[0]).unwrap().skills,
+        ["single-skill"]
+    );
+    fs::remove_file(root.join("SKILL.md")).unwrap();
+    write_skill(&root, "skills/standard");
+    write_catalog(&root, serde_json::json!([{"name":"single","source":"./"}]));
+    assert_eq!(
+        inspect_plugin(&market, &market.plugins[0]).unwrap().skills,
+        ["standard"]
+    );
+}
+
+#[test]
+fn invalid_inline_skill_declarations_never_fall_back_to_loading_all_skills() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("market");
+    write_skill(&root, "skills/unselected");
+    for skills in [
+        serde_json::json!(true),
+        serde_json::json!([1]),
+        serde_json::json!(["../outside"]),
+        serde_json::json!(["/tmp"]),
+        serde_json::json!(["./missing"]),
+    ] {
+        write_catalog(
+            &root,
+            serde_json::json!([{"name":"bundle","source":"./","strict":false,"skills":skills}]),
+        );
+        let market = parse_catalog(&root).unwrap();
+        assert!(inspect_plugin(&market, &market.plugins[0]).is_err());
+    }
+    write_catalog(
+        &root,
+        serde_json::json!([{"name":"bundle","source":"./","strict":false,"skills":[]}]),
+    );
+    let market = parse_catalog(&root).unwrap();
+    assert!(
+        inspect_plugin(&market, &market.plugins[0])
+            .unwrap()
+            .skills
+            .is_empty()
+    );
+    write_catalog(
+        &root,
+        serde_json::json!([{"name":"bundle","source":"./","strict":"false"}]),
+    );
+    assert!(inspect_plugin(&market, &market.plugins[0]).is_err());
+    write_catalog(
+        &root,
+        serde_json::json!([{"name":"bundle","source":"./changed"}]),
+    );
+    assert!(
+        inspect_plugin(&market, &market.plugins[0])
+            .unwrap_err()
+            .to_string()
+            .contains("entry changed")
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn declared_skill_symlinks_cannot_escape_the_plugin_package() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("market");
+    write_skill(temp.path(), "outside");
+    fs::create_dir_all(root.join("skills")).unwrap();
+    std::os::unix::fs::symlink(temp.path().join("outside"), root.join("skills/escaped")).unwrap();
+    write_catalog(
+        &root,
+        serde_json::json!([{"name":"bundle","source":"./","strict":false,"skills":["./skills/escaped"]}]),
+    );
+    let market = parse_catalog(&root).unwrap();
+    assert!(inspect_plugin(&market, &market.plugins[0]).is_err());
+    write_catalog(
+        &root,
+        serde_json::json!([{"name":"bundle","source":"./","skills":["./skills"]}]),
+    );
+    assert!(inspect_plugin(&market, &market.plugins[0]).is_err());
 }

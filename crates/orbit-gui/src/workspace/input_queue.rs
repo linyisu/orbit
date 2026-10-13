@@ -6,6 +6,8 @@ use gpui_kit::component::{
     spinner::Spinner,
 };
 use orbit_protocol::input_queue::{Action, Entry, Snapshot, State};
+mod preview;
+pub(super) use preview::preview;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Operation {
@@ -190,8 +192,12 @@ struct QueueRow {
 }
 
 impl Workspace {
-    pub(super) fn open_input_queue(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(info) = &self.info else { return };
+    pub(super) fn ensure_input_queue(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<Entity<InputQueue>> {
+        let info = self.info.as_ref()?;
         let panel = if let Some(panel) = &self.input_queue
             && panel
                 .read(cx)
@@ -207,8 +213,16 @@ impl Workspace {
             let panel = cx.new(|cx| {
                 InputQueue::new(owner, options, session, workspace, connected, window, cx)
             });
+            self.input_queue_updates = Some(cx.observe(&panel, |_, _, cx| cx.notify()));
             self.input_queue = Some(panel.clone());
             panel
+        };
+        Some(panel)
+    }
+
+    pub(super) fn open_input_queue(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(panel) = self.ensure_input_queue(window, cx) else {
+            return;
         };
         present(panel.clone(), window, cx);
         panel.read(cx).list.focus_handle(cx).focus(window, cx);
@@ -218,6 +232,48 @@ impl Workspace {
         cx.defer(move |cx| {
             let _ = panel.update(cx, |panel, cx| panel.load(None, cx));
         });
+    }
+
+    pub(super) fn refresh_input_queue(&self, force: bool, cx: &mut Context<Self>) {
+        if !self.connected || self.opening {
+            return;
+        }
+        let Some(panel) = &self.input_queue else {
+            return;
+        };
+        let panel = panel.downgrade();
+        let busy = self.busy;
+        cx.defer(move |cx| {
+            let _ = panel.update(cx, |panel, cx| {
+                if panel.current_scope(cx) && (force || busy || !panel.rows.is_empty()) {
+                    panel.load(None, cx);
+                }
+            });
+        });
+    }
+
+    pub(super) fn edit_queued_input(
+        &mut self,
+        id: i64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(panel) = self.ensure_input_queue(window, cx) else {
+            return;
+        };
+        panel.update(cx, |queue, cx| {
+            if let Some(ix) = queue.rows.iter().position(|row| row.entry.id == id) {
+                queue.selected = Some(id);
+                queue.list.update(cx, |list, cx| {
+                    list.set_selected_index(Some(IndexPath::new(ix)), window, cx)
+                });
+                cx.notify();
+            }
+        });
+        present(panel.clone(), window, cx);
+        if let Some(row) = panel.read(cx).rows.iter().find(|row| row.entry.id == id) {
+            row.draft.focus_handle(cx).focus(window, cx);
+        }
     }
 }
 
@@ -264,6 +320,16 @@ impl InputQueue {
 
     fn belongs_to(&self, session: &str, workspace: &str, options: &Options) -> bool {
         self.session == session && self.workspace == workspace && self.options.same_host(options)
+    }
+
+    pub(super) fn has_drafts(&self, cx: &App) -> bool {
+        self.requests
+            .pending
+            .as_ref()
+            .is_some_and(|operation| operation.id().is_some())
+            || self.rows.iter().any(|row| {
+                row.uncertain || row.draft.read(cx).value().as_ref() != row.entry.content
+            })
     }
 
     fn current_scope(&self, cx: &App) -> bool {

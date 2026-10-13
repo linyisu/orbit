@@ -555,6 +555,7 @@ impl Render for Workspace {
                 |view| {
                     view.child(
                         v_flex()
+                            .relative()
                             .w_full()
                             .flex_shrink_0()
                             .items_center()
@@ -565,6 +566,7 @@ impl Render for Workspace {
                                 view.child(
                                     h_flex()
                                         .w_full()
+                                        .items_center()
                                         .when(Preferences::comfortable_width(cx), |view| {
                                             view.max_w(rems(CONTENT_WIDTH_REM))
                                         })
@@ -586,7 +588,27 @@ impl Render for Workspace {
                                                         cx,
                                                     );
                                                 })),
+                                        )
+                                        .child(div().flex_1())
+                                        .child(
+                                            Button::new("open-staged-messages")
+                                                .ghost()
+                                                .xsmall()
+                                                .label("暂存消息…")
+                                                .on_click(cx.listener(|view, _, window, cx| {
+                                                    view.open_input_queue(window, cx)
+                                                })),
                                         ),
+                                )
+                            })
+                            .when_some(self.input_queue.clone(), |view, queue| {
+                                view.child(
+                                    div()
+                                        .w_full()
+                                        .when(Preferences::comfortable_width(cx), |view| {
+                                            view.max_w(rems(CONTENT_WIDTH_REM))
+                                        })
+                                        .child(super::input_queue::preview(&queue, cx)),
                                 )
                             })
                             .child(
@@ -596,6 +618,13 @@ impl Render for Workspace {
                                         view.max_w(rems(CONTENT_WIDTH_REM))
                                     })
                                     .child(self.composer(window, cx)),
+                            )
+                            .child(
+                                div()
+                                    .absolute()
+                                    .right_0()
+                                    .bottom(rems(3.))
+                                    .child(self.conversation.read(cx).navigation_controls()),
                             ),
                     )
                 },

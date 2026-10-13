@@ -26,6 +26,7 @@ pub(crate) struct Conversation {
     rows: Vec<Entity<TurnView>>,
     scroll: Entity<MessageScrollerState>,
     navigation: Entity<navigation::Navigation>,
+    navigation_controls: Entity<navigation::Controls>,
     viewport_height: Rc<Cell<Pixels>>,
 }
 struct TurnView {
@@ -64,14 +65,21 @@ impl EventEmitter<Disclosure> for MessageRow {}
 impl Conversation {
     pub(crate) fn new(cx: &mut Context<Self>) -> Self {
         let scroll = cx.new(|cx| MessageScrollerState::new(0, cx));
-        let navigation = cx.new(|cx| navigation::Navigation::new(scroll.clone(), cx));
+        let viewport_height = Rc::new(Cell::new(px(0.)));
+        let navigation =
+            cx.new(|cx| navigation::Navigation::new(scroll.clone(), viewport_height.clone(), cx));
+        let navigation_controls = cx.new(|cx| navigation::Controls::new(navigation.clone(), cx));
         Self {
             navigation,
+            navigation_controls,
             transcript: Transcript::default(),
             rows: vec![],
             scroll,
-            viewport_height: Rc::new(Cell::new(px(0.))),
+            viewport_height,
         }
+    }
+    pub(crate) fn navigation_controls(&self) -> Entity<navigation::Controls> {
+        self.navigation_controls.clone()
     }
     pub(crate) fn is_empty(&self) -> bool {
         self.rows.is_empty()

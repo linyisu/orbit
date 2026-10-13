@@ -149,7 +149,7 @@ pub(super) async fn execute(
                     crate::instructions::project_root(cwd).unwrap_or_else(|| cwd.to_path_buf());
                 root.join(".orbit/skills").join(&name).join("SKILL.md")
             };
-            // Disk IO is bounded (64 KiB), off the GUI thread and serialized by the session actor.
+            // Disk IO is bounded (1 MiB), off the GUI thread and serialized by the session actor.
             save_skill(&path, &name, original.as_deref(), &content)?;
             super::actions::execute(setup, SessionAction::RefreshSkills, busy).await?;
             Ok(skills(setup))
@@ -209,8 +209,8 @@ fn save_skill(path: &Path, name: &str, original: Option<&str>, content: &str) ->
         "名称只能包含字母、数字、横线和下划线（最多 64 字符）"
     );
     ensure!(
-        !content.trim().is_empty() && content.len() <= 64 * 1024,
-        "技能内容不能为空，且不能超过 64 KiB"
+        !content.trim().is_empty() && content.len() <= crate::skills::MAX_SKILL_BYTES as usize,
+        "技能内容不能为空，且不能超过 1 MiB"
     );
     for part in path.ancestors() {
         match fs::symlink_metadata(part) {

@@ -73,11 +73,18 @@ pub(super) async fn execute(
         }
         SessionAction::RefreshSkills => {
             let options = &setup.resources.options;
-            let enabled = setup
+            // A plugin can be enabled before an empty session is persisted.
+            // Resolve its workspace's current project, just as initial setup
+            // does; the draft snapshot may still have an empty project ID.
+            let enabled = match setup
                 .session
                 .store
-                .project_plugins(&setup.session.snapshot.session.project_id)
-                .await?;
+                .project_at(&setup.session.snapshot.session.workspace)
+                .await?
+            {
+                Some(project) => setup.session.store.project_plugins(&project.id).await?,
+                None => Vec::new(),
+            };
             let roots = crate::marketplaces::enabled_skill_roots(&enabled);
             let skills = if setup
                 .resources
@@ -167,6 +174,56 @@ fn report(title: &str, text: String) -> Report {
 mod tests {
     use super::*;
     use orbit_protocol::Inspection;
+
+    #[tokio::test]
+    async fn empty_session_refresh_finds_plugins_enabled_after_opening() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        std::fs::create_dir(root.join(".git")).unwrap();
+        TestConfig::new()
+            .provider(TestProvider::new("test").key("test").models(["mock"]))
+            .write(root.join("config.toml"))
+            .unwrap();
+        let options = crate::WorkspaceOptions {
+            model: Some("test::mock".into()),
+            initial_directory: root.into(),
+            config: root.join("config.toml"),
+            auth_directory: root.join("auth"),
+            database: root.join("sessions.db"),
+            allow_mcp_start: false,
+            home: None,
+            config_home: None,
+            instruction_dir: None,
+            editor_command: "vi".into(),
+        };
+        let mut setup = super::super::setup::prepare_service(&options, None)
+            .await
+            .unwrap();
+        assert!(!setup.session.is_persisted());
+        assert!(setup.resources.budget.plugin_skill_diagnostics.is_empty());
+        let project = setup.session.store.resolve_project(root).await.unwrap();
+        setup
+            .session
+            .store
+            .enable_project_plugin(orbit_protocol::project::ProjectPlugin {
+                project_id: project.id,
+                marketplace_source: format!("missing-market-{}", setup.session.id()),
+                plugin_name: "example".into(),
+                package_source: "plugins/example".into(),
+                version: None,
+                marketplace_revision: None,
+                enabled_at: 0,
+            })
+            .await
+            .unwrap();
+        execute(&mut setup, SessionAction::RefreshSkills, false)
+            .await
+            .unwrap();
+        // Even the unavailable source must be found in the new project: an
+        // empty draft's stale project ID previously lost this plugin entirely.
+        assert_eq!(setup.resources.budget.plugin_skill_diagnostics.len(), 1);
+        assert!(!setup.session.is_persisted());
+    }
 
     #[tokio::test]
     async fn actions_use_target_state_and_skill_context_survives_reopening() {

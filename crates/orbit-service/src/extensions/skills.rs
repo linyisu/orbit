@@ -12,7 +12,9 @@ use serde::Deserialize;
 use serde_json::json;
 
 const CATALOG_PREFIX: &str = "ORBIT_SKILL_CATALOG_V1\n";
-const MAX_SKILL_BYTES: u64 = 64 * 1024;
+// Some published reference skills exceed 64 KiB. Keep reads bounded while
+// accepting the same maximum body size used by other editable text resources.
+pub(crate) const MAX_SKILL_BYTES: u64 = 1024 * 1024;
 const MAX_DESCRIPTION_CHARS: usize = 500;
 
 #[derive(Deserialize)]
@@ -107,6 +109,12 @@ impl Skills {
         let mut entries = BTreeMap::new();
 
         for (directory, source) in roots {
+            if source == SkillSource::MarketplacePlugin && directory.join("SKILL.md").is_file() {
+                if let Some(skill) = discover_skill(&directory, source) {
+                    entries.insert(skill.command.clone(), skill);
+                }
+                continue;
+            }
             for skill in discover_directory(&directory, source) {
                 entries.insert(skill.command.clone(), skill);
             }
@@ -254,37 +262,45 @@ fn discover_directory(directory: &Path, source: SkillSource) -> Vec<Skill> {
                 return None;
             }
 
-            let command = entry.file_name().to_string_lossy().trim().to_owned();
-
-            if !valid_name(&command) || !seen.insert(command.clone()) {
+            let skill = discover_skill(&entry.path(), source)?;
+            if !seen.insert(skill.command.clone()) {
                 return None;
             }
-
-            let path = entry.path().join("SKILL.md");
-            let body = read_skill(&path).ok()?;
-            let (frontmatter, text) = split_frontmatter(&body);
-            let description = frontmatter
-                .get("description")
-                .cloned()
-                .filter(|value| !value.is_empty())
-                .unwrap_or_else(|| first_sentence(text));
-
-            if description.is_empty() {
-                return None;
-            }
-
-            Some(Skill {
-                title: frontmatter
-                    .get("name")
-                    .cloned()
-                    .unwrap_or_else(|| command.clone()),
-                command,
-                description: truncate_chars(&description, MAX_DESCRIPTION_CHARS),
-                path,
-                source,
-            })
+            Some(skill)
         })
         .collect()
+}
+
+fn discover_skill(directory: &Path, source: SkillSource) -> Option<Skill> {
+    let metadata = fs::symlink_metadata(directory).ok()?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return None;
+    }
+    let command = directory.file_name()?.to_string_lossy().trim().to_owned();
+    if !valid_name(&command) {
+        return None;
+    }
+    let path = directory.join("SKILL.md");
+    let body = read_skill(&path).ok()?;
+    let (frontmatter, text) = split_frontmatter(&body);
+    let description = frontmatter
+        .get("description")
+        .cloned()
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| first_sentence(text));
+    if description.is_empty() {
+        return None;
+    }
+    Some(Skill {
+        title: frontmatter
+            .get("name")
+            .cloned()
+            .unwrap_or_else(|| command.clone()),
+        command,
+        description: truncate_chars(&description, MAX_DESCRIPTION_CHARS),
+        path,
+        source,
+    })
 }
 
 pub(crate) fn read_skill(path: &Path) -> Result<String, String> {
@@ -294,7 +310,7 @@ pub(crate) fn read_skill(path: &Path) -> Result<String, String> {
     if !metadata.is_file() || metadata.file_type().is_symlink() || metadata.len() > MAX_SKILL_BYTES
     {
         return Err(format!(
-            "{} must be a regular non-symlink file up to 64 KiB",
+            "{} must be a regular non-symlink file up to 1 MiB",
             path.display()
         ));
     }
@@ -523,6 +539,29 @@ mod tests {
         symlink(&outside, &skill).unwrap();
 
         assert!(Skills::discover(&repo, None).entries.is_empty());
+        assert!(read_skill(&skill).is_err());
+    }
+
+    #[test]
+    fn large_reference_skills_are_discoverable_but_reads_remain_bounded() {
+        let temp = tempfile::tempdir().unwrap();
+        let skill = temp.path().join("plugin/skills/reference/SKILL.md");
+        fs::create_dir_all(skill.parent().unwrap()).unwrap();
+        let body = format!(
+            "---\nname: reference\ndescription: Full API reference\n---\n{}",
+            "Reference content.\n".repeat(6000)
+        );
+        assert!(body.len() > 64 * 1024);
+        fs::write(&skill, &body).unwrap();
+        let skills = Skills::discover_with_plugin_roots(
+            temp.path(),
+            None,
+            None,
+            vec![skill.parent().unwrap().to_owned()],
+        );
+        assert!(skills.get("reference").is_some());
+        assert_eq!(read_skill(&skill).unwrap(), body);
+        fs::write(&skill, "x".repeat(MAX_SKILL_BYTES as usize + 1)).unwrap();
         assert!(read_skill(&skill).is_err());
     }
 

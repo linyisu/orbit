@@ -86,21 +86,17 @@ fn resolve_family(
         .clone()
 }
 
-/// Technical tables keep identifiers and short CJK values intact. Kit measures
-/// the actual glyph runs and owns horizontal scrolling when the table is wider
-/// than its viewport; prose outside cells retains its normal wrapping.
+/// Columns share the available document width, capped by their measured content.
+/// Cells may shrink and wrap even in narrow panes; tables never scroll sideways.
 pub(crate) fn document_style() -> gpui_kit::component::text::TextViewStyle {
-    use gpui_kit::{Overflow, StyleRefinement, Styled, relative, rems};
-    let mut table = StyleRefinement::default();
-    table.overflow.x = Some(Overflow::Scroll);
+    use gpui_kit::{StyleRefinement, Styled, relative, rems};
     gpui_kit::component::text::TextViewStyle::default()
         .code_block(
             StyleRefinement::default()
                 .text_size(rems(0.875))
                 .line_height(relative(1.5)),
         )
-        .table(table)
-        .table_cell(StyleRefinement::default().whitespace_nowrap())
+        .table_cell(StyleRefinement::default().min_w_0().whitespace_normal())
 }
 
 pub(crate) fn install(cx: &mut App) {

@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use tokio::process::Command;
 
 const MAX_MANIFEST_BYTES: u64 = 64 * 1024;
+mod package;
 
 pub use orbit_protocol::plugins::{Marketplace, Plugin, PluginPackage};
 
@@ -79,7 +80,7 @@ fn enabled_skill_roots_from_markets(
     let mut diagnostics = Vec::new();
 
     for configured in enabled {
-        let result = (|| -> Result<PathBuf> {
+        let result = (|| -> Result<Vec<PathBuf>> {
             let market = markets
                 .iter()
                 .find(|market| market.source == configured.marketplace_source)
@@ -112,7 +113,8 @@ fn enabled_skill_roots_from_markets(
                         configured.marketplace_source, configured.plugin_name
                     )
                 })?;
-            let package = inspect_plugin(market, plugin)?;
+            let inspected = package::inspect(market, plugin)?;
+            let package = inspected.package;
             ensure!(
                 package.version == configured.version,
                 "插件 {} 的版本已从 {} 变为 {}；请重新检查后启用",
@@ -121,12 +123,11 @@ fn enabled_skill_roots_from_markets(
                 package.version.as_deref().unwrap_or("未声明")
             );
 
-            Ok(package.directory.join("skills"))
+            Ok(inspected.skill_directories)
         })();
 
         match result {
-            Ok(root) if root.is_dir() => roots.push(root),
-            Ok(_) => {}
+            Ok(directories) => roots.extend(directories),
             Err(error) => {
                 diagnostics.push(format!("已跳过插件 {}：{error}", configured.plugin_name))
             }
@@ -140,59 +141,7 @@ fn enabled_skill_roots_from_markets(
 }
 
 pub fn inspect_plugin(market: &Marketplace, plugin: &Plugin) -> Result<PluginPackage> {
-    let source = plugin.source.as_deref().context(
-        "this marketplace entry does not declare a local package source; refresh the marketplace or inspect it outside Orbit",
-    )?;
-    let market_root = market.directory.canonicalize().with_context(|| {
-        format!(
-            "cannot open marketplace directory {}",
-            market.directory.display()
-        )
-    })?;
-    let package = resolve_package_path(&market_root, source)?;
-    let manifest_path = package.join(".claude-plugin/plugin.json");
-    let metadata = fs::metadata(&manifest_path)
-        .with_context(|| format!("plugin manifest is missing: {}", manifest_path.display()))?;
-    ensure!(
-        metadata.is_file() && metadata.len() <= MAX_MANIFEST_BYTES,
-        "plugin manifest must be a regular file up to 64 KiB"
-    );
-
-    let manifest: serde_json::Value = serde_json::from_slice(&fs::read(&manifest_path)?)
-        .with_context(|| format!("invalid plugin JSON in {}", manifest_path.display()))?;
-    let name = manifest
-        .get("name")
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .context("plugin manifest has no name")?;
-
-    ensure!(valid_name(name), "plugin manifest name is invalid");
-    ensure!(
-        name == plugin.name,
-        "plugin manifest name {name:?} does not match marketplace entry {:?}",
-        plugin.name
-    );
-
-    let description = optional_text(&manifest, "description", "plugin manifest")?;
-    let version = optional_text(&manifest, "version", "plugin manifest")?;
-    let skills = declared_markdown_files(&package.join("skills"), "SKILL.md")?;
-    let commands = declared_markdown_files(&package.join("commands"), ".md")?;
-    let agents = declared_markdown_files(&package.join("agents"), ".md")?;
-    let declares_hooks =
-        package.join("hooks/hooks.json").is_file() || manifest.get("hooks").is_some();
-    let declares_mcp = package.join(".mcp.json").is_file() || manifest.get("mcpServers").is_some();
-
-    Ok(PluginPackage {
-        name: name.into(),
-        version,
-        description,
-        directory: package,
-        skills,
-        commands,
-        agents,
-        declares_hooks,
-        declares_mcp,
-    })
+    Ok(package::inspect(market, plugin)?.package)
 }
 
 struct Store {
@@ -458,15 +407,27 @@ fn git_url(source: &str) -> Result<String> {
 }
 
 fn parse_catalog(directory: &Path) -> Result<Marketplace> {
-    let path = [
+    let raw = read_catalog(directory)?;
+    parse_catalog_value(directory, &raw)
+}
+
+fn catalog_path(directory: &Path) -> Option<PathBuf> {
+    [
         directory.join(".claude-plugin/marketplace.json"),
         directory.join("marketplace.json"),
     ]
     .into_iter()
     .find(|candidate| candidate.is_file())
-    .context("marketplace does not contain .claude-plugin/marketplace.json")?;
-    let raw: serde_json::Value = serde_json::from_slice(&fs::read(&path)?)
-        .with_context(|| format!("invalid marketplace JSON in {}", path.display()))?;
+}
+
+fn read_catalog(directory: &Path) -> Result<serde_json::Value> {
+    let path = catalog_path(directory)
+        .context("marketplace does not contain .claude-plugin/marketplace.json")?;
+    serde_json::from_slice(&fs::read(&path)?)
+        .with_context(|| format!("invalid marketplace JSON in {}", path.display()))
+}
+
+fn parse_catalog_value(directory: &Path, raw: &serde_json::Value) -> Result<Marketplace> {
     let name = raw
         .get("name")
         .and_then(serde_json::Value::as_str)

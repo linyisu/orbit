@@ -315,7 +315,7 @@ impl Workspace {
             // even while the main conversation remains empty.
             && self.side_questions.is_none()
             && self.child_agents.is_none()
-            && self.input_queue.is_none()
+            && !self.input_queue.as_ref().is_some_and(|queue| queue.read(cx).has_drafts(cx))
             && self.question_form.is_none()
             && self.tasks.is_none()
     }

@@ -11,6 +11,36 @@ struct Queue {
     entries: Vec<Entry>,
 }
 
+pub(super) fn enqueue(workspace: &str, session: &str, content: &str) -> anyhow::Result<i64> {
+    let path = Path::new(workspace).join(".fixture-input-queue.json");
+    let mut queue: Queue = match std::fs::read(&path) {
+        Ok(bytes) => serde_json::from_slice(&bytes)?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Queue {
+            session: session.into(),
+            run: Some(71),
+            entries: Vec::new(),
+        },
+        Err(error) => return Err(error.into()),
+    };
+    anyhow::ensure!(queue.session == session, "消息不属于当前会话");
+    let id = queue.entries.last().map_or(1, |entry| entry.id + 1);
+    queue.entries.push(Entry {
+        id,
+        content: content.into(),
+        state: State::Queued,
+    });
+    std::fs::write(path, serde_json::to_vec(&queue)?)?;
+    Ok(id)
+}
+
+pub(super) fn consume(workspace: &str) -> anyhow::Result<Vec<Entry>> {
+    let path = Path::new(workspace).join(".fixture-input-queue.json");
+    let mut queue: Queue = serde_json::from_slice(&std::fs::read(&path)?)?;
+    let entries = std::mem::take(&mut queue.entries);
+    std::fs::write(path, serde_json::to_vec(&queue)?)?;
+    Ok(entries)
+}
+
 pub(super) fn execute(workspace: &str, request: &Value) -> Value {
     match execute_inner(workspace, request) {
         Ok(snapshot) => json!({"type":"input_queue","value":snapshot}),

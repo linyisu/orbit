@@ -56,3 +56,41 @@ fn queue_transport_uses_row_cursors_exact_content_and_run_receipts() {
         assert!(request(&backend, Request::InputQueue { session: "other-session".into(), expected_workspace: info.workspace.clone(), action: Action::List { after: None } }).await.unwrap_err().contains("不属于当前会话"));
     });
 }
+
+#[test]
+fn acknowledged_steers_are_visible_until_the_agent_consumes_or_the_user_removes_them() {
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::write(directory.path().join(".fixture-input-queue-live"), "").unwrap();
+    let mut options = Options::parse_from(["orbit-gui"]);
+    options.config = directory.path().join("unused.toml");
+    options.workspace = Some(directory.path().into());
+    options.server = Some(env!("CARGO_BIN_EXE_orbit-gui-fixture").into());
+    options.database = Some(directory.path().join("unused.db"));
+    options.auth_dir = Some(directory.path().join("auth"));
+    options.model = Some("fixture::local".into());
+    options.resume = Some("demo".into());
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let (backend, mut events) = Backend::start(options, &runtime);
+    runtime.block_on(async {
+        let Event::Response(Response::Opened(info)) = until(&mut events, |event| matches!(event, Event::Response(Response::Opened(_)))).await else { unreachable!() };
+        let command = |action| Request::InputQueue { session: info.id.clone(), expected_workspace: info.workspace.clone(), action };
+        let mut first = None;
+        for (id, text) in [("first", "先检查现状\n再执行修改"), ("second", "暂时不要提交")] {
+            backend.send(Command::Send { session: info.id.clone(), id: id.into(), prompt: text.into(), paths: vec![], steer: true }).unwrap();
+            until(&mut events, |event| matches!(event, Event::Sent { id: received } if received == id)).await;
+            let Response::InputQueue(Snapshot::List { entries, run, .. }) = request(&backend, command(Action::List { after: None })).await.unwrap() else { panic!("queue expected") };
+            assert!(entries.iter().any(|entry| entry.content == text && entry.state == State::Queued));
+            first = Some((entries[0].clone(), run));
+        }
+        let (first, run) = first.unwrap();
+        request(&backend, command(Action::Remove { id: first.id, expected: first.content, run })).await.unwrap();
+        let Response::InputQueue(Snapshot::List { entries, .. }) = request(&backend, command(Action::List { after: None })).await.unwrap() else { panic!("queue expected") };
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].content, "暂时不要提交");
+        std::fs::write(directory.path().join(".fixture-input-queue-consume-all"), "").unwrap();
+        backend.send(Command::Request(Request::Poll { session: info.id.clone(), after: 0 })).unwrap();
+        until(&mut events, |event| matches!(event, Event::Response(Response::Page(page)) if page.updates.iter().any(|update| matches!(update, orbit_protocol::Update::Agent(event) if matches!(event.as_ref(), orbit_agent::events::AgentEvent::InputReceived { content, .. } if content == "暂时不要提交"))))).await;
+        let Response::InputQueue(Snapshot::List { entries, .. }) = request(&backend, command(Action::List { after: None })).await.unwrap() else { panic!("queue expected") };
+        assert!(entries.is_empty());
+    });
+}

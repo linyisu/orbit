@@ -182,6 +182,7 @@ pub(crate) struct Workspace {
     question_history: Option<Entity<questions::QuestionHistory>>,
     child_agents: Option<Entity<subagents::ChildAgents>>,
     input_queue: Option<Entity<input_queue::InputQueue>>,
+    input_queue_updates: Option<Subscription>,
     tool_output: Option<Entity<tool_output::ToolOutput>>,
     command_search: Entity<gpui_kit::component::command::CommandState>,
     command_open: bool,
@@ -295,6 +296,7 @@ impl Workspace {
             question_history: None,
             child_agents: None,
             input_queue: None,
+            input_queue_updates: None,
             tool_output: None,
             command_search: cx
                 .new(|cx| gpui_kit::component::command::CommandState::new(window, cx)),
@@ -319,7 +321,7 @@ impl Workspace {
             loop {
                 cx.background_executor().timer(Duration::from_secs(1)).await;
                 if weak
-                    .update(cx, |view, cx| {
+                    .update_in(cx, |view, window, cx| {
                         if view.connected
                             && !view.opening
                             && view.quota_request.elapsed() >= Duration::from_secs(60)
@@ -329,6 +331,9 @@ impl Workspace {
                         // The footer borrows the quota view's summary; its reset
                         // countdown also needs a render while the dialog is closed.
                         if view.info.is_some() {
+                            if !window.has_active_sheet(cx) && !window.has_active_dialog(cx) {
+                                view.refresh_input_queue(false, cx);
+                            }
                             cx.notify();
                         }
                     })
@@ -577,6 +582,7 @@ impl Workspace {
                     }
                     self.paths.retain(|path| !pending.paths.contains(path));
                     self.busy = true;
+                    self.refresh_input_queue(true, cx);
                 }
             }
             Event::Response(response) => self.response(response, window, cx),
@@ -732,6 +738,8 @@ impl Workspace {
                     cx,
                 );
                 self.plan_action(orbit_protocol::plan::Action::Enable, cx);
+                self.ensure_input_queue(window, cx);
+                self.refresh_input_queue(true, cx);
             }
             Response::Profile(info) => {
                 self.usage = cx.new(crate::usage::Usage::new);
@@ -798,6 +806,12 @@ impl Workspace {
                     }
                 }
                 self.execution.apply_progress(&page.tool_progress);
+                if self.input_queue.is_none() {
+                    self.ensure_input_queue(window, cx);
+                }
+                if (restoring && !self.opening) || finished {
+                    self.refresh_input_queue(true, cx);
+                }
                 self.sync_tool_output(restoring, window, cx);
                 self.refresh_title(cx);
                 if finished && !restoring {
