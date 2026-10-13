@@ -25,7 +25,8 @@ gpui_kit::assets::icon_assets!(
         Pin,
         Tags,
         Trash,
-        Clock
+        Clock,
+        Download
     ]
 );
 pub(crate) struct AppAssets;
@@ -42,5 +43,18 @@ impl AssetSource for AppAssets {
         paths.sort();
         paths.dedup();
         Ok(paths)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn source_import_icon_is_available_in_the_application_bundle() {
+        let path = gpui_kit::assets::IconName::Download.path();
+        let bytes = AppAssets.load(&path).unwrap().unwrap();
+        assert!(std::str::from_utf8(&bytes).unwrap().contains("<svg"));
+        assert!(AppAssets.list("icons/").unwrap().contains(&path));
     }
 }

@@ -439,7 +439,8 @@ impl Render for Resources {
                     row.child(
                         Button::new("resource-import")
                             .primary()
-                            .label("从来源导入…")
+                            .icon(IconName::Download)
+                            .label("从来源导入")
                             .disabled(self.busy || self.session.is_none())
                             .on_click(
                                 cx.listener(|view, _, window, cx| view.import_skills(window, cx)),

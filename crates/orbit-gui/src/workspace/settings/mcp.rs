@@ -688,7 +688,6 @@ impl Render for Mcp {
         }
         let mut runtime = v_flex()
             .gap_3()
-            .mt_4()
             .pt_4()
             .border_t_1()
             .border_color(cx.theme().border)
@@ -813,7 +812,7 @@ impl Render for Mcp {
                 .child(
                     Button::new("mcp-import")
                         .icon(IconName::Download)
-                        .label("从来源导入…")
+                        .label("从来源导入")
                         .disabled(self.busy || self.session.is_none() || self.draft.is_none())
                         .on_click(
                             cx.listener(|view, _, window, cx| view.import_source(window, cx)),
@@ -822,7 +821,7 @@ impl Render for Mcp {
                 .child(
                     Button::new("mcp-add")
                         .icon(IconName::Plus)
-                        .label("添加服务器…")
+                        .label("添加服务器")
                         .disabled(self.busy || self.draft.is_none())
                         .on_click(cx.listener(|v, _, w, cx| v.edit(None, w, cx))),
                 ),
@@ -831,7 +830,7 @@ impl Render for Mcp {
             if draft.servers().is_empty() {
                 content = content.child(
                     div()
-                        .py_8()
+                        .py_1()
                         .text_sm()
                         .text_color(cx.theme().muted_foreground)
                         .child("还没有 MCP 服务器。添加后，Agent 就能使用服务器提供的工具。"),

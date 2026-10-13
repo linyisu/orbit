@@ -375,11 +375,25 @@ impl Render for TurnView {
                                         weak.upgrade()
                                             .and_then(|view| {
                                                 let view = view.read(cx);
-                                                view.process
-                                                    .get(index)
-                                                    .map(|part| view.parts[*part].clone())
+                                                view.process.get(index).map(|part| {
+                                                    (
+                                                        view.parts[*part].clone(),
+                                                        index + 1 == view.process.len(),
+                                                    )
+                                                })
                                             })
-                                            .map(|part| part.into_any_element())
+                                            .map(|(part, last)| {
+                                                // Keep the final control clear of the clipping
+                                                // edge. Row padding participates in list height
+                                                // and wheel/scrollbar limits, unlike an inset
+                                                // outside the scrolling content.
+                                                div()
+                                                    .w_full()
+                                                    .min_w_0()
+                                                    .when(last, |row| row.pb_2())
+                                                    .child(part)
+                                                    .into_any_element()
+                                            })
                                             .unwrap_or_else(|| div().into_any_element())
                                     },
                                 )

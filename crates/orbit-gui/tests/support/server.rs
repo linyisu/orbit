@@ -304,6 +304,9 @@ fn main() -> anyhow::Result<()> {
                 if session == "tool-history" {
                     history.insert(session.clone(), tool_history());
                 }
+                if session == "process-tail" {
+                    history.insert(session.clone(), process_tail());
+                }
                 if session == "demo"
                     && std::path::Path::new(&workspace)
                         .join(".fixture-inspector")
@@ -716,6 +719,26 @@ fn tool_history() -> Vec<Value> {
         json!({"Agent":{"Model":{"TextDelta":"检查完成。当前项目按工作区、会话和工具执行分层。\n\n### 建议调整\n\n- **会话状态**由独立实体持有，切换任务时保留草稿和执行状态。\n- **工具过程**归入所属用户回合，完整参数与结果按需展开。\n- **最终答复**单独呈现，避免工具日志打断阅读。\n\n本次只读取了源码，没有修改项目文件。"}}}),
         json!({"Finished":{"status":"completed"}}),
     ]);
+    events
+}
+
+fn process_tail() -> Vec<Value> {
+    let mut events =
+        vec![json!({"Started":{"prompt":"检查执行块最后一条工具记录是否能完整显示。"}})];
+    let paragraph = "Inspect the terminal state and preserve the current cursor position. Verify that image rendering and command output remain readable after cancellation.\n\n";
+    let reasoning = format!(
+        "{}\n```text\nOutput:\n  syntax check passed\n```\n\n```text\nProgress: 1/182\nCurrent exercise: src/01_basics/add.v\n```\n\n```text\nh:hint / i:image / d:desc / s:submit / c:check\n```",
+        paragraph.repeat(8)
+    );
+    events.push(json!({"Agent":{"Model":{"ReasoningDelta":reasoning}}}));
+    for index in 0..2 {
+        let call = json!({"id":format!("tail-{index}"),"function":{"name":"run_command","arguments":"{\"command\":\"pwd\"}"}});
+        events.extend([
+            json!({"Agent":{"ToolStarted":{"call":call}}}),
+            json!({"Agent":{"ToolFinished":{"call":call,"content":format!("末尾工具记录 {index}"),"changes":[]}}}),
+        ]);
+    }
+    events.push(json!({"Finished":{"status":"failed"}}));
     events
 }
 
