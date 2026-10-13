@@ -29,3 +29,8 @@ Child masks consume movement first; a final capture handler consumes unused
 wheel input at either edge or when the content fits, before ancestor virtual
 lists handle it. Orbit uses this boundary for execution details so scrolling
 their thought/tool records cannot move the surrounding conversation.
+
+Sheets repair focus on pointer-down when it has escaped to a background
+control or an unrendered retained handle. This keeps the shared close button's
+Cancel action inside the sheet before its click handler runs, while preserving
+valid focus in the sheet's content and the existing close callback order.

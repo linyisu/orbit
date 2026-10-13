@@ -119,6 +119,7 @@ impl RenderOnce for Sheet {
         let on_close = self.on_close;
         let escape_request = request_close.clone();
         let escape_notify = on_close.clone();
+        let pointer_focus = self.focus.clone();
 
         anchored().position(point(px(0.), px(0.))).child(
             self.base
@@ -132,6 +133,15 @@ impl RenderOnce for Sheet {
                 .key_context(CONTEXT)
                 .track_focus(&self.focus)
                 .focus_trap("sheet", &self.focus)
+                .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                    // A retained background handle can regain focus while the
+                    // sheet is open. Buttons preserve focus on mouse-down and
+                    // may dispatch actions on click, so repair that route before
+                    // their click handler runs. Keep valid child focus intact.
+                    if !pointer_focus.contains_focused(window, cx) {
+                        pointer_focus.focus(window, cx);
+                    }
+                })
                 .on_action(move |_: &Cancel, window, cx| {
                     cx.propagate();
                     close(&escape_request, &escape_notify, window, cx);
@@ -169,7 +179,7 @@ impl RenderOnce for Sheet {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gpui::{Context, Render, point, px};
+    use gpui::{Context, Render, StatefulInteractiveElement as _, point, px};
     use std::{cell::RefCell, rc::Rc};
 
     struct Harness {
@@ -266,5 +276,91 @@ mod tests {
         assert!(events.borrow().is_empty());
         cx.simulate_click(point(px(20.), px(80.)), Default::default());
         assert_eq!(&*events.borrow(), &["request", "closed"]);
+    }
+
+    #[gpui::test]
+    fn close_button_recovers_from_focus_outside_the_sheet(cx: &mut gpui::TestAppContext) {
+        cx.update(crate::init);
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let outside = cx.update(|cx| cx.focus_handle());
+        let (_, cx) = cx.add_window_view({
+            let events = events.clone();
+            let outside = outside.clone();
+            move |_, cx| CloseButtonHarness {
+                focus: cx.focus_handle(),
+                outside,
+                child: None,
+                events,
+            }
+        });
+        cx.update(|window, cx| {
+            outside.focus(window, cx);
+            window.draw(cx).clear(cx);
+        });
+        cx.simulate_click(point(px(30.), px(30.)), Default::default());
+        cx.run_until_parked();
+        assert_eq!(&*events.borrow(), &["request", "closed"]);
+    }
+
+    #[gpui::test]
+    fn close_button_preserves_valid_child_focus(cx: &mut gpui::TestAppContext) {
+        cx.update(crate::init);
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let child = cx.update(|cx| cx.focus_handle());
+        let (_, cx) = cx.add_window_view({
+            let events = events.clone();
+            let child = child.clone();
+            move |_, cx| CloseButtonHarness {
+                focus: cx.focus_handle(),
+                outside: cx.focus_handle(),
+                child: Some(child),
+                events,
+            }
+        });
+        cx.update(|window, cx| {
+            child.focus(window, cx);
+            window.draw(cx).clear(cx);
+        });
+        cx.simulate_click(point(px(30.), px(30.)), Default::default());
+        cx.run_until_parked();
+        assert!(cx.update(|window, _| child.is_focused(window)));
+        assert_eq!(&*events.borrow(), &["request", "closed"]);
+    }
+
+    struct CloseButtonHarness {
+        focus: FocusHandle,
+        outside: FocusHandle,
+        child: Option<FocusHandle>,
+        events: Rc<RefCell<Vec<&'static str>>>,
+    }
+
+    impl Render for CloseButtonHarness {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let requested = self.events.clone();
+            let closed = self.events.clone();
+            div().track_focus(&self.outside).child(
+                Sheet::new(cx)
+                    .focus_handle(self.focus.clone())
+                    .request_close(move |_, _| requested.borrow_mut().push("request"))
+                    .on_close(move |_, _, _| closed.borrow_mut().push("closed"))
+                    .surface(
+                        div().size(px(100.)).child(
+                            div()
+                                .id("close")
+                                .size(px(60.))
+                                .when_some(self.child.clone(), |this, child| {
+                                    this.track_focus(&child)
+                                })
+                                // Match Component Button's pointer contract.
+                                .on_mouse_down(MouseButton::Left, |_, window, _| {
+                                    window.prevent_default();
+                                })
+                                .on_click(|_, window, cx| {
+                                    window.dispatch_action(Box::new(Cancel), cx);
+                                }),
+                        ),
+                    ),
+            )
+        }
     }
 }
