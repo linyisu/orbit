@@ -1,14 +1,17 @@
 //! A single window-owned sidebar. Tabs supply data; they never own navigation state.
+mod organization;
 #[path = "session_controls.rs"]
 mod session_controls;
-use super::navigation::{project_items, scrolling_title};
+use super::navigation::scrolling_title;
 use super::*;
+use crate::preferences::{Placement, Preferences};
 use gpui_kit::component::{
     list::ListItem,
     menu::{ContextMenuExt, PopupMenu},
     spinner::Spinner,
     tooltip::Tooltip,
 };
+use organization::session_menu;
 
 pub(crate) struct Sidebar {
     owner: Option<WeakEntity<Workspace>>,
@@ -18,15 +21,43 @@ pub(crate) struct Sidebar {
     info: Option<SessionInfo>,
     navigation_tasks: Vec<WorkspaceSummary>,
     hovered_title: Option<(SharedString, Instant)>,
+    _preferences: Subscription,
 }
 struct HostNavigation {
     options: Options,
     sessions: Vec<SessionEntry>,
     groups: Vec<TreeItem>,
     tree: Entity<TreeState>,
+    placements: Vec<Placement>,
+}
+impl HostNavigation {
+    fn rebuild(&mut self, cx: &mut App) {
+        let selected = self.tree.read(cx).selected_item().cloned();
+        self.groups = organization::grouped_items(&self.sessions, &self.placements, &self.groups);
+        self.tree.update(cx, |tree, cx| {
+            tree.set_items(self.groups.clone(), cx);
+            // Moving a selected session into a collapsed category must reveal
+            // its destination without expanding unrelated project folders.
+            tree.set_selected_item(selected.as_ref(), cx);
+        });
+    }
 }
 impl Sidebar {
-    pub(crate) fn new(_cx: &mut Context<Self>) -> Self {
+    pub(crate) fn new(cx: &mut Context<Self>) -> Self {
+        let preferences = cx.observe_global::<Preferences>(|sidebar: &mut Self, cx| {
+            for host in &mut sidebar.hosts {
+                let placements = host
+                    .sessions
+                    .iter()
+                    .map(|entry| Preferences::session_placement(&host.options, &entry.id, cx))
+                    .collect::<Vec<_>>();
+                if host.placements != placements {
+                    host.placements = placements;
+                    host.rebuild(cx);
+                }
+            }
+            cx.notify();
+        });
         Self {
             owner: None,
             visible: true,
@@ -35,6 +66,7 @@ impl Sidebar {
             info: None,
             navigation_tasks: vec![],
             hovered_title: None,
+            _preferences: preferences,
         }
     }
     pub(crate) fn bind(&mut self, owner: &Entity<Workspace>, cx: &mut Context<Self>) {
@@ -57,6 +89,7 @@ impl Sidebar {
                 sessions: vec![],
                 groups: vec![],
                 tree: cx.new(|cx| TreeState::new(cx)),
+                placements: vec![],
             });
             self.hosts.len() - 1
         });
@@ -72,7 +105,11 @@ impl Sidebar {
             .map(|item| item.id.clone());
         let catalog_changed = host.sessions != sessions;
         if catalog_changed {
-            let mut groups = project_items(&sessions, &host.groups);
+            host.placements = sessions
+                .iter()
+                .map(|entry| Preferences::session_placement(&host.options, &entry.id, cx))
+                .collect();
+            let mut groups = organization::grouped_items(&sessions, &host.placements, &host.groups);
             for group in &mut groups {
                 if group.id.as_ref() == format!("project:{location}")
                     && !host.groups.iter().any(|old| old.id == group.id)
@@ -134,6 +171,7 @@ impl Sidebar {
     }
     fn project_tree(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let owner = cx.weak_entity();
+        let workspace_owner = self.owner.clone();
         let hovered = self.hovered_title.clone();
         let tasks = self.navigation_tasks.clone();
         let active = self
@@ -144,6 +182,15 @@ impl Sidebar {
             .id("project-conversations")
             .size_full()
             .capture_key_down(cx.listener(|view, event: &KeyDownEvent, window, cx| {
+                // Nested row menus own Enter when their trigger or popup has
+                // focus. Only the tree's own keyboard path opens a session.
+                if !window
+                    .context_stack()
+                    .last()
+                    .is_some_and(|context| context.contains(gpui_kit::base::tree_key_context()))
+                {
+                    return;
+                }
                 if matches!(event.keystroke.key.as_str(), "enter" | "f2" | "delete") {
                     let id = view
                         .navigation()
@@ -173,8 +220,10 @@ impl Sidebar {
             .child(Tree::new(self.navigation(), move |_, entry, _, _, cx| {
                 let id = entry.item().id.clone();
                 let owner = owner.clone();
-                let menu_owner = owner.clone();
+                let menu_owner = workspace_owner.clone();
                 let menu_id = id.clone();
+                let button_owner = workspace_owner.clone();
+                let button_id = id.clone();
                 let hover_owner = owner.clone();
                 let hover_id = id.clone();
                 let folder = entry.is_folder();
@@ -223,7 +272,11 @@ impl Sidebar {
                             .gap_2()
                             .child(div().w_4().flex_shrink_0().when(folder, |slot| {
                                 slot.child(
-                                    Icon::new(if expanded {
+                                    Icon::new(if id.as_ref() == "pinned" {
+                                        IconName::Pin
+                                    } else if id.starts_with("category:") {
+                                        IconName::Tags
+                                    } else if expanded {
                                         IconName::FolderOpen
                                     } else {
                                         IconName::Folder
@@ -274,20 +327,42 @@ impl Sidebar {
                                         )
                                     }),
                             )
+                            .when(!folder, |content| {
+                                content.child(
+                                    Button::new((ElementId::from(button_id.clone()), "menu"))
+                                        .ghost()
+                                        .xsmall()
+                                        .icon(IconName::Ellipsis)
+                                        .accessibility_label(format!(
+                                            "管理会话：{}",
+                                            entry.item().label
+                                        ))
+                                        .tooltip("会话操作")
+                                        .on_click(|_, _, cx| cx.stop_propagation())
+                                        .dropdown_menu(move |menu, window, cx| {
+                                            session_menu(
+                                                button_owner.clone(),
+                                                button_id
+                                                    .strip_prefix("session:")
+                                                    .map(str::to_owned),
+                                                menu,
+                                                window,
+                                                cx,
+                                            )
+                                        }),
+                                )
+                            })
                             .map(move |content| {
                                 if folder {
                                     content.into_any_element()
                                 } else {
                                     content
-                                        .context_menu(move |menu, _, cx| {
-                                            let sidebar = menu_owner.upgrade();
-                                            let owner = sidebar
-                                                .as_ref()
-                                                .and_then(|sidebar| sidebar.read(cx).owner.clone());
+                                        .context_menu(move |menu, window, cx| {
                                             session_menu(
-                                                owner,
+                                                menu_owner.clone(),
                                                 menu_id.strip_prefix("session:").map(str::to_owned),
                                                 menu,
+                                                window,
                                                 cx,
                                             )
                                         })
@@ -295,7 +370,7 @@ impl Sidebar {
                                 }
                             }),
                     )
-                    .when(folder, |row| {
+                    .when(folder && id.starts_with("project:"), |row| {
                         let path = id.strip_prefix("project:").unwrap_or(&id).to_owned();
                         row.tooltip(move |window, cx| Tooltip::new(path.clone()).build(window, cx))
                     })
@@ -330,7 +405,7 @@ impl Render for Sidebar {
                 view.with_owner(cx, |view, _, cx| view.open(None, cx), window)
             }))
             .on_action(cx.listener(|view, _: &OpenProject, window, cx| {
-                view.with_owner(cx, |view, _, cx| view.open_project(cx), window)
+                view.with_owner(cx, |view, window, cx| view.open_project(window, cx), window)
             }))
             .on_action(
                 cx.listener(|view, action: &AppearanceSettings, window, cx| {
@@ -517,7 +592,11 @@ impl Render for Sidebar {
                             .tooltip(crate::keymap::tooltip("打开项目", "open_project", cx))
                             .disabled(active.choosing_project || active.pending.is_some())
                             .on_click(cx.listener(|view, _, window, cx| {
-                                view.with_owner(cx, |view, _, cx| view.open_project(cx), window)
+                                view.with_owner(
+                                    cx,
+                                    |view, window, cx| view.open_project(window, cx),
+                                    window,
+                                )
                             })),
                     )
                     .child(
@@ -619,17 +698,17 @@ impl Render for Sidebar {
                     .gap_2()
                     .text_xs()
                     .text_color(cx.theme().muted_foreground)
-                    .child(div().flex_1().child("项目"))
+                    .child(div().flex_1().child("会话"))
                     .child(
                         Button::new("selected-session-menu")
                             .ghost()
                             .small()
                             .icon(IconName::Ellipsis)
                             .accessibility_label("所选会话操作")
-                            .tooltip("所选会话操作 · F2 重命名 · Delete 删除")
+                            .tooltip("会话管理 · 置顶、分类、重命名与删除")
                             .dropdown_menu({
                                 let sidebar = cx.weak_entity();
-                                move |menu, _, cx| {
+                                move |menu, window, cx| {
                                     let Some(sidebar) = sidebar.upgrade() else {
                                         return menu;
                                     };
@@ -640,12 +719,31 @@ impl Render for Sidebar {
                                         .selected_item()
                                         .and_then(|item| item.id.strip_prefix("session:"))
                                         .map(str::to_owned);
-                                    session_menu(sidebar.owner.clone(), id, menu, cx)
+                                    session_menu(sidebar.owner.clone(), id, menu, window, cx)
                                 }
                             }),
                     ),
             )
             .child(div().flex_1().min_h_0().child(self.project_tree(cx)))
+            .when(
+                matches!(
+                    Preferences::save_status(cx),
+                    crate::keymap::SaveStatus::Failed { .. }
+                ),
+                |sidebar| {
+                    sidebar.child(
+                        Button::new("retry-sidebar-settings")
+                            .ghost()
+                            .small()
+                            .icon(IconName::Info)
+                            .label("设置未保存 · 重试")
+                            .tooltip("置顶、分类或其他设置尚未写入磁盘，点击重试保存")
+                            .on_click(|_, _, cx| {
+                                Preferences::retry_save(cx);
+                            }),
+                    )
+                },
+            )
             .child(
                 h_flex()
                     .p_2()
@@ -677,48 +775,4 @@ impl Render for Sidebar {
             )
             .into_any_element()
     }
-}
-
-fn session_menu(
-    owner: Option<WeakEntity<Workspace>>,
-    id: Option<String>,
-    menu: PopupMenu,
-    cx: &App,
-) -> PopupMenu {
-    let workspace = owner.as_ref().and_then(WeakEntity::upgrade);
-    let available = workspace
-        .as_ref()
-        .is_some_and(|owner| owner.read(cx).connected)
-        && id.is_some();
-    let busy = workspace.as_ref().is_some_and(|owner| {
-        id.as_ref()
-            .is_some_and(|id| owner.read(cx).session_busy(id))
-    });
-    let rename_owner = owner.clone();
-    let rename_id = id.clone();
-    menu.item(
-        PopupMenuItem::new("重命名会话…")
-            .icon(IconName::Pencil)
-            .disabled(!available)
-            .on_click(move |_, window, cx| {
-                if let (Some(owner), Some(id)) = (&rename_owner, &rename_id) {
-                    let _ = owner.update(cx, |view, cx| view.rename_session(id, window, cx));
-                }
-            }),
-    )
-    .separator()
-    .item(
-        PopupMenuItem::new(if busy {
-            "删除会话（运行中）"
-        } else {
-            "删除会话…"
-        })
-        .icon(IconName::Trash)
-        .disabled(!available || busy)
-        .on_click(move |_, window, cx| {
-            if let (Some(owner), Some(id)) = (&owner, &id) {
-                let _ = owner.update(cx, |view, cx| view.delete_session(id, window, cx));
-            }
-        }),
-    )
 }

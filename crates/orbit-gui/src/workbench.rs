@@ -133,6 +133,11 @@ impl Workbench {
             })
             .map(|task| task.view.read(cx).key().to_owned());
         if let Some(key) = existing {
+            if let Some(index) = self.empty_task_to_replace(&options, cx)
+                && self.tasks[index].view.read(cx).key() != key
+            {
+                self.discard_empty_task(index, window, cx);
+            }
             if let Some(task) = self
                 .tasks
                 .iter()
@@ -146,6 +151,30 @@ impl Workbench {
         }
         self.create(options, None, window, cx);
     }
+
+    fn empty_task_to_replace(&self, options: &Options, cx: &App) -> Option<usize> {
+        // Opening a saved conversation fills the current placeholder. Ordinary
+        // tab navigation and restoring a window must retain every saved tab.
+        if self.restoring || options.resume.is_none() {
+            return None;
+        }
+        self.tasks.iter().position(|task| {
+            !task.closed
+                && task.view.read(cx).key() == self.active
+                && task.view.read(cx).is_empty_draft(cx)
+        })
+    }
+
+    fn discard_empty_task(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        // Dismiss the placeholder's authentication before activating the target
+        // host. Dropping its transport never cancels a server-side task.
+        self.tasks[index]
+            .view
+            .update(cx, |view, cx| view.set_visible(false, window, cx));
+        let task = self.tasks.remove(index);
+        self.unread.remove(task.view.read(cx).key());
+    }
+
     fn create(
         &mut self,
         options: Options,
@@ -153,6 +182,10 @@ impl Workbench {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let replacement = saved
+            .is_none()
+            .then(|| self.empty_task_to_replace(&options, cx))
+            .flatten();
         let runtime = self.runtime.clone();
         let catalog = self
             .tasks
@@ -243,13 +276,19 @@ impl Workbench {
         );
         let observer = cx.observe(&view, |workbench, _, cx| workbench.sync_sidebar(cx));
         let key = view.read(cx).key().to_owned();
-        self.tasks.push(OpenTask {
+        let task = OpenTask {
             view,
             _subscription: subscription,
             was_busy: false,
             _observer: observer,
             closed: false,
-        });
+        };
+        if let Some(index) = replacement {
+            self.discard_empty_task(index, window, cx);
+            self.tasks.insert(index, task);
+        } else {
+            self.tasks.push(task);
+        }
         self.activate(&key, window, cx);
     }
     fn activate(&mut self, key: &str, window: &mut Window, cx: &mut Context<Self>) {

@@ -231,6 +231,11 @@ impl SessionControls {
                 _ => Err("服务未返回会话操作结果，请更新服务后重试。".into()),
             });
             if result.is_ok() {
+                if operation == Operation::Delete {
+                    cx.update(|cx| {
+                        crate::preferences::Preferences::forget_session(&options, &id, cx);
+                    });
+                }
                 let _ = workspace.update(cx, |view, cx| {
                     if !view.options.same_host(&options) {
                         return;

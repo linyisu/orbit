@@ -300,14 +300,24 @@ impl Workspace {
         self.execution.phase().label()
     }
     pub(crate) fn is_empty_draft(&self, cx: &App) -> bool {
-        self.info
-            .as_ref()
-            .map_or(self.options.resume.is_none(), |info| !info.persisted)
+        self.options.resume.is_none()
+            && self.info.as_ref().is_none_or(|info| !info.persisted)
             && self.conversation.read(cx).is_empty()
-            && self.input.read(cx).value().is_empty()
-            && self.paths.is_empty()
+            && !self.has_draft(cx)
             && !self.busy
-            && self.pending.is_none()
+            && !self.files_need_attention(cx)
+            && !self.files_saving(cx)
+            && !self
+                .settings_page
+                .as_ref()
+                .is_some_and(|page| page.read(cx).has_pending_work(cx))
+            // Accessory editors can own unsent drafts or independent requests
+            // even while the main conversation remains empty.
+            && self.side_questions.is_none()
+            && self.child_agents.is_none()
+            && self.input_queue.is_none()
+            && self.question_form.is_none()
+            && self.tasks.is_none()
     }
     pub(crate) fn set_visible(
         &mut self,
@@ -387,6 +397,7 @@ impl Workspace {
     }
     pub(crate) fn has_draft(&self, cx: &App) -> bool {
         self.pending.is_some()
+            || self.picker_pending
             || self.retry.is_some()
             || !self.paths.is_empty()
             || !self.input.read(cx).value().is_empty()

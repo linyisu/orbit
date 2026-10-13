@@ -480,9 +480,9 @@ impl Render for Workspace {
                                     Button::new("home-open-project")
                                         .label("打开项目…")
                                         .disabled(self.choosing_project)
-                                        .on_click(
-                                            cx.listener(|view, _, _, cx| view.open_project(cx)),
-                                        ),
+                                        .on_click(cx.listener(|view, _, window, cx| {
+                                            view.open_project(window, cx)
+                                        })),
                                 )
                             })
                             .into_any_element()
@@ -695,7 +695,9 @@ impl Render for Workspace {
             }))
             .on_action(cx.listener(|view, _: &NewConversation, _, cx| view.open(None, cx)))
             .on_action(cx.listener(Self::appearance))
-            .on_action(cx.listener(|view, _: &OpenProject, _, cx| view.open_project(cx)))
+            .on_action(
+                cx.listener(|view, _: &OpenProject, window, cx| view.open_project(window, cx)),
+            )
             .on_action(
                 cx.listener(|view, _: &WorkspaceCommands, window, cx| view.commands(window, cx)),
             )

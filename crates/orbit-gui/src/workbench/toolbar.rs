@@ -184,7 +184,7 @@ impl Workbench {
                             move |menu, _, _| {
                                 let mut menu = menu;
                                 for (command, label) in [
-                                    (WorkspaceCommand::OpenProject, "打开本地项目…"),
+                                    (WorkspaceCommand::OpenLocalProject, "打开本地项目…"),
                                     (WorkspaceCommand::RemoteProject, "连接远程项目…"),
                                     (WorkspaceCommand::File, "打开文件…"),
                                     (WorkspaceCommand::Tasks, "项目任务"),

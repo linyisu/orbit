@@ -183,6 +183,77 @@ pub(super) fn open(
     });
 }
 
+/// Browse the current target directly; changing hosts remains a separate command.
+pub(super) fn choose_project_directory(
+    options: Options,
+    runtime: Arc<tokio::runtime::Runtime>,
+    environment: String,
+    window: &mut Window,
+    cx: &mut Context<Workspace>,
+) {
+    let browser = cx.new(|cx| browser::DirectoryBrowser::new(options, runtime, window, cx));
+    let owner = cx.weak_entity();
+    browser.update(cx, |_, cx| {
+        cx.on_release(move |_, cx| {
+            // Switching tabs can close all dialogs without calling on_close.
+            // Release the picker guard for that programmatic dismissal too.
+            cx.defer(move |cx| {
+                let _ = owner.update(cx, |view, cx| {
+                    view.choosing_project = false;
+                    cx.notify();
+                });
+            });
+        })
+        .detach();
+    });
+    let selection = cx.subscribe_in(
+        &browser,
+        window,
+        |view, _, event: &browser::Selected, window, cx| {
+            view.choosing_project = false;
+            window.close_dialog(cx);
+            view.switch_project(event.0.clone().into(), None, false, false, window, cx);
+        },
+    );
+    let owner = cx.weak_entity();
+    let first = std::cell::Cell::new(true);
+    window.open_dialog(cx, move |dialog, window, cx| {
+        // Retain the subscription for exactly the dialog lifetime.
+        let _selection = &selection;
+        if first.replace(false) {
+            browser.update(cx, |browser, cx| browser.focus(window, cx));
+        }
+        dialog
+            .title("打开项目")
+            .width(
+                (window.rem_size() * 40.).min(window.bounds().size.width - window.rem_size() * 2.),
+            )
+            .child(
+                v_flex()
+                    .gap_3()
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(environment.clone()),
+                    )
+                    .child(browser.clone()),
+            )
+            .on_close({
+                let owner = owner.clone();
+                move |_, window, cx| {
+                    let _ = owner.update(cx, |view, cx| {
+                        view.choosing_project = false;
+                        cx.notify();
+                        cx.defer_in(window, |view, window, cx| {
+                            view.show_connection_challenge(window, cx)
+                        });
+                    });
+                }
+            })
+    });
+}
+
 impl RemoteConnection {
     fn new(
         options: Options,

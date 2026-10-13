@@ -32,6 +32,10 @@ enum CatalogRow {
     Cards(Vec<(usize, usize)>, usize),
 }
 impl Plugins {
+    pub(super) fn has_pending_work(&self) -> bool {
+        self.busy
+    }
+
     pub(super) fn new(
         owner: WeakEntity<Workspace>,
         session: Option<String>,
@@ -89,7 +93,7 @@ impl Plugins {
                 .as_ref()
                 .is_some_and(|info| info.id == session && info.workspace == workspace)
             {
-                anyhow::bail!("工作区已切换，请在当前项目的设置中重新打开插件。");
+                anyhow::bail!("工作区已切换，请重新打开当前工作区的插件市场。");
             }
             view.backend
                 .as_ref()

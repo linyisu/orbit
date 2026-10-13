@@ -14,6 +14,7 @@ use orbit_protocol::{
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum WorkspaceCommand {
     OpenProject,
+    OpenLocalProject,
     RemoteProject,
     Changes,
     Diff,
@@ -66,6 +67,7 @@ pub(crate) enum WorkspaceCommand {
 impl WorkspaceCommand {
     pub(super) const ALL: &'static [(Self, &'static str)] = &[
         (Self::OpenProject, "打开项目…"),
+        (Self::OpenLocalProject, "打开本地项目…"),
         (Self::RemoteProject, "打开远程项目…"),
         (Self::Changes, "文件变更"),
         (Self::Diff, "查看差异"),
@@ -150,7 +152,11 @@ impl Workspace {
             _ => {}
         }
         if matches!(action, WorkspaceCommand::OpenProject) {
-            self.open_project(cx);
+            self.open_project(window, cx);
+            return;
+        }
+        if matches!(action, WorkspaceCommand::OpenLocalProject) {
+            self.choose_project_directory(None, cx);
             return;
         }
         if matches!(action, WorkspaceCommand::RemoteProject) {

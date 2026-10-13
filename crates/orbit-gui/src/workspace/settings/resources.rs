@@ -36,6 +36,10 @@ pub(super) struct Resources {
     _query_events: Subscription,
 }
 impl Resources {
+    pub(super) fn has_pending_work(&self) -> bool {
+        self.busy || (self.editing && !self.readonly) || self.importer.is_some()
+    }
+
     pub(super) fn new(
         owner: WeakEntity<Workspace>,
         session: Option<String>,
@@ -96,7 +100,7 @@ impl Resources {
             if !view.info.as_ref().is_some_and(|info| {
                 Some(&info.id) == session.as_ref() && info.workspace == workspace
             }) {
-                anyhow::bail!("工作区已切换，请在当前项目的设置中重新打开资源。");
+                anyhow::bail!("工作区已切换，请重新打开当前工作区的资源。");
             }
             anyhow::ensure!(view.connected, "连接已断开，请重新连接后重试。");
             view.backend

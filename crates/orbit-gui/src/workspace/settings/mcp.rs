@@ -40,6 +40,10 @@ pub(super) struct Mcp {
     status_task: Task<()>,
 }
 impl Mcp {
+    pub(super) fn has_pending_work(&self) -> bool {
+        self.busy || self.editing
+    }
+
     pub(super) fn new(
         options: &Options,
         runtime: Arc<tokio::runtime::Runtime>,
@@ -142,7 +146,7 @@ impl Mcp {
                         view.info
                             .as_ref()
                             .is_some_and(|info| info.id == session && info.workspace == workspace),
-                        "工作区已切换，请重新打开当前项目的设置。"
+                        "工作区已切换，请重新打开 MCP 工具页面以刷新会话状态。"
                     );
                     view.backend
                         .as_ref()
@@ -451,7 +455,7 @@ impl Render for Mcp {
         let mut content = v_flex().w_full().max_w(rems(60.)).gap_4()
             .child(h_flex().gap_3()
                 .child(div().flex_1().min_w_0().whitespace_normal().text_sm().text_color(cx.theme().muted_foreground)
-                    .child("配置 MCP 工具服务器。保存后新会话生效；连接远程工作区时，命令在远程运行。"))
+                    .child("配置保存在本机，对所有项目的新会话生效；连接 SSH 工作区时，命令在远程运行。"))
                 .child(Button::new("mcp-refresh").ghost().small().label("刷新")
                     .disabled(self.busy || self.status_busy || self.editing)
                     .on_click(cx.listener(|view, _, _, cx| {
@@ -549,16 +553,24 @@ impl Render for Mcp {
         }
         let mut runtime = v_flex()
             .gap_3()
+            .mt_4()
+            .pt_4()
+            .border_t_1()
+            .border_color(cx.theme().border)
             .child(
                 div()
                     .font_weight(FontWeight::SEMIBOLD)
-                    .child("会话启动状态"),
+                    .child("当前会话的连接状态"),
             )
             .child(
                 div()
                     .text_sm()
                     .text_color(cx.theme().muted_foreground)
-                    .child("显示当前会话启动时的连接结果与已注册工具。配置修改会在新会话应用。"),
+                    .whitespace_normal()
+                    .child(format!(
+                        "{} · 会话启动时的连接结果与已注册工具。配置修改会在新会话应用。",
+                        self.workspace
+                    )),
             )
             .when_some(self.status_error.clone(), |view, error| {
                 view.child(div().text_sm().text_color(cx.theme().danger).child(error))
@@ -643,7 +655,6 @@ impl Render for Mcp {
                     .child("正在读取会话状态…"),
             );
         }
-        content = content.child(runtime);
         content = content.child(
             h_flex()
                 .child(
@@ -730,6 +741,6 @@ impl Render for Mcp {
         } else if self.busy {
             content = content.child("正在加载…");
         }
-        content
+        content.child(runtime)
     }
 }

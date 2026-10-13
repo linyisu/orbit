@@ -109,6 +109,22 @@ pub(super) struct Shortcuts {
 }
 
 impl Shortcuts {
+    pub(super) fn has_pending_work(&self, cx: &App) -> bool {
+        self.recording.is_some()
+            || self.pending.is_some()
+            || self.failed.is_some()
+            || self.editing.is_some_and(|id| {
+                let saved = keymap::configured(id, cx)
+                    .or_else(|| keymap::current(id, cx))
+                    .unwrap_or_default();
+                let text = self.draft.read(cx).value();
+                text.trim() != saved
+                    && keymap::validate(id, &text, cx)
+                        .ok()
+                        .is_none_or(|text| text != saved)
+            })
+    }
+
     pub(super) fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let query = cx.new(|cx| InputState::new(window, cx).placeholder("搜索命令或按键…"));
         let draft = cx.new(|cx| InputState::new(window, cx).placeholder("例如 ctrl-k ctrl-b"));

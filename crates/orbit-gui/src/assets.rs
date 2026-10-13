@@ -22,6 +22,9 @@ gpui_kit::assets::icon_assets!(
         Laptop,
         ListTodo,
         Pencil,
+        Pin,
+        Tags,
+        Trash,
         Clock
     ]
 );

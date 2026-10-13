@@ -145,6 +145,7 @@ pub(crate) struct Workspace {
     recovery: recovery::Recovery,
     timer: Task<()>,
     picker: Task<()>,
+    picker_pending: bool,
     _subscriptions: Vec<Subscription>,
     focus: FocusHandle,
     input: Entity<TextareaState>,
@@ -257,6 +258,7 @@ impl Workspace {
             recovery: Default::default(),
             timer: Task::ready(()),
             picker: Task::ready(()),
+            picker_pending: false,
             _subscriptions: vec![subscription, focused, blurred, bounds, focus_lost],
             focus: cx.focus_handle(),
             input,
@@ -922,6 +924,8 @@ impl Workspace {
     }
 
     fn attach(&mut self, cx: &mut Context<Self>) {
+        self.picker_pending = true;
+        cx.notify();
         let prompt = cx.prompt_for_paths(PathPromptOptions {
             files: true,
             directories: false,
@@ -932,6 +936,8 @@ impl Workspace {
         self.picker = cx.spawn(async move |weak, cx| {
             let result = prompt.await;
             let _ = weak.update(cx, |view, cx| {
+                view.picker_pending = false;
+                cx.notify();
                 if view.info.as_ref().map(|info| &info.id) != session.as_ref() {
                     return;
                 }
@@ -996,6 +1002,8 @@ impl Workspace {
             return handled;
         }
         let session = self.info.as_ref().map(|info| info.id.clone());
+        self.picker_pending = true;
+        cx.notify();
         let job =
             self.runtime
                 .spawn_blocking(move || -> anyhow::Result<Vec<tempfile::NamedTempFile>> {
@@ -1015,6 +1023,8 @@ impl Workspace {
         self.picker = cx.spawn(async move |weak, cx| {
             let result = job.await;
             let _ = weak.update(cx, |view, cx| {
+                view.picker_pending = false;
+                cx.notify();
                 if view.info.as_ref().map(|info| &info.id) != session.as_ref() {
                     return;
                 }

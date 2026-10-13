@@ -83,6 +83,21 @@ pub(super) struct Advanced {
 }
 
 impl Advanced {
+    pub(super) fn has_pending_work(&self, cx: &App) -> bool {
+        if self.busy {
+            return true;
+        }
+        let Some(draft) = &self.draft else {
+            return false;
+        };
+        // Invalid input is still an unsaved edit. Compare parsed values so a
+        // saved value such as "002" does not keep the placeholder indefinitely.
+        let Ok(current) = self.values(cx) else {
+            return true;
+        };
+        !same_form_values(&current, draft.settings())
+    }
+
     pub(super) fn new(
         options: &Options,
         runtime: Arc<tokio::runtime::Runtime>,
@@ -178,19 +193,7 @@ impl Advanced {
 
     fn apply(&mut self, draft: AdvancedDraft, window: &mut Window, cx: &mut Context<Self>) {
         let settings = draft.settings();
-        let values = [
-            settings.max_turns.to_string(),
-            settings.max_tool_calls.to_string(),
-            settings.command.default_timeout_seconds.to_string(),
-            settings.command.max_timeout_seconds.to_string(),
-            settings.command.read_file_scan_bytes.to_string(),
-            settings.subagents.max_concurrent.to_string(),
-            settings.subagents.max_turns.to_string(),
-            settings.subagents.max_tool_calls.to_string(),
-            settings.subagents.timeout_seconds.to_string(),
-            settings.subagents.explore_model.clone().unwrap_or_default(),
-            settings.subagents.review_model.clone().unwrap_or_default(),
-        ];
+        let values = form_fields(settings);
         for (field, value) in self.fields.iter().zip(values) {
             field.update(cx, |input, cx| input.set_value(value, window, cx));
         }
@@ -313,6 +316,35 @@ impl Advanced {
             )
             .into_any_element()
     }
+}
+
+fn form_fields(settings: &AgentSettings) -> [String; FIELDS.len()] {
+    [
+        settings.max_turns.to_string(),
+        settings.max_tool_calls.to_string(),
+        settings.command.default_timeout_seconds.to_string(),
+        settings.command.max_timeout_seconds.to_string(),
+        settings.command.read_file_scan_bytes.to_string(),
+        settings.subagents.max_concurrent.to_string(),
+        settings.subagents.max_turns.to_string(),
+        settings.subagents.max_tool_calls.to_string(),
+        settings.subagents.timeout_seconds.to_string(),
+        settings.subagents.explore_model.clone().unwrap_or_default(),
+        settings.subagents.review_model.clone().unwrap_or_default(),
+    ]
+}
+
+fn same_form_values(current: &AgentSettings, saved: &AgentSettings) -> bool {
+    form_fields(current) == form_fields(saved)
+        && current.auto_compact == saved.auto_compact
+        && current.command.network.is_allowed() == saved.command.network.is_allowed()
+        && current.subagents.enabled == saved.subagents.enabled
+        && current
+            .disabled_capabilities
+            .iter()
+            .collect::<BTreeSet<_>>()
+            == saved.disabled_capabilities.iter().collect::<BTreeSet<_>>()
+        && current.disabled_tools == saved.disabled_tools
 }
 
 fn number<T: std::str::FromStr>(value: &str, label: &str) -> anyhow::Result<T> {
@@ -460,5 +492,46 @@ impl Render for Advanced {
             section("禁用指定工具", "每行填写一个完整工具名，按名称精确匹配；留空不增加限制。MCP 工具使用 mcp__服务器__工具 格式。", cx)
                 .child(Textarea::new(&self.tools).disabled(unavailable).aria_label("禁用指定工具")),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AgentSettings, Capability, same_form_values};
+
+    fn saved_settings() -> AgentSettings {
+        AgentSettings {
+            max_turns: 0,
+            max_tool_calls: 2000,
+            auto_compact: true,
+            command: Default::default(),
+            subagents: Default::default(),
+            disabled_capabilities: vec![Capability::Write, Capability::Web],
+            disabled_tools: vec!["read_file".into()],
+        }
+    }
+
+    #[test]
+    fn uncommitted_agent_edits_remain_protected_until_saved_or_reverted() {
+        let mut saved = saved_settings();
+        let mut form = saved.clone();
+        form.disabled_capabilities.reverse();
+        assert!(same_form_values(&form, &saved));
+
+        form.max_tool_calls = 42;
+        assert!(!same_form_values(&form, &saved));
+        saved = form.clone();
+        assert!(same_form_values(&form, &saved));
+
+        form.subagents.explore_model = Some("local::model".into());
+        assert!(!same_form_values(&form, &saved));
+        form = saved.clone();
+        form.auto_compact = !saved.auto_compact;
+        assert!(!same_form_values(&form, &saved));
+        form = saved.clone();
+        form.disabled_tools.clear();
+        assert!(!same_form_values(&form, &saved));
+        form = saved.clone();
+        assert!(same_form_values(&form, &saved));
     }
 }

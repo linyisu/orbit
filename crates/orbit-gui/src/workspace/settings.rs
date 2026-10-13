@@ -13,11 +13,12 @@ use gpui_kit::component::{
     input::{Input, InputState, NumberInput},
     radio::{Radio, RadioGroup},
     scroll::ScrollableElement,
-    sidebar::{Sidebar, SidebarMenu, SidebarMenuItem},
+    sidebar::{Sidebar, SidebarGroup, SidebarMenu, SidebarMenuItem},
     switch::Switch,
     tooltip::Tooltip,
 };
 
+// Keep the existing page identifiers stable for command destinations.
 const PAGES: [(&str, IconName, &str); 8] = [
     (
         "外观与布局",
@@ -45,6 +46,14 @@ const PAGES: [(&str, IconName, &str); 8] = [
     ),
 ];
 
+// Application preferences share the client configuration across every project;
+// resources below them are queried through the currently connected workspace.
+const GROUPS: [(&str, &[usize]); 3] = [
+    ("全局设置", &[0, 1, 3, 6, 7]),
+    ("工作区资源", &[2, 5]),
+    ("当前会话", &[4]),
+];
+
 impl Workspace {
     pub(super) fn settings(
         &mut self,
@@ -53,9 +62,11 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         if let Some(page) = &self.settings_page {
-            if accounts_first {
-                page.update(cx, |page, cx| page.select_page(1, window, cx));
-            }
+            // The Settings command always opens application preferences. Direct
+            // resource commands select their destination immediately afterwards.
+            page.update(cx, |page, cx| {
+                page.select_page(usize::from(accounts_first), window, cx)
+            });
             cx.emit(WorkspaceEvent::Settings(page.clone()));
             return;
         }
@@ -248,6 +259,21 @@ struct ResourceContext {
 }
 
 impl SettingsPage {
+    /// Retained forms belong to this workspace even when another settings page
+    /// or the conversation is visible. A blank conversation is not disposable
+    /// while one of those forms is being edited or saved.
+    pub(super) fn has_pending_work(&self, cx: &App) -> bool {
+        self.accounts.read(cx).has_pending_work()
+            || self.advanced.read(cx).has_pending_work(cx)
+            || self.mcp.read(cx).has_pending_work()
+            || self.shortcuts.read(cx).has_pending_work(cx)
+            || self.contexts.iter().any(|context| {
+                context.skills.read(cx).has_pending_work()
+                    || context.memory.read(cx).has_pending_work()
+                    || context.plugins.read(cx).has_pending_work()
+            })
+    }
+
     pub(super) fn bind_context(
         &mut self,
         session: Option<String>,
@@ -434,7 +460,7 @@ impl Render for SettingsPage {
             .filter(|ix| page_matches(*ix, &query))
             .collect();
         let has_results = !visible.is_empty();
-        let sidebar = Sidebar::new("settings-navigation")
+        let mut sidebar = Sidebar::new("settings-navigation")
             .w_full()
             .h_full()
             .border_0()
@@ -446,11 +472,19 @@ impl Render for SettingsPage {
                     .prefix(Icon::new(IconName::Search))
                     .cleanable(true)
                     .aria_label("搜索设置"),
-            )
-            .child(
-                SidebarMenu::new()
-                    .gap_1()
-                    .children(visible.into_iter().map(|ix| {
+            );
+        for (label, pages) in GROUPS {
+            let pages: Vec<_> = pages
+                .iter()
+                .copied()
+                .filter(|ix| visible.contains(ix))
+                .collect();
+            if pages.is_empty() {
+                continue;
+            }
+            sidebar = sidebar.child(
+                SidebarGroup::new(label).child(SidebarMenu::new().gap_1().children(
+                    pages.into_iter().map(|ix| {
                         SidebarMenuItem::new(PAGES[ix].0)
                             .icon(PAGES[ix].1)
                             .active(self.initial_page == ix)
@@ -461,8 +495,10 @@ impl Render for SettingsPage {
                                 view.initial_page = ix;
                                 cx.notify();
                             }))
-                    })),
+                    }),
+                )),
             );
+        }
         let body = if !has_results {
             div()
                 .p_6()
@@ -481,19 +517,22 @@ impl Render for SettingsPage {
                 .into_any_element()
         } else {
             let (title, description) = match self.initial_page {
-                0 => ("外观与布局", "应用设置 · 让 Orbit 适应你的阅读与工作习惯。"),
+                0 => (
+                    "外观与布局",
+                    "让 Orbit 适应你的阅读与工作习惯，修改后立即应用。",
+                ),
                 1 => (
                     "账号与模型",
-                    "应用设置 · 管理连接账号、API 凭据与可用模型。",
+                    "在本机管理账号、API 凭据与模型，供所有项目使用。",
                 ),
-                2 => ("技能", "项目设置 · 浏览、创建与编辑当前工作区的技能。"),
-                3 => ("MCP 工具", "应用设置 · 配置 Agent 可用的工具服务器。"),
-                4 => ("会话记忆", "会话设置 · 管理当前会话保存的事实与偏好。"),
+                2 => ("技能", "浏览当前工作区可用的个人与项目技能。"),
+                3 => ("MCP 工具", "配置所有项目中新建会话可用的工具服务器。"),
+                4 => ("会话记忆", "管理当前会话保存的事实与偏好。"),
                 7 => (
                     "高级 Agent",
-                    "应用设置 · 调整运行预算、能力上限与子 Agent 参数。",
+                    "设置新建会话的运行预算、能力上限与子 Agent 参数。",
                 ),
-                _ => ("快捷键", "应用快捷键 · 修改后立即应用，并保存到本机设置。"),
+                _ => ("快捷键", "修改后立即应用于整个应用，并保存到本机设置。"),
             };
             let content = self.content(cx);
             let scroll = &self.scrolls[self.initial_page.min(PAGES.len() - 1)];
@@ -529,10 +568,14 @@ impl Render for SettingsPage {
         };
         let back = self.owner.clone();
         let shortcuts = self.shortcuts.clone();
-        let scope = format!(
-            "{} · {}",
-            self.environment, self.contexts[self.context].workspace
-        );
+        let scope = if matches!(self.initial_page, 2 | 4 | 5) {
+            format!(
+                "{} · {}",
+                self.environment, self.contexts[self.context].workspace
+            )
+        } else {
+            "全局 · 对所有项目生效".to_owned()
+        };
         let scope_tooltip = scope.clone();
         v_flex()
             .size_full()

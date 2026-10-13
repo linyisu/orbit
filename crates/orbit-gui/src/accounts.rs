@@ -91,6 +91,10 @@ fn connections(config: &Path, auth: &Path) -> anyhow::Result<Vec<Connection>> {
 }
 
 impl Accounts {
+    pub(crate) fn has_pending_work(&self) -> bool {
+        self.busy || self.loading || self.logging_in || self.adding || self.draft.is_some()
+    }
+
     pub(crate) fn new(
         options: &Options,
         runtime: Arc<tokio::runtime::Runtime>,

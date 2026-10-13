@@ -1,5 +1,8 @@
-//! Application appearance preferences. The UI owns the current values; one
+//! Application preferences. The UI owns the current values; one
 //! background writer serializes updates so older writes cannot win a race.
+mod navigation;
+pub(crate) use navigation::Placement;
+
 use gpui_kit::component::ThemeMode;
 use gpui_kit::{App, Global, SharedString, Subscription, Task, Window, WindowAppearance};
 use serde::{Deserialize, Serialize};
@@ -17,6 +20,8 @@ struct Values {
     code_font_family: Option<String>,
     #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     keybindings: crate::keymap::Overrides,
+    #[serde(skip_serializing_if = "navigation::Organization::is_empty")]
+    navigation: navigation::Organization,
 }
 
 #[derive(Clone)]
@@ -163,6 +168,50 @@ impl Preferences {
 
     pub(crate) fn save_status(cx: &App) -> crate::keymap::SaveStatus {
         cx.global::<Self>().save_status.clone()
+    }
+
+    pub(crate) fn retry_save(cx: &mut App) -> u64 {
+        cx.global_mut::<Self>().publish()
+    }
+
+    pub(crate) fn session_placement(
+        options: &crate::backend::Options,
+        id: &str,
+        cx: &App,
+    ) -> Placement {
+        cx.global::<Self>().values.navigation.placement(options, id)
+    }
+
+    pub(crate) fn session_categories(options: &crate::backend::Options, cx: &App) -> Vec<String> {
+        cx.global::<Self>().values.navigation.categories(options)
+    }
+
+    pub(crate) fn set_session_pin(
+        options: &crate::backend::Options,
+        id: &str,
+        pinned: bool,
+        cx: &mut App,
+    ) -> u64 {
+        let this = cx.global_mut::<Self>();
+        this.values.navigation.set_pin(options, id, pinned);
+        this.publish()
+    }
+
+    pub(crate) fn set_session_category(
+        options: &crate::backend::Options,
+        id: &str,
+        category: Option<String>,
+        cx: &mut App,
+    ) -> anyhow::Result<u64> {
+        let this = cx.global_mut::<Self>();
+        this.values.navigation.set_category(options, id, category)?;
+        Ok(this.publish())
+    }
+
+    pub(crate) fn forget_session(options: &crate::backend::Options, id: &str, cx: &mut App) -> u64 {
+        let this = cx.global_mut::<Self>();
+        this.values.navigation.forget(options, id);
+        this.publish()
     }
 
     pub(crate) fn mode(&self, system: WindowAppearance) -> ThemeMode {
@@ -368,6 +417,28 @@ mod tests {
     }
 
     #[test]
+    fn session_organization_defaults_for_older_preferences_and_roundtrips() {
+        use clap::Parser;
+        let mut values: Values = serde_json::from_str(r#"{"font_size":18,"dark":false}"#).unwrap();
+        assert!(values.navigation.is_empty());
+        let json = serde_json::to_value(&values).unwrap();
+        assert!(json.get("navigation").is_none());
+        let options = crate::backend::Options::parse_from(["orbit-gui"]);
+        values.navigation.set_pin(&options, "one", true);
+        values
+            .navigation
+            .set_category(&options, "one", Some("学习".into()))
+            .unwrap();
+        let restored: Values =
+            serde_json::from_slice(&serde_json::to_vec(&values).unwrap()).unwrap();
+        assert_eq!(restored.font_size, Some(18));
+        assert_eq!(restored.dark, Some(false));
+        let placement = restored.navigation.placement(&options, "one");
+        assert!(placement.is_pinned());
+        assert_eq!(placement.category(), Some("学习"));
+    }
+
+    #[test]
     fn stale_save_receipts_cannot_acknowledge_a_later_edit() {
         use crate::keymap::SaveStatus;
         assert!(!accepts_receipt(2, &SaveStatus::Saved(1)));
@@ -423,6 +494,7 @@ mod tests {
     #[test]
     fn disk_failure_preserves_values_and_same_value_retry_is_persisted() {
         use crate::keymap::SaveStatus;
+        use clap::Parser;
         let directory = tempfile::tempdir().unwrap();
         let parent = directory.path().join("settings");
         let path = parent.join("gui.json");
@@ -433,6 +505,13 @@ mod tests {
             .values
             .keybindings
             .insert("toggle_sidebar".into(), Some("ctrl-k ctrl-b".into()));
+        let options = crate::backend::Options::parse_from(["orbit-gui"]);
+        preferences.values.navigation.set_pin(&options, "one", true);
+        preferences
+            .values
+            .navigation
+            .set_category(&options, "one", Some("学习".into()))
+            .unwrap();
         let first = preferences.publish();
         runtime.block_on(async {
             tokio::time::timeout(
@@ -467,5 +546,8 @@ mod tests {
         );
         let restored: Values = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
         assert_eq!(restored.keybindings, preferences.values.keybindings);
+        let placement = restored.navigation.placement(&options, "one");
+        assert!(placement.is_pinned());
+        assert_eq!(placement.category(), Some("学习"));
     }
 }

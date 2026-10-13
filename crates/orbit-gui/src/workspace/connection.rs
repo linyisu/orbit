@@ -173,8 +173,24 @@ impl Workspace {
         });
     }
 
-    pub(super) fn open_project(&mut self, cx: &mut Context<Self>) {
-        self.choose_project_directory(None, cx);
+    pub(super) fn open_project(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.choosing_project || self.opening {
+            return;
+        }
+        if self.options.ssh.is_some() || self.options.wsl.is_some() {
+            self.suspend_connection_challenge(window, cx);
+            self.choosing_project = true;
+            remote::choose_project_directory(
+                self.options.clone(),
+                self.runtime.clone(),
+                self.environment(),
+                window,
+                cx,
+            );
+            cx.notify();
+        } else {
+            self.choose_project_directory(None, cx);
+        }
     }
 
     pub(super) fn choose_project_directory(
@@ -226,23 +242,7 @@ impl Workspace {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let mut options = self.options.clone();
-        if local {
-            if options.ssh.is_some() || options.wsl.is_some() {
-                options.server = None;
-                options.database = None;
-            }
-            options.ssh = None;
-            options.ssh_user = None;
-            options.ssh_port = None;
-            options.identity = None;
-            options.wsl = None;
-            options.wsl_user = None;
-        }
-        options.workspace = Some(path);
-        options.resume = resume;
-        options.recover_draft = false;
-        options.relink_on_resume = relink;
+        let options = project_options(&self.options, path, resume, local, relink);
         cx.emit(WorkspaceEvent::Open(Box::new(options)));
     }
 
@@ -284,6 +284,35 @@ impl Workspace {
             )
         });
     }
+}
+
+/// A directory choice changes the project, not the selected host. The separate
+/// local command is the only path that deliberately clears remote transport.
+fn project_options(
+    current: &Options,
+    path: PathBuf,
+    resume: Option<String>,
+    local: bool,
+    relink: bool,
+) -> Options {
+    let mut options = current.clone();
+    if local {
+        if options.ssh.is_some() || options.wsl.is_some() {
+            options.server = None;
+            options.database = None;
+        }
+        options.ssh = None;
+        options.ssh_user = None;
+        options.ssh_port = None;
+        options.identity = None;
+        options.wsl = None;
+        options.wsl_user = None;
+    }
+    options.workspace = Some(path);
+    options.resume = resume;
+    options.recover_draft = false;
+    options.relink_on_resume = relink;
+    options
 }
 
 // The queue owns replies while a tab is hidden. Dialogs hold a clone so closing
@@ -513,9 +542,76 @@ impl Workspace {
 
 #[cfg(test)]
 mod tests {
-    use super::{ConnectionChallenge, filtered_log};
+    use super::{ConnectionChallenge, Options, filtered_log, project_options};
+    use clap::Parser;
     use orbit_client::interaction::Challenge;
     use tokio::sync::oneshot;
+
+    #[test]
+    fn opening_another_remote_project_preserves_ssh_and_wsl_targets() {
+        for args in [
+            vec![
+                "orbit-gui",
+                "--ssh",
+                "dev-alias",
+                "--ssh-user",
+                "builder",
+                "--ssh-port",
+                "2222",
+                "--identity",
+                "/desktop/keys/dev",
+            ],
+            vec!["orbit-gui", "--wsl", "Ubuntu", "--wsl-user", "builder"],
+        ] {
+            let mut current = Options::parse_from(args);
+            current.workspace = Some("/remote/old".into());
+            current.server = Some("/remote/bin/orbit-workspace-server".into());
+            current.database = Some("~/state/orbit.db".into());
+            current.resume = Some("previous-session".into());
+            current.recover_draft = true;
+            current.relink_on_resume = true;
+            let selected = project_options(
+                &current,
+                "/remote/project '中文'".into(),
+                None,
+                false,
+                false,
+            );
+            assert!(current.same_host(&selected));
+            assert_eq!(
+                selected.workspace.as_deref(),
+                Some(std::path::Path::new("/remote/project '中文'"))
+            );
+            assert!(selected.resume.is_none());
+            assert!(!selected.recover_draft && !selected.relink_on_resume);
+            assert_eq!(selected.identity, current.identity);
+            assert_eq!(selected.wsl_user, current.wsl_user);
+        }
+    }
+
+    #[test]
+    fn explicit_local_project_clears_remote_target_and_its_service_paths() {
+        let mut current = Options::parse_from([
+            "orbit-gui",
+            "--ssh",
+            "dev",
+            "--ssh-user",
+            "builder",
+            "--ssh-port",
+            "2222",
+            "--identity",
+            "/desktop/key",
+        ]);
+        current.server = Some("/remote/bin/orbit".into());
+        current.database = Some("/remote/state.db".into());
+        let selected = project_options(&current, "/local/project".into(), None, true, false);
+        assert!(selected.ssh.is_none() && selected.ssh_user.is_none());
+        assert!(selected.ssh_port.is_none() && selected.identity.is_none());
+        assert!(selected.wsl.is_none() && selected.wsl_user.is_none());
+        assert!(selected.server.is_none() && selected.database.is_none());
+        assert_eq!(selected.config, current.config);
+        assert_eq!(selected.auth_dir, current.auth_dir);
+    }
 
     #[test]
     fn hidden_authentication_survives_dialog_drop_and_answers_once() {
