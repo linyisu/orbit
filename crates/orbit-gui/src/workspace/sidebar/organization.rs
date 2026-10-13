@@ -5,52 +5,227 @@ use gpui_kit::component::{
     notification::Notification,
 };
 
+#[derive(Clone)]
+pub(super) struct ProjectDrag {
+    owner: WeakEntity<Sidebar>,
+    options: Options,
+    path: String,
+    label: SharedString,
+}
+impl ProjectDrag {
+    pub(super) fn owner_matches(&self, other: &Self) -> bool {
+        self.owner.upgrade() == other.owner.upgrade()
+            && self.options.same_host(&other.options)
+            && self.path != other.path
+    }
+}
+impl Render for ProjectDrag {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        h_flex()
+            .px_3()
+            .py_2()
+            .gap_2()
+            .bg(cx.theme().popover)
+            .border_1()
+            .border_color(cx.theme().border)
+            .rounded(cx.theme().radius)
+            .child(Icon::new(IconName::Folder).size_4())
+            .child(self.label.clone())
+    }
+}
+
+pub(super) fn project_drag(
+    owner: WeakEntity<Sidebar>,
+    options: Options,
+    path: String,
+    label: SharedString,
+) -> ProjectDrag {
+    ProjectDrag {
+        owner,
+        options,
+        path,
+        label,
+    }
+}
+
+pub(super) fn drop_project(
+    drag: &ProjectDrag,
+    target: &str,
+    owner: &WeakEntity<Sidebar>,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let Some(sidebar) = owner
+        .upgrade()
+        .filter(|sidebar| Some(sidebar) == drag.owner.upgrade().as_ref())
+    else {
+        return;
+    };
+    let view = sidebar.read(cx);
+    let Some(host) = view
+        .host
+        .map(|ix| &view.hosts[ix])
+        .filter(|host| host.options.same_host(&drag.options))
+    else {
+        return;
+    };
+    let paths = project_paths(&host.groups);
+    category_result(
+        Preferences::reorder_project(&drag.options, &drag.path, target, &paths, cx),
+        window,
+        cx,
+    );
+}
+
+fn project_paths(groups: &[TreeItem]) -> Vec<String> {
+    groups
+        .iter()
+        .flat_map(|section| &section.children)
+        .filter_map(|item| item.id.strip_prefix("project:").map(str::to_owned))
+        .collect()
+}
+
+pub(super) fn row_menu(
+    owner: WeakEntity<Sidebar>,
+    id: &str,
+    menu: PopupMenu,
+    window: &mut Window,
+    cx: &mut Context<PopupMenu>,
+) -> PopupMenu {
+    let Some(sidebar) = owner.upgrade() else {
+        return menu;
+    };
+    let view = sidebar.read(cx);
+    if let Some(path) = id.strip_prefix("project:") {
+        let Some(host) = view.host.map(|ix| &view.hosts[ix]) else {
+            return menu;
+        };
+        let options = host.options.clone();
+        let pinned = host.projects.is_pinned(path);
+        let paths = project_paths(&host.groups);
+        let peers = paths
+            .iter()
+            .filter(|path| host.projects.is_pinned(path) == pinned)
+            .collect::<Vec<_>>();
+        let ix = peers
+            .iter()
+            .position(|peer| peer.as_str() == path)
+            .unwrap_or(0);
+        let pin_options = options.clone();
+        let pin_path = path.to_owned();
+        let mut menu = menu.item(
+            PopupMenuItem::new(if pinned {
+                "取消项目置顶"
+            } else {
+                "置顶项目"
+            })
+            .icon(IconName::Pin)
+            .on_click(move |_, _, cx| {
+                Preferences::set_project_pin(&pin_options, &pin_path, !pinned, cx);
+            }),
+        );
+        for (label, target) in [
+            ("上移项目", ix.checked_sub(1).and_then(|ix| peers.get(ix))),
+            ("下移项目", peers.get(ix + 1)),
+        ] {
+            let target = target.map(|path| (*path).clone());
+            let options = options.clone();
+            let source = path.to_owned();
+            let paths = paths.clone();
+            menu = menu.item(
+                PopupMenuItem::new(label)
+                    .disabled(target.is_none())
+                    .on_click(move |_, window, cx| {
+                        if let Some(target) = &target {
+                            category_result(
+                                Preferences::reorder_project(&options, &source, target, &paths, cx),
+                                window,
+                                cx,
+                            );
+                        }
+                    }),
+            );
+        }
+        menu
+    } else {
+        session_menu(
+            view.owner.clone(),
+            id.strip_prefix("session:").map(str::to_owned),
+            menu,
+            window,
+            cx,
+        )
+    }
+}
+
 pub(super) fn grouped_items(
     sessions: &[SessionEntry],
     placements: &[Placement],
+    projects: &crate::preferences::Projects,
     previous: &[TreeItem],
 ) -> Vec<TreeItem> {
-    let mut pinned = Vec::new();
-    let mut categories = std::collections::BTreeMap::<String, Vec<TreeItem>>::new();
-    let mut projects = Vec::new();
-    for (entry, placement) in sessions.iter().zip(placements) {
-        let title = if entry.title.trim().is_empty() {
-            "未命名会话".into()
-        } else {
-            entry.title.clone()
-        };
-        let item = TreeItem::new(format!("session:{}", entry.id), title);
-        if placement.is_pinned() {
-            pinned.push(item);
-        } else if let Some(category) = placement.category() {
-            categories
-                .entry(category.to_owned())
-                .or_default()
-                .push(item);
-        } else {
-            projects.push(entry.clone());
-        }
+    let old_projects = previous
+        .iter()
+        .flat_map(|section| section.children.iter())
+        .cloned()
+        .collect::<Vec<_>>();
+    let mut groups = super::super::navigation::project_items(sessions, &old_projects);
+    let placements_by_id = sessions
+        .iter()
+        .zip(placements)
+        .map(|(entry, placement)| (entry.id.as_ref(), placement))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    // Categories live inside their actual project. Pinning moves the entire
+    // project, including every conversation and its category, as one object.
+    for project in &mut groups {
+        let path = project.id.strip_prefix("project:").unwrap();
+        let mut categories = std::collections::BTreeMap::<String, Vec<TreeItem>>::new();
+        project.children.retain(|item| {
+            let category = item
+                .id
+                .strip_prefix("session:")
+                .and_then(|id| placements_by_id.get(id))
+                .and_then(|placement| placement.category());
+            if let Some(category) = category {
+                categories
+                    .entry(category.to_owned())
+                    .or_default()
+                    .push(item.clone());
+                false
+            } else {
+                true
+            }
+        });
+        let previous = old_projects.iter().find(|old| old.id == project.id);
+        project
+            .children
+            .extend(categories.into_iter().map(|(category, children)| {
+                let id = format!("category:{}:{path}:{category}", path.len());
+                let expanded = previous
+                    .and_then(|project| project.children.iter().find(|item| item.id.as_ref() == id))
+                    .is_none_or(TreeItem::is_expanded);
+                TreeItem::new(id, category)
+                    .expanded(expanded)
+                    .children(children)
+            }));
     }
-    let group = |id: String, label: String, children: Vec<TreeItem>| {
-        let expanded = previous
-            .iter()
-            .find(|item| item.id.as_ref() == id)
-            .is_none_or(TreeItem::is_expanded);
-        let mut item = TreeItem::new(id, label).expanded(expanded);
-        item.children = children;
-        item
-    };
-    let mut groups = Vec::new();
-    if !pinned.is_empty() {
-        groups.push(group("pinned".into(), "置顶".into(), pinned));
-    }
-    groups.extend(
-        categories
-            .into_iter()
-            .map(|(category, entries)| group(format!("category:{category}"), category, entries)),
-    );
-    groups.extend(super::super::navigation::project_items(&projects, previous));
-    groups
+    groups.sort_by_key(|project| projects.position(project.id.strip_prefix("project:").unwrap()));
+    let (pinned, regular): (Vec<_>, Vec<_>) = groups
+        .into_iter()
+        .partition(|project| projects.is_pinned(project.id.strip_prefix("project:").unwrap()));
+    [("pinned", "置顶", pinned), ("projects", "项目", regular)]
+        .into_iter()
+        .filter(|(_, _, children)| !children.is_empty())
+        .map(|(id, label, children)| {
+            let expanded = previous
+                .iter()
+                .find(|section| section.id.as_ref() == id)
+                .is_none_or(TreeItem::is_expanded);
+            TreeItem::new(id, label)
+                .expanded(expanded)
+                .children(children)
+        })
+        .collect()
 }
 
 pub(super) fn session_menu(
@@ -74,9 +249,6 @@ pub(super) fn session_menu(
     let categories = Preferences::session_categories(&options, cx);
     let rename_owner = owner.clone();
     let rename_id = id.clone();
-    let pin_options = options.clone();
-    let pin_id = id.clone();
-    let pinned = placement.is_pinned();
     let category_id = id.clone();
     menu.item(
         PopupMenuItem::new("重命名会话…")
@@ -87,13 +259,6 @@ pub(super) fn session_menu(
                     let _ =
                         owner.update(cx, |view, cx| view.rename_session(&rename_id, window, cx));
                 }
-            }),
-    )
-    .item(
-        PopupMenuItem::new(if pinned { "取消置顶" } else { "置顶" })
-            .icon(IconName::Pin)
-            .on_click(move |_, _, cx| {
-                Preferences::set_session_pin(&pin_options, &pin_id, !pinned, cx);
             }),
     )
     .submenu_with_icon(
@@ -275,7 +440,7 @@ impl Render for CategoryEditor {
 
 #[cfg(test)]
 mod tests {
-    use super::{Placement, SessionEntry, grouped_items};
+    use super::{Placement, Projects, SessionEntry, grouped_items, project_paths};
     fn entry(id: &str, project: &str) -> SessionEntry {
         SessionEntry {
             id: id.to_owned().into(),
@@ -283,58 +448,70 @@ mod tests {
             workspace: project.to_owned().into(),
         }
     }
-    fn placement(pinned: bool, category: Option<&str>) -> Placement {
-        serde_json::from_value(serde_json::json!({"pinned": pinned, "category": category})).unwrap()
+    fn projects() -> Projects {
+        serde_json::from_value(
+            serde_json::json!({"pinned":["/alpha"],"order":["/gamma","/beta","/alpha"]}),
+        )
+        .unwrap()
     }
     #[test]
-    fn pinned_and_categorized_sessions_appear_once_without_changing_projects() {
+    fn pinned_projects_keep_all_sessions_and_categories_under_their_project() {
         let sessions = vec![
             entry("a", "/alpha"),
             entry("b", "/beta"),
             entry("c", "/alpha"),
+            entry("d", "/gamma"),
         ];
-        let mut placements = vec![
-            placement(true, Some("学习")),
-            placement(false, Some("学习")),
+        let placements = vec![
+            serde_json::from_value(serde_json::json!({"category":"学习"})).unwrap(),
+            Placement::default(),
+            Placement::default(),
             Placement::default(),
         ];
-        let groups = grouped_items(&sessions, &placements, &[]);
+        let groups = grouped_items(&sessions, &placements, &projects(), &[]);
         assert_eq!(
             groups
                 .iter()
-                .map(|group| group.id.as_ref())
+                .map(|section| section.id.as_ref())
                 .collect::<Vec<_>>(),
-            ["pinned", "category:学习", "project:/alpha"]
+            ["pinned", "projects"]
         );
-        assert_eq!(groups.iter().flat_map(|group| &group.children).count(), 3);
-        placements[0] = placement(false, Some("学习"));
-        let groups = grouped_items(&sessions, &placements, &groups);
-        assert_eq!(
-            groups[0]
-                .children
-                .iter()
-                .map(|child| child.id.as_ref())
-                .collect::<Vec<_>>(),
-            ["session:a", "session:b"]
-        );
-        placements[0] = Placement::default();
-        let groups = grouped_items(&sessions, &placements, &groups);
-        assert_eq!(groups[1].id.as_ref(), "project:/alpha");
-        assert_eq!(groups[1].children.len(), 2);
+        let alpha = &groups[0].children[0];
+        assert_eq!(alpha.id.as_ref(), "project:/alpha");
+        assert_eq!(alpha.children[0].id.as_ref(), "session:c");
+        assert_eq!(alpha.children[1].label.as_ref(), "学习");
+        assert_eq!(alpha.children[1].children[0].id.as_ref(), "session:a");
+        assert_eq!(project_paths(&groups), ["/alpha", "/gamma", "/beta"]);
+        let category = alpha.children[1].clone().expanded(false);
+        let alpha = alpha.clone().expanded(true).children([]);
+        let mut old = groups.clone();
+        old[0].children[0] = alpha;
+        old[0].children[0].children = vec![category];
+        let unpinned = Projects::default();
+        let moved = grouped_items(&sessions, &placements, &unpinned, &old);
+        assert_eq!(moved.len(), 1);
+        let alpha = moved[0]
+            .children
+            .iter()
+            .find(|item| item.id.as_ref() == "project:/alpha")
+            .unwrap();
+        assert!(alpha.is_expanded());
+        assert!(!alpha.children[1].is_expanded());
         assert_eq!(sessions[0].workspace.as_ref(), "/alpha");
     }
     #[test]
-    fn catalog_refresh_keeps_folder_expansion_and_reveals_new_organization_groups() {
-        let sessions = vec![entry("a", "/alpha"), entry("b", "/beta")];
-        let placements = vec![placement(false, Some("工作")), Placement::default()];
-        let groups = grouped_items(&sessions, &placements, &[]);
-        assert!(groups[0].is_expanded());
-        let old = vec![
-            groups[0].clone().expanded(false),
-            groups[1].clone().expanded(true),
-        ];
-        let refreshed = grouped_items(&sessions, &placements, &old);
-        assert!(!refreshed[0].is_expanded());
-        assert!(refreshed[1].is_expanded());
+    fn new_catalog_entries_keep_saved_project_order_and_existing_expansion() {
+        let sessions = vec![entry("b", "/beta"), entry("d", "/gamma")];
+        let placements = vec![Placement::default(); 2];
+        let groups = grouped_items(&sessions, &placements, &projects(), &[]);
+        groups[0].children[0].clone().expanded(true);
+        let refreshed = grouped_items(
+            &sessions.iter().rev().cloned().collect::<Vec<_>>(),
+            &placements,
+            &projects(),
+            &groups,
+        );
+        assert_eq!(project_paths(&refreshed), ["/gamma", "/beta"]);
+        assert!(refreshed[0].children[0].is_expanded());
     }
 }

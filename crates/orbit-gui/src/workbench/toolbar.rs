@@ -15,6 +15,22 @@ use gpui_kit::{
     prelude::FluentBuilder,
 };
 
+/// Decide against the pre-close order, including retained background tasks.
+/// Prefer the nearest open tab on the left; only the first tab falls right.
+pub(super) fn close_neighbor<T>(
+    tabs: &[T],
+    index: usize,
+    closed: impl Fn(&T) -> bool,
+) -> Option<usize> {
+    if index >= tabs.len() {
+        return None;
+    }
+    (0..index)
+        .rev()
+        .chain(index + 1..tabs.len())
+        .find(|ix| !closed(&tabs[*ix]))
+}
+
 impl Workbench {
     pub(super) fn adjacent(&mut self, forward: bool, window: &mut Window, cx: &mut Context<Self>) {
         let keys: Vec<_> = self
@@ -227,5 +243,23 @@ impl Workbench {
                         })),
                 ),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::close_neighbor;
+    #[test]
+    fn closing_tabs_prefers_left_skips_hidden_runs_and_only_falls_right_at_the_start() {
+        let tabs = [false, true, false, false];
+        assert_eq!(close_neighbor(&tabs, 3, |closed| *closed), Some(2));
+        assert_eq!(close_neighbor(&tabs, 2, |closed| *closed), Some(0));
+        assert_eq!(close_neighbor(&tabs, 0, |closed| *closed), Some(2));
+        assert_eq!(close_neighbor(&[false], 0, |closed| *closed), None);
+        assert_eq!(
+            close_neighbor(&[true, false, true], 1, |closed| *closed),
+            None
+        );
+        assert_eq!(close_neighbor(&tabs, tabs.len(), |closed| *closed), None);
     }
 }

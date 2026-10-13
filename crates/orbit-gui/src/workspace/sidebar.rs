@@ -2,16 +2,13 @@
 mod organization;
 #[path = "session_controls.rs"]
 mod session_controls;
-use super::navigation::scrolling_title;
+mod tree;
 use super::*;
-use crate::preferences::{Placement, Preferences};
+use crate::preferences::{Placement, Preferences, Projects};
 use gpui_kit::component::{
-    list::ListItem,
     menu::{ContextMenuExt, PopupMenu},
     spinner::Spinner,
-    tooltip::Tooltip,
 };
-use organization::session_menu;
 
 pub(crate) struct Sidebar {
     owner: Option<WeakEntity<Workspace>>,
@@ -29,11 +26,17 @@ struct HostNavigation {
     groups: Vec<TreeItem>,
     tree: Entity<TreeState>,
     placements: Vec<Placement>,
+    projects: Projects,
 }
 impl HostNavigation {
     fn rebuild(&mut self, cx: &mut App) {
         let selected = self.tree.read(cx).selected_item().cloned();
-        self.groups = organization::grouped_items(&self.sessions, &self.placements, &self.groups);
+        self.groups = organization::grouped_items(
+            &self.sessions,
+            &self.placements,
+            &self.projects,
+            &self.groups,
+        );
         self.tree.update(cx, |tree, cx| {
             tree.set_items(self.groups.clone(), cx);
             // Moving a selected session into a collapsed category must reveal
@@ -51,8 +54,10 @@ impl Sidebar {
                     .iter()
                     .map(|entry| Preferences::session_placement(&host.options, &entry.id, cx))
                     .collect::<Vec<_>>();
-                if host.placements != placements {
+                let projects = Preferences::projects(&host.options, cx);
+                if host.placements != placements || host.projects != projects {
                     host.placements = placements;
+                    host.projects = projects;
                     host.rebuild(cx);
                 }
             }
@@ -90,6 +95,7 @@ impl Sidebar {
                 groups: vec![],
                 tree: cx.new(|cx| TreeState::new(cx)),
                 placements: vec![],
+                projects: Projects::default(),
             });
             self.hosts.len() - 1
         });
@@ -105,14 +111,32 @@ impl Sidebar {
             .map(|item| item.id.clone());
         let catalog_changed = host.sessions != sessions;
         if catalog_changed {
+            Preferences::migrate_project_pins(
+                &host.options,
+                &sessions
+                    .iter()
+                    .map(|entry| (entry.id.to_string(), entry.workspace.to_string()))
+                    .collect::<Vec<_>>(),
+                cx,
+            );
+            host.projects = Preferences::projects(&host.options, cx);
             host.placements = sessions
                 .iter()
                 .map(|entry| Preferences::session_placement(&host.options, &entry.id, cx))
                 .collect();
-            let mut groups = organization::grouped_items(&sessions, &host.placements, &host.groups);
-            for group in &mut groups {
+            let mut groups = organization::grouped_items(
+                &sessions,
+                &host.placements,
+                &host.projects,
+                &host.groups,
+            );
+            for group in groups.iter_mut().flat_map(|section| &mut section.children) {
                 if group.id.as_ref() == format!("project:{location}")
-                    && !host.groups.iter().any(|old| old.id == group.id)
+                    && !host
+                        .groups
+                        .iter()
+                        .flat_map(|section| &section.children)
+                        .any(|old| old.id == group.id)
                 {
                     *group = group.clone().expanded(true);
                 }
@@ -169,220 +193,8 @@ impl Sidebar {
         self.visible = !self.visible;
         cx.notify();
     }
-    fn project_tree(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let owner = cx.weak_entity();
-        let workspace_owner = self.owner.clone();
-        let hovered = self.hovered_title.clone();
-        let tasks = self.navigation_tasks.clone();
-        let active = self
-            .info
-            .as_ref()
-            .map(|info| format!("session:{}", info.id));
-        div()
-            .id("project-conversations")
-            .size_full()
-            .capture_key_down(cx.listener(|view, event: &KeyDownEvent, window, cx| {
-                // Nested row menus own Enter when their trigger or popup has
-                // focus. Only the tree's own keyboard path opens a session.
-                if !window
-                    .context_stack()
-                    .last()
-                    .is_some_and(|context| context.contains(gpui_kit::base::tree_key_context()))
-                {
-                    return;
-                }
-                if matches!(event.keystroke.key.as_str(), "enter" | "f2" | "delete") {
-                    let id = view
-                        .navigation()
-                        .read(cx)
-                        .selected_item()
-                        .map(|item| item.id.clone());
-                    if let Some(id) =
-                        id.and_then(|id| id.strip_prefix("session:").map(str::to_owned))
-                    {
-                        match event.keystroke.key.as_str() {
-                            "f2" => view.with_owner(
-                                cx,
-                                |view, window, cx| view.rename_session(&id, window, cx),
-                                window,
-                            ),
-                            "delete" => view.with_owner(
-                                cx,
-                                |view, window, cx| view.delete_session(&id, window, cx),
-                                window,
-                            ),
-                            _ => view.select_session(&id, window, cx),
-                        }
-                        cx.stop_propagation();
-                    }
-                }
-            }))
-            .child(Tree::new(self.navigation(), move |_, entry, _, _, cx| {
-                let id = entry.item().id.clone();
-                let owner = owner.clone();
-                let menu_owner = workspace_owner.clone();
-                let menu_id = id.clone();
-                let button_owner = workspace_owner.clone();
-                let button_id = id.clone();
-                let hover_owner = owner.clone();
-                let hover_id = id.clone();
-                let folder = entry.is_folder();
-                let expanded = entry.is_expanded();
-                let title: SharedString = entry
-                    .item()
-                    .label
-                    .split_whitespace()
-                    .collect::<Vec<_>>()
-                    .join(" ")
-                    .into();
-                let started = hovered
-                    .as_ref()
-                    .filter(|(key, _)| key == &id)
-                    .map(|(_, time)| *time);
-                let task = id.strip_prefix("session:").and_then(|session| {
-                    tasks
-                        .iter()
-                        .find(|task| task.session.as_deref() == Some(session))
-                });
-                let status = task.map(|task| task.status);
-                ListItem::new(id.clone())
-                    .accessibility_label(entry.item().label.clone())
-                    .h_8()
-                    .overflow_hidden()
-                    .confirmed(active.as_deref() == Some(id.as_ref()))
-                    .on_hover(move |hovering, _, cx| {
-                        let _ = hover_owner.update(cx, |view, cx| {
-                            if *hovering {
-                                view.hovered_title = Some((hover_id.clone(), Instant::now()));
-                            } else if view
-                                .hovered_title
-                                .as_ref()
-                                .is_some_and(|(id, _)| id == &hover_id)
-                            {
-                                view.hovered_title = None;
-                            }
-                            cx.notify();
-                        });
-                    })
-                    .child(
-                        h_flex()
-                            .id((ElementId::from(id.clone()), "content"))
-                            .w_full()
-                            .min_w_0()
-                            .gap_2()
-                            .child(div().w_4().flex_shrink_0().when(folder, |slot| {
-                                slot.child(
-                                    Icon::new(if id.as_ref() == "pinned" {
-                                        IconName::Pin
-                                    } else if id.starts_with("category:") {
-                                        IconName::Tags
-                                    } else if expanded {
-                                        IconName::FolderOpen
-                                    } else {
-                                        IconName::Folder
-                                    })
-                                    .size_4(),
-                                )
-                            }))
-                            .child(
-                                div()
-                                    .w_0()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .h_6()
-                                    .overflow_hidden()
-                                    .whitespace_nowrap()
-                                    .text_ellipsis()
-                                    .map(|label| match started.filter(|_| !cx.reduce_motion()) {
-                                        Some(started) => {
-                                            label.child(scrolling_title(title, started))
-                                        }
-                                        None => label.child(title),
-                                    }),
-                            )
-                            .child(
-                                div()
-                                    .id((ElementId::from(id.clone()), "activity"))
-                                    .w_4()
-                                    .h_4()
-                                    .flex_shrink_0()
-                                    .when_some(task, |slot, task| {
-                                        slot.when(task.attention, |slot| {
-                                            slot.child(
-                                                Icon::new(IconName::Info)
-                                                    .size_4()
-                                                    .text_color(cx.theme().muted_foreground),
-                                            )
-                                        })
-                                        .when(task.loading && !task.attention, |slot| {
-                                            slot.child(Spinner::new().small())
-                                        })
-                                        .when_some(
-                                            status,
-                                            |slot, status| {
-                                                slot.tooltip(move |window, cx| {
-                                                    Tooltip::new(status).build(window, cx)
-                                                })
-                                            },
-                                        )
-                                    }),
-                            )
-                            .when(!folder, |content| {
-                                content.child(
-                                    Button::new((ElementId::from(button_id.clone()), "menu"))
-                                        .ghost()
-                                        .xsmall()
-                                        .icon(IconName::Ellipsis)
-                                        .accessibility_label(format!(
-                                            "管理会话：{}",
-                                            entry.item().label
-                                        ))
-                                        .tooltip("会话操作")
-                                        .on_click(|_, _, cx| cx.stop_propagation())
-                                        .dropdown_menu(move |menu, window, cx| {
-                                            session_menu(
-                                                button_owner.clone(),
-                                                button_id
-                                                    .strip_prefix("session:")
-                                                    .map(str::to_owned),
-                                                menu,
-                                                window,
-                                                cx,
-                                            )
-                                        }),
-                                )
-                            })
-                            .map(move |content| {
-                                if folder {
-                                    content.into_any_element()
-                                } else {
-                                    content
-                                        .context_menu(move |menu, window, cx| {
-                                            session_menu(
-                                                menu_owner.clone(),
-                                                menu_id.strip_prefix("session:").map(str::to_owned),
-                                                menu,
-                                                window,
-                                                cx,
-                                            )
-                                        })
-                                        .into_any_element()
-                                }
-                            }),
-                    )
-                    .when(folder && id.starts_with("project:"), |row| {
-                        let path = id.strip_prefix("project:").unwrap_or(&id).to_owned();
-                        row.tooltip(move |window, cx| Tooltip::new(path.clone()).build(window, cx))
-                    })
-                    .on_click(move |_, window, cx| {
-                        if let Some(session) = id.strip_prefix("session:") {
-                            let _ = owner
-                                .update(cx, |view, cx| view.select_session(session, window, cx));
-                        }
-                    })
-            }))
-    }
 }
+
 impl Render for Sidebar {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let Some(owner) = self.owner.as_ref().and_then(|owner| owner.upgrade()) else {
@@ -689,39 +501,6 @@ impl Render for Sidebar {
                                     window,
                                 );
                             })),
-                    ),
-            )
-            .child(
-                h_flex()
-                    .px_4()
-                    .py_2()
-                    .gap_2()
-                    .text_xs()
-                    .text_color(cx.theme().muted_foreground)
-                    .child(div().flex_1().child("会话"))
-                    .child(
-                        Button::new("selected-session-menu")
-                            .ghost()
-                            .small()
-                            .icon(IconName::Ellipsis)
-                            .accessibility_label("所选会话操作")
-                            .tooltip("会话管理 · 置顶、分类、重命名与删除")
-                            .dropdown_menu({
-                                let sidebar = cx.weak_entity();
-                                move |menu, window, cx| {
-                                    let Some(sidebar) = sidebar.upgrade() else {
-                                        return menu;
-                                    };
-                                    let sidebar = sidebar.read(cx);
-                                    let id = sidebar
-                                        .navigation()
-                                        .read(cx)
-                                        .selected_item()
-                                        .and_then(|item| item.id.strip_prefix("session:"))
-                                        .map(str::to_owned);
-                                    session_menu(sidebar.owner.clone(), id, menu, window, cx)
-                                }
-                            }),
                     ),
             )
             .child(div().flex_1().min_h_0().child(self.project_tree(cx)))

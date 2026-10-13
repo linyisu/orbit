@@ -430,6 +430,8 @@ impl Workbench {
         options.recover_draft = false;
         options.relink_on_resume = false;
         let was_active = self.active == key;
+        let adjacent = toolbar::close_neighbor(&self.tasks, ix, |task| task.closed)
+            .map(|ix| self.tasks[ix].view.read(cx).key().to_owned());
         if busy {
             // Closing a tab is navigation. Keep its transport and event
             // subscription alive until the user explicitly stops the run.
@@ -465,17 +467,7 @@ impl Workbench {
             }
             self.open(options, window, cx);
         } else if was_active {
-            let next = self
-                .tasks
-                .iter()
-                .skip(ix)
-                .chain(self.tasks.iter().take(ix))
-                .find(|task| !task.closed)
-                .expect("an open task")
-                .view
-                .read(cx)
-                .key()
-                .to_owned();
+            let next = adjacent.expect("an adjacent open task");
             self.activate(&next, window, cx);
         } else {
             self.publish(cx);

@@ -1,7 +1,7 @@
 //! Application preferences. The UI owns the current values; one
 //! background writer serializes updates so older writes cannot win a race.
 mod navigation;
-pub(crate) use navigation::Placement;
+pub(crate) use navigation::{Placement, Projects};
 
 use gpui_kit::component::ThemeMode;
 use gpui_kit::{App, Global, SharedString, Subscription, Task, Window, WindowAppearance};
@@ -186,15 +186,50 @@ impl Preferences {
         cx.global::<Self>().values.navigation.categories(options)
     }
 
-    pub(crate) fn set_session_pin(
+    pub(crate) fn projects(options: &crate::backend::Options, cx: &App) -> Projects {
+        cx.global::<Self>().values.navigation.projects(options)
+    }
+
+    pub(crate) fn migrate_project_pins(
         options: &crate::backend::Options,
-        id: &str,
+        sessions: &[(String, String)],
+        cx: &mut App,
+    ) {
+        let this = cx.global_mut::<Self>();
+        if this
+            .values
+            .navigation
+            .migrate_project_pins(options, sessions)
+        {
+            this.publish();
+        }
+    }
+
+    pub(crate) fn set_project_pin(
+        options: &crate::backend::Options,
+        path: &str,
         pinned: bool,
         cx: &mut App,
     ) -> u64 {
         let this = cx.global_mut::<Self>();
-        this.values.navigation.set_pin(options, id, pinned);
+        this.values
+            .navigation
+            .set_project_pin(options, path, pinned);
         this.publish()
+    }
+
+    pub(crate) fn reorder_project(
+        options: &crate::backend::Options,
+        source: &str,
+        target: &str,
+        paths: &[String],
+        cx: &mut App,
+    ) -> anyhow::Result<u64> {
+        let this = cx.global_mut::<Self>();
+        this.values
+            .navigation
+            .reorder_project(options, source, target, paths)?;
+        Ok(this.publish())
     }
 
     pub(crate) fn set_session_category(

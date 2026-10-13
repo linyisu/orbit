@@ -1,8 +1,10 @@
-//! Personal session organization is durable desktop state. Session IDs are
+//! Personal project and session organization is durable desktop state. Session IDs are
 //! meaningful only within their service/data source, including remote stores.
 use crate::backend::Options;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
+mod projects;
+pub(crate) use projects::Projects;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -32,6 +34,8 @@ pub(super) struct Organization {
 struct Host {
     options: Options,
     sessions: BTreeMap<String, Placement>,
+    #[serde(default, skip_serializing_if = "Projects::is_empty")]
+    projects: Projects,
 }
 
 impl Organization {
@@ -59,6 +63,7 @@ impl Organization {
             .collect()
     }
 
+    #[cfg(test)]
     pub(super) fn set_pin(&mut self, options: &Options, id: &str, pinned: bool) {
         let mut placement = self.placement(options, id);
         placement.pinned = pinned;
@@ -97,7 +102,8 @@ impl Organization {
                 host.sessions.remove(id);
             }
         }
-        self.hosts.retain(|host| !host.sessions.is_empty());
+        self.hosts
+            .retain(|host| !host.sessions.is_empty() || !host.projects.is_empty());
     }
 
     fn store(&mut self, options: &Options, id: &str, placement: Placement) {
@@ -115,6 +121,7 @@ impl Organization {
             self.hosts.push(Host {
                 options: host_options(options),
                 sessions: BTreeMap::from([(id.to_owned(), placement)]),
+                projects: Projects::default(),
             });
         }
     }
