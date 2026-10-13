@@ -1,5 +1,7 @@
 //! The Tokio transport lives off the GPUI thread. Dropping a window disconnects
 //! its client; it never sends Cancel to a running agent.
+#[path = "backend/agents.rs"]
+mod agents;
 #[path = "backend/queue_images.rs"]
 mod queue_images;
 use std::{path::PathBuf, time::Duration};
@@ -146,6 +148,7 @@ impl Options {
 }
 
 pub(crate) enum Command {
+    WatchAgents(Option<(String, String)>),
     Tasks {
         session: String,
         workspace: String,
@@ -176,6 +179,11 @@ pub(crate) enum Command {
 }
 
 pub(crate) enum Event {
+    AgentStatuses {
+        session: String,
+        workspace: String,
+        agents: Vec<orbit_protocol::subagents::Agent>,
+    },
     Tasks {
         session: String,
         result: Result<orbit_protocol::project::TaskSnapshot, String>,
@@ -411,6 +419,7 @@ async fn run_connection(
     let mut queue_images = std::collections::HashMap::new();
     let mut questions_revision = None;
     let mut subagent: Option<(String, usize)> = None;
+    let mut agent_watch = agents::Watch::default();
     let mut last_page = None;
     // A paged transcript is already available: drain it without the live
     // polling delay, while keeping commands ahead of each page request.
@@ -421,6 +430,7 @@ async fn run_connection(
             command = commands.recv() => {
                 let Some(command) = command else { return Ok(()) };
                 match command {
+                    Command::WatchAgents(scope) => agent_watch.set(scope),
                     Command::Complete { session, input } => {
                         let result = match client.request(Request::Complete { session: session.clone(), input: input.clone() }).await {
                             Ok(Response::Completions { entries, .. }) => Ok(entries),
@@ -571,6 +581,9 @@ async fn run_connection(
                         Response::Error(error) => { subagent = None; events.send(Event::Error(error)).await?; }
                         _ => {}
                     }
+                }
+                if !backlog {
+                    agent_watch.poll(&mut client, &session, events).await?;
                 }
             }
         }

@@ -105,6 +105,13 @@ impl FixtureSubagents {
                 }
                 let children = self.parents.get_mut(parent).unwrap();
                 for child in children.iter_mut() {
+                    if child.agent.id == "child-running"
+                        && Path::new(workspace)
+                            .join(".fixture-subagents-complete")
+                            .exists()
+                    {
+                        child.agent.status = "completed".into();
+                    }
                     if child.cancelling > 0 {
                         child.cancelling -= 1;
                         if child.cancelling == 0 {

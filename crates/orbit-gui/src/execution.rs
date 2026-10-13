@@ -289,6 +289,7 @@ pub(crate) struct ChildAgent {
     pub(crate) role: String,
     pub(crate) status: String,
     task: Option<String>,
+    authoritative_run: Option<i64>,
 }
 
 impl ChildAgent {
@@ -326,6 +327,29 @@ impl Execution {
     }
     pub(crate) fn agents(&self) -> &[ChildAgent] {
         &self.agents
+    }
+
+    pub(crate) fn sync_agents(&mut self, agents: &[orbit_protocol::subagents::Agent]) {
+        for current in agents {
+            if let Some(agent) = self.agents.iter_mut().find(|agent| agent.id == current.id) {
+                if agent.authoritative_run.is_some_and(|run| run > current.run) {
+                    continue;
+                }
+                agent.status = child_status(&current.status).into();
+                agent.authoritative_run = Some(current.run);
+                if !current.task.trim().is_empty() {
+                    agent.task = Some(current.task.clone());
+                }
+            } else {
+                self.agents.push(ChildAgent {
+                    id: current.id.clone(),
+                    role: child_role(&current.role).into(),
+                    status: child_status(&current.status).into(),
+                    task: (!current.task.trim().is_empty()).then(|| current.task.clone()),
+                    authoritative_run: Some(current.run),
+                });
+            }
+        }
     }
 
     /// Progress contains replacement stdout tails, not append-only chunks.
@@ -460,31 +484,24 @@ impl Execution {
             let task = serde_json::from_str::<serde_json::Value>(&call.function.arguments)
                 .ok()
                 .and_then(|args| argument(Some(&args), &["task", "prompt"]).map(str::to_owned));
-            let status = match value["status"].as_str() {
-                Some("running" | "queued") => "运行中",
-                Some("completed") => "已完成",
-                Some("failed") => "失败",
-                Some("cancelled" | "interrupted") => "已停止",
-                _ => "查看状态",
-            }
-            .to_owned();
+            let status = child_status(value["status"].as_str().unwrap_or_default()).to_owned();
             if let Some(agent) = self.agents.iter_mut().find(|agent| agent.id == id) {
-                agent.status = status;
-                if task.is_some() {
-                    agent.task = task;
+                // Replayed spawn receipts describe launch time, not the latest
+                // stored run. They cannot overwrite the live catalogue.
+                if agent.authoritative_run.is_none() {
+                    agent.status = status;
+                    if task.is_some() {
+                        agent.task = task;
+                    }
                 }
             } else {
-                let role = match value["role"].as_str() {
-                    Some("review") => "审查",
-                    Some("explore") => "探索",
-                    Some("develop") => "实现",
-                    _ => "Agent",
-                };
+                let role = child_role(value["role"].as_str().unwrap_or_default());
                 self.agents.push(ChildAgent {
                     id: id.to_owned(),
                     role: role.to_owned(),
                     status,
                     task,
+                    authoritative_run: None,
                 });
             }
         }
@@ -524,9 +541,81 @@ impl Execution {
     }
 }
 
+fn child_status(status: &str) -> &'static str {
+    match status {
+        "running" | "queued" => "运行中",
+        "completed" => "已完成",
+        "failed" => "失败",
+        "cancelled" | "interrupted" => "已停止",
+        _ => "查看状态",
+    }
+}
+
+fn child_role(role: &str) -> &'static str {
+    match role {
+        "review" => "审查",
+        "explore" => "探索",
+        "develop" => "实现",
+        _ => "Agent",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stored_child_runs_refresh_terminal_states_and_ignore_launch_replay() {
+        use orbit_protocol::subagents::Agent;
+        let mut state = Execution::default();
+        let call = ToolCall::function(
+            "spawn",
+            "spawn_agent",
+            serde_json::json!({"task":"检查项目"}),
+        );
+        let running =
+            serde_json::json!({"agent_id":"child","role":"review","status":"running"}).to_string();
+        state.agent(&AgentEvent::ToolFinished {
+            call: call.clone(),
+            content: running.clone(),
+            changes: vec![],
+        });
+        let mut stored = Agent {
+            id: "child".into(),
+            role: "review".into(),
+            model: "fixture".into(),
+            task: "检查项目".into(),
+            workspace: "/workspace".into(),
+            status: "completed".into(),
+            run: 10,
+        };
+        for (status, label) in [
+            ("completed", "已完成"),
+            ("failed", "失败"),
+            ("cancelled", "已停止"),
+            ("interrupted", "已停止"),
+        ] {
+            stored.status = status.into();
+            state.sync_agents(&[stored.clone()]);
+            state.agent(&AgentEvent::ToolFinished {
+                call: call.clone(),
+                content: running.clone(),
+                changes: vec![],
+            });
+            assert_eq!(state.agents()[0].status, label);
+            assert_eq!(state.agents()[0].task(), Some("检查项目"));
+        }
+        stored.run = 11;
+        stored.status = "running".into();
+        state.sync_agents(&[stored.clone()]);
+        assert_eq!(state.agents()[0].status, "运行中");
+        stored.run = 10;
+        stored.status = "completed".into();
+        state.sync_agents(&[stored]);
+        assert_eq!(state.agents()[0].status, "运行中");
+        state.sync_agents(&[]);
+        assert_eq!(state.agents()[0].status, "运行中");
+    }
     fn update(value: serde_json::Value) -> Update {
         serde_json::from_value(value).unwrap()
     }

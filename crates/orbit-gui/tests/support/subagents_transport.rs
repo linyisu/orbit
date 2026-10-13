@@ -12,6 +12,41 @@ async fn request(backend: &Backend, request: Request) -> Result<Response, String
 }
 
 #[test]
+fn inspector_refreshes_all_child_pages_after_parent_output_has_stopped() {
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::write(directory.path().join(".fixture-subagents"), "").unwrap();
+    let mut options = Options::parse_from(["orbit-gui"]);
+    options.config = directory.path().join("unused.toml");
+    options.workspace = Some(directory.path().into());
+    options.server = Some(env!("CARGO_BIN_EXE_orbit-gui-fixture").into());
+    options.database = Some(directory.path().join("unused.db"));
+    options.auth_dir = Some(directory.path().join("auth"));
+    options.model = Some("fixture::local".into());
+    options.resume = Some("demo".into());
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let (backend, mut events) = Backend::start(options, &runtime);
+    runtime.block_on(async {
+        let Event::Response(Response::Opened(info)) = until(&mut events, |event| matches!(event, Event::Response(Response::Opened(_)))).await else { unreachable!() };
+        backend.send(Command::WatchAgents(Some((info.id.clone(),info.workspace.clone())))).unwrap();
+        let Event::AgentStatuses { session, workspace, agents } = until(&mut events, |event| matches!(event, Event::AgentStatuses { .. })).await else { unreachable!() };
+        assert_eq!((session,workspace),(info.id.clone(), info.workspace.clone()));
+        assert_eq!(agents.len(),35);
+        assert_eq!(agents.iter().find(|agent| agent.id == "child-running").unwrap().status,"running");
+        assert!(agents.iter().any(|agent| agent.id == "stored-child-34"));
+        // Only the stored child run changes; no parent tool or model event is
+        // emitted. The live inspector must still discover the terminal state.
+        std::fs::write(directory.path().join(".fixture-subagents-complete"), "").unwrap();
+        let Event::AgentStatuses { agents, .. } = until(&mut events, |event| matches!(event, Event::AgentStatuses { .. })).await else { unreachable!() };
+        assert_eq!(agents.len(),35);
+        assert_eq!(agents.iter().find(|agent| agent.id == "child-running").unwrap().status,"completed");
+        // Opening the same pane again must deliver a fresh snapshot even when
+        // the transcript and the last observed status did not change.
+        backend.send(Command::WatchAgents(Some((info.id,info.workspace)))).unwrap();
+        assert!(matches!(until(&mut events, |event| matches!(event, Event::AgentStatuses { .. })).await, Event::AgentStatuses { agents, .. } if agents.len() == 35));
+    });
+}
+
+#[test]
 fn native_child_discovery_owns_each_row_and_waits_for_cancelled_storage_state() {
     let directory = tempfile::tempdir().unwrap();
     std::fs::write(directory.path().join(".fixture-subagents"), "").unwrap();

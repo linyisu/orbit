@@ -426,6 +426,19 @@ impl Workspace {
     fn event(&mut self, event: Event, window: &mut Window, cx: &mut Context<Self>) {
         let previous = self.summary();
         match event {
+            Event::AgentStatuses {
+                session,
+                workspace,
+                agents,
+            } => {
+                if self
+                    .info
+                    .as_ref()
+                    .is_some_and(|info| info.id == session && info.workspace == workspace)
+                {
+                    self.execution.sync_agents(&agents);
+                }
+            }
             Event::Tasks { session, result } => {
                 if let Some(tasks) = &self.tasks {
                     tasks.update(cx, |tasks, cx| tasks.receive(&session, result, window, cx));
@@ -676,6 +689,7 @@ impl Workspace {
             });
         }
         self.info = Some(info);
+        self.watch_agents(cx);
         self.refresh_title(cx);
     }
 

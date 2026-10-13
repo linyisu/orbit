@@ -327,6 +327,9 @@ impl Workspace {
     ) {
         let changed = self.visible != visible;
         self.visible = visible;
+        if changed {
+            self.watch_agents(cx);
+        }
         if !visible && changed {
             self.suspend_connection_challenge(window, cx);
             window.remove_notification::<Workspace>(cx);
@@ -425,6 +428,7 @@ impl Workspace {
             // its composer. Returning to the conversation must reveal it first.
             self.panel = None;
             self.inspector = None;
+            self.watch_agents(cx);
         }
         self.focus_page(window, cx);
         cx.notify();
@@ -509,6 +513,7 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         self.inspector = section;
+        self.watch_agents(cx);
         self.panel = None;
         if self.page == MainPage::Conversation {
             if self.inspector == Some(inspector::Section::Execution) {
@@ -524,6 +529,18 @@ impl Workspace {
             }
         }
         cx.notify();
+    }
+    pub(super) fn watch_agents(&mut self, cx: &mut Context<Self>) {
+        let scope = (self.visible && self.inspector == Some(inspector::Section::Agents))
+            .then(|| {
+                self.info
+                    .as_ref()
+                    .map(|info| (info.id.clone(), info.workspace.clone()))
+            })
+            .flatten();
+        if self.backend.is_some() {
+            self.command(Command::WatchAgents(scope), cx);
+        }
     }
     pub(crate) fn environment(&self) -> String {
         self.options
@@ -560,6 +577,7 @@ impl Workspace {
         self.page = MainPage::Tasks;
         self.panel = None;
         self.inspector = None;
+        self.watch_agents(cx);
         if create {
             self.tasks
                 .as_ref()
