@@ -1101,7 +1101,7 @@ impl Workspace {
             let weak = weak.clone();
             dialog
                 .title("用量")
-                .width(window.rem_size() * 38.)
+                .width(window.rem_size() * 42.)
                 .child(usage.clone())
                 .footer(
                     h_flex().justify_end().child(

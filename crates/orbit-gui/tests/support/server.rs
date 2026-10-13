@@ -390,11 +390,11 @@ fn main() -> anyhow::Result<()> {
                         std::path::Path::new(&workspace).join(".fixture-quota-model"),
                     )?;
                     let limits = [
-                        ("Gemini Models · Weekly Limit Remaining", 0.89, "Account"),
+                        ("Gemini Models · Weekly Limit Remaining · weekly", 0.89, "Account"),
                         ("模型 · chat_20706", 1., "Model"),
-                        ("Gemini Models · Five Hour Limit Remaining", 0.73, "Account"),
-                        ("Claude and GPT models · Weekly Limit Remaining", 1., "Account"),
-                        ("Claude and GPT models · Five Hour Limit Remaining", 0.5, "Account"),
+                        ("Gemini Models · Five Hour Limit Remaining · 5h", 0.73, "Account"),
+                        ("Claude and GPT models · Weekly Limit Remaining · weekly", 1., "Account"),
+                        ("Claude and GPT models · Five Hour Limit Remaining · 5h", 0.5, "Account"),
                     ].map(|(label, fraction, scope)| json!({"label":label,"scope":scope,"remaining_fraction":fraction,"resets_at":(now+13200).to_string()}));
                     json!({"type":"usage","value":{"model":model,"account":{"identity":"fixture","provider":"Antigravity","name":"演示账号","fetched_at":now,"limits":limits},"session":{"runs":1,"requests":1,"runs_with_usage":1}}})
                 } else {

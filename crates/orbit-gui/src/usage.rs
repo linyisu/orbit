@@ -110,6 +110,8 @@ impl Usage {
 impl Render for Usage {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         v_flex()
+            .w_full()
+            .min_w_0()
             .gap_4()
             .child(self.account.clone())
             .when_some(self.fetched_at, |view, fetched| {
@@ -133,22 +135,50 @@ impl Render for Usage {
             })
             .children(self.rows.iter().map(|row| {
                 h_flex()
+                    .w_full()
+                    .min_w_0()
                     .gap_3()
-                    .child(div().w_40().child(row.label.clone()))
+                    .child(
+                        div()
+                            .w(rems(14.))
+                            .min_w_0()
+                            .text_ellipsis()
+                            .child(row.label.clone()),
+                    )
                     .when_some(row.percent, |view, percent| {
                         view.child(
                             div()
-                                .w_32()
+                                .flex_1()
+                                .min_w_0()
                                 .child(Progress::new(row.id.clone()).value(percent)),
                         )
-                        .child(div().w_12().text_right().child(format!("{percent:.0}%")))
+                        .child(
+                            div()
+                                .w_12()
+                                .flex_shrink_0()
+                                .whitespace_nowrap()
+                                .text_right()
+                                .child(format!("{percent:.0}%")),
+                        )
                     })
-                    .when(row.percent.is_none(), |view| view.child(row.amount.clone()))
+                    .when(row.percent.is_none(), |view| {
+                        view.child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .text_ellipsis()
+                                .text_right()
+                                .child(row.amount.clone()),
+                        )
+                    })
                     .when_some(
                         row.reset.and_then(|at| remaining(at, now())),
                         |view, text| {
                             view.child(
                                 div()
+                                    .w(rems(9.))
+                                    .flex_shrink_0()
+                                    .whitespace_nowrap()
                                     .text_sm()
                                     .text_color(cx.theme().muted_foreground)
                                     .child(format!("{text}后重置")),
@@ -182,12 +212,7 @@ fn quota_rows(snapshot: &Snapshot) -> Vec<Quota> {
             } else {
                 "额度"
             };
-            let label = limit
-                .label
-                .replace("Weekly Limit Remaining", "周")
-                .replace("Five Hour Limit Remaining", "5h")
-                .replace("Gemini Models", "Gemini")
-                .replace("Claude and GPT models", "Claude / GPT");
+            let label = quota_label(&limit.label);
             Quota {
                 id: format!("{}:{}", snapshot.account.identity, limit.label).into(),
                 label: label.into(),
@@ -204,6 +229,21 @@ fn quota_rows(snapshot: &Snapshot) -> Vec<Quota> {
             }
         })
         .collect()
+}
+fn quota_label(label: &str) -> String {
+    let mut parts = label
+        .split('·')
+        .map(|part| match part.trim().to_ascii_lowercase().as_str() {
+            "weekly limit remaining" | "weekly" | "week" => "周".to_owned(),
+            "five hour limit remaining" | "five_hour" | "5h" => "5h".to_owned(),
+            _ => part
+                .trim()
+                .replace("Gemini Models", "Gemini")
+                .replace("Claude and GPT models", "Claude / GPT"),
+        })
+        .collect::<Vec<_>>();
+    parts.dedup();
+    parts.join(" · ")
 }
 fn now() -> i64 {
     SystemTime::now()
@@ -234,7 +274,7 @@ fn remaining(at: i64, now: i64) -> Option<String> {
 }
 #[cfg(test)]
 mod tests {
-    use super::{quota_rows, remaining, reset_timestamp};
+    use super::{quota_label, quota_rows, remaining, reset_timestamp};
     use orbit_protocol::usage::{Account, Limit, Scope, Snapshot};
 
     #[test]
@@ -244,23 +284,23 @@ mod tests {
                 provider: "Antigravity".into(),
                 limits: [
                     (
-                        "Gemini Models · Weekly Limit Remaining",
+                        "Gemini Models · Weekly Limit Remaining · weekly",
                         0.89,
                         Scope::Account,
                     ),
                     ("模型 · chat_20706", 1., Scope::Model),
                     (
-                        "Gemini Models · Five Hour Limit Remaining",
+                        "Gemini Models · Five Hour Limit Remaining · 5h",
                         0.73,
                         Scope::Account,
                     ),
                     (
-                        "Claude and GPT models · Weekly Limit Remaining",
+                        "Claude and GPT models · Weekly Limit Remaining · weekly",
                         1.,
                         Scope::Account,
                     ),
                     (
-                        "Claude and GPT models · Five Hour Limit Remaining",
+                        "Claude and GPT models · Five Hour Limit Remaining · 5h",
                         0.5,
                         Scope::Account,
                     ),
@@ -320,5 +360,13 @@ mod tests {
         assert_eq!(remaining(3601, 0).as_deref(), Some("1时1分"));
         assert_eq!(remaining(42, 42), None);
         assert_eq!(remaining(1, 42), None);
+    }
+
+    #[test]
+    fn quota_labels_keep_distinct_details_and_accept_already_compact_windows() {
+        assert_eq!(quota_label("Gemini · 周"), "Gemini · 周");
+        assert_eq!(quota_label("Claude · weekly"), "Claude · 周");
+        assert_eq!(quota_label("请求额度 · daily"), "请求额度 · daily");
+        assert_eq!(quota_label("总余额"), "总余额");
     }
 }
