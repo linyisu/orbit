@@ -79,10 +79,11 @@ pub(super) fn preview(
                         .xsmall()
                         .icon(IconName::Pencil)
                         .accessibility_label(format!("编辑暂存消息 #{id}"))
-                        .tooltip("查看或编辑暂存消息")
-                        .on_click(cx.listener(move |queue, _, window, cx| {
-                            queue.select(Some(id), window, cx)
-                        })),
+                        .tooltip("撤回并放回输入框编辑")
+                        .disabled(
+                            !mutable || !row.confirmed || !row.entry.editable() || row.uncertain,
+                        )
+                        .on_click(cx.listener(move |queue, _, _, cx| queue.restore(id, cx))),
                 )
                 .child(
                     Button::new(("cancel-queued", id as u64))

@@ -12,7 +12,7 @@ enum Operation {
     List {
         after: Option<i64>,
     },
-    Edit {
+    Restore {
         id: i64,
         expected: String,
         content: String,
@@ -29,22 +29,18 @@ impl Operation {
     fn id(&self) -> Option<i64> {
         match self {
             Self::List { .. } => None,
-            Self::Edit { id, .. } | Self::Remove { id, .. } => Some(*id),
+            Self::Restore { id, .. } | Self::Remove { id, .. } => Some(*id),
         }
     }
 
     fn action(&self) -> Action {
         match self {
             Self::List { after } => Action::List { after: *after },
-            Self::Edit {
-                id,
-                expected,
-                content,
-                run,
-            } => Action::Edit {
+            Self::Restore {
+                id, expected, run, ..
+            } => Action::Remove {
                 id: *id,
                 expected: expected.clone(),
-                content: content.clone(),
                 run: *run,
             },
             Self::Remove { id, expected, run } => Action::Remove {
@@ -128,11 +124,6 @@ fn valid_entry(entry: &Entry, run: Option<i64>) -> bool {
             State::Idle => run.is_none(),
             State::Claimed | State::Finishing | State::Unavailable => true,
         }
-}
-
-/// Only an acknowledged edit of the still-current draft may normalize its text.
-fn acknowledged_draft<'a>(current: &str, submitted: &str, stored: &'a str) -> Option<&'a str> {
-    (current == submitted && stored == submitted.trim()).then_some(stored)
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -517,28 +508,23 @@ impl InputQueue {
                 self.sync_list(window, cx);
             }
             (
-                Operation::Edit { id, content, .. },
-                Ok(Response::InputQueue(Snapshot::Edited { entry })),
-            ) if entry.id == *id
-                && entry.content == content.trim()
-                && entry.editable()
-                && valid_entry(&entry, self.run) =>
-            {
-                if let Some(row) = self.rows.iter_mut().find(|row| row.entry.id == *id) {
-                    if let Some(stored) =
-                        acknowledged_draft(&row.draft.read(cx).value(), content, &entry.content)
-                    {
-                        row.draft
-                            .update(cx, |draft, cx| draft.set_value(stored, window, cx));
-                        if self.selected == Some(*id) {
-                            self.selected = None;
-                        }
-                    }
-                    row.entry = entry;
-                    row.confirmed = true;
-                    row.uncertain = false;
-                    row.error = None;
-                }
+                Operation::Restore { id, content, .. },
+                Ok(Response::InputQueue(Snapshot::Removed { id: received })),
+            ) if received == *id => {
+                // Only a confirmed withdrawal makes this safe to edit locally.
+                // Preserve any text typed while the withdrawal was in flight.
+                let _ = self.owner.update(cx, |workspace, cx| {
+                    let current = workspace.input.read(cx).value().to_string();
+                    let restored = restored_text(content, &current);
+                    workspace
+                        .input
+                        .update(cx, |input, cx| input.set_value(restored, window, cx));
+                    workspace.input.focus_handle(cx).focus(window, cx);
+                    cx.notify();
+                });
+                self.rows.retain(|row| row.entry.id != *id);
+                self.selected = None;
+                self.sync_list(window, cx);
                 self.refresh_after_mutation(cx);
             }
             (
@@ -695,14 +681,14 @@ impl InputQueue {
         });
     }
 
-    fn save(&mut self, id: i64, cx: &mut Context<Self>) {
+    fn restore(&mut self, id: i64, cx: &mut Context<Self>) {
         if !self.requests.ready() {
             return;
         }
         let Some(row) = self.rows.iter_mut().find(|row| row.entry.id == id) else {
             return;
         };
-        if !row.confirmed || !row.entry.editable() {
+        if !row.confirmed || !row.entry.editable() || row.uncertain {
             return;
         }
         let content = row.draft.read(cx).value().to_string();
@@ -711,7 +697,7 @@ impl InputQueue {
             cx.notify();
             return;
         }
-        let operation = Operation::Edit {
+        let operation = Operation::Restore {
             id,
             expected: row.entry.content.clone(),
             content,
@@ -770,14 +756,12 @@ impl InputQueue {
         let id = row.entry.id;
         let editable = row.confirmed && row.entry.editable();
         let mutable = editable && self.requests.ready();
-        let dirty = row.draft.read(cx).value().as_ref() != row.entry.content;
         let pending = self
             .requests
             .pending
             .as_ref()
             .is_some_and(|operation| operation.id() == Some(id));
         let original = row.entry.content.clone();
-        let draft = row.draft.clone();
         let compact = window.viewport_size().height < window.rem_size() * 36.;
         let state = if row.uncertain || !row.confirmed || self.requests.needs_refresh {
             "等待刷新"
@@ -797,15 +781,15 @@ impl InputQueue {
                         div()
                             .flex_1()
                             .text_sm()
-                            .child(format!("编辑暂存消息 · {state}")),
+                            .child(format!("暂存消息 · {state}")),
                     )
                     .child(
                         Button::new("close-queued-editor")
                             .ghost()
                             .xsmall()
                             .icon(IconName::X)
-                            .tooltip("收起编辑，保留草稿")
-                            .accessibility_label("收起暂存消息编辑")
+                            .tooltip("收起消息详情")
+                            .accessibility_label("收起暂存消息详情")
                             .on_click(
                                 cx.listener(|panel, _, window, cx| panel.select(None, window, cx)),
                             ),
@@ -814,7 +798,7 @@ impl InputQueue {
             .child(
                 Textarea::new(&row.draft)
                     .h(if compact { rems(4.) } else { rems(7.) })
-                    .readonly(!editable || pending)
+                    .readonly(true)
                     .aria_label(format!("输入 #{id} 的内容")),
             )
             .child(
@@ -832,22 +816,6 @@ impl InputQueue {
                     )
                     .when(editable, |view| {
                         view.child(
-                            Button::new("restore-queued-input")
-                                .small()
-                                .label("还原草稿")
-                                .disabled(pending || !dirty)
-                                .on_click(cx.listener(move |panel, _, window, cx| {
-                                    if let Some(row) =
-                                        panel.rows.iter().find(|row| row.entry.id == id)
-                                    {
-                                        let original = row.entry.content.clone();
-                                        draft.update(cx, |draft, cx| {
-                                            draft.set_value(original, window, cx)
-                                        });
-                                    }
-                                })),
-                        )
-                        .child(
                             Button::new("cancel-queued-input")
                                 .small()
                                 .label("撤回")
@@ -858,9 +826,15 @@ impl InputQueue {
                             Button::new("save-queued-input")
                                 .small()
                                 .primary()
-                                .label(if pending { "正在处理" } else { "保存" })
-                                .disabled(!mutable || !dirty)
-                                .on_click(cx.listener(move |panel, _, _, cx| panel.save(id, cx))),
+                                .label(if pending {
+                                    "正在撤回…"
+                                } else {
+                                    "放回输入框编辑"
+                                })
+                                .disabled(!mutable)
+                                .on_click(
+                                    cx.listener(move |panel, _, _, cx| panel.restore(id, cx)),
+                                ),
                         )
                     }),
             )
@@ -871,6 +845,14 @@ impl InputQueue {
 impl Render for InputQueue {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         preview::preview(self, window, cx)
+    }
+}
+
+fn restored_text(withdrawn: &str, current: &str) -> String {
+    if current.is_empty() {
+        withdrawn.to_owned()
+    } else {
+        format!("{withdrawn}\n\n{current}")
     }
 }
 
@@ -975,7 +957,7 @@ impl ListDelegate for QueueList {
 #[cfg(test)]
 mod tests {
     use super::{
-        DraftRefresh, Operation, Requests, acknowledged_draft, keep_absent_draft, refresh_draft,
+        DraftRefresh, Operation, Requests, keep_absent_draft, refresh_draft, restored_text,
         valid_entry, valid_page,
     };
     use orbit_protocol::input_queue::{Action, Entry, State};
@@ -991,7 +973,7 @@ mod tests {
     #[test]
     fn reconnect_requires_refresh_and_never_replays_an_unconfirmed_edit() {
         let mut requests = ready();
-        let edit = Operation::Edit {
+        let edit = Operation::Restore {
             id: 72,
             expected: "  original\n".into(),
             content: "draft\nsecond line".into(),
@@ -1032,25 +1014,19 @@ mod tests {
 
     #[test]
     fn mutations_send_real_id_run_and_exact_untrimmed_compare_value() {
-        let operation = Operation::Edit {
+        let operation = Operation::Restore {
             id: 992,
             expected: "  stored\n\n".into(),
             content: " replacement\n".into(),
             run: Some(312),
         };
         match operation.action() {
-            Action::Edit {
-                id,
-                expected,
-                content,
-                run,
-            } => {
+            Action::Remove { id, expected, run } => {
                 assert_eq!(id, 992);
                 assert_eq!(expected, "  stored\n\n");
-                assert_eq!(content, " replacement\n");
                 assert_eq!(run, Some(312));
             }
-            _ => panic!("expected edit"),
+            _ => panic!("editing must withdraw the queued input"),
         }
     }
 
@@ -1070,18 +1046,11 @@ mod tests {
     }
 
     #[test]
-    fn acknowledged_normalization_preserves_a_newer_local_draft() {
+    fn withdrawal_restores_exact_text_and_preserves_newer_composer_input() {
+        assert_eq!(restored_text(" original\n", ""), " original\n");
         assert_eq!(
-            acknowledged_draft(" edited\n", " edited\n", "edited"),
-            Some("edited")
-        );
-        assert_eq!(
-            acknowledged_draft("newer unsent draft", " edited\n", "edited"),
-            None
-        );
-        assert_eq!(
-            acknowledged_draft(" edited\n", " edited\n", "unexpected"),
-            None
+            restored_text("original", "new draft"),
+            "original\n\nnew draft"
         );
     }
 
