@@ -1,4 +1,5 @@
 use super::*;
+use gpui_kit::base::{SelectableText, TextSelection};
 #[path = "questions/history.rs"]
 mod history;
 #[path = "questions/side.rs"]
@@ -233,14 +234,18 @@ impl Render for QuestionForm {
                                     .px_2()
                                     .pb_2()
                                     .font_weight(FontWeight::MEDIUM)
-                                    .child(question.prompt.clone()),
+                                    .child(SelectableText::new(("question-prompt", ix), question.prompt.clone())),
                             )
                             .children(question.options.iter().enumerate().map(
                                 |(index, option)| {
                                     let option_id = option.id.clone();
                                     let checked = self.answers[ix].selected.contains(&option.id);
-                                    Button::new(("question-option", index))
-                                        .ghost()
+                                    gpui_kit::base::Button::new(("question-option", index))
+                                        .rounded(cx.theme().radius)
+                                        .text_color(cx.theme().foreground)
+                                        .hover(|style| style.bg(cx.theme().accent))
+                                        .focus_visible(|style| style.bg(cx.theme().accent))
+                                        .styles(|styles| styles.disabled(|style| style.opacity(0.5)))
                                         .w_full()
                                         .h_auto()
                                         .py_2()
@@ -279,7 +284,7 @@ impl Render for QuestionForm {
                                                         .child(
                                                             div()
                                                                 .whitespace_normal()
-                                                                .child(option.label.clone()),
+                                                                .child(SelectableText::new(("question-label", index), option.label.clone())),
                                                         )
                                                         .when(
                                                             !option.description.is_empty(),
@@ -293,9 +298,7 @@ impl Render for QuestionForm {
                                                                                 .muted_foreground,
                                                                         )
                                                                         .child(
-                                                                            option
-                                                                                .description
-                                                                                .clone(),
+                                                                            SelectableText::new(("question-description", index), option.description.clone()),
                                                                         ),
                                                                 )
                                                             },
@@ -312,8 +315,8 @@ impl Render for QuestionForm {
                                                     )
                                                 }),
                                         )
-                                        .on_click(cx.listener(move |view, _, window, cx| {
-                                            if view.pending || view.current != ix {
+                                        .on_click(cx.listener(move |view, event, window, cx| {
+                                            if view.pending || view.current != ix || (matches!(event, ClickEvent::Mouse(_)) && TextSelection::has_selection(window, cx)) {
                                                 return;
                                             }
                                             if single {

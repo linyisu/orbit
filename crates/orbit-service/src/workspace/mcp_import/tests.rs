@@ -1,4 +1,5 @@
 use super::*;
+mod session;
 
 fn fixture() -> (tempfile::TempDir, PathBuf, PathBuf) {
     let root = tempfile::tempdir().unwrap();

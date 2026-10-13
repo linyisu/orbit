@@ -47,6 +47,7 @@ struct Actor {
     questions: Questions,
     running: Option<Running>,
     undo: Option<Undo>,
+    import: Option<crate::workspace::resources::Import>,
     accepted: HashMap<String, String>,
     remembered: HashSet<String>,
     pending: HashMap<u64, ApprovalRequest>,
@@ -90,6 +91,7 @@ pub(super) async fn run(
         questions,
         running: None,
         undo: None,
+        import: None,
         accepted: HashMap::new(),
         remembered,
         pending: HashMap::new(),
@@ -110,10 +112,10 @@ pub(super) async fn run(
                 if let Command::RetireUnobserved { result } = envelope.command {
                     // Drafts have nothing to save. Persisted sessions can release
                     // their runtime only after execution and metadata work finish.
-                    let retire = !actor.setup.session.is_persisted()
+                    let retire = actor.import.is_none() && (!actor.setup.session.is_persisted()
                         || (!actor.active()
                             && !actor.questions.running().await
-                            && !actor.setup.session.metadata_pending());
+                            && !actor.setup.session.metadata_pending()));
                     let _ = result.send(retire);
                     if retire {
                         drop(actor);
@@ -124,7 +126,7 @@ pub(super) async fn run(
                     continue;
                 }
                 if matches!(&envelope.command, Command::Close) {
-                    if actor.active() || actor.questions.running().await {
+                    if actor.active() || actor.questions.running().await || actor.import.is_some() {
                         let _ = envelope.reply.send(Err(anyhow::anyhow!("会话正在运行，无法删除")));
                         continue;
                     }
@@ -159,6 +161,10 @@ pub(super) async fn run(
                     let text = match result { Ok(text) => text, Err(error) => format!("撤销失败：{error:#}") };
                     view.push(Update::Report(orbit_protocol::Report { title: "撤销文件写入".into(), text }));
                 }
+            }
+            output = async { (&mut actor.import.as_mut().unwrap().task).await }, if actor.import.is_some() => {
+                let import = actor.import.take().unwrap();
+                import.finish(&mut actor.setup, output.unwrap_or_else(|error| Err(anyhow::anyhow!("MCP 导入任务中断：{error}"))));
             }
             Some(request) = actor.setup.resources.approvals.recv() => actor.approval(request).await,
             _ = outputs.tick(), if actor.running.is_some() && !actor.progress.is_empty() && actor.progress_task.is_none() => {
@@ -409,17 +415,28 @@ impl Actor {
                 expected_workspace,
                 result,
             } => {
-                let busy = self.active() || self.questions.running().await;
-                let response = async {
-                    ensure!(
-                        expected_workspace.as_ref().is_none_or(|expected| {
-                            expected == &self.setup.session.snapshot.session.workspace
-                        }),
-                        "工作区已切换，请重新打开当前项目的设置后重试"
-                    );
-                    crate::workspace::resources::execute(&mut self.setup, action, busy).await
+                ensure!(
+                    expected_workspace.as_ref().is_none_or(|expected| {
+                        expected == &self.setup.session.snapshot.session.workspace
+                    }),
+                    "工作区已切换，请重新打开当前项目的设置后重试"
+                );
+                if matches!(
+                    action,
+                    orbit_protocol::resources::Action::ScanMcp { .. }
+                        | orbit_protocol::resources::Action::InstallMcp { .. }
+                ) {
+                    ensure!(self.import.is_none(), "MCP 导入正在进行，请等待完成");
+                    self.import = Some(crate::workspace::resources::Import::start(
+                        &mut self.setup,
+                        action,
+                        result,
+                    )?);
+                    return Ok(());
                 }
-                .await;
+                let busy = self.active() || self.questions.running().await;
+                let response =
+                    crate::workspace::resources::execute(&mut self.setup, action, busy).await;
                 let _ = result.send(response);
             }
             Command::Files {
