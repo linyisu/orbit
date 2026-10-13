@@ -28,6 +28,15 @@ pub(super) struct Turn {
     thought: Option<usize>,
 }
 impl Turn {
+    pub(super) fn reply(&self) -> String {
+        self.parts
+            .iter()
+            .filter(|part| part.kind == Kind::Text && !part.content.is_empty())
+            .map(|part| part.content.as_str())
+            .collect::<Vec<_>>()
+            .join("\n\n")
+    }
+
     pub(super) fn conclusion(&self) -> Option<usize> {
         // Reasoning and reports may arrive after prose in the same stream.
         // Only another tool call moves that answer into the process history.
@@ -260,6 +269,28 @@ mod tests {
     }
     fn call(id: &str) -> Value {
         json!({"id":id,"function":{"name":"read_file","arguments":"{}"}})
+    }
+
+    #[test]
+    fn copied_reply_preserves_all_prose_and_markdown_without_process_records() {
+        let mut turn = Turn::default();
+        for (kind, content) in [
+            (Kind::Text, "**first**\n```rust\nlet x = 1;\n```"),
+            (Kind::Thought, "reasoning"),
+            (Kind::Tool, "tool output"),
+            (Kind::Text, "final answer"),
+        ] {
+            turn.parts.push(Part {
+                kind,
+                title: String::new(),
+                content: content.into(),
+                running: false,
+            });
+        }
+        assert_eq!(
+            turn.reply(),
+            "**first**\n```rust\nlet x = 1;\n```\n\nfinal answer"
+        );
     }
 
     #[test]

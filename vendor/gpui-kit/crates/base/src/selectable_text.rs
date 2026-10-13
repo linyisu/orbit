@@ -24,6 +24,7 @@ pub struct SelectableText {
     document_order: u64,
     text_style: Option<TextStyleRefinement>,
     selection_color: Option<Hsla>,
+    scroll_viewport: Option<Bounds<Pixels>>,
 }
 
 impl SelectableText {
@@ -50,6 +51,7 @@ impl SelectableText {
             document_order: 0,
             text_style: None,
             selection_color: None,
+            scroll_viewport: None,
         }
     }
 
@@ -69,6 +71,13 @@ impl SelectableText {
     /// `colors.selection` token.
     pub fn selection_color(mut self, color: Hsla) -> Self {
         self.selection_color = Some(color);
+        self
+    }
+
+    /// Supplies the owning scroller's viewport for drag auto-scroll. Decorative
+    /// clipping bounds must not initiate scrolling inside a fully visible run.
+    pub fn scroll_viewport(mut self, bounds: Bounds<Pixels>) -> Self {
+        self.scroll_viewport = Some(bounds);
         self
     }
 
@@ -188,10 +197,13 @@ impl Element for SelectableText {
         self.styled_text
             .prepaint(global_id, inspector_id, bounds, &mut (), window, cx);
         let hitbox = window.insert_hitbox(bounds, HitboxBehavior::Normal);
-        let registration = TextSelectionRegistration::new(hitbox.clone(), bounds)
+        let mut registration = TextSelectionRegistration::new(hitbox.clone(), bounds)
             .with_document_order(self.document_order)
             .with_text_bounds(vec![bounds])
             .with_rendered_element(handle, window, cx);
+        if let Some(viewport) = self.scroll_viewport {
+            registration = registration.with_scroll_viewport(viewport);
+        }
         handle.register(registration, window, cx);
         hitbox
     }

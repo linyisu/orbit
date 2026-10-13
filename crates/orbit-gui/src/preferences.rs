@@ -18,6 +18,8 @@ struct Values {
     font_size: Option<u8>,
     ui_font_family: Option<String>,
     code_font_family: Option<String>,
+    #[serde(skip_serializing_if = "std::collections::BTreeSet::is_empty")]
+    mcp_start_configs: std::collections::BTreeSet<PathBuf>,
     #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     keybindings: crate::keymap::Overrides,
     #[serde(skip_serializing_if = "navigation::Organization::is_empty")]
@@ -154,6 +156,23 @@ impl Preferences {
             };
         }
         self.revision
+    }
+
+    pub(crate) fn allows_mcp_start(config: &Path, cx: &App) -> bool {
+        cx.global::<Self>()
+            .values
+            .mcp_start_configs
+            .contains(config)
+    }
+
+    pub(crate) fn set_mcp_start(config: &Path, allowed: bool, cx: &mut App) -> u64 {
+        let this = cx.global_mut::<Self>();
+        if allowed {
+            this.values.mcp_start_configs.insert(config.to_path_buf());
+        } else {
+            this.values.mcp_start_configs.remove(config);
+        }
+        this.publish()
     }
 
     pub(crate) fn keybindings(cx: &App) -> &crate::keymap::Overrides {
@@ -402,6 +421,38 @@ fn save(path: &Path, values: &Values) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mcp_grants_are_opt_in_config_scoped_and_survive_preferences_reload() {
+        let old: Values = serde_json::from_str("{}").unwrap();
+        assert!(old.mcp_start_configs.is_empty());
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("gui.json");
+        let first = root.path().join("first.toml");
+        let second = root.path().join("second.toml");
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let mut preferences = Preferences::load(Some(&path), &runtime).unwrap();
+        preferences.values.mcp_start_configs.insert(first.clone());
+        preferences.publish();
+        runtime.block_on(async {
+            preferences.save_updates.changed().await.unwrap();
+        });
+        let mut loaded = Preferences::load(Some(&path), &runtime).unwrap();
+        assert!(loaded.values.mcp_start_configs.contains(&first));
+        assert!(!loaded.values.mcp_start_configs.contains(&second));
+        loaded.values.mcp_start_configs.remove(&first);
+        loaded.publish();
+        runtime.block_on(async {
+            loaded.save_updates.changed().await.unwrap();
+        });
+        assert!(
+            Preferences::load(Some(&path), &runtime)
+                .unwrap()
+                .values
+                .mcp_start_configs
+                .is_empty()
+        );
+    }
 
     #[test]
     fn older_preferences_keep_default_fonts_and_font_choices_roundtrip() {

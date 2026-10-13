@@ -16,8 +16,8 @@ use std::io;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
-// Version 24 adds workspace-owned skill source discovery and installation.
-pub const VERSION: u32 = 24;
+// Version 25 adds target-owned MCP source discovery and dependency installation.
+pub const VERSION: u32 = 25;
 // Steering receipts identify the durable input independently of its consumption.
 pub const MIN_COMPATIBLE_VERSION: u32 = 15;
 

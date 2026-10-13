@@ -5,6 +5,7 @@ mod completion;
 pub mod configuration;
 mod files;
 mod input_queue;
+mod mcp_import;
 mod plugins;
 mod profile;
 pub mod project;

@@ -35,6 +35,8 @@ impl Workspace {
         v_flex()
             .id("composer")
             .key_context("OrbitComposer")
+            .capture_action(cx.listener(|view, _: &gpui_kit::component::input::MoveUp, window, cx| view.history_arrow(true, window, cx)))
+            .capture_action(cx.listener(|view, _: &gpui_kit::component::input::MoveDown, window, cx| view.history_arrow(false, window, cx)))
             .on_action(cx.listener(|view, _: &InputHistoryPrevious, window, cx| view.input_history(true, window, cx)))
             .on_action(cx.listener(|view, _: &InputHistoryNext, window, cx| view.input_history(false, window, cx)))
             .relative()

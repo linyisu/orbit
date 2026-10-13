@@ -26,6 +26,10 @@ pub(crate) struct Options {
     pub(crate) auth_dir: Option<PathBuf>,
     #[arg(long)]
     pub(crate) model: Option<String>,
+    /// Allow enabled MCP programs to start for this invocation.
+    #[arg(long)]
+    #[serde(skip)]
+    pub(crate) allow_mcp_start: bool,
     #[arg(long)]
     pub(crate) resume: Option<String>,
     /// One-shot intent from selecting a replacement directory for a saved session.
@@ -134,6 +138,7 @@ impl Options {
         connection.identity = self.identity.clone();
         connection.wsl = self.wsl.clone();
         connection.wsl_user = self.wsl_user.clone();
+        connection.allow_mcp_start = self.allow_mcp_start;
         Ok(connection)
     }
 }

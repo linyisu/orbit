@@ -34,10 +34,15 @@ pub(crate) fn encode(model: &str, request: ChatRequest) -> Result<(Value, Header
                     parts.push(json!({ "text": content }));
                 }
                 for attachment in attachments {
-                    let (mime, data) = attachment.image()?;
+                    let Some((mime, data)) = attachment.image_if_available()? else {
+                        continue;
+                    };
                     parts.push(json!({ "inlineData": { "mimeType": mime, "data": data } }));
                 }
 
+                if parts.is_empty() {
+                    parts.push(json!({ "text": "[图片]" }));
+                }
                 ("user", parts)
             }
 
@@ -420,6 +425,29 @@ fn cca_schema(schema: Value) -> Result<Value, ModelError> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn missing_images_keep_text_and_image_only_turns_remain_encodable() {
+        use crate::types::{Attachment, ChatMessage, ChatRequest};
+        let root = tempfile::tempdir().unwrap();
+        for text in ["continue", ""] {
+            let (body, _) = super::encode(
+                "vision",
+                ChatRequest::new(vec![ChatMessage::user_with_attachments(
+                    text,
+                    vec![Attachment::Image {
+                        name: "gone.png".into(),
+                        mime_type: "image/png".into(),
+                        path: root.path().join("gone.png"),
+                        lease: None,
+                    }],
+                )]),
+            )
+            .unwrap();
+            assert!(!body.to_string().contains("inlineData"));
+            assert!(!body["request"]["contents"][0]["parts"].as_array().unwrap().is_empty());
+        }
+    }
+
     use super::*;
 
     #[test]

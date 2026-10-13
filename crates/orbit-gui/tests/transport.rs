@@ -32,6 +32,24 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 
 #[test]
+fn mcp_start_permission_defaults_off_and_is_forwarded_to_each_target() {
+    use clap::Parser;
+    for target in [vec![], vec!["--ssh", "test-host"], vec!["--wsl", "Ubuntu"]] {
+        let mut args = vec!["orbit-gui"];
+        args.extend(target);
+        let disabled = Options::parse_from(&args);
+        assert!(!disabled.connection_options().unwrap().allow_mcp_start);
+        args.push("--allow-mcp-start");
+        let enabled = Options::parse_from(&args);
+        assert!(enabled.connection_options().unwrap().allow_mcp_start);
+        // Invocation-only grants must never become permanent via saved tabs.
+        let restored: Options =
+            serde_json::from_slice(&serde_json::to_vec(&enabled).unwrap()).unwrap();
+        assert!(!restored.allow_mcp_start);
+    }
+}
+
+#[test]
 fn remote_options_preserve_target_paths_and_forward_authentication() {
     use clap::Parser;
     let mut options = Options::parse_from([
@@ -457,6 +475,7 @@ fn transport_retries_sends_and_resolves_approvals() {
             auth_dir: Some(directory.path().join("auth")),
             model: Some("fixture::local".into()),
             resume: None,
+            allow_mcp_start: false,
             relink_on_resume: false,
             recover_draft: false,
             appearance: None,
@@ -550,6 +569,7 @@ fn independent_tasks_keep_running_and_scope_approvals_to_their_connection() {
         auth_dir: Some(directory.path().join("auth")),
         model: Some("fixture::local".into()),
         resume: Some("task-a".into()),
+        allow_mcp_start: false,
         relink_on_resume: false,
         recover_draft: false,
         appearance: None,
@@ -602,6 +622,7 @@ fn history_pages_drain_without_live_poll_delays_and_keep_cursor_order() {
             auth_dir: Some(directory.path().join("auth")),
             model: Some("fixture::local".into()),
             resume: Some("paged".into()),
+            allow_mcp_start: false,
             relink_on_resume: false,
             recover_draft: false,
             appearance: None,
@@ -652,6 +673,7 @@ fn replacement_directory_links_before_resume_and_preserves_ownership_checks() {
                 auth_dir: Some(directory.path().join("auth")),
                 model: Some("fixture::local".into()),
                 resume: Some("demo".into()),
+                allow_mcp_start: false,
                 relink_on_resume: explicit,
                 recover_draft: false,
                 appearance: None,

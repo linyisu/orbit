@@ -16,6 +16,26 @@ pub(super) struct History {
 }
 
 impl History {
+    pub(super) fn seed(&mut self, entries: Vec<String>) {
+        if self.entries.is_empty() {
+            for entry in entries {
+                if !entry.trim().is_empty() && self.entries.last() != Some(&entry) {
+                    self.entries.push(entry);
+                }
+            }
+        }
+    }
+
+    fn handles_arrow(&self, previous: bool, text: &str, selection: &Range<usize>) -> bool {
+        !self.entries.is_empty()
+            && selection.is_empty()
+            && if previous {
+                selection.start == 0 || (self.index.is_some() && selection.start == text.len())
+            } else {
+                self.index.is_some() && selection.start == text.len()
+            }
+    }
+
     pub(super) fn accepted(&mut self, text: &str) {
         if !text.trim().is_empty() && self.entries.last().is_none_or(|last| last != text) {
             self.entries.push(text.to_owned());
@@ -98,6 +118,29 @@ impl Workspace {
         );
         orbit_client::attachments::pasted_paths(text, &directory)
     }
+    pub(super) fn history_arrow(
+        &mut self,
+        previous: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.command_open
+            || !self.paths.is_empty()
+            || window.modifiers() != Modifiers::default()
+            || !self.input.focus_handle(cx).is_focused(window)
+        {
+            return;
+        }
+        let input = self.input.read(cx);
+        if self
+            .history
+            .handles_arrow(previous, &input.value(), &input.selected_range())
+        {
+            self.input_history(previous, window, cx);
+            cx.stop_propagation();
+        }
+    }
+
     pub(super) fn input_history(
         &mut self,
         previous: bool,
@@ -172,6 +215,23 @@ mod tests {
             text: text.into(),
             selection,
         }
+    }
+
+    #[test]
+    fn plain_arrows_recall_history_without_stealing_multiline_editing_or_selection() {
+        let mut history = History::default();
+        history.seed(vec!["old prompt".into(), "latest\nsecond line".into()]);
+        assert!(history.handles_arrow(true, "", &(0..0)));
+        assert!(!history.handles_arrow(true, "editing\nsecond", &(10..10)));
+        assert!(!history.handles_arrow(true, "selected", &(0..4)));
+        assert!(!history.handles_arrow(false, "", &(0..0)));
+        let recalled = history.navigate(true, draft("", 0..0), false).unwrap();
+        assert!(history.handles_arrow(true, &recalled.text, &recalled.selection));
+        assert!(history.handles_arrow(false, &recalled.text, &recalled.selection));
+        assert_eq!(
+            history.navigate(false, recalled, false),
+            Some(draft("", 0..0))
+        );
     }
 
     #[test]

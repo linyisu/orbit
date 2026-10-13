@@ -224,9 +224,24 @@ impl Attachment {
         }
     }
 
+    /// Missing historical assets are omitted from model requests. Other read
+    /// failures still retain the byte/regular-file checks and error reporting.
+    pub fn image_if_available(&self) -> Result<Option<(&str, String)>, crate::error::ModelError> {
+        Ok(Self::read_image_optional(self.path())?
+            .map(|bytes| (self.mime_type(), STANDARD.encode(bytes))))
+    }
+
     /// Read a regular image file within the shared byte budget. Format decoding
     /// belongs to the caller; this also supports SVG bytes in terminal previews.
     pub fn read_image_bytes(path: &std::path::Path) -> Result<Vec<u8>, crate::error::ModelError> {
+        Self::read_image_optional(path)?.ok_or_else(|| {
+            crate::error::ModelError::Attachment(format!("{}: file not found", path.display()))
+        })
+    }
+
+    fn read_image_optional(
+        path: &std::path::Path,
+    ) -> Result<Option<Vec<u8>>, crate::error::ModelError> {
         use std::io::Read;
 
         let io_error =
@@ -237,12 +252,15 @@ impl Attachment {
                 path.display()
             ))
         };
-        let metadata = std::fs::metadata(path).map_err(io_error)?;
+        let file = match std::fs::File::open(path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(io_error(error)),
+        };
+        let metadata = file.metadata().map_err(io_error)?;
         if !metadata.is_file() || metadata.len() > Self::MAX_IMAGE_BYTES as u64 {
             return Err(too_large());
         }
-
-        let file = std::fs::File::open(path).map_err(io_error)?;
         if !file.metadata().map_err(io_error)?.is_file() {
             return Err(too_large());
         }
@@ -254,7 +272,7 @@ impl Attachment {
             return Err(too_large());
         }
 
-        Ok(bytes)
+        Ok(Some(bytes))
     }
 }
 

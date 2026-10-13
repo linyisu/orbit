@@ -108,18 +108,9 @@ pub(super) fn row_menu(
         };
         let options = host.options.clone();
         let pinned = host.projects.is_pinned(path);
-        let paths = project_paths(&host.groups);
-        let peers = paths
-            .iter()
-            .filter(|path| host.projects.is_pinned(path) == pinned)
-            .collect::<Vec<_>>();
-        let ix = peers
-            .iter()
-            .position(|peer| peer.as_str() == path)
-            .unwrap_or(0);
         let pin_options = options.clone();
         let pin_path = path.to_owned();
-        let mut menu = menu.item(
+        menu.item(
             PopupMenuItem::new(if pinned {
                 "取消项目置顶"
             } else {
@@ -129,30 +120,7 @@ pub(super) fn row_menu(
             .on_click(move |_, _, cx| {
                 Preferences::set_project_pin(&pin_options, &pin_path, !pinned, cx);
             }),
-        );
-        for (label, target) in [
-            ("上移项目", ix.checked_sub(1).and_then(|ix| peers.get(ix))),
-            ("下移项目", peers.get(ix + 1)),
-        ] {
-            let target = target.map(|path| (*path).clone());
-            let options = options.clone();
-            let source = path.to_owned();
-            let paths = paths.clone();
-            menu = menu.item(
-                PopupMenuItem::new(label)
-                    .disabled(target.is_none())
-                    .on_click(move |_, window, cx| {
-                        if let Some(target) = &target {
-                            category_result(
-                                Preferences::reorder_project(&options, &source, target, &paths, cx),
-                                window,
-                                cx,
-                            );
-                        }
-                    }),
-            );
-        }
-        menu
+        )
     } else {
         session_menu(
             view.owner.clone(),

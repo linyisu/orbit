@@ -1,6 +1,7 @@
 //! User-selected skill sources are fetched on the owning workspace server.
 //! Discovery snapshots whole skill packages without executing their contents.
 mod source;
+pub(super) use source::acquire as acquire_source;
 #[cfg(test)]
 mod tests;
 

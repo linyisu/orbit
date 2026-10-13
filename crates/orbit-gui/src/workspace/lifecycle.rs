@@ -387,6 +387,13 @@ impl Workspace {
     pub(crate) fn new_task(&mut self, cx: &mut Context<Self>) {
         self.open(None, cx);
     }
+    pub(crate) fn reopen_empty_draft(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // An explicit new-task action can reuse the tab, but its old draft
+        // connection must not retain obsolete model or MCP settings.
+        if !self.opening && self.is_empty_draft(cx) {
+            self.connect(window, cx);
+        }
+    }
     pub(crate) fn reconnect_if_needed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.connected && !self.opening && !self.recovery.is_active() {
             self.connect(window, cx);

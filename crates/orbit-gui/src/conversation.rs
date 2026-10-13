@@ -28,6 +28,7 @@ pub(crate) struct Conversation {
     navigation: Entity<navigation::Navigation>,
     navigation_controls: Entity<navigation::Controls>,
     viewport_height: Rc<Cell<Pixels>>,
+    viewport_bounds: Rc<Cell<Bounds<Pixels>>>,
 }
 struct TurnView {
     index: usize,
@@ -35,11 +36,13 @@ struct TurnView {
     parts: Vec<Entity<MessageRow>>,
     process: Vec<usize>,
     conclusion: Option<usize>,
+    reply: SharedString,
     label: SharedString,
     disclosure: ProcessDisclosure,
     scroll: Entity<MessageScrollerState>,
     process_scroll: Entity<MessageScrollerState>,
     viewport_height: Rc<Cell<Pixels>>,
+    viewport_bounds: Rc<Cell<Bounds<Pixels>>>,
     _subscriptions: Vec<Subscription>,
 }
 struct Disclosure {
@@ -50,6 +53,7 @@ struct MessageRow {
     title: SharedString,
     text: Entity<TextViewState>,
     literal: Option<SharedString>,
+    viewport: Option<Rc<Cell<Bounds<Pixels>>>>,
     source_len: usize,
     deferred_text: Option<String>,
     muted: bool,
@@ -77,6 +81,7 @@ impl Conversation {
             rows: vec![],
             scroll,
             viewport_height,
+            viewport_bounds: Rc::new(Cell::new(Bounds::default())),
         }
     }
     pub(crate) fn navigation_controls(&self) -> Entity<navigation::Controls> {
@@ -84,6 +89,14 @@ impl Conversation {
     }
     pub(crate) fn is_empty(&self) -> bool {
         self.rows.is_empty()
+    }
+    pub(crate) fn prompts(&self) -> Vec<String> {
+        self.transcript
+            .turns
+            .iter()
+            .filter_map(|turn| turn.prompt.clone())
+            .filter(|text| !text.trim().is_empty())
+            .collect()
     }
     pub(crate) fn first_prompt(&self) -> Option<&str> {
         self.transcript
@@ -103,6 +116,7 @@ impl Conversation {
                     index * 2 + 1,
                     self.scroll.clone(),
                     self.viewport_height.clone(),
+                    self.viewport_bounds.clone(),
                     cx,
                 )
             }));
@@ -153,6 +167,14 @@ impl Conversation {
         for (index, turn) in self.rows.iter().enumerate() {
             if let Some(user) = &turn.read(cx).user.clone() {
                 user.update(cx, |row, cx| {
+                    if image.is_err() {
+                        let previous_len = row.images.len();
+                        row.images
+                            .retain(|attachment| attachment.path.as_ref() != path);
+                        if row.images.len() != previous_len {
+                            cx.notify();
+                        }
+                    }
                     for attachment in &mut row.images {
                         if attachment.path.as_ref() == path {
                             attachment.data = image.clone();
@@ -173,6 +195,7 @@ impl TurnView {
         index: usize,
         scroll: Entity<MessageScrollerState>,
         viewport_height: Rc<Cell<Pixels>>,
+        viewport_bounds: Rc<Cell<Bounds<Pixels>>>,
         cx: &mut Context<Self>,
     ) -> Self {
         Self {
@@ -181,20 +204,24 @@ impl TurnView {
             parts: vec![],
             process: vec![],
             conclusion: None,
+            reply: "".into(),
             label: "".into(),
             disclosure: ProcessDisclosure::default(),
             scroll,
             process_scroll: cx.new(|cx| MessageScrollerState::new(0, cx)),
             viewport_height,
+            viewport_bounds,
             _subscriptions: vec![],
         }
     }
     fn sync(&mut self, turn: &Turn, changed: Option<usize>, cx: &mut Context<Self>) {
+        self.reply = turn.reply().into();
         if self.user.is_none()
             && let Some(prompt) = &turn.prompt
         {
             self.user = Some(cx.new(|cx| {
                 let mut row = MessageRow::new(self.index - 1, prompt, false, true, cx);
+                row.viewport = Some(self.viewport_bounds.clone());
                 row.images = turn
                     .images
                     .iter()
@@ -368,6 +395,17 @@ impl Render for TurnView {
                 self.conclusion.and_then(|i| self.parts.get(i).cloned()),
                 |view, reply| view.child(reply),
             )
+            .when(!self.reply.is_empty(), |view| {
+                view.child(
+                    h_flex().child(
+                        gpui_kit::component::clipboard::Clipboard::new("copy-answer")
+                            .value(self.reply.clone())
+                            .small()
+                            .tooltip("复制完整 AI 回答")
+                            .accessibility_label("复制完整 AI 回答"),
+                    ),
+                )
+            })
     }
 }
 impl Render for Conversation {
@@ -394,6 +432,7 @@ impl Render for Conversation {
         let navigation = self.navigation.downgrade();
         let owner = cx.weak_entity();
         let viewport_height = self.viewport_height.clone();
+        let viewport_bounds = self.viewport_bounds.clone();
         let scroller =
             MessageScroller::new("conversation", self.scroll.clone(), move |index, _, cx| {
                 weak.upgrade()
@@ -464,6 +503,7 @@ impl Render for Conversation {
                         canvas(
                             move |_, _, _| {},
                             move |bounds, _, _, cx| {
+                                viewport_bounds.set(bounds);
                                 if viewport_height.replace(bounds.size.height) != bounds.size.height
                                 {
                                     let owner = owner.clone();
@@ -525,6 +565,7 @@ impl MessageRow {
                 }
             }),
             literal: user.then(|| source.to_owned().into()),
+            viewport: None,
             source_len: source.len(),
             deferred_text: muted.then(|| source.to_owned()),
             muted,
@@ -539,7 +580,9 @@ impl Render for MessageRow {
         // The title icon owns a column; expanded content starts at the title
         // text, using the same inset rather than Button's internal padding.
         let disclosure_inset = rems(1.5);
+        let message_group: SharedString = format!("user-message-{}", cx.entity_id()).into();
         let body = v_flex()
+            .group(message_group.clone())
             .when(!self.user, |view| view.w_full())
             .items_start()
             .min_w_0()
@@ -612,9 +655,36 @@ impl Render for MessageRow {
             })
             .when(self.expanded, |view| {
                 if let Some(source) = &self.literal {
-                    return view.child(div().min_w_0().whitespace_normal().child(
-                        gpui_kit::base::SelectableText::new("user-source", source.clone()),
-                    ));
+                    return view
+                        .child(div().min_w_0().whitespace_normal().child(
+                            gpui_kit::base::SelectableText::new("user-source", source.clone()).map(
+                                |text| {
+                                    if let Some(viewport) = &self.viewport {
+                                        text.scroll_viewport(viewport.get())
+                                    } else {
+                                        text
+                                    }
+                                },
+                            ),
+                        ))
+                        .child(
+                            h_flex().justify_end().child(
+                                div()
+                                    .id("user-copy-action")
+                                    .opacity(0.)
+                                    .group_hover(message_group.clone(), |style| style.opacity(1.))
+                                    .in_focus(|style| style.opacity(1.))
+                                    .child(
+                                        gpui_kit::component::clipboard::Clipboard::new(
+                                            "copy-user-question",
+                                        )
+                                        .value(source.clone())
+                                        .small()
+                                        .tooltip("复制问题")
+                                        .accessibility_label("复制用户问题"),
+                                    ),
+                            ),
+                        );
                 }
                 let text = TextView::new(&self.text)
                     .when(!self.user, |view| view.w_full())

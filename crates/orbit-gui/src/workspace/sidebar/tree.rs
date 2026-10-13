@@ -130,7 +130,9 @@ impl Sidebar {
                         .find(|task| task.session.as_deref() == Some(session))
                 });
                 let status = task.map(|task| task.status);
+                let row_group: SharedString = format!("sidebar-row-{id}").into();
                 ListItem::new(id.clone())
+                    .group(row_group.clone())
                     .accessibility_label(entry.item().label.clone())
                     .h_8()
                     .overflow_hidden()
@@ -251,6 +253,11 @@ impl Sidebar {
                                             ))
                                             .ghost()
                                             .xsmall()
+                                            .opacity(0.)
+                                            .group_hover(row_group.clone(), |style| {
+                                                style.opacity(1.)
+                                            })
+                                            .focus_visible(|style| style.opacity(1.))
                                             .icon(IconName::Ellipsis)
                                             .accessibility_label(format!(
                                                 "管理{}：{}",

@@ -143,8 +143,13 @@ impl Workbench {
                 .iter()
                 .find(|task| task.view.read(cx).key() == key)
             {
-                task.view
-                    .update(cx, |view, cx| view.reconnect_if_needed(window, cx));
+                task.view.update(cx, |view, cx| {
+                    if options.resume.is_none() {
+                        view.reopen_empty_draft(window, cx);
+                    } else {
+                        view.reconnect_if_needed(window, cx);
+                    }
+                });
             }
             self.activate(&key, window, cx);
             return;

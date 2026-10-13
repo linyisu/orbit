@@ -51,6 +51,7 @@ impl PreparedWorkspace {
 
 pub struct WorkspaceResources {
     pub(super) skill_import: Option<super::skill_import::Scan>,
+    pub(super) mcp_import: Option<super::mcp_import::Scan>,
     pub options: WorkspaceOptions,
     pub mode: orbit_protocol::Mode,
     pub mode_revision: u64,
@@ -307,6 +308,7 @@ pub(super) async fn prepare_resources(
 
     Ok(WorkspaceResources {
         skill_import: None,
+        mcp_import: None,
         mode_revision: 0,
         planning,
         mode: match session.store.tui_mode(session.id()).await?.as_str() {

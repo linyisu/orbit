@@ -384,6 +384,8 @@ impl Workspace {
         self.connection_logs
             .update(cx, |logs, cx| logs.reset(environment, window, cx));
         let mut options = self.options.clone();
+        options.allow_mcp_start |=
+            crate::preferences::Preferences::allows_mcp_start(&options.config, cx);
         if let Some(info) = &self.info {
             options.resume = (info.persisted || self.retry.is_some() || self.pending.is_some())
                 .then(|| info.id.clone());
@@ -804,6 +806,9 @@ impl Workspace {
                         self.conversation
                             .update(cx, |conversation, cx| conversation.apply(update, cx));
                     }
+                }
+                if restoring && !self.opening {
+                    self.history.seed(self.conversation.read(cx).prompts());
                 }
                 self.execution.apply_progress(&page.tool_progress);
                 if self.input_queue.is_none() {

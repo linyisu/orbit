@@ -47,10 +47,14 @@ pub(crate) fn encode(
                 content,
                 attachments,
             } => {
-                let mut blocks = vec![json!({ "type": "input_text", "text": content })];
+                let mut blocks = vec![
+                    json!({ "type": "input_text", "text": if content.is_empty() { "[图片]" } else { &content } }),
+                ];
 
                 for attachment in attachments {
-                    let (mime_type, data) = attachment.image()?;
+                    let Some((mime_type, data)) = attachment.image_if_available()? else {
+                        continue;
+                    };
                     blocks.push(json!({ "type": "input_image", "image_url": format!("data:{mime_type};base64,{data}") }));
                 }
 
@@ -264,6 +268,33 @@ mod input_tests {
         .unwrap();
 
         assert_eq!(body["reasoning"]["effort"], "high");
+    }
+
+    #[test]
+    fn missing_historical_image_keeps_text_and_allows_the_next_turn() {
+        let root = tempfile::tempdir().unwrap();
+        let (body, _) = encode(
+            "vision-model",
+            ChatRequest::new(vec![
+                ChatMessage::user_with_attachments(
+                    "previous question",
+                    vec![crate::types::Attachment::Image {
+                        name: "gone.png".into(),
+                        mime_type: "image/png".into(),
+                        path: root.path().join("gone.png"),
+                        lease: None,
+                    }],
+                ),
+                ChatMessage::user("continue"),
+            ]),
+            None,
+            &json!({}),
+            true,
+        )
+        .unwrap();
+        assert_eq!(body["input"][0]["content"].as_array().unwrap().len(), 1);
+        assert_eq!(body["input"][1]["role"], "user");
+        assert!(!body.to_string().contains("gone.png"));
     }
 
     #[test]

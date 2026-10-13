@@ -15,7 +15,7 @@ struct GitSource {
     directory: PathBuf,
 }
 
-pub(super) async fn acquire(
+pub(in crate::workspace) async fn acquire(
     source: &str,
     workspace: &Path,
     home: Option<&Path>,

@@ -222,6 +222,7 @@ pub struct TextSelectionRegistration {
     document_order: u64,
     text_bounds: Vec<Bounds<Pixels>>,
     self_scroll: bool,
+    scroll_viewport: Option<Bounds<Pixels>>,
     selection_edges: Option<(Bounds<Pixels>, Bounds<Pixels>)>,
     rendered: Option<WeakEntity<RenderedMarker>>,
 }
@@ -237,6 +238,7 @@ impl TextSelectionRegistration {
             document_order: 0,
             text_bounds: Vec::new(),
             self_scroll: false,
+            scroll_viewport: None,
             selection_edges: None,
             rendered: None,
         }
@@ -283,6 +285,13 @@ impl TextSelectionRegistration {
     /// wheel event for the nearest scrollable ancestor.
     pub(crate) fn with_self_scroll(mut self, self_scroll: bool) -> Self {
         self.self_scroll = self_scroll;
+        self
+    }
+
+    /// Sets the actual scrolling viewport when a decorative clipping ancestor
+    /// (for example, a rounded message bubble) has a smaller content mask.
+    pub fn with_scroll_viewport(mut self, bounds: Bounds<Pixels>) -> Self {
+        self.scroll_viewport = Some(bounds);
         self
     }
 
@@ -2266,7 +2275,9 @@ impl WindowSelectionState {
         // scrollable ancestor. It remains stable as the participant itself
         // moves, so selection keeps scrolling the same related region even
         // after the anchor text has moved out of view.
-        let visible_bounds = registration.hitbox.content_mask.bounds;
+        let visible_bounds = registration
+            .scroll_viewport
+            .unwrap_or(registration.hitbox.content_mask.bounds);
         // Keeps the synthesized wheel event hit-testing inside the mask.
         const HIT_TEST_INSET: Pixels = px(1.);
         // A collapsed mask leaves an empty clamp range below — stop.
@@ -4208,6 +4219,44 @@ mod tests {
         cx.run_until_parked();
         assert!(commands.borrow().iter().any(Option::is_some));
         assert_eq!(commands.borrow().last(), Some(&None));
+    }
+
+    #[gpui::test]
+    fn decorative_clip_edges_do_not_scroll_inside_the_supplied_viewport(cx: &mut TestAppContext) {
+        let window = cx.add_window(|_, cx| WindowSelectionView {
+            selection: TextSelectionHandle::new("unused", cx),
+        });
+        window
+            .update(cx, |_, window, cx| {
+                let state = cx.new(|_| WindowSelectionState::default());
+                let participant = FakeParticipant::new("participant", cx);
+                state.update(cx, |state, cx| {
+                    participant.register(state, 0., TextSelectionScopeId::default(), 0, cx);
+                    state.begin(point(px(1.), px(1.)), false, cx);
+                    let clipped = Bounds::new(point(px(0.), px(0.)), size(px(100.), px(60.)));
+                    let viewport = Bounds::new(point(px(0.), px(0.)), size(px(100.), px(300.)));
+                    state.register_participant(
+                        participant.selection.clone(),
+                        TextSelectionRegistration::new(
+                            Hitbox {
+                                id: HitboxId::placeholder(),
+                                bounds: clipped,
+                                content_mask: ContentMask { bounds: clipped },
+                                behavior: HitboxBehavior::Normal,
+                            },
+                            clipped,
+                        )
+                        .with_text_bounds(vec![clipped])
+                        .with_scroll_viewport(viewport),
+                        cx,
+                    );
+                    state.update_in_window(point(px(20.), px(55.)), window, cx);
+                    assert!(!state.auto_scroll.is_active());
+                    state.update_in_window(point(px(20.), px(295.)), window, cx);
+                    assert!(state.auto_scroll.is_active());
+                });
+            })
+            .unwrap();
     }
 
     #[gpui::test]

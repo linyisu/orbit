@@ -12,6 +12,48 @@ pub(super) async fn execute(
     action: Action,
     busy: bool,
 ) -> Result<Snapshot> {
+    if matches!(action, Action::ScanMcp { .. } | Action::InstallMcp { .. }) {
+        ensure!(
+            !setup.resources.policy.disabled(Capability::Mcp),
+            "MCP 工具已禁用"
+        );
+        ensure!(!busy, "请等待当前任务结束后导入 MCP 服务器");
+        ensure!(
+            !setup.resources.policy.read_only
+                && !setup.resources.policy.disabled(Capability::Write),
+            "只读会话或禁用写入时不能导入 MCP 服务器"
+        );
+        return match action {
+            Action::ScanMcp { source } => {
+                setup.resources.mcp_import = None;
+                let scan = super::mcp_import::Scan::acquire(
+                    setup.session.id().to_owned(),
+                    Path::new(&setup.session.snapshot.session.workspace).to_path_buf(),
+                    source,
+                    setup.resources.options.home.clone(),
+                )
+                .await?;
+                let snapshot = scan.snapshot();
+                setup.resources.mcp_import = Some(scan);
+                Ok(snapshot)
+            }
+            Action::InstallMcp { token, id } => {
+                setup
+                    .resources
+                    .mcp_import
+                    .take()
+                    .context("MCP 来源已过期，请重新扫描")?
+                    .install(
+                        &token,
+                        &id,
+                        setup.session.id(),
+                        Path::new(&setup.session.snapshot.session.workspace),
+                    )
+                    .await
+            }
+            _ => unreachable!(),
+        };
+    }
     if matches!(action, Action::Mcp) {
         ensure!(
             !setup.resources.policy.disabled(Capability::Mcp),

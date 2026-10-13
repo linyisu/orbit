@@ -42,10 +42,14 @@ pub(crate) fn encode(
                 if attachments.is_empty() {
                     messages.push(json!({ "role": "user", "content": content }));
                 } else {
-                    let mut blocks = vec![json!({ "type": "text", "text": content })];
+                    let mut blocks = vec![
+                        json!({ "type": "text", "text": if content.is_empty() { "[图片]" } else { &content } }),
+                    ];
 
                     for attachment in attachments {
-                        let (mime_type, data) = attachment.image()?;
+                        let Some((mime_type, data)) = attachment.image_if_available()? else {
+                            continue;
+                        };
                         blocks.push(json!({
                             "type": "image_url",
                             "image_url": { "url": format!("data:{mime_type};base64,{data}") }
@@ -379,6 +383,33 @@ mod input_tests {
         .unwrap();
 
         assert_eq!(body["thinking"]["type"], "enabled");
+    }
+
+    #[test]
+    fn missing_historical_image_keeps_text_and_allows_the_next_turn() {
+        let root = tempfile::tempdir().unwrap();
+        let (body, _) = encode(
+            "vision-model",
+            ChatRequest::new(vec![
+                ChatMessage::user_with_attachments(
+                    "previous question",
+                    vec![crate::types::Attachment::Image {
+                        name: "gone.png".into(),
+                        mime_type: "image/png".into(),
+                        path: root.path().join("gone.png"),
+                        lease: None,
+                    }],
+                ),
+                ChatMessage::user("continue"),
+            ]),
+            None,
+            &json!({}),
+            true,
+        )
+        .unwrap();
+        assert_eq!(body["messages"][0]["content"].as_array().unwrap().len(), 1);
+        assert_eq!(body["messages"][1]["role"], "user");
+        assert!(!body.to_string().contains("gone.png"));
     }
 
     #[test]

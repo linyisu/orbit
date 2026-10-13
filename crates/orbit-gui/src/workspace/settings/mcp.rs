@@ -1,4 +1,5 @@
 //! MCP configuration belongs to the client configuration, even for remote sessions.
+mod import;
 use super::super::*;
 use gpui_kit::component::{
     button::ButtonVariant,
@@ -12,10 +13,16 @@ use orbit_protocol::resources::{Action, McpServer, Snapshot};
 use orbit_tools::mcp::McpServerConfig;
 
 pub(super) struct Mcp {
+    importer: Option<Entity<import::Importer>>,
+    _import_events: Option<Subscription>,
+    imported: bool,
     owner: WeakEntity<Workspace>,
     session: Option<String>,
     workspace: String,
     path: PathBuf,
+    startup_override: bool,
+    startup_revision: Option<u64>,
+    _preferences: Subscription,
     runtime: Arc<tokio::runtime::Runtime>,
     draft: Option<McpDraft>,
     name: Entity<InputState>,
@@ -41,7 +48,7 @@ pub(super) struct Mcp {
 }
 impl Mcp {
     pub(super) fn has_pending_work(&self) -> bool {
-        self.busy || self.editing
+        self.busy || self.editing || self.importer.is_some()
     }
 
     pub(super) fn new(
@@ -53,11 +60,19 @@ impl Mcp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        crate::preferences::Preferences::observe_saves(cx);
+        let preferences = cx.observe_global::<crate::preferences::Preferences>(|_, cx| cx.notify());
         let mut view = Self {
+            importer: None,
+            _import_events: None,
+            imported: false,
             owner,
             session,
             workspace,
             path: options.config.clone(),
+            startup_override: options.allow_mcp_start,
+            startup_revision: None,
+            _preferences: preferences,
             runtime,
             draft: None,
             name: cx.new(|cx| InputState::new(window, cx).placeholder("例如 filesystem")),
@@ -256,6 +271,7 @@ impl Mcp {
         cx.notify();
     }
     fn edit(&mut self, name: Option<String>, window: &mut Window, cx: &mut Context<Self>) {
+        self.imported = false;
         self.template = name
             .as_ref()
             .and_then(|name| self.draft.as_ref()?.servers().get(name).cloned());
@@ -428,6 +444,116 @@ impl Mcp {
         });
         cx.notify();
     }
+    fn import_source(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(session) = self.session.clone() else {
+            return;
+        };
+        let owner = self.owner.clone();
+        let workspace = self.workspace.clone();
+        let importer = cx.new(|cx| import::Importer::new(owner, session, workspace, window, cx));
+        self._import_events =
+            Some(
+                cx.subscribe_in(&importer, window, |view, _, event, window, cx| {
+                    match event {
+                        import::Event::Closed => {
+                            view.importer = None;
+                        }
+                        import::Event::Prepared { name, launch } => {
+                            view.importer = None;
+                            view.edit(None, window, cx);
+                            view.imported = true;
+                            view.name
+                                .update(cx, |input, cx| input.set_value(name.clone(), window, cx));
+                            view.command.update(cx, |input, cx| {
+                                input.set_value(launch.command.clone(), window, cx)
+                            });
+                            view.args.update(cx, |input, cx| {
+                                input.set_value(launch.args.join("\n"), window, cx)
+                            });
+                            view.env.update(cx, |input, cx| {
+                                input.set_value(
+                                    launch
+                                        .env
+                                        .iter()
+                                        .map(|(key, value)| format!("{key}={value}"))
+                                        .collect::<Vec<_>>()
+                                        .join("\n"),
+                                    window,
+                                    cx,
+                                )
+                            });
+                            view.tools.update(cx, |input, cx| {
+                                input.set_value(launch.tools.join("\n"), window, cx)
+                            });
+                        }
+                    }
+                    cx.notify();
+                }),
+            );
+        self.importer = Some(importer);
+        cx.notify();
+    }
+
+    fn startup_control(&self, cx: &mut Context<Self>) -> AnyElement {
+        use crate::{keymap::SaveStatus, preferences::Preferences};
+        let allowed = self.startup_override || Preferences::allows_mcp_start(&self.path, cx);
+        let mut view = v_flex().w_full().gap_2()
+            .child(Switch::new("mcp-allow-start")
+                .label("允许启动已启用的 MCP 服务器")
+                .checked(allowed)
+                .disabled(self.startup_override)
+                .on_click(cx.listener(|view, allowed, _, cx| {
+                    view.startup_revision = Some(Preferences::set_mcp_start(&view.path, *allowed, cx));
+                    cx.notify();
+                })))
+            .child(div().text_sm().whitespace_normal().text_color(cx.theme().muted_foreground)
+                .child(if self.startup_override {
+                    "本次启动已通过 --allow-mcp-start 授权。服务器以目标机器上的当前用户身份运行。"
+                } else {
+                    "适用于使用此配置的所有项目。打开后，新会话可启动下方已启用的服务器；关闭不影响当前会话已运行的工具。"
+                }));
+        if let Some(revision) = self.startup_revision {
+            let status = Preferences::save_status(cx);
+            if status.revision() >= revision {
+                view = match status {
+                    SaveStatus::Saving(_) => view.child(
+                        div()
+                            .text_sm()
+                            .text_color(cx.theme().muted_foreground)
+                            .child("正在保存启动设置…"),
+                    ),
+                    SaveStatus::Saved(_) => view.child(
+                        div()
+                            .text_sm()
+                            .text_color(cx.theme().muted_foreground)
+                            .child("启动设置已保存，新建会话生效。"),
+                    ),
+                    SaveStatus::Failed { message, .. } => view.child(
+                        v_flex()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .whitespace_normal()
+                                    .text_color(cx.theme().danger)
+                                    .child(format!("启动设置尚未保存：{message}")),
+                            )
+                            .child(
+                                Button::new("mcp-retry-startup-save")
+                                    .small()
+                                    .label("重试保存")
+                                    .on_click(cx.listener(|view, _, _, cx| {
+                                        view.startup_revision = Some(Preferences::retry_save(cx));
+                                        cx.notify();
+                                    })),
+                            ),
+                    ),
+                };
+            }
+        }
+        view.into_any_element()
+    }
+
     fn confirm_remove(&mut self, name: String, window: &mut Window, cx: &mut Context<Self>) {
         let owner = cx.weak_entity();
         window.open_alert_dialog(cx, move |dialog, _, _| {
@@ -452,10 +578,18 @@ impl Mcp {
 }
 impl Render for Mcp {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if let Some(importer) = &self.importer {
+            return div()
+                .w_full()
+                .max_w(rems(60.))
+                .child(importer.clone())
+                .into_any_element();
+        }
         let mut content = v_flex().w_full().max_w(rems(60.)).gap_4()
+            .child(self.startup_control(cx))
             .child(h_flex().gap_3()
                 .child(div().flex_1().min_w_0().whitespace_normal().text_sm().text_color(cx.theme().muted_foreground)
-                    .child("配置保存在本机，对所有项目的新会话生效；连接 SSH 工作区时，命令在远程运行。"))
+                    .child("配置保存在本机，新建会话生效。支持 stdio 服务；SSH / WSL 会话在目标机器启动命令。参数、依赖和路径也须在目标机器可用。"))
                 .child(Button::new("mcp-refresh").ghost().small().label("刷新")
                     .disabled(self.busy || self.status_busy || self.editing)
                     .on_click(cx.listener(|view, _, _, cx| {
@@ -475,6 +609,7 @@ impl Render for Mcp {
             return content.child(
                 v_flex()
                     .gap_3()
+                    .when(self.imported, |view| view.child(div().text_sm().whitespace_normal().text_color(cx.theme().muted_foreground).child("来源已准备好。请核对名称、启动参数和环境变量，再保存并启用。")))
                     .child("服务器名称")
                     .child(
                         Input::new(&self.name)
@@ -549,7 +684,7 @@ impl Render for Mcp {
                                     })),
                             ),
                     ),
-            );
+            ).into_any_element();
         }
         let mut runtime = v_flex()
             .gap_3()
@@ -587,6 +722,17 @@ impl Render for Mcp {
             for server in servers {
                 let name = server.name.clone();
                 let expanded = self.expanded.contains(&name);
+                let detail = if server.detail.starts_with("启动需显式授权") {
+                    if self.startup_override
+                        || crate::preferences::Preferences::allows_mcp_start(&self.path, cx)
+                    {
+                        "本会话创建时未允许启动，请新建会话应用授权。".to_owned()
+                    } else {
+                        "尚未允许启动。打开上方开关后，新建会话连接。".to_owned()
+                    }
+                } else {
+                    server.detail.clone()
+                };
                 runtime = runtime.child(
                     v_flex()
                         .gap_2()
@@ -608,7 +754,7 @@ impl Render for Mcp {
                                                 .text_color(cx.theme().muted_foreground)
                                                 .child(format!(
                                                     "{} · {} 个可用工具",
-                                                    server.detail,
+                                                    detail,
                                                     server.tools.len()
                                                 )),
                                         ),
@@ -657,11 +803,21 @@ impl Render for Mcp {
         }
         content = content.child(
             h_flex()
+                .gap_2()
                 .child(
                     div()
                         .flex_1()
                         .font_weight(FontWeight::SEMIBOLD)
                         .child("服务器配置"),
+                )
+                .child(
+                    Button::new("mcp-import")
+                        .icon(IconName::Download)
+                        .label("从来源导入…")
+                        .disabled(self.busy || self.session.is_none() || self.draft.is_none())
+                        .on_click(
+                            cx.listener(|view, _, window, cx| view.import_source(window, cx)),
+                        ),
                 )
                 .child(
                     Button::new("mcp-add")
@@ -741,6 +897,6 @@ impl Render for Mcp {
         } else if self.busy {
             content = content.child("正在加载…");
         }
-        content.child(runtime)
+        content.child(runtime).into_any_element()
     }
 }

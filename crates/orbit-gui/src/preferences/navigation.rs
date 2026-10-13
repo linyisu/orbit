@@ -135,6 +135,7 @@ fn host_options(options: &Options) -> Options {
     host.model = None;
     host.appearance = None;
     host.preferences = None;
+    host.allow_mcp_start = false;
     let workspace = host.workspace.take();
     // Most databases belong to the host. A relative remote database belongs to
     // its workspace, so use the transport's identity rule instead of a second

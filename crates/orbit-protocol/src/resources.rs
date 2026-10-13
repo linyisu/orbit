@@ -22,6 +22,30 @@ pub enum Action {
     Memories,
     Memory(super::project::MemoryAction),
     Mcp,
+    ScanMcp {
+        source: String,
+    },
+    InstallMcp {
+        token: String,
+        id: String,
+    },
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct McpLaunch {
+    pub command: String,
+    pub args: Vec<String>,
+    pub env: std::collections::BTreeMap<String, String>,
+    pub tools: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct McpCandidate {
+    pub id: String,
+    pub name: String,
+    pub launch: McpLaunch,
+    pub install: Vec<Vec<String>>,
+    pub description: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -72,4 +96,13 @@ pub enum Snapshot {
     },
     Memories(Vec<super::project::SessionMemory>),
     Mcp(Vec<McpServer>),
+    McpSource {
+        token: String,
+        source: String,
+        candidates: Vec<McpCandidate>,
+    },
+    McpInstalled {
+        name: String,
+        launch: McpLaunch,
+    },
 }
