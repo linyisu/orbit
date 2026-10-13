@@ -73,7 +73,7 @@ impl Sidebar {
                     }
                 }
             }))
-            .child(Tree::new(self.navigation(), move |_, entry, _, _, cx| {
+            .child(Tree::new(self.navigation(), move |ix, entry, _, _, cx| {
                 let id = entry.item().id.clone();
                 let owner = owner.clone();
                 let menu_owner = owner.clone();
@@ -108,12 +108,11 @@ impl Sidebar {
                     options.clone(),
                     id.strip_prefix("project:").unwrap_or_default().to_owned(),
                     entry.item().label.clone(),
+                    ix,
                 );
                 let drag_target = drag.clone();
                 let drop_owner = owner.clone();
                 let drop_id = id.clone();
-                let icon_owner = owner.clone();
-                let icon_id = id.clone();
                 let title: SharedString = entry
                     .item()
                     .label
@@ -135,6 +134,15 @@ impl Sidebar {
                     .accessibility_label(entry.item().label.clone())
                     .h_8()
                     .overflow_hidden()
+                    .when(project, |row| {
+                        // Kit's tree expands folders on mouse-down. Defer this
+                        // project click until release so its native drag threshold
+                        // can distinguish a click from a row reorder. A drag
+                        // consumes the click and leaves expansion untouched.
+                        row.on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                            .on_drag(drag, |drag, _, _, cx| cx.new(|_| drag.clone()))
+                            .cursor_grab()
+                    })
                     .confirmed(active.as_deref() == Some(id.as_ref()))
                     .on_hover(move |hovering, _, cx| {
                         let _ = hover_owner.update(cx, |view, cx| {
@@ -162,24 +170,6 @@ impl Sidebar {
                                     .id((ElementId::from(id.clone()), "project-icon"))
                                     .w_4()
                                     .flex_shrink_0()
-                                    .when(project, |slot| {
-                                        slot.on_mouse_down(MouseButton::Left, |_, _, cx| {
-                                            cx.stop_propagation()
-                                        })
-                                        .on_drag(drag, |drag, _, _, cx| cx.new(|_| drag.clone()))
-                                        .on_click(move |_, window, cx| {
-                                            cx.stop_propagation();
-                                            let _ = icon_owner.update(cx, |view, cx| {
-                                                view.toggle_project(&icon_id, window, cx)
-                                            });
-                                        })
-                                        .tooltip(
-                                            |window, cx| {
-                                                Tooltip::new("拖动项目图标调整顺序")
-                                                    .build(window, cx)
-                                            },
-                                        )
-                                    })
                                     .when(folder, |slot| {
                                         slot.child(
                                             Icon::new(if id.as_ref() == "pinned" {
@@ -247,30 +237,42 @@ impl Sidebar {
                             )
                             .when(project || !folder, |content| {
                                 content.child(
-                                    Button::new((ElementId::from(button_id.clone()), "menu"))
-                                        .ghost()
-                                        .xsmall()
-                                        .icon(IconName::Ellipsis)
-                                        .accessibility_label(format!(
-                                            "管理{}：{}",
-                                            if project { "项目" } else { "会话" },
-                                            entry.item().label
-                                        ))
-                                        .tooltip(if project {
-                                            "项目操作"
-                                        } else {
-                                            "会话操作"
+                                    // Stop bubbling after the popover's trigger
+                                    // receives the press, before the row can drag.
+                                    div()
+                                        .id((ElementId::from(button_id.clone()), "menu-trigger"))
+                                        .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                                            cx.stop_propagation()
                                         })
-                                        .on_click(|_, _, cx| cx.stop_propagation())
-                                        .dropdown_menu(move |menu, window, cx| {
-                                            organization::row_menu(
-                                                button_owner.clone(),
-                                                &button_id,
-                                                menu,
-                                                window,
-                                                cx,
-                                            )
-                                        }),
+                                        .child(
+                                            Button::new((
+                                                ElementId::from(button_id.clone()),
+                                                "menu",
+                                            ))
+                                            .ghost()
+                                            .xsmall()
+                                            .icon(IconName::Ellipsis)
+                                            .accessibility_label(format!(
+                                                "管理{}：{}",
+                                                if project { "项目" } else { "会话" },
+                                                entry.item().label
+                                            ))
+                                            .tooltip(if project {
+                                                "项目操作"
+                                            } else {
+                                                "会话操作"
+                                            })
+                                            .on_click(|_, _, cx| cx.stop_propagation())
+                                            .dropdown_menu(move |menu, window, cx| {
+                                                organization::row_menu(
+                                                    button_owner.clone(),
+                                                    &button_id,
+                                                    menu,
+                                                    window,
+                                                    cx,
+                                                )
+                                            }),
+                                        ),
                                 )
                             })
                             .map(move |content| {
@@ -294,10 +296,13 @@ impl Sidebar {
                     .when(project, |row| {
                         row.drag_over::<organization::ProjectDrag>(move |style, dragged, _, cx| {
                             if dragged.owner_matches(&drag_target) {
-                                style
-                                    .bg(cx.theme().accent)
-                                    .border_1()
-                                    .border_color(cx.theme().ring)
+                                let style =
+                                    style.bg(cx.theme().accent).border_color(cx.theme().ring);
+                                if dragged.drop_before(&drag_target) {
+                                    style.border_t_2()
+                                } else {
+                                    style.border_b_2()
+                                }
                             } else {
                                 style
                             }
@@ -315,7 +320,11 @@ impl Sidebar {
                         )
                     })
                     .on_click(move |_, window, cx| {
-                        if let Some(session) = id.strip_prefix("session:") {
+                        if project {
+                            cx.stop_propagation();
+                            let _ =
+                                owner.update(cx, |view, cx| view.toggle_project(&id, window, cx));
+                        } else if let Some(session) = id.strip_prefix("session:") {
                             let _ = owner
                                 .update(cx, |view, cx| view.select_session(session, window, cx));
                         }

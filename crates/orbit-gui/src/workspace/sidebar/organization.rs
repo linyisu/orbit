@@ -11,8 +11,12 @@ pub(super) struct ProjectDrag {
     options: Options,
     path: String,
     label: SharedString,
+    position: usize,
 }
 impl ProjectDrag {
+    pub(super) fn drop_before(&self, target: &Self) -> bool {
+        self.position > target.position
+    }
     pub(super) fn owner_matches(&self, other: &Self) -> bool {
         self.owner.upgrade() == other.owner.upgrade()
             && self.options.same_host(&other.options)
@@ -39,12 +43,14 @@ pub(super) fn project_drag(
     options: Options,
     path: String,
     label: SharedString,
+    position: usize,
 ) -> ProjectDrag {
     ProjectDrag {
         owner,
         options,
         path,
         label,
+        position,
     }
 }
 
