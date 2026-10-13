@@ -330,7 +330,8 @@ impl Render for TurnView {
             .items_start()
             .gap_4()
             .when(!self.process.is_empty(), |view| {
-                view.child(
+                view.child(gpui_kit::base::ScrollContainment::new(
+                    "process-heading-wheel-boundary",
                     Button::new("turn-process")
                         .ghost()
                         .small()
@@ -352,12 +353,13 @@ impl Render for TurnView {
                             });
                             cx.notify();
                         })),
-                )
+                ))
             })
             .when(
                 self.disclosure.expanded() && !self.process.is_empty(),
                 |view| {
-                    view.child(
+                    view.child(gpui_kit::base::ScrollContainment::new(
+                        "process-wheel-boundary",
                         div()
                             .id("process-viewport")
                             .occlude()
@@ -402,7 +404,7 @@ impl Render for TurnView {
                                 .with_list_style(StyleRefinement::default().py_0())
                                 .size_full(),
                             ),
-                    )
+                    ))
                 },
             )
             .when_some(

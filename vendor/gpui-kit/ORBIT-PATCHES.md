@@ -23,3 +23,9 @@ by glyphs, code backgrounds, formula objects, hit testing and selection; the
 individual fragments stay left-aligned internally. Scrolling nowrap tables
 stop at their measured natural width instead of spreading spare space across
 columns, and still scroll horizontally when the viewport is narrower.
+
+`ScrollContainment` wraps capture-based scrollers such as `MessageScroller`.
+Child masks consume movement first; a final capture handler consumes unused
+wheel input at either edge or when the content fits, before ancestor virtual
+lists handle it. Orbit uses this boundary for execution details so scrolling
+their thought/tool records cannot move the surrounding conversation.

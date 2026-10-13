@@ -59,6 +59,7 @@ mod reduce_motion;
 mod resizable;
 mod root;
 mod scroll_bounce;
+mod scroll_containment;
 mod scrollable_mask;
 mod scrollbar;
 mod select;
@@ -163,6 +164,7 @@ pub use resizable::{
 };
 pub use root::{Root, RootPlugin};
 pub use scroll_bounce::{ScrollBounce, ScrollBounceMotion};
+pub use scroll_containment::ScrollContainment;
 pub use scrollable_mask::{RoundedFrameCover, ScrollableMask};
 pub use scrollbar::{
     Scrollbar, ScrollbarAxis, ScrollbarEntrance, ScrollbarHandle, ScrollbarMode, ScrollbarMotion,
