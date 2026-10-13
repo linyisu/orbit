@@ -32,6 +32,7 @@ fn main() -> anyhow::Result<()> {
         .with_assets(assets::AppAssets)
         .run(move |cx| {
             gpui_kit::init(cx);
+            image_preview::init(cx);
             let mode = preferences.mode(cx.window_appearance());
             cx.set_global(preferences);
             gpui_kit::component::set_locale("zh-CN");

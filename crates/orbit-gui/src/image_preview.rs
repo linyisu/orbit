@@ -1,5 +1,8 @@
 //! One image viewer for message images and composer drafts.
-use gpui_kit::component::{WindowExt, h_flex};
+use gpui_kit::component::{
+    ActiveTheme, Sizable,
+    button::{Button, ButtonVariants},
+};
 use gpui_kit::*;
 use std::{path::PathBuf, sync::Arc};
 
@@ -40,7 +43,7 @@ pub(crate) fn open_path(path: PathBuf, window: &mut Window, cx: &mut App) {
                         Err(error) => preview.image = Err(error),
                     }
                     cx.notify();
-                    // The dialog's width depends on the loaded raster dimensions.
+                    // Refit the image when its dimensions become available.
                     window.refresh();
                 });
             }),
@@ -49,11 +52,58 @@ pub(crate) fn open_path(path: PathBuf, window: &mut Window, cx: &mut App) {
     show(preview, window, cx);
 }
 
-fn show(preview: Entity<ImagePreview>, window: &mut Window, cx: &mut App) {
-    window.open_dialog(cx, move |dialog, window, cx| {
-        let (width, _) = preview.read(cx).geometry(window);
-        dialog.title("图片预览").width(width).child(preview.clone())
+pub(crate) fn init(cx: &mut App) {
+    gpui_kit::base::Root::register_plugin::<PreviewHost>(cx, |_, cx| PreviewHost {
+        preview: None,
+        focus: cx.focus_handle(),
+        previous_focus: None,
     });
+}
+
+struct PreviewHost {
+    preview: Option<Entity<ImagePreview>>,
+    focus: FocusHandle,
+    previous_focus: Option<FocusHandle>,
+}
+impl gpui_kit::base::RootPlugin for PreviewHost {}
+impl PreviewHost {
+    fn close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.preview = None;
+        if let Some(focus) = self.previous_focus.take() {
+            focus.focus(window, cx);
+        }
+        cx.notify();
+    }
+}
+impl Render for PreviewHost {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let Some(preview) = self.preview.clone() else {
+            return div().into_any_element();
+        };
+        gpui_kit::base::Dialog::new(cx)
+            .focus_handle(self.focus.clone())
+            .on_ok(|_, _, _| false)
+            .on_close(cx.listener(|view, _, window, cx| view.close(window, cx)))
+            .popup(preview)
+            .into_any_element()
+    }
+}
+fn show(preview: Entity<ImagePreview>, window: &mut Window, cx: &mut App) {
+    if let Some(host) = gpui_kit::base::Root::read(window, cx).plugin::<PreviewHost>() {
+        host.update(cx, |host, cx| {
+            if host.preview.is_none() {
+                host.previous_focus = window.focused(cx);
+            }
+            host.preview = Some(preview);
+            host.focus.focus(window, cx);
+            cx.notify();
+        });
+    }
+}
+fn close(window: &mut Window, cx: &mut App) {
+    if let Some(host) = gpui_kit::base::Root::read(window, cx).plugin::<PreviewHost>() {
+        host.update(cx, |host, cx| host.close(window, cx));
+    }
 }
 
 fn load_image(path: PathBuf) -> Result<(Arc<Image>, (u32, u32)), SharedString> {
@@ -78,15 +128,15 @@ impl ImagePreview {
         let (width, height) = self.dimensions.unwrap_or((800, 600));
         let rem = f32::from(window.rem_size());
         let available = window.viewport_size();
-        let (dialog_width, image_width, image_height) = fit(
+        let (stage_width, image_width, image_height) = fit(
             width,
             height,
             f32::from(available.width),
             f32::from(available.height),
             rem,
         );
-        // Image dimensions are raster pixels; dialog insets follow the UI scale.
-        (px(dialog_width), size(px(image_width), px(image_height)))
+        // Image dimensions are raster pixels; viewer margins follow the UI scale.
+        (px(stage_width), size(px(image_width), px(image_height)))
     }
 }
 
@@ -97,32 +147,66 @@ fn fit(
     viewport_height: f32,
     rem: f32,
 ) -> (f32, f32, f32) {
-    let max_width = (viewport_width - rem * 4.).min(rem * 64.);
-    let max_height = (viewport_height - rem * 10.).max(rem * 8.);
-    let scale = ((max_width - rem * 2.5) / width.max(1) as f32)
+    let max_width = (viewport_width - rem * 6.).max(1.);
+    let max_height = (viewport_height - rem * 8.).max(1.);
+    // Enlarge small attachments as well as fitting large screenshots. A bounded
+    // enlargement keeps tiny raster assets from filling the entire window.
+    let scale = (max_width / width.max(1) as f32)
         .min(max_height / height.max(1) as f32)
-        .min(1.);
-    let image_width = width as f32 * scale;
-    let image_height = height as f32 * scale;
+        .min(4.);
     (
-        (image_width + rem * 2.5).max(rem * 20.).min(max_width),
-        image_width,
-        image_height,
+        max_width,
+        width.max(1) as f32 * scale,
+        height.max(1) as f32 * scale,
     )
 }
 
 impl Render for ImagePreview {
-    fn render(&mut self, window: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let (_, fitted) = self.geometry(window);
-        h_flex().justify_center().child(match &self.image {
-            Ok(Some(image)) => img(image.clone())
-                .w(fitted.width)
-                .h(fitted.height)
-                .object_fit(ObjectFit::Contain)
-                .into_any_element(),
-            Ok(None) => div().child("加载图片…").into_any_element(),
-            Err(error) => div().child(error.clone()).into_any_element(),
-        })
+        div()
+            .id("image-viewer")
+            .size_full()
+            .relative()
+            .occlude()
+            .bg(cx.theme().background.opacity(0.96))
+            .flex()
+            .items_center()
+            .justify_center()
+            .on_mouse_down(MouseButton::Left, |_, window, cx| {
+                cx.stop_propagation();
+                close(window, cx);
+            })
+            .child(match &self.image {
+                Ok(Some(image)) => div()
+                    .w(fitted.width)
+                    .h(fitted.height)
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .child(
+                        img(image.clone())
+                            .size_full()
+                            .object_fit(ObjectFit::Contain),
+                    )
+                    .into_any_element(),
+                Ok(None) => div().child("加载图片…").into_any_element(),
+                Err(error) => div().child(error.clone()).into_any_element(),
+            })
+            .child(
+                div()
+                    .absolute()
+                    .top_4()
+                    .right_4()
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .child(
+                        Button::new("close-image-preview")
+                            .ghost()
+                            .small()
+                            .icon(gpui_kit::assets::IconName::X)
+                            .accessibility_label("关闭图片预览")
+                            .tooltip("关闭图片预览（Esc）")
+                            .on_click(|_, window, cx| close(window, cx)),
+                    ),
+            )
     }
 }
 
@@ -135,13 +219,16 @@ mod tests {
         for rem in [14., 20.] {
             for (viewport_width, viewport_height) in [(800., 560.), (1180., 800.)] {
                 for (width, height) in [(2195, 470), (470, 2195), (80, 60)] {
-                    let (dialog_width, image_width, image_height) =
+                    let (stage_width, image_width, image_height) =
                         fit(width, height, viewport_width, viewport_height, rem);
-                    assert!(dialog_width <= viewport_width - rem * 4.);
-                    assert!(image_width + rem * 2.5 <= dialog_width + 0.01);
-                    assert!(image_height <= (viewport_height - rem * 10.).max(rem * 8.));
-                    assert!(image_width <= width as f32);
-                    assert!(image_height <= height as f32);
+                    assert!(stage_width <= viewport_width - rem * 6.);
+                    assert!(image_width <= stage_width + 0.01);
+                    assert!(image_height <= (viewport_height - rem * 8.).max(1.));
+                    assert!(image_width <= width as f32 * 4.);
+                    assert!(image_height <= height as f32 * 4.);
+                    if width == 80 {
+                        assert!(image_width > width as f32);
+                    }
                     assert!(
                         (image_width / image_height - width as f32 / height as f32).abs() < 0.01
                     );

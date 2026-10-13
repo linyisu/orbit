@@ -268,20 +268,49 @@ impl Workspace {
             }
             let entries2 = entries.clone();
             let owner = owner.clone();
-            dialog.title("跳转到会话").child(
-                Palette::new(&state)
-                    .placeholder("会话标题…")
-                    .items(entries.iter().map(|entry| {
-                        CommandItem::new().label(format!("{} · {}", entry.title, entry.workspace))
-                    }))
-                    .on_confirm(move |index, window, cx| {
-                        if let Some(entry) = entries2.get(index.row) {
-                            window.close_dialog(cx);
-                            let _ = owner
-                                .update(cx, |view, cx| view.select_session(&entry.id, window, cx));
-                        }
-                    }),
-            )
+            dialog
+                .title("跳转到会话")
+                .margin_top(window.viewport_size().height * 0.1)
+                .width(
+                    (window.viewport_size().width - window.rem_size() * 4.)
+                        .min(window.rem_size() * 60.),
+                )
+                .child(
+                    Palette::new(&state)
+                        .bordered(false)
+                        .placeholder("搜索会话标题或目录…")
+                        .max_h(window.viewport_size().height * 0.65)
+                        .items(entries.iter().map(|entry| {
+                            let title = entry.title.clone();
+                            let path = entry.workspace.clone();
+                            CommandItem::new()
+                                .label(title.clone())
+                                .keywords([path.clone()])
+                                .child(move |_, cx| {
+                                    v_flex()
+                                        .min_w_0()
+                                        .w_full()
+                                        .gap_1()
+                                        .py_1()
+                                        .child(div().truncate().child(title.clone()))
+                                        .child(
+                                            div()
+                                                .text_sm()
+                                                .text_color(cx.theme().muted_foreground)
+                                                .truncate()
+                                                .child(path.clone()),
+                                        )
+                                })
+                        }))
+                        .on_confirm(move |index, window, cx| {
+                            if let Some(entry) = entries2.get(index.row) {
+                                window.close_dialog(cx);
+                                let _ = owner.update(cx, |view, cx| {
+                                    view.select_session(&entry.id, window, cx)
+                                });
+                            }
+                        }),
+                )
         });
     }
 }
