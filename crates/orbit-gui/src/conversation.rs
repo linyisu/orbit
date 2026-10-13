@@ -469,6 +469,11 @@ impl Render for Conversation {
                                             }
                                             view.scroll
                                                 .update(cx, |scroll, cx| scroll.remeasure(cx));
+                                            // Resizing can hide the current dot even
+                                            // when the active round has not changed.
+                                            view.navigation.update(cx, |navigation, cx| {
+                                                navigation.reveal_active(cx)
+                                            });
                                             cx.notify();
                                         });
                                     });

@@ -399,12 +399,9 @@ fn package_summary(package: &protocol::PluginPackage) -> String {
 }
 impl Plugins {
     fn page(&self, width: Pixels, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        let mut content = v_flex()
-            .w_full()
+        let mut content = super::content_column()
             .flex_shrink_0()
             .min_w_0()
-            .max_w(rems(60.))
-            .mx_auto()
             .p_6()
             .gap_6()
             .child(
@@ -416,7 +413,7 @@ impl Plugins {
                             .flex_1()
                             .min_w_0()
                             .gap_2()
-                            .child(div().text_2xl().font_semibold().child("插件市场"))
+                            .child(div().text_xl().font_semibold().child("插件市场"))
                             .child(
                                 div()
                                     .text_sm()
@@ -487,16 +484,18 @@ impl Plugins {
                 v.child(div().text_sm().text_color(cx.theme().danger).child(error))
             });
         let Some(catalog) = &self.catalog else {
-            return content
+            // Container-query roots are painted at the viewport origin; an
+            // actual parent must distribute the content column's auto margins.
+            return v_flex()
+                .size_full()
                 .child(
-                    div()
-                        .py_8()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(if self.busy {
+                    content.child(div().py_8().text_color(cx.theme().muted_foreground).child(
+                        if self.busy {
                             "正在加载插件…"
                         } else {
                             "尚未加载插件。连接工作区后重试。"
-                        }),
+                        },
+                    )),
                 )
                 .into_any_element();
         };
@@ -590,19 +589,22 @@ impl Plugins {
             }
         }
         if rows.is_empty() {
-            return content
+            return v_flex()
+                .size_full()
                 .child(
-                    div()
-                        .py_8()
-                        .text_sm()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(if catalog.marketplaces.is_empty() {
-                            "还没有插件市场。添加 Git 地址或本地目录来浏览插件。"
-                        } else if query.is_empty() {
-                            "市场中没有可用插件。可在市场来源中刷新。"
-                        } else {
-                            "没有匹配的插件，试试其他关键词。"
-                        }),
+                    content.child(
+                        div()
+                            .py_8()
+                            .text_sm()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(if catalog.marketplaces.is_empty() {
+                                "还没有插件市场。添加 Git 地址或本地目录来浏览插件。"
+                            } else if query.is_empty() {
+                                "市场中没有可用插件。可在市场来源中刷新。"
+                            } else {
+                                "没有匹配的插件，试试其他关键词。"
+                            }),
+                    ),
                 )
                 .into_any_element();
         }
@@ -640,12 +642,12 @@ impl Plugins {
                             move |view, range, _, cx| {
                                 range
                                     .map(|ix| {
-                                        div()
-                                            .w_full()
-                                            .max_w(rems(60.))
-                                            .mx_auto()
-                                            .px_6()
-                                            .child(view.row(&rows[ix], cx))
+                                        div().size_full().child(
+                                            super::content_column()
+                                                .h_full()
+                                                .px_6()
+                                                .child(view.row(&rows[ix], cx)),
+                                        )
                                     })
                                     .collect::<Vec<_>>()
                             },

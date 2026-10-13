@@ -262,12 +262,12 @@ fn discover_directory(directory: &Path, source: SkillSource) -> Vec<Skill> {
 
             let path = entry.path().join("SKILL.md");
             let body = read_skill(&path).ok()?;
-            let (frontmatter, _) = split_frontmatter(&body);
+            let (frontmatter, text) = split_frontmatter(&body);
             let description = frontmatter
                 .get("description")
                 .cloned()
                 .filter(|value| !value.is_empty())
-                .unwrap_or_else(|| first_sentence(&body));
+                .unwrap_or_else(|| first_sentence(text));
 
             if description.is_empty() {
                 return None;
@@ -302,21 +302,58 @@ pub(crate) fn read_skill(path: &Path) -> Result<String, String> {
     fs::read_to_string(path).map_err(|error| format!("{}: {error}", path.display()))
 }
 
-fn split_frontmatter(text: &str) -> (BTreeMap<String, String>, &str) {
-    let Some(rest) = text.strip_prefix("---\n") else {
+pub(crate) fn split_frontmatter(text: &str) -> (BTreeMap<String, String>, &str) {
+    let Some(rest) = text
+        .strip_prefix("---\n")
+        .or_else(|| text.strip_prefix("---\r\n"))
+    else {
         return (BTreeMap::new(), text);
     };
-    let Some((raw, body)) = rest.split_once("\n---\n") else {
+    let mut offset = 0;
+    let mut section = None;
+    for line in rest.split_inclusive('\n') {
+        if line.trim_end_matches(['\r', '\n']) == "---" {
+            section = Some((&rest[..offset], &rest[offset + line.len()..]));
+            break;
+        }
+        offset += line.len();
+    }
+    let Some((raw, body)) = section else {
         return (BTreeMap::new(), text);
     };
-
-    let fields = raw
-        .lines()
-        .filter_map(|line| line.split_once(':'))
-        .map(|(key, value)| (key.trim().to_owned(), unquote(value.trim()).to_owned()))
-        .filter(|(key, value)| !key.is_empty() && !value.is_empty())
-        .collect();
-
+    let mut fields = BTreeMap::new();
+    let mut lines = raw.lines().peekable();
+    while let Some(line) = lines.next() {
+        if line.starts_with(char::is_whitespace) {
+            continue;
+        }
+        let Some((key, value)) = line.split_once(':') else {
+            continue;
+        };
+        let key = key.trim();
+        let value = value.trim();
+        if key.is_empty() || value.is_empty() {
+            continue;
+        }
+        let value = if matches!(value, "|" | "|-" | "|+" | ">" | ">-" | ">+") {
+            let mut paragraphs = Vec::new();
+            while lines
+                .peek()
+                .is_some_and(|line| line.trim().is_empty() || line.starts_with(char::is_whitespace))
+            {
+                paragraphs.push(lines.next().unwrap().trim());
+            }
+            paragraphs
+                .join(if value.starts_with('>') { " " } else { "\n" })
+                .trim()
+                .to_owned()
+        } else {
+            unquote(value).to_owned()
+        };
+        if !value.is_empty() {
+            fields.insert(key.to_owned(), value);
+        }
+    }
     (fields, body)
 }
 
@@ -332,7 +369,7 @@ fn unquote(value: &str) -> &str {
         .unwrap_or(value)
 }
 
-fn first_sentence(body: &str) -> String {
+pub(crate) fn first_sentence(body: &str) -> String {
     body.lines()
         .map(str::trim)
         .find(|line| !line.is_empty() && !line.starts_with('#'))
@@ -341,7 +378,7 @@ fn first_sentence(body: &str) -> String {
         .to_owned()
 }
 
-fn valid_name(name: &str) -> bool {
+pub(crate) fn valid_name(name: &str) -> bool {
     !name.is_empty()
         && name.len() <= 64
         && name
@@ -365,6 +402,26 @@ mod tests {
     use tokio_util::sync::CancellationToken;
 
     use super::*;
+
+    #[test]
+    fn frontmatter_reads_windows_lines_and_multiline_descriptions() {
+        let text = "---\r\nname: review\r\ndescription: >-\r\n  Review code and\r\n  explain the changes.\r\n---\r\nBody.";
+        let (fields, body) = split_frontmatter(text);
+        assert_eq!(fields["name"], "review");
+        assert_eq!(
+            fields["description"],
+            "Review code and explain the changes."
+        );
+        assert_eq!(body, "Body.");
+        let (fields, body) = split_frontmatter("---\ndescription: |\n  One\n  Two\n---\nBody");
+        assert_eq!(fields["description"], "One\nTwo");
+        assert_eq!(body, "Body");
+        assert!(
+            split_frontmatter("---\ndescription: unfinished")
+                .0
+                .is_empty()
+        );
+    }
 
     #[tokio::test]
     async fn loader_exposes_only_installed_skills_and_clears_an_empty_catalog() {

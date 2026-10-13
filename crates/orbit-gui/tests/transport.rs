@@ -23,6 +23,9 @@ mod input_queue_transport;
 #[path = "support/tool_output_transport.rs"]
 mod tool_output_transport;
 
+#[path = "support/skill_import_transport.rs"]
+mod skill_import_transport;
+
 use backend::{Backend, Command, Event, Options};
 use orbit_client::protocol::{Request, Response};
 use std::time::Duration;

@@ -67,8 +67,50 @@ pub(super) async fn execute(
         !setup.resources.policy.disabled(Capability::Skills),
         "技能功能已禁用"
     );
+    if matches!(
+        action,
+        Action::SaveSkill { .. } | Action::ImportSkills { .. }
+    ) {
+        ensure!(!setup.resources.policy.read_only, "只读会话不能修改技能");
+        ensure!(
+            !setup.resources.policy.disabled(Capability::Write),
+            "文件写入已禁用"
+        );
+    }
     super::actions::execute(setup, SessionAction::RefreshSkills, busy).await?;
     match action {
+        Action::ScanSkills { source } => {
+            ensure!(!busy, "请等待当前任务结束后获取技能来源");
+            setup.resources.skill_import = None;
+            let scan = super::skill_import::Scan::acquire(
+                setup.session.id().to_owned(),
+                Path::new(&setup.session.snapshot.session.workspace).to_path_buf(),
+                source,
+                setup.resources.options.home.clone(),
+                skill_names(setup),
+            )
+            .await?;
+            let snapshot = scan.snapshot();
+            setup.resources.skill_import = Some(scan);
+            Ok(snapshot)
+        }
+        Action::ImportSkills { token, paths } => {
+            ensure!(!busy, "请等待当前任务结束后添加技能");
+            let scan = setup
+                .resources
+                .skill_import
+                .take()
+                .context("技能来源已过期，请重新扫描")?;
+            scan.install(
+                &token,
+                setup.session.id(),
+                Path::new(&setup.session.snapshot.session.workspace),
+                &paths,
+                &skill_names(setup),
+            )?;
+            super::actions::execute(setup, SessionAction::RefreshSkills, busy).await?;
+            Ok(skills(setup))
+        }
         Action::ReadSkill { name } => {
             let skill = setup
                 .resources
@@ -115,6 +157,16 @@ pub(super) async fn execute(
         Action::Skills => Ok(skills(setup)),
         _ => unreachable!(),
     }
+}
+fn skill_names(setup: &PreparedWorkspace) -> std::collections::HashSet<String> {
+    setup
+        .resources
+        .budget
+        .skills
+        .completions()
+        .into_iter()
+        .map(|(name, _)| name)
+        .collect()
 }
 fn editable(source: SkillSource) -> bool {
     matches!(source, SkillSource::OrbitUser | SkillSource::OrbitProject)
@@ -266,6 +318,42 @@ mod tests {
         };
         assert!(editable);
         assert!(content.contains("Read the diff"));
+        let source = root.join("incoming/verification");
+        fs::create_dir_all(source.join("references")).unwrap();
+        fs::write(
+            source.join("SKILL.md"),
+            "---\nname: verification\ndescription: Verify changes\n---\nRun focused checks.",
+        )
+        .unwrap();
+        fs::write(source.join("references/checks.md"), "Check behavior.").unwrap();
+        let scan = || Action::ScanSkills {
+            source: source.display().to_string(),
+        };
+        assert!(execute(&mut setup, scan(), true).await.is_err());
+        let Snapshot::SkillSource { token, skills, .. } =
+            execute(&mut setup, scan(), false).await.unwrap()
+        else {
+            panic!("skill source expected")
+        };
+        assert_eq!(skills.len(), 1);
+        assert!(!skills[0].conflict);
+        let install = || Action::ImportSkills {
+            token: token.clone(),
+            paths: vec![".".into()],
+        };
+        assert!(execute(&mut setup, install(), true).await.is_err());
+        setup.resources.policy.read_only = true;
+        assert!(execute(&mut setup, install(), false).await.is_err());
+        setup.resources.policy.read_only = false;
+        let Snapshot::Skills(skills) = execute(&mut setup, install(), false).await.unwrap() else {
+            panic!("installed skills expected")
+        };
+        assert_eq!(skills.len(), 2);
+        assert!(
+            root.join(".orbit/skills/verification/references/checks.md")
+                .is_file()
+        );
+        assert!(execute(&mut setup, install(), false).await.is_err());
         setup
             .session
             .begin("settings test".into(), "test::mock".into())

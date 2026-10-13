@@ -508,10 +508,7 @@ impl Render for SettingsPage {
                 .overflow_y_scroll()
                 .track_scroll(scroll)
                 .child(
-                    v_flex()
-                        .w_full()
-                        .max_w(rems(60.))
-                        .mx_auto()
+                    content_column()
                         .p_6()
                         .gap_6()
                         .child(
@@ -606,6 +603,10 @@ fn page_matches(ix: usize, query: &str) -> bool {
     query.is_empty()
         || title.to_lowercase().contains(query)
         || keywords.to_lowercase().contains(query)
+}
+
+fn content_column() -> Div {
+    v_flex().w_full().max_w(rems(60.)).mx_auto()
 }
 
 fn section(title: &'static str, description: &'static str, cx: &App) -> Div {

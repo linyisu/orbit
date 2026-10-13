@@ -6,6 +6,7 @@ mod input_queue;
 mod inspector;
 mod review;
 mod side_questions;
+mod skill_import;
 mod subagents;
 mod tool_output;
 mod user_input_history;
@@ -65,6 +66,7 @@ fn main() -> anyhow::Result<()> {
         ],
     )]);
     let mut fixture_skills: HashMap<String, String> = HashMap::new();
+    let mut skill_imports = skill_import::FixtureImports::default();
     let mut fixture_memories: Vec<Value> = vec![];
     let mut pending: VecDeque<Value> = VecDeque::new();
     let mut approvals: Vec<Value> = vec![];
@@ -92,6 +94,12 @@ fn main() -> anyhow::Result<()> {
             && let Some(path) = request["workspace"].as_str()
         {
             workspace = path.to_owned();
+            if std::path::Path::new(path)
+                .join(".fixture-skill-import")
+                .exists()
+            {
+                skill_import::seed(&mut fixture_skills);
+            }
             relocation =
                 std::fs::read_to_string(std::path::Path::new(path).join(".fixture-relocation"))
                     .ok();
@@ -307,7 +315,15 @@ fn main() -> anyhow::Result<()> {
                     planning = plan;
                 }
                 if session == "navigation" {
-                    history.insert(session.clone(), (1..=160).flat_map(|index| [
+                    let rounds = if std::path::Path::new(&workspace)
+                        .join(".fixture-navigation-short")
+                        .exists()
+                    {
+                        3
+                    } else {
+                        160
+                    };
+                    history.insert(session.clone(), (1..=rounds).flat_map(|index| [
                         json!({"Started":{"prompt":format!("第 {index} 轮：检查项目功能与验证结果")}}),
                         json!({"Agent":{"Model":{"TextDelta":format!("## 第 {index} 轮答复\n\n这一轮保留真实用户提问作为定位点。\n\n{}", "详细说明与后续步骤。\n\n".repeat(index % 4 + 1))}}}),
                         json!({"Finished":{"status":"completed"}}),
@@ -550,6 +566,13 @@ fn main() -> anyhow::Result<()> {
                     || request["session"].as_str() != Some(session.as_str())
                 {
                     json!({"type":"error","value":"工作区已切换，请重新打开当前项目的设置后重试"})
+                } else if let Some(response) = skill_imports.execute(
+                    &session,
+                    &workspace,
+                    &request["action"],
+                    &mut fixture_skills,
+                ) {
+                    response
                 } else {
                     let action = &request["action"];
                     if let Some(save) = action.get("SaveSkill") {

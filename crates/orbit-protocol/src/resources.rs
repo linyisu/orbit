@@ -4,6 +4,13 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Action {
     Skills,
+    ScanSkills {
+        source: String,
+    },
+    ImportSkills {
+        token: String,
+        paths: Vec<String>,
+    },
     ReadSkill {
         name: String,
     },
@@ -40,9 +47,24 @@ pub struct Skill {
     pub editable: bool,
 }
 
+/// A skill discovered in a session-owned, immutable source snapshot.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SkillCandidate {
+    pub path: String,
+    pub name: String,
+    pub title: String,
+    pub description: String,
+    pub conflict: bool,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Snapshot {
     Skills(Vec<Skill>),
+    SkillSource {
+        token: String,
+        source: String,
+        skills: Vec<SkillCandidate>,
+    },
     Skill {
         name: String,
         content: String,

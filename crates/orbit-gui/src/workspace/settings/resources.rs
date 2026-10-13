@@ -1,4 +1,5 @@
 //! Retained editors; settings requests report errors locally and never open report panels.
+mod import;
 use super::super::*;
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::radio::{Radio, RadioGroup};
@@ -30,6 +31,8 @@ pub(super) struct Resources {
     error: Option<String>,
     status: Option<String>,
     task: Task<()>,
+    importer: Option<Entity<import::Importer>>,
+    import_events: Option<Subscription>,
     _query_events: Subscription,
 }
 impl Resources {
@@ -69,6 +72,8 @@ impl Resources {
             error: None,
             status: None,
             task: Task::ready(()),
+            importer: None,
+            import_events: None,
             _query_events: query_events,
         }
     }
@@ -244,14 +249,50 @@ impl Resources {
             ),
         }
     }
+
+    fn import_skills(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(session) = self.session.clone() else {
+            return;
+        };
+        let importer = cx.new(|cx| {
+            import::Importer::new(
+                self.owner.clone(),
+                session,
+                self.workspace.clone(),
+                window,
+                cx,
+            )
+        });
+        self.import_events = Some(cx.subscribe_in(
+            &importer,
+            window,
+            |view, _, event, window, cx| {
+                if let import::Event::Imported(skills, count) = event {
+                    view.skills = skills.clone();
+                    view.status = Some(format!("已导入 {count} 个技能，可从下方加载到当前会话。"));
+                }
+                view.importer = None;
+                view.import_events = None;
+                view.query.update(cx, |input, cx| input.focus(window, cx));
+                cx.notify();
+            },
+        ));
+        self.error = None;
+        self.status = None;
+        self.importer = Some(importer);
+        cx.notify();
+    }
 }
 impl Render for Resources {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if let Some(importer) = &self.importer {
+            return v_flex().w_full().min_w_0().child(importer.clone());
+        }
         let (description, add, empty) = match self.kind {
             Kind::Skills => (
                 "管理当前工作区可用的技能。新技能保存到项目，保存后自动刷新。",
                 "新建技能…",
-                "还没有技能，创建一个来复用 Agent 的工作流程。",
+                "还没有技能。可以从仓库或目录导入，也可以新建技能。",
             ),
             Kind::Memory => (
                 "保存当前会话的事实与偏好，供后续对话使用。",
@@ -269,6 +310,7 @@ impl Render for Resources {
                     .child(
                         div()
                             .flex_1()
+                            .min_w_0()
                             .text_sm()
                             .text_color(cx.theme().muted_foreground)
                             .child(description),
@@ -370,6 +412,7 @@ impl Render for Resources {
         content = content.child(
             h_flex()
                 .gap_3()
+                .flex_wrap()
                 .child(
                     div().flex_1().min_w_0().child(
                         Input::new(&self.query)
@@ -387,7 +430,18 @@ impl Render for Resources {
                         .label(add)
                         .disabled(self.busy || self.session.is_none())
                         .on_click(cx.listener(|v, _, w, cx| v.new_item(w, cx))),
-                ),
+                )
+                .when(matches!(self.kind, Kind::Skills), |row| {
+                    row.child(
+                        Button::new("resource-import")
+                            .primary()
+                            .label("从来源导入…")
+                            .disabled(self.busy || self.session.is_none())
+                            .on_click(
+                                cx.listener(|view, _, window, cx| view.import_skills(window, cx)),
+                            ),
+                    )
+                }),
         );
         let query = self.query.read(cx).value().trim().to_lowercase();
         let mut rows = Vec::new();

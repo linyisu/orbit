@@ -79,6 +79,13 @@ impl Navigation {
         self.dots.scroll_to_item(active, ScrollStrategy::Center);
         cx.notify();
     }
+    pub(super) fn reveal_active(&self, cx: &mut Context<Self>) {
+        if !self.anchors.is_empty() {
+            self.dots
+                .scroll_to_item(self.active, ScrollStrategy::Center);
+            cx.notify();
+        }
+    }
     pub(super) fn visible_row(&mut self, row: usize, cx: &mut Context<Self>) {
         if self.anchors.is_empty() {
             return;
@@ -177,6 +184,7 @@ impl Render for Navigation {
             .min_h_0()
             .py_2()
             .items_center()
+            .justify_center()
             .key_context("ConversationNavigation")
             .track_focus(&self.focus)
             .on_action(cx.listener(|view, _: &PreviousRound, _, cx| {
@@ -188,62 +196,76 @@ impl Render for Navigation {
             .on_action(cx.listener(|view, _: &FirstRound, _, cx| view.jump(0, cx)))
             .on_action(cx.listener(|view, _: &LatestRound, _, cx| view.latest(cx)))
             .child(
-                div()
-                    .relative()
+                v_flex()
                     .w_full()
-                    .flex_1()
                     .min_h_0()
+                    .max_h(relative(1.))
+                    .items_center()
                     .child(
-                        uniform_list(
-                            "conversation-dots",
-                            self.anchors.len(),
-                            move |range, _, cx| {
-                                owner
-                                    .update(cx, |view, cx| {
-                                        range.map(|index| view.dot(index, cx)).collect::<Vec<_>>()
-                                    })
-                                    .unwrap_or_default()
-                            },
-                        )
-                        .size_full()
-                        .track_scroll(&self.dots),
+                        div()
+                            .relative()
+                            .w_full()
+                            // Match the compact h_5 dot rows. Only this list
+                            // shrinks when the navigation group exceeds the pane.
+                            .h(rems(self.anchors.len() as f32 * 1.25))
+                            .flex_shrink_1()
+                            .min_h_0()
+                            .child(
+                                uniform_list(
+                                    "conversation-dots",
+                                    self.anchors.len(),
+                                    move |range, _, cx| {
+                                        owner
+                                            .update(cx, |view, cx| {
+                                                range
+                                                    .map(|index| view.dot(index, cx))
+                                                    .collect::<Vec<_>>()
+                                            })
+                                            .unwrap_or_default()
+                                    },
+                                )
+                                .size_full()
+                                .track_scroll(&self.dots),
+                            )
+                            .child(Scrollbar::vertical(&self.dots)),
                     )
-                    .child(Scrollbar::vertical(&self.dots)),
-            )
-            .child(
-                Button::new("current-round")
-                    .ghost()
-                    .xsmall()
-                    .label((self.active + 1).to_string())
-                    .tooltip(format!(
-                        "当前 {}/{} 轮 · 定位当前问题",
-                        self.active + 1,
-                        self.anchors.len()
-                    ))
-                    .accessibility_label(format!(
-                        "定位当前问题，第 {} 轮，共 {} 轮",
-                        self.active + 1,
-                        self.anchors.len()
-                    ))
-                    .on_click(cx.listener(|view, _, window, cx| {
-                        window.focus(&view.focus, cx);
-                        view.dots
-                            .scroll_to_item(view.active, ScrollStrategy::Center);
-                        view.jump(view.active, cx);
-                    })),
-            )
-            .child(
-                Button::new("latest-round")
-                    .ghost()
-                    .small()
-                    .icon(gpui_kit::assets::IconName::ArrowDown)
-                    .tooltip("回到最新消息 · End")
-                    .accessibility_label("回到最新消息")
-                    .disabled(!self.messages.read(cx).is_scrolled_up())
-                    .on_click(cx.listener(|view, _, window, cx| {
-                        window.focus(&view.focus, cx);
-                        view.latest(cx);
-                    })),
+                    .child(
+                        Button::new("current-round")
+                            .flex_shrink_0()
+                            .ghost()
+                            .xsmall()
+                            .label((self.active + 1).to_string())
+                            .tooltip(format!(
+                                "当前 {}/{} 轮 · 定位当前问题",
+                                self.active + 1,
+                                self.anchors.len()
+                            ))
+                            .accessibility_label(format!(
+                                "定位当前问题，第 {} 轮，共 {} 轮",
+                                self.active + 1,
+                                self.anchors.len()
+                            ))
+                            .on_click(cx.listener(|view, _, window, cx| {
+                                window.focus(&view.focus, cx);
+                                view.dots
+                                    .scroll_to_item(view.active, ScrollStrategy::Center);
+                                view.jump(view.active, cx);
+                            })),
+                    )
+                    .child(
+                        Button::new("latest-round")
+                            .flex_shrink_0()
+                            .ghost()
+                            .small()
+                            .icon(gpui_kit::assets::IconName::ArrowDown)
+                            .tooltip("回到最新消息 · End")
+                            .accessibility_label("回到最新消息")
+                            .disabled(!self.messages.read(cx).is_scrolled_up())
+                            .on_click(cx.listener(|view, _, window, cx| {
+                                window.focus(&view.focus, cx);
+                                view.latest(cx);
+                            })),
+                    ),
             )
             .into_any_element()
     }

@@ -16,6 +16,7 @@ mod run;
 mod server;
 mod session;
 pub mod setup;
+mod skill_import;
 mod subagents;
 mod tasks;
 mod usage;
