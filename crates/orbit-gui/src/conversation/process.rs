@@ -1,15 +1,15 @@
-//! Execution stays visible until an answer begins. Manual inspection persists
-//! across updates within that phase; a new execution phase opens it again.
+//! Keep execution visible through intermediate prose and tool calls. Only a
+//! completed answer collapses it automatically; explicit inspection wins.
 pub(super) struct ProcessDisclosure {
     expanded: bool,
-    answering: bool,
+    manual: bool,
 }
 
 impl Default for ProcessDisclosure {
     fn default() -> Self {
         Self {
             expanded: true,
-            answering: false,
+            manual: false,
         }
     }
 }
@@ -21,12 +21,12 @@ impl ProcessDisclosure {
 
     pub(super) fn toggle(&mut self) {
         self.expanded = !self.expanded;
+        self.manual = true;
     }
 
-    pub(super) fn sync(&mut self, answering: bool) {
-        if self.answering != answering {
-            self.expanded = !answering;
-            self.answering = answering;
+    pub(super) fn sync(&mut self, completed_answer: bool) {
+        if !self.manual {
+            self.expanded = !completed_answer;
         }
     }
 }
@@ -42,90 +42,88 @@ mod tests {
             .apply(serde_json::from_value(event).unwrap())
             .is_some()
         {
-            disclosure.sync(transcript.turns.last().unwrap().conclusion().is_some());
+            let turn = transcript.turns.last().unwrap();
+            disclosure.sync(turn.completed && turn.conclusion().is_some());
         }
     }
 
-    #[test]
-    fn execution_is_visible_until_answer_and_manual_inspection_survives_streaming() {
-        let mut transcript = Transcript::default();
-        let mut disclosure = ProcessDisclosure::default();
+    fn commentary_and_tools() -> Vec<Value> {
         let call = json!({"id":"read","function":{"name":"read_file","arguments":"{}"}});
-        for event in [
+        vec![
             json!({"Started":{"prompt":"检查项目"}}),
             json!({"Agent":{"ToolStarted":{"call":call}}}),
             json!({"Agent":{"ToolFinished":{"call":call,"content":"文件内容","changes":[]}}}),
-            json!({"Agent":{"Model":{"ReasoningDelta":"分析结果"}}}),
-            json!({"Agent":{"Model":{"TextDelta":"  \n"}}}),
-        ] {
-            apply(&mut transcript, &mut disclosure, event);
-            assert!(disclosure.expanded());
-        }
-        apply(
-            &mut transcript,
-            &mut disclosure,
-            json!({"Agent":{"Model":{"TextDelta":"检查完成。"}}}),
-        );
-        assert!(!disclosure.expanded());
-        apply(
-            &mut transcript,
-            &mut disclosure,
+            json!({"Agent":{"Model":{"TextDelta":"先检查实现，再验证影响。"}}}),
             json!({"Agent":{"Model":{"ReasoningDelta":"补充思考"}}}),
+            json!({"Agent":{"Model":{"TextDelta":"  \n"}}}),
+            json!({"Agent":{"ToolStarted":{"call":call}}}),
+            json!({"Agent":{"ToolFinished":{"call":call,"content":"检查结果","changes":[]}}}),
+            json!({"Agent":{"Model":{"TextDelta":"检查完成。"}}}),
+        ]
+    }
+
+    #[test]
+    fn commentary_never_collapses_execution_before_the_run_finishes() {
+        let mut transcript = Transcript::default();
+        let mut disclosure = ProcessDisclosure::default();
+        for event in commentary_and_tools() {
+            apply(&mut transcript, &mut disclosure, event);
+            assert!(disclosure.expanded());
+        }
+        apply(
+            &mut transcript,
+            &mut disclosure,
+            json!({"Finished":{"status":"completed"}}),
         );
         assert!(!disclosure.expanded());
+        // Opening a completed record must survive subsequent view syncs.
         disclosure.toggle();
-        for event in [
-            json!({"Agent":{"Model":{"TextDelta":"这是结果。"}}}),
-            json!({"Finished":{"status":"completed"}}),
-        ] {
-            apply(&mut transcript, &mut disclosure, event);
+        disclosure.sync(true);
+        assert!(disclosure.expanded());
+    }
+
+    #[test]
+    fn manual_choice_survives_prose_tools_and_completion() {
+        for expanded in [false, true] {
+            let mut transcript = Transcript::default();
+            let mut disclosure = ProcessDisclosure::default();
+            disclosure.toggle();
+            if expanded {
+                disclosure.toggle();
+            }
+            for event in commentary_and_tools()
+                .into_iter()
+                .chain([json!({"Finished":{"status":"completed"}})])
+            {
+                apply(&mut transcript, &mut disclosure, event);
+                assert_eq!(disclosure.expanded(), expanded);
+            }
+        }
+    }
+
+    #[test]
+    fn failed_or_cancelled_execution_keeps_partial_answers_and_details_visible() {
+        for status in ["failed", "cancelled"] {
+            let mut transcript = Transcript::default();
+            let mut disclosure = ProcessDisclosure::default();
+            for event in commentary_and_tools()
+                .into_iter()
+                .chain([json!({"Finished":{"status":status}})])
+            {
+                apply(&mut transcript, &mut disclosure, event);
+            }
             assert!(disclosure.expanded());
         }
     }
 
     #[test]
-    fn new_execution_phase_reopens_and_empty_deltas_do_not_override_manual_choice() {
-        let mut transcript = Transcript::default();
-        let mut disclosure = ProcessDisclosure::default();
-        apply(
-            &mut transcript,
-            &mut disclosure,
-            json!({"Agent":{"Model":{"TextDelta":"先检查源码。"}}}),
-        );
-        assert!(!disclosure.expanded());
-        let call = json!({"id":"read","function":{"name":"read_file","arguments":"{}"}});
-        apply(
-            &mut transcript,
-            &mut disclosure,
-            json!({"Agent":{"ToolStarted":{"call":call}}}),
-        );
-        assert!(disclosure.expanded());
-        disclosure.toggle();
-        for event in [
-            json!({"Agent":{"Model":{"ReasoningDelta":"检查中"}}}),
-            json!({"Agent":{"Model":{"TextDelta":""}}}),
-            json!({"Agent":{"ToolFinished":{"call":call,"content":"文件内容","changes":[]}}}),
-        ] {
-            apply(&mut transcript, &mut disclosure, event);
-            assert!(!disclosure.expanded());
-        }
-        disclosure.toggle();
-        apply(
-            &mut transcript,
-            &mut disclosure,
-            json!({"Agent":{"Model":{"TextDelta":"检查完成。"}}}),
-        );
-        assert!(!disclosure.expanded());
-    }
-
-    #[test]
-    fn failed_execution_without_an_answer_keeps_its_details_available() {
+    fn completed_execution_without_an_answer_keeps_its_details_visible() {
         let mut transcript = Transcript::default();
         let mut disclosure = ProcessDisclosure::default();
         for event in [
             json!({"Started":{"prompt":"检查项目"}}),
-            json!({"Report":{"title":"连接失败","text":"连接中断，请重试。"}}),
-            json!({"Finished":{"status":"failed"}}),
+            json!({"Agent":{"Model":{"ReasoningDelta":"分析结果"}}}),
+            json!({"Finished":{"status":"completed"}}),
         ] {
             apply(&mut transcript, &mut disclosure, event);
         }

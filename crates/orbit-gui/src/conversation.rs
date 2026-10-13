@@ -301,7 +301,7 @@ impl TurnView {
             });
         }
         self.process = process;
-        self.disclosure.sync(conclusion.is_some());
+        self.disclosure.sync(turn.completed && conclusion.is_some());
         self.conclusion = conclusion;
         self.label = turn.label().into();
         cx.notify();

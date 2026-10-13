@@ -90,11 +90,11 @@ pub(super) fn flow_events() -> VecDeque<Value> {
         // An empty model delta must not end the execution presentation.
         json!({"Agent":{"Model":{"TextDelta":""}}}),
         json!({"Agent":{"Model":{"TextDelta":"FLOW-FIRST: 初步检查已完成。"}}}),
-        json!({"Agent":{"Model":{"ReasoningDelta":"FLOW-LATE-REASONING: 正文开始后迟到的思考增量不能隐藏答复或重新展开执行记录。"}}}),
-        json!({"Agent":{"Model":{"TextDelta":" FLOW-CONTINUATION: 正文继续输出，手动展开的工具记录应保持展开。"}}}),
+        json!({"Agent":{"Model":{"ReasoningDelta":"FLOW-LATE-REASONING: 中途输出文字后，思考和工具记录应保持展开。"}}}),
+        json!({"Agent":{"Model":{"TextDelta":" FLOW-CONTINUATION: 继续说明检查进展，任务还未完成。"}}}),
         json!({"Agent":{"ToolStarted":{"call":resumed}}}),
         json!({"Agent":{"ToolFinished":{"call":resumed,"content":"FLOW-RESUMED-TOOL: manifest inspected","changes":[]}}}),
-        json!({"Agent":{"Model":{"ReasoningDelta":"FLOW-RESUMED-REASONING: 工具执行恢复后，记录应再次自动展开。"}}}),
+        json!({"Agent":{"Model":{"ReasoningDelta":"FLOW-RESUMED-REASONING: 后续工具执行继续，展开状态应保持稳定。"}}}),
         json!({"Agent":{"Model":{"TextDelta":"FLOW-FINAL: 补充检查完成，开始最终答复。"}}}),
     ]
     .into()

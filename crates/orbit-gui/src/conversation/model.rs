@@ -24,6 +24,7 @@ pub(super) struct Turn {
     pub(super) images: Vec<String>,
     pub(super) parts: Vec<Part>,
     pub(super) status: String,
+    pub(super) completed: bool,
     text: Option<usize>,
     thought: Option<usize>,
 }
@@ -113,6 +114,7 @@ impl Transcript {
             Update::Finished { status, .. } => {
                 let turn = self.active?;
                 let run = &mut self.turns[turn];
+                run.completed = status == "completed";
                 run.status = match status.as_str() {
                     "completed" => "已完成",
                     "cancelled" => "已停止",

@@ -4,6 +4,7 @@ mod disclosures;
 mod files;
 mod input_queue;
 mod inspector;
+mod planning;
 mod review;
 mod side_questions;
 mod skill_import;
@@ -307,6 +308,12 @@ fn main() -> anyhow::Result<()> {
                 if session == "process-tail" {
                     history.insert(session.clone(), process_tail());
                 }
+                if session == "plan-review" {
+                    let (events, remaining, plan) = planning::seed(&workspace);
+                    history.insert(session.clone(), events);
+                    pending = remaining;
+                    planning = plan;
+                }
                 if session == "demo"
                     && std::path::Path::new(&workspace)
                         .join(".fixture-inspector")
@@ -367,6 +374,7 @@ fn main() -> anyhow::Result<()> {
                     .front()
                     .is_some_and(|event| inspector::held(&workspace, event));
                 if approvals.is_empty()
+                    && !(session == "plan-review" && planning["plan"]["status"] == "review")
                     && !hold_command
                     && !hold_disclosure
                     && !hold_disclosure_flow
@@ -526,6 +534,13 @@ fn main() -> anyhow::Result<()> {
                     {
                         planning["mode"] = json!("build");
                         planning["plan"]["status"] = json!("approved");
+                        if session == "plan-review" {
+                            std::fs::write(
+                                std::path::Path::new(&workspace)
+                                    .join(".fixture-plan-decision.json"),
+                                serde_json::to_vec(&request["action"])?,
+                            )?;
+                        }
                     }
                     Some("leave") => planning["mode"] = json!("build"),
                     _ => {}
