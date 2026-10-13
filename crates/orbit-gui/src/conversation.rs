@@ -8,7 +8,7 @@ use gpui_kit::component::{
     bubble::{Bubble, BubbleContent, BubbleVariant},
     button::{Button, ButtonVariants},
     h_flex,
-    message::{Message, MessageAlignment, MessageContent},
+    message::{Message, MessageAlignment, MessageContent, MessageFooter},
     message_scroller::{MessageScroller, MessageScrollerState},
     text::{TextView, TextViewState},
     v_flex,
@@ -582,7 +582,6 @@ impl Render for MessageRow {
         let disclosure_inset = rems(1.5);
         let message_group: SharedString = format!("user-message-{}", cx.entity_id()).into();
         let body = v_flex()
-            .group(message_group.clone())
             .when(!self.user, |view| view.w_full())
             .items_start()
             .min_w_0()
@@ -655,36 +654,17 @@ impl Render for MessageRow {
             })
             .when(self.expanded, |view| {
                 if let Some(source) = &self.literal {
-                    return view
-                        .child(div().min_w_0().whitespace_normal().child(
-                            gpui_kit::base::SelectableText::new("user-source", source.clone()).map(
-                                |text| {
-                                    if let Some(viewport) = &self.viewport {
-                                        text.scroll_viewport(viewport.get())
-                                    } else {
-                                        text
-                                    }
-                                },
-                            ),
-                        ))
-                        .child(
-                            h_flex().justify_end().child(
-                                div()
-                                    .id("user-copy-action")
-                                    .opacity(0.)
-                                    .group_hover(message_group.clone(), |style| style.opacity(1.))
-                                    .in_focus(|style| style.opacity(1.))
-                                    .child(
-                                        gpui_kit::component::clipboard::Clipboard::new(
-                                            "copy-user-question",
-                                        )
-                                        .value(source.clone())
-                                        .small()
-                                        .tooltip("复制问题")
-                                        .accessibility_label("复制用户问题"),
-                                    ),
-                            ),
-                        );
+                    return view.child(div().min_w_0().whitespace_normal().child(
+                        gpui_kit::base::SelectableText::new("user-source", source.clone()).map(
+                            |text| {
+                                if let Some(viewport) = &self.viewport {
+                                    text.scroll_viewport(viewport.get())
+                                } else {
+                                    text
+                                }
+                            },
+                        ),
+                    ));
                 }
                 let text = TextView::new(&self.text)
                     .when(!self.user, |view| view.w_full())
@@ -715,15 +695,44 @@ impl Render for MessageRow {
                 }
             });
         if self.user {
-            Message::new()
-                .alignment(MessageAlignment::End)
-                .with_stack_style(StyleRefinement::default().max_w(relative(0.8)))
-                .content(
-                    MessageContent::new().bubble(
-                        Bubble::new()
-                            .with_variant(BubbleVariant::Muted)
-                            .content(BubbleContent::new().child(body)),
-                    ),
+            div()
+                .group(message_group.clone())
+                .child(
+                    Message::new()
+                        .alignment(MessageAlignment::End)
+                        .with_stack_style(StyleRefinement::default().max_w(relative(0.8)))
+                        .content(
+                            MessageContent::new().bubble(
+                                Bubble::new()
+                                    .with_variant(BubbleVariant::Muted)
+                                    .content(BubbleContent::new().child(body)),
+                            ),
+                        )
+                        .when_some(
+                            self.literal.clone().filter(|text| !text.is_empty()),
+                            |message, source| {
+                                message.footer(
+                                    MessageFooter::new().content_inset(false).child(
+                                        div()
+                                            .id("user-copy-action")
+                                            .opacity(0.)
+                                            .group_hover(message_group.clone(), |style| {
+                                                style.opacity(1.)
+                                            })
+                                            .in_focus(|style| style.opacity(1.))
+                                            .child(
+                                                gpui_kit::component::clipboard::Clipboard::new(
+                                                    "copy-user-question",
+                                                )
+                                                .value(source)
+                                                .small()
+                                                .tooltip("复制问题")
+                                                .accessibility_label("复制用户问题"),
+                                            ),
+                                    ),
+                                )
+                            },
+                        ),
                 )
                 .into_any_element()
         } else {

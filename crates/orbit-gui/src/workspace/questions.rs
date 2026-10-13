@@ -313,6 +313,9 @@ impl Render for QuestionForm {
                                                 }),
                                         )
                                         .on_click(cx.listener(move |view, _, window, cx| {
+                                            if view.pending || view.current != ix {
+                                                return;
+                                            }
                                             if single {
                                                 view.answers[ix].selected.clear();
                                                 view.inputs[ix].update(cx, |input, cx| {
@@ -327,7 +330,11 @@ impl Render for QuestionForm {
                                                     .retain(|id| id != &option_id);
                                             }
                                             view.error = None;
-                                            cx.notify();
+                                            if single {
+                                                view.advance(window, cx);
+                                            } else {
+                                                cx.notify();
+                                            }
                                         }))
                                 },
                             )),
