@@ -651,6 +651,10 @@ impl Workspace {
         match update {
             Update::Started { presentation, .. } => {
                 self.replaying = presentation.replayed;
+                if !presentation.compact {
+                    self.inspector_state.reset();
+                    self.execution_scroll = UniformListScrollHandle::new();
+                }
             }
             Update::Agent(event) => match &**event {
                 AgentEvent::ContextUsage { estimated_input } => {

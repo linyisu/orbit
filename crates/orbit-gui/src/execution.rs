@@ -79,6 +79,97 @@ pub(crate) struct ToolRun {
 }
 
 impl ToolRun {
+    /// A read-only description of the requested operation. Execution status is
+    /// deliberately absent: only the service receipt can establish its result.
+    pub(crate) fn presentation(&self) -> ToolPresentation {
+        let args = serde_json::from_str::<serde_json::Value>(&self.arguments).ok();
+        let args = args.as_ref();
+        let path = argument(args, &["path"]);
+        let (label, target, directory, file) = match self.name.as_str() {
+            "run_command" => (
+                "命令",
+                argument(args, &["command", "cmd"]),
+                argument(args, &["cwd"]),
+                false,
+            ),
+            "read_file" => ("读取文件", path, None, true),
+            "write_file" => ("写入文件", path, None, true),
+            "edit_file" => ("编辑文件", path, None, true),
+            "read_image" => ("查看图片", path, None, true),
+            "read_document" => ("读取文档", path, None, true),
+            "list_files" => ("浏览目录", path, None, true),
+            "project_overview" => ("项目概览", argument(args, &["query", "path"]), None, false),
+            "search_text" => (
+                "搜索代码",
+                argument(args, &["query", "pattern"]),
+                path,
+                false,
+            ),
+            "web_search" => ("搜索网页", argument(args, &["query"]), None, false),
+            "web_fetch" => ("读取网页", argument(args, &["url"]), None, false),
+            "spawn_agent" => (
+                "启动 Agent",
+                argument(args, &["task", "prompt"]),
+                None,
+                false,
+            ),
+            "send_agent_message" => (
+                "发送给 Agent",
+                argument(args, &["message", "prompt", "agent_id"]),
+                argument(args, &["agent_id"]),
+                false,
+            ),
+            "read_agent" => ("查看 Agent", argument(args, &["agent_id"]), None, false),
+            "wait_agents" => ("等待 Agent", None, None, false),
+            "cancel_agents" => ("停止 Agent", None, None, false),
+            _ => (self.name.as_str(), None, None, false),
+        };
+        let target = target.unwrap_or_default();
+        let fallback = argument(
+            args,
+            &[
+                "path", "command", "cmd", "query", "pattern", "task", "prompt", "agent_id",
+            ],
+        )
+        .unwrap_or(&self.detail);
+        let (title, directory) = if file && !target.is_empty() {
+            path_parts(target)
+        } else {
+            (target, directory.unwrap_or_default())
+        };
+        let title = compact_line(if title.is_empty() { label } else { title });
+        let subtitle = if directory.is_empty() {
+            if label == self.name && target.is_empty() {
+                compact_line(fallback)
+            } else {
+                label.to_owned()
+            }
+        } else {
+            format!("{label} · {}", compact_line(directory))
+        };
+        let mut tooltip = if label == self.name {
+            self.name.clone()
+        } else {
+            format!("{label} · {}", self.name)
+        };
+        if !target.is_empty() {
+            tooltip.push('\n');
+            tooltip.push_str(target);
+        } else if !fallback.is_empty() {
+            tooltip.push('\n');
+            tooltip.push_str(fallback);
+        }
+        if !file && !directory.is_empty() && directory != target {
+            tooltip.push('\n');
+            tooltip.push_str(directory);
+        }
+        ToolPresentation {
+            title,
+            subtitle,
+            tooltip,
+        }
+    }
+
     pub(crate) fn is_foreground_command(&self) -> bool {
         self.name == "run_command"
             && serde_json::from_str::<serde_json::Value>(&self.arguments)
@@ -91,6 +182,75 @@ impl ToolRun {
             .then_some(())
             .and_then(|_| serde_json::from_str(self.output.as_deref()?).ok())
     }
+}
+
+/// Compact row copy with the complete requested command or path available on
+/// hover. It contains no independently retained or inferred execution state.
+pub(crate) struct ToolPresentation {
+    title: String,
+    subtitle: String,
+    tooltip: String,
+}
+
+impl ToolPresentation {
+    pub(crate) fn title(&self) -> &str {
+        &self.title
+    }
+
+    pub(crate) fn subtitle(&self) -> &str {
+        &self.subtitle
+    }
+
+    pub(crate) fn tooltip(&self) -> &str {
+        &self.tooltip
+    }
+}
+
+fn argument<'a>(args: Option<&'a serde_json::Value>, keys: &[&str]) -> Option<&'a str> {
+    keys.iter().find_map(|key| {
+        args?.get(key)?.as_str().filter(|text| {
+            text.chars()
+                .any(|character| !character.is_whitespace() && !character.is_control())
+        })
+    })
+}
+
+fn compact_line(text: &str) -> String {
+    let line = text
+        .lines()
+        .find(|line| {
+            line.chars()
+                .any(|character| !character.is_whitespace() && !character.is_control())
+        })
+        .unwrap_or_default();
+    let mut characters = line
+        .split_whitespace()
+        .flat_map(|word| std::iter::once(' ').chain(word.chars()))
+        .skip(1)
+        .filter(|character| !character.is_control());
+    let mut compact: String = characters.by_ref().take(160).collect();
+    if characters.next().is_some() {
+        compact.push('…');
+    }
+    compact
+}
+
+// Tool paths belong to the service's platform, which can differ from the GUI's
+// platform. Preserve their spelling instead of resolving them on this host.
+fn path_parts(path: &str) -> (&str, &str) {
+    let trimmed = path.trim_end_matches(['/', '\\']);
+    if trimmed.is_empty() || (trimmed.ends_with(':') && trimmed.len() == 2) {
+        return (path, "");
+    }
+    let Some(separator) = trimmed.rfind(['/', '\\']) else {
+        return (trimmed, "");
+    };
+    let parent_end = if separator == 0 || (separator == 2 && trimmed.as_bytes()[1] == b':') {
+        separator + 1
+    } else {
+        separator
+    };
+    (&trimmed[separator + 1..], &trimmed[..parent_end])
 }
 
 /// The command tool's result schema, not a guessed shell-output wrapper. The
@@ -128,6 +288,19 @@ pub(crate) struct ChildAgent {
     pub(crate) id: String,
     pub(crate) role: String,
     pub(crate) status: String,
+    task: Option<String>,
+}
+
+impl ChildAgent {
+    /// The actual task supplied when this child was spawned. Result text and
+    /// follow-up messages never replace this identity with a guessed title.
+    pub(crate) fn task(&self) -> Option<&str> {
+        self.task.as_deref()
+    }
+
+    pub(crate) fn task_summary(&self) -> Option<String> {
+        self.task.as_deref().map(compact_line)
+    }
 }
 
 #[derive(Default)]
@@ -284,6 +457,9 @@ impl Execution {
             && let Ok(value) = serde_json::from_str::<serde_json::Value>(content)
             && let Some(id) = value["agent_id"].as_str()
         {
+            let task = serde_json::from_str::<serde_json::Value>(&call.function.arguments)
+                .ok()
+                .and_then(|args| argument(Some(&args), &["task", "prompt"]).map(str::to_owned));
             let status = match value["status"].as_str() {
                 Some("running" | "queued") => "运行中",
                 Some("completed") => "已完成",
@@ -294,6 +470,9 @@ impl Execution {
             .to_owned();
             if let Some(agent) = self.agents.iter_mut().find(|agent| agent.id == id) {
                 agent.status = status;
+                if task.is_some() {
+                    agent.task = task;
+                }
             } else {
                 let role = match value["role"].as_str() {
                     Some("review") => "审查",
@@ -305,6 +484,7 @@ impl Execution {
                     id: id.to_owned(),
                     role: role.to_owned(),
                     status,
+                    task,
                 });
             }
         }
@@ -350,6 +530,123 @@ mod tests {
     fn update(value: serde_json::Value) -> Update {
         serde_json::from_value(value).unwrap()
     }
+
+    fn presented_tool(name: &str, arguments: serde_json::Value) -> ToolRun {
+        let mut execution = Execution::default();
+        execution.agent(&AgentEvent::ToolStarted {
+            call: ToolCall::function("presentation", name, arguments),
+        });
+        execution.tools.remove(0)
+    }
+
+    #[test]
+    fn command_presentation_uses_first_nonempty_line_without_changing_the_request() {
+        let command = "\n\t \n  python3  -c \"\nprint('已完成')\n\"";
+        let tool = presented_tool(
+            "run_command",
+            serde_json::json!({"command":command,"cwd":"/home/用户/项目"}),
+        );
+        let original = tool.arguments.clone();
+        let presentation = tool.presentation();
+        assert_eq!(presentation.title(), "python3 -c \"");
+        assert_eq!(presentation.subtitle(), "命令 · /home/用户/项目");
+        assert!(presentation.tooltip().contains(command));
+        assert!(presentation.tooltip().ends_with("/home/用户/项目"));
+        assert_eq!(tool.arguments, original);
+        assert_eq!(tool.status, ToolStatus::Running);
+    }
+
+    #[test]
+    fn presentation_bounds_long_unicode_titles_but_keeps_the_complete_tooltip() {
+        let command = format!("printf '{}'", "数据🦀".repeat(300));
+        let tool = presented_tool("run_command", serde_json::json!({"command":command}));
+        let presentation = tool.presentation();
+        assert_eq!(presentation.title().chars().count(), 161);
+        assert!(presentation.title().ends_with('…'));
+        assert!(presentation.tooltip().ends_with(&command));
+        assert!(!presentation.title().contains('\u{fffd}'));
+    }
+
+    #[test]
+    fn file_presentation_preserves_remote_path_spelling_and_root_directories() {
+        for (path, title, directory) in [
+            ("/home/用户/项目/main.rs", "main.rs", "/home/用户/项目"),
+            ("/main.rs", "main.rs", "/"),
+            ("src/测试文件.rs", "测试文件.rs", "src"),
+            ("C:\\项目\\main.rs", "main.rs", "C:\\项目"),
+            ("C:\\main.rs", "main.rs", "C:\\"),
+            ("main.rs", "main.rs", ""),
+            ("/", "/", ""),
+            ("C:\\", "C:\\", ""),
+        ] {
+            let tool = presented_tool("read_file", serde_json::json!({"path":path}));
+            let presentation = tool.presentation();
+            assert_eq!(presentation.title(), title);
+            assert_eq!(
+                presentation.subtitle(),
+                if directory.is_empty() {
+                    "读取文件".to_owned()
+                } else {
+                    format!("读取文件 · {directory}")
+                }
+            );
+            assert!(presentation.tooltip().ends_with(path));
+        }
+    }
+
+    #[test]
+    fn empty_invalid_and_unknown_arguments_leave_an_identifiable_row() {
+        for arguments in [
+            serde_json::json!({}),
+            serde_json::json!({"command":" \n\t"}),
+        ] {
+            let tool = presented_tool("run_command", arguments);
+            assert_eq!(tool.presentation().title(), "命令");
+            assert!(tool.presentation().tooltip().contains("run_command"));
+        }
+        let mut tool = presented_tool("mcp__catalog__search", serde_json::json!({"query":"齿轮"}));
+        assert_eq!(tool.presentation().title(), "mcp__catalog__search");
+        assert_eq!(tool.presentation().subtitle(), "齿轮");
+        tool.arguments = "not JSON".into();
+        assert_eq!(tool.presentation().title(), "mcp__catalog__search");
+        assert_eq!(tool.status, ToolStatus::Running);
+    }
+
+    #[test]
+    fn search_and_delegation_present_the_actual_requested_target() {
+        for (name, args, title, label) in [
+            (
+                "search_text",
+                serde_json::json!({"query":"渲染 错误", "path":"src"}),
+                "渲染 错误",
+                "搜索代码 · src",
+            ),
+            (
+                "web_search",
+                serde_json::json!({"query":"GPUI tooltip"}),
+                "GPUI tooltip",
+                "搜索网页",
+            ),
+            (
+                "web_fetch",
+                serde_json::json!({"url":"https://example.com/文档"}),
+                "https://example.com/文档",
+                "读取网页",
+            ),
+            (
+                "spawn_agent",
+                serde_json::json!({"task":"检查布局\n保留用户改动"}),
+                "检查布局",
+                "启动 Agent",
+            ),
+        ] {
+            let presentation = presented_tool(name, args).presentation();
+            assert_eq!(presentation.title(), title);
+            assert_eq!(presentation.subtitle(), label);
+            assert!(presentation.tooltip().contains(name));
+        }
+    }
+
     #[test]
     fn projection_tracks_real_tools_compaction_and_committed_files() {
         let mut state = Execution::default();
@@ -404,6 +701,70 @@ mod tests {
         assert_eq!(state.tools()[0].status, ToolStatus::Complete);
         assert_eq!(state.agents().len(), 1);
         assert_eq!(state.agents()[0].status, "已完成");
+    }
+
+    #[test]
+    fn child_task_identity_survives_completion_and_follow_up_tool_receipts() {
+        let task = "\n检查  侧栏布局\n保留当前项目与用户草稿";
+        let mut state = Execution::default();
+        let call = ToolCall::function("spawn", "spawn_agent", serde_json::json!({"task":task}));
+        let receipt = |status: &str| {
+            serde_json::json!({"agent_id":"child","role":"review","status":status}).to_string()
+        };
+        state.agent(&AgentEvent::ToolBackgrounded {
+            call: call.clone(),
+            job_id: "job".into(),
+            content: receipt("running"),
+        });
+        assert_eq!(state.agents()[0].task(), Some(task));
+        assert_eq!(
+            state.agents()[0].task_summary().as_deref(),
+            Some("检查 侧栏布局")
+        );
+        state.agent(&AgentEvent::ToolFinished {
+            call,
+            content: receipt("completed"),
+            changes: vec![],
+        });
+        for name in ["read_agent", "send_agent_message", "wait_agents"] {
+            state.agent(&AgentEvent::ToolFinished {
+                call: ToolCall::function(
+                    name,
+                    name,
+                    serde_json::json!({"agent_id":"child", "message":"补充说明"}),
+                ),
+                content: receipt("running"),
+                changes: vec![],
+            });
+            assert_eq!(state.agents()[0].task(), Some(task));
+        }
+        // Partial historical receipts must not erase an already known task.
+        state.agent(&AgentEvent::ToolFinished {
+            call: ToolCall::function("historical", "spawn_agent", serde_json::json!({})),
+            content: receipt("completed"),
+            changes: vec![],
+        });
+        assert_eq!(state.agents().len(), 1);
+        assert_eq!(state.agents()[0].task(), Some(task));
+        assert_eq!(state.agents()[0].status, "已完成");
+    }
+
+    #[test]
+    fn child_tasks_accept_legacy_prompts_but_never_invent_missing_tasks() {
+        for (arguments, task) in [
+            (serde_json::json!({"prompt":"审查改动"}), Some("审查改动")),
+            (serde_json::json!({"task":" \n\t"}), None),
+            (serde_json::json!({}), None),
+        ] {
+            let mut state = Execution::default();
+            state.agent(&AgentEvent::ToolFinished {
+                call: ToolCall::function("spawn", "spawn_agent", arguments),
+                content: serde_json::json!({"agent_id":"child","role":"review","status":"completed","task":"结果中的其他文本"}).to_string(),
+                changes: vec![],
+            });
+            assert_eq!(state.agents()[0].task(), task);
+            assert_eq!(state.agents()[0].task_summary().as_deref(), task);
+        }
     }
 
     fn command_result(exit_code: serde_json::Value, timed_out: bool, cancelled: bool) -> String {

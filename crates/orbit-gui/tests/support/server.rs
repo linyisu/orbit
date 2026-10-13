@@ -3,6 +3,7 @@
 mod disclosures;
 mod files;
 mod input_queue;
+mod inspector;
 mod review;
 mod side_questions;
 mod subagents;
@@ -295,6 +296,16 @@ fn main() -> anyhow::Result<()> {
                 if session == "tool-history" {
                     history.insert(session.clone(), tool_history());
                 }
+                if session == "demo"
+                    && std::path::Path::new(&workspace)
+                        .join(".fixture-inspector")
+                        .exists()
+                {
+                    let (events, remaining, plan) = inspector::seed(&workspace);
+                    history.insert(session.clone(), events);
+                    pending = remaining;
+                    planning = plan;
+                }
                 if session == "navigation" {
                     history.insert(session.clone(), (1..=160).flat_map(|index| [
                         json!({"Started":{"prompt":format!("第 {index} 轮：检查项目功能与验证结果")}}),
@@ -324,10 +335,14 @@ fn main() -> anyhow::Result<()> {
                 let hold_disclosure_flow = pending
                     .front()
                     .is_some_and(|event| disclosures::flow_held(&workspace, event));
+                let hold_inspector = pending
+                    .front()
+                    .is_some_and(|event| inspector::held(&workspace, event));
                 if approvals.is_empty()
                     && !hold_command
                     && !hold_disclosure
                     && !hold_disclosure_flow
+                    && !hold_inspector
                     && let Some(event) = pending.pop_front()
                 {
                     events.push(event);

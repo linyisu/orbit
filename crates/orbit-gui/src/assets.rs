@@ -20,7 +20,9 @@ gpui_kit::assets::icon_assets!(
         Command,
         Monitor,
         Laptop,
-        ListTodo
+        ListTodo,
+        Pencil,
+        Clock
     ]
 );
 pub(crate) struct AppAssets;

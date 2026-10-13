@@ -493,7 +493,11 @@ impl Workspace {
         self.inspector = section;
         self.panel = None;
         if self.page == MainPage::Conversation {
-            if self.inspector.is_some() && window.viewport_size().width < window.rem_size() * 72. {
+            if self.inspector == Some(inspector::Section::Execution) {
+                self.inspector_state.focus.focus(window, cx);
+            } else if self.inspector.is_some()
+                && window.viewport_size().width < window.rem_size() * 72.
+            {
                 // The compact inspector replaces the composer. Sheets opened
                 // from it must restore a focus target that remains visible.
                 self.focus.focus(window, cx);

@@ -81,6 +81,7 @@ actions!(
 
 pub(crate) fn bind_keys(cx: &mut App) {
     files::bind_keys(cx);
+    inspector::bind_keys(cx);
     cx.bind_keys([
         KeyBinding::new(
             "down",
@@ -135,6 +136,7 @@ pub(crate) struct Workspace {
     execution: crate::execution::Execution,
     execution_scroll: UniformListScrollHandle,
     inspector: Option<inspector::Section>,
+    inspector_state: inspector::State,
     options: Options,
     runtime: Arc<tokio::runtime::Runtime>,
     backend: Option<Backend>,
@@ -246,6 +248,7 @@ impl Workspace {
             execution: Default::default(),
             execution_scroll: UniformListScrollHandle::new(),
             inspector: None,
+            inspector_state: inspector::State::new(cx),
             options,
             runtime,
             backend: None,
