@@ -1,4 +1,4 @@
-//! Durable queued text, with row-owned drafts and run/content compare-and-swap.
+//! Durable queued messages, with row-owned drafts and run/content compare-and-swap.
 use super::*;
 use gpui_kit::component::{
     IndexPath,
@@ -13,6 +13,7 @@ enum Operation {
         after: Option<i64>,
     },
     Restore {
+        images: Vec<orbit_protocol::MessageImage>,
         id: i64,
         expected: String,
         content: String,
@@ -508,7 +509,12 @@ impl InputQueue {
                 self.sync_list(window, cx);
             }
             (
-                Operation::Restore { id, content, .. },
+                Operation::Restore {
+                    id,
+                    content,
+                    images,
+                    ..
+                },
                 Ok(Response::InputQueue(Snapshot::Removed { id: received })),
             ) if received == *id => {
                 // Only a confirmed withdrawal makes this safe to edit locally.
@@ -519,7 +525,17 @@ impl InputQueue {
                     workspace
                         .input
                         .update(cx, |input, cx| input.set_value(restored, window, cx));
+                    let paths = images
+                        .iter()
+                        .map(|image| PathBuf::from(&image.path))
+                        .collect::<Vec<_>>();
+                    for path in paths {
+                        if !workspace.paths.contains(&path) {
+                            workspace.paths.push(path);
+                        }
+                    }
                     workspace.input.focus_handle(cx).focus(window, cx);
+                    cx.emit(WorkspaceEvent::DraftChanged);
                     cx.notify();
                 });
                 self.rows.retain(|row| row.entry.id != *id);
@@ -692,12 +708,13 @@ impl InputQueue {
             return;
         }
         let content = row.draft.read(cx).value().to_string();
-        if content.trim().is_empty() || content.trim().len() > 1_048_576 {
+        if (content.trim().is_empty() && row.entry.images.is_empty()) || content.len() > 1_048_576 {
             row.error = Some("输入内容需要 1–1048576 字节。".into());
             cx.notify();
             return;
         }
         let operation = Operation::Restore {
+            images: row.entry.images.clone(),
             id,
             expected: row.entry.content.clone(),
             content,
@@ -849,7 +866,9 @@ impl Render for InputQueue {
 }
 
 fn restored_text(withdrawn: &str, current: &str) -> String {
-    if current.is_empty() {
+    if withdrawn.is_empty() {
+        current.to_owned()
+    } else if current.is_empty() {
         withdrawn.to_owned()
     } else {
         format!("{withdrawn}\n\n{current}")
@@ -974,6 +993,7 @@ mod tests {
     fn reconnect_requires_refresh_and_never_replays_an_unconfirmed_edit() {
         let mut requests = ready();
         let edit = Operation::Restore {
+            images: vec![],
             id: 72,
             expected: "  original\n".into(),
             content: "draft\nsecond line".into(),
@@ -1015,6 +1035,7 @@ mod tests {
     #[test]
     fn mutations_send_real_id_run_and_exact_untrimmed_compare_value() {
         let operation = Operation::Restore {
+            images: vec![],
             id: 992,
             expected: "  stored\n\n".into(),
             content: " replacement\n".into(),
@@ -1033,6 +1054,7 @@ mod tests {
     #[test]
     fn pagination_rejects_nonadvancing_ids_and_cursor_mismatches() {
         let entry = |id| Entry {
+            images: vec![],
             id,
             content: "input".into(),
             state: State::Queued,
@@ -1047,6 +1069,7 @@ mod tests {
 
     #[test]
     fn withdrawal_restores_exact_text_and_preserves_newer_composer_input() {
+        assert_eq!(restored_text("", "new draft"), "new draft");
         assert_eq!(restored_text(" original\n", ""), " original\n");
         assert_eq!(
             restored_text("original", "new draft"),
@@ -1082,6 +1105,7 @@ mod tests {
     #[test]
     fn contradictory_mutable_state_and_run_cannot_enable_controls() {
         let entry = |state| Entry {
+            images: vec![],
             id: 9,
             content: "input".into(),
             state,

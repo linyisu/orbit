@@ -579,29 +579,48 @@ impl Actor {
                     && self.setup.resources.budget.input_context_tokens < previous_limit;
                 self.profile().await;
             }
-            Command::Steer { message, accepted } => {
+            Command::Steer {
+                message,
+                images,
+                accepted,
+            } => {
                 let message = message.trim().to_owned();
                 ensure!(
-                    !message.is_empty() && message.len() <= 1024 * 1024,
+                    (!message.is_empty() || !images.is_empty()) && message.len() <= 1024 * 1024,
                     "invalid session input"
                 );
                 let run = self
                     .running
                     .as_ref()
                     .ok_or_else(|| anyhow::anyhow!("session is idle; submit a new message"))?;
+                let attachments = super::super::run::import_images(
+                    self.setup.session.store.path(),
+                    self.setup.resources.model.supports_vision(),
+                    self.setup
+                        .resources
+                        .policy
+                        .disabled(orbit_protocol::Capability::Image),
+                    images,
+                )
+                .await?;
                 run.inbox
                     .persist_and_push(|| async {
                         let id = self
                             .setup
                             .session
                             .store
-                            .queue_session_input(self.setup.session.id(), message.clone())
+                            .queue_session_input_with_attachments(
+                                self.setup.session.id(),
+                                message.clone(),
+                                attachments.clone(),
+                            )
                             .await
                             .map_err(|error| {
                                 orbit_agent::tool::ToolError::ExecutionFailed(error.to_string())
                             })?;
                         let _ = accepted.send(id);
                         Ok(InboxMessage {
+                            attachments,
                             id,
                             content: message,
                         })

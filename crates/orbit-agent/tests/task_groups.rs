@@ -114,6 +114,7 @@ async fn inbox_wakes_waiting_agent_and_cancellation_reaps_auxiliary_jobs() {
                 first = false;
                 inbox
                     .push(InboxMessage {
+                        attachments: vec![],
                         id: 7,
                         content: "extra context".into(),
                     })

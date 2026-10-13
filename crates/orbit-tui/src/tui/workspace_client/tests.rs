@@ -856,12 +856,14 @@ fn steering_is_visible_before_receipt_and_is_reconciled_by_message_id() {
         }
         // Another client can submit identical text; it must not consume our pending rows.
         tab.state.apply(AgentEvent::InputReceived {
+            attachments: vec![],
             message_id: 20,
             content: "same message".into(),
         });
         assert_eq!(tab.state.pending_input.count(), 2);
         for id in [10, 11] {
             tab.state.apply(AgentEvent::InputReceived {
+                attachments: vec![],
                 message_id: id,
                 content: "same message".into(),
             });

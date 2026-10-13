@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 // Version 25 adds target-owned MCP source discovery and dependency installation.
-pub const VERSION: u32 = 25;
+pub const VERSION: u32 = 26;
 // Steering receipts identify the durable input independently of its consumption.
 pub const MIN_COMPATIBLE_VERSION: u32 = 15;
 
@@ -184,6 +184,11 @@ pub enum Request {
         session: String,
         model: String,
         effort: Option<String>,
+    },
+    SteerImages {
+        session: String,
+        message: String,
+        images: Vec<ImageUpload>,
     },
     Steer {
         session: String,

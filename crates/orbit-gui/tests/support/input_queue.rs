@@ -11,7 +11,12 @@ struct Queue {
     entries: Vec<Entry>,
 }
 
-pub(super) fn enqueue(workspace: &str, session: &str, content: &str) -> anyhow::Result<i64> {
+pub(super) fn enqueue(
+    workspace: &str,
+    session: &str,
+    content: &str,
+    images: Vec<orbit_protocol::MessageImage>,
+) -> anyhow::Result<i64> {
     let path = Path::new(workspace).join(".fixture-input-queue.json");
     let mut queue: Queue = match std::fs::read(&path) {
         Ok(bytes) => serde_json::from_slice(&bytes)?,
@@ -25,6 +30,7 @@ pub(super) fn enqueue(workspace: &str, session: &str, content: &str) -> anyhow::
     anyhow::ensure!(queue.session == session, "消息不属于当前会话");
     let id = queue.entries.last().map_or(1, |entry| entry.id + 1);
     queue.entries.push(Entry {
+        images,
         id,
         content: content.into(),
         state: State::Queued,
@@ -59,6 +65,7 @@ fn execute_inner(workspace: &str, request: &Value) -> anyhow::Result<Snapshot> {
             run: Some(71),
             entries: if directory.join(".fixture-input-queue").exists() {
                 (1..=35).map(|index| Entry {
+                    images: vec![],
                     id: index * 7,
                     content: format!("第 {index} 条补充：先检查现有状态，再执行并验证。\n这段文本用于检查选择、修改和保留草稿。"),
                     state: match index {

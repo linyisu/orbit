@@ -245,13 +245,24 @@ impl Store {
         self.queue_session_input(id, content).await
     }
     pub async fn queue_session_input(&self, id: &str, content: String) -> Result<i64> {
+        self.queue_session_input_with_attachments(id, content, vec![])
+            .await
+    }
+    pub async fn queue_session_input_with_attachments(
+        &self,
+        id: &str,
+        content: String,
+        attachments: Vec<orbit_model::types::Attachment>,
+    ) -> Result<i64> {
         ensure!(
-            !content.trim().is_empty() && content.len() <= 1024 * 1024,
+            (!content.trim().is_empty() || !attachments.is_empty()) && content.len() <= 1024 * 1024,
             "message must contain 1..1048576 bytes"
         );
         let id = id.to_owned();
+        let database = self.path().to_owned();
         self.write_access(move |conn| async move {
             let tx = conn.begin().await?;
+            crate::attachments::register(&tx, &database, &id, &attachments).await?;
             let count = agent_messages::Entity::find()
                 .filter(agent_messages::Column::SessionId.eq(&id))
                 .filter(agent_messages::Column::Received.eq(false))
@@ -261,6 +272,7 @@ impl Store {
             let row = agent_messages::ActiveModel {
                 session_id: Set(id),
                 content: Set(content),
+                attachments: Set(serde_json::to_string(&attachments)?),
                 ..Default::default()
             }
             .insert(&tx)
@@ -276,18 +288,21 @@ impl Store {
     ) -> Result<Vec<orbit_agent::inbox::InboxMessage>> {
         let id = id.to_owned();
         self.read_access(move |conn| async move {
-            Ok(agent_messages::Entity::find()
+            agent_messages::Entity::find()
                 .filter(agent_messages::Column::SessionId.eq(id))
                 .filter(agent_messages::Column::Received.eq(false))
                 .order_by_asc(agent_messages::Column::Id)
                 .all(&conn)
                 .await?
                 .into_iter()
-                .map(|row| orbit_agent::inbox::InboxMessage {
-                    id: row.id,
-                    content: row.content,
+                .map(|row| -> Result<orbit_agent::inbox::InboxMessage> {
+                    Ok(orbit_agent::inbox::InboxMessage {
+                        attachments: serde_json::from_str(&row.attachments)?,
+                        id: row.id,
+                        content: row.content,
+                    })
                 })
-                .collect())
+                .collect::<Result<Vec<_>>>()
         })
         .await
     }
@@ -487,6 +502,7 @@ mod tests {
         };
         let child_journal = child.execution_journal().unwrap();
         let event = AgentEvent::InputReceived {
+            attachments: vec![],
             message_id: message,
             content: "检查 UTF-8".into(),
         };

@@ -40,7 +40,11 @@ pub(super) fn preview(
             .chars()
             .take(240)
             .collect::<String>();
-        let title = snippet.split_whitespace().collect::<Vec<_>>().join(" ");
+        let title = if snippet.trim().is_empty() && !row.entry.images.is_empty() {
+            format!("{} 张图片", row.entry.images.len())
+        } else {
+            snippet.split_whitespace().collect::<Vec<_>>().join(" ")
+        };
         view = view.child(
             h_flex()
                 .id(("staged-message", id as u64))
@@ -52,6 +56,13 @@ pub(super) fn preview(
                 .bg(cx.theme().muted)
                 .rounded_lg()
                 .child(Icon::new(IconName::List).small())
+                .children(row.entry.images.iter().take(3).map(|image| {
+                    img(PathBuf::from(&image.path))
+                        .w(rems(2.))
+                        .h(rems(2.))
+                        .object_fit(ObjectFit::Contain)
+                        .rounded_sm()
+                }))
                 .child(
                     div()
                         .flex_1()

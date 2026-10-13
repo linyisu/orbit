@@ -746,11 +746,33 @@ impl Service {
                     .await?;
                 Ok(Response::Ok)
             }
+            Request::SteerImages {
+                session,
+                message,
+                images,
+            } => {
+                let (accepted, receipt) = tokio::sync::oneshot::channel();
+                self.session(&session)
+                    .await?
+                    .command(session::Command::Steer {
+                        message,
+                        images,
+                        accepted,
+                    })
+                    .await?;
+                Ok(Response::InputQueued {
+                    message_id: receipt.await?,
+                })
+            }
             Request::Steer { session, message } => {
                 let (accepted, receipt) = tokio::sync::oneshot::channel();
                 self.session(&session)
                     .await?
-                    .command(session::Command::Steer { message, accepted })
+                    .command(session::Command::Steer {
+                        message,
+                        images: vec![],
+                        accepted,
+                    })
                     .await?;
                 Ok(Response::InputQueued {
                     message_id: receipt.await?,

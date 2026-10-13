@@ -91,6 +91,8 @@ pub enum AgentEvent {
     InputReceived {
         message_id: i64,
         content: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        attachments: Vec<orbit_model::types::Attachment>,
     },
     ToolFinished {
         call: ToolCall,

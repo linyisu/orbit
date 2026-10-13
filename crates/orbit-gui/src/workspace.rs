@@ -778,17 +778,32 @@ impl Workspace {
                     .iter()
                     .any(|update| matches!(update, Update::Finished { .. }));
                 for update in page.updates {
-                    if let Update::Started { presentation, .. } = &update {
-                        for image in &presentation.image_assets {
-                            if let Some(info) = &self.info {
-                                self.command(
-                                    Command::ReadImage {
-                                        session: info.id.clone(),
-                                        path: image.path.clone(),
-                                    },
-                                    cx,
-                                );
-                            }
+                    let images = match &update {
+                        Update::Started { presentation, .. } => presentation
+                            .image_assets
+                            .iter()
+                            .map(|image| image.path.clone())
+                            .collect::<Vec<_>>(),
+                        Update::Agent(event) => match event.as_ref() {
+                            orbit_agent::events::AgentEvent::InputReceived {
+                                attachments, ..
+                            } => attachments
+                                .iter()
+                                .map(|image| image.path().to_string_lossy().into_owned())
+                                .collect(),
+                            _ => vec![],
+                        },
+                        _ => vec![],
+                    };
+                    for path in images {
+                        if let Some(info) = &self.info {
+                            self.command(
+                                Command::ReadImage {
+                                    session: info.id.clone(),
+                                    path,
+                                },
+                                cx,
+                            );
                         }
                     }
                     if let Update::Profile(info) = update {
@@ -1101,10 +1116,8 @@ impl Workspace {
     }
 }
 
-fn draft_ready(text: &str, paths: &[PathBuf], busy: bool) -> bool {
-    // The service's steering request carries text only. Keep image drafts intact
-    // until a normal Start request can upload them, even when they include text.
-    (!text.trim().is_empty() || !paths.is_empty()) && (!busy || paths.is_empty())
+fn draft_ready(text: &str, paths: &[PathBuf], _busy: bool) -> bool {
+    !text.trim().is_empty() || !paths.is_empty()
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -1124,10 +1137,10 @@ mod tests {
     use super::{PendingSend, draft_ready};
 
     #[test]
-    fn image_drafts_wait_for_idle_without_becoming_text_steers() {
+    fn image_drafts_can_be_queued_while_busy() {
         let paths = ["draft.png".into()];
-        assert!(!draft_ready("", &paths, true));
-        assert!(!draft_ready("look at this image", &paths, true));
+        assert!(draft_ready("", &paths, true));
+        assert!(draft_ready("look at this image", &paths, true));
         assert!(draft_ready("", &paths, false));
         assert!(draft_ready("look at this image", &paths, false));
         assert!(draft_ready("a text supplement", &[], true));

@@ -20,6 +20,7 @@ fn replay_preserves_compaction_and_queued_input_semantics() {
         prompt: "queued".into(),
         events: vec![
             AgentEvent::InputReceived {
+                attachments: vec![],
                 message_id: 1,
                 content: "queued".into(),
             },
@@ -85,6 +86,7 @@ fn dense_streams_coalesce_without_mutating_published_cursors_or_crossing_barrier
         assert_eq!(*size, serde_json::to_vec(update).unwrap().len());
     }
     let barrier = AgentEvent::InputReceived {
+        attachments: vec![],
         message_id: 42,
         content: "steering".into(),
     };

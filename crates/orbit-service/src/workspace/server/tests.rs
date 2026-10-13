@@ -38,6 +38,9 @@ struct Fixture {
 
 impl Fixture {
     async fn new(url: &str) -> Self {
+        Self::with_vision(url, false).await
+    }
+    async fn with_vision(url: &str, vision: bool) -> Self {
         let root = tempfile::tempdir().unwrap();
         let workspace = root.path().join("workspace");
         let external = root.path().join("external");
@@ -51,7 +54,7 @@ impl Fixture {
                     TestProvider::new("test")
                         .endpoint(url)
                         .key("test-only")
-                        .models([TestModel::new("test")]),
+                        .models([TestModel::new("test").vision(vision)]),
                 )
                 .providers_toml()
                 .unwrap(),

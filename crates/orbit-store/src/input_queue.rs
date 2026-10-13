@@ -57,11 +57,14 @@ impl Store {
                 .all(&tx)
                 .await?
                 .into_iter()
-                .map(|row| InboxMessage {
-                    id: row.id,
-                    content: row.content,
+                .map(|row| -> Result<InboxMessage> {
+                    Ok(InboxMessage {
+                        attachments: serde_json::from_str(&row.attachments)?,
+                        id: row.id,
+                        content: row.content,
+                    })
                 })
-                .collect();
+                .collect::<Result<Vec<_>>>()?;
             tx.commit().await?;
             Ok(PendingInputQueue {
                 workspace,

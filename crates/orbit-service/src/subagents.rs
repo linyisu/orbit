@@ -487,6 +487,7 @@ impl Service {
 
                                 message_id = id;
                                 Ok(InboxMessage {
+                                    attachments: vec![],
                                     id,
                                     content: args.message.clone(),
                                 })

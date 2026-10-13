@@ -7,6 +7,7 @@ pub struct Model {
     pub id: i64,
     pub session_id: String,
     pub content: String,
+    pub attachments: String,
     pub received: bool,
 }
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

@@ -188,6 +188,7 @@ async fn checkpoint_consumed_input_cannot_be_edited_or_removed() {
                 attachments: vec![],
             },
             Some(AgentEvent::InputReceived {
+                attachments: vec![],
                 message_id: id,
                 content: "consumed".into(),
             }),
@@ -255,5 +256,43 @@ async fn writer_lease_and_external_move_protect_idle_persistent_input() {
     assert_eq!(
         store.input_queue(&session).await.unwrap().messages[0].content,
         "after move"
+    );
+}
+
+#[tokio::test]
+async fn image_only_queue_survives_reload_and_atomic_withdrawal() {
+    let root = tempfile::tempdir().unwrap();
+    let store = Store::open(root.path().join("sessions.db")).await.unwrap();
+    let workspace = root.path().to_string_lossy().into_owned();
+    let writer = store
+        .create(workspace.clone(), "test".into())
+        .await
+        .unwrap();
+    let image = orbit_model::types::Attachment::Image {
+        name: "queued.png".into(),
+        mime_type: "image/png".into(),
+        path: root.path().join("queued.png"),
+        lease: None,
+    };
+    let id = store
+        .queue_session_input_with_attachments(writer.id(), String::new(), vec![image.clone()])
+        .await
+        .unwrap();
+    let pending = store.pending_agent_messages(writer.id()).await.unwrap();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].attachments[0].path(), image.path());
+    assert!(pending[0].content.is_empty());
+    let queue = store.input_queue(writer.id()).await.unwrap();
+    assert_eq!(queue.messages[0].attachments[0].name(), "queued.png");
+    writer
+        .remove_queued_input(&workspace, id, "")
+        .await
+        .unwrap();
+    assert!(
+        store
+            .pending_agent_messages(writer.id())
+            .await
+            .unwrap()
+            .is_empty()
     );
 }

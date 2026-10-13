@@ -1,4 +1,4 @@
-//! Durable text inputs waiting for the session Agent's next input boundary.
+//! Durable inputs waiting for the session Agent's next input boundary.
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -40,6 +40,8 @@ pub enum State {
 pub struct Entry {
     pub id: i64,
     pub content: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<crate::MessageImage>,
     pub state: State,
 }
 
@@ -74,6 +76,7 @@ mod tests {
         for state in [State::Claimed, State::Finishing, State::Unavailable] {
             assert!(
                 !Entry {
+                    images: vec![],
                     id: 1,
                     content: "retained".into(),
                     state
@@ -84,6 +87,7 @@ mod tests {
         for state in [State::Queued, State::Idle] {
             assert!(
                 Entry {
+                    images: vec![],
                     id: 1,
                     content: "editable".into(),
                     state

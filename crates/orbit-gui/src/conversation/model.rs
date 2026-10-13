@@ -158,8 +158,16 @@ impl Transcript {
     }
     fn agent(&mut self, event: AgentEvent) -> Option<Change> {
         match event {
-            AgentEvent::InputReceived { content, .. } => {
-                let turn = self.begin(Some(content), vec![]);
+            AgentEvent::InputReceived {
+                content,
+                attachments,
+                ..
+            } => {
+                let images = attachments
+                    .iter()
+                    .map(|image| image.path().to_string_lossy().into_owned())
+                    .collect();
+                let turn = self.begin(Some(content), images);
                 Some(Change { turn, part: None })
             }
             AgentEvent::TurnStarted { .. } => {

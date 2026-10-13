@@ -70,6 +70,14 @@ pub(super) async fn execute(
                     State::Idle
                 };
                 let entry = Entry {
+                    images: message
+                        .attachments
+                        .iter()
+                        .map(|image| orbit_protocol::MessageImage {
+                            name: image.name().into(),
+                            path: image.path().to_string_lossy().into_owned(),
+                        })
+                        .collect(),
                     id: message.id,
                     content: message.content,
                     state,
@@ -126,7 +134,29 @@ pub(super) async fn execute(
                 State::Idle
             };
             Ok(Snapshot::Edited {
-                entry: Entry { id, content, state },
+                entry: Entry {
+                    id,
+                    content,
+                    state,
+                    images: setup
+                        .session
+                        .store
+                        .pending_agent_messages(setup.session.id())
+                        .await?
+                        .into_iter()
+                        .find(|message| message.id == id)
+                        .map(|message| {
+                            message
+                                .attachments
+                                .iter()
+                                .map(|image| orbit_protocol::MessageImage {
+                                    name: image.name().into(),
+                                    path: image.path().to_string_lossy().into_owned(),
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default(),
+                },
             })
         }
         Action::Remove {

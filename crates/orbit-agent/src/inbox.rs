@@ -8,6 +8,7 @@ use crate::tool::ToolError;
 pub struct InboxMessage {
     pub id: i64,
     pub content: String,
+    pub attachments: Vec<orbit_model::types::Attachment>,
 }
 
 #[derive(Clone, Debug)]
@@ -175,6 +176,7 @@ mod tests {
                     reserved.send(()).unwrap();
                     gate.await.unwrap();
                     Ok(InboxMessage {
+                        attachments: vec![],
                         id: 1,
                         content: "orbit context".into(),
                     })
@@ -195,6 +197,7 @@ mod tests {
         assert!(
             inbox
                 .push(InboxMessage {
+                    attachments: vec![],
                     id: 2,
                     content: "late".into()
                 })
@@ -223,6 +226,7 @@ mod tests {
         for (id, content) in [(1, "first"), (2, "original"), (3, "last")] {
             inbox
                 .push(InboxMessage {
+                    attachments: vec![],
                     id,
                     content: content.into(),
                 })
@@ -378,13 +382,28 @@ mod tests {
             .persist_remove(1, "first", || async { Ok(()) })
             .await
             .unwrap();
+        let image = orbit_model::types::Attachment::Image {
+            name: "queued.png".into(),
+            mime_type: "image/png".into(),
+            path: "/queued.png".into(),
+            lease: None,
+        };
+        inbox
+            .push(InboxMessage {
+                id: 4,
+                content: String::new(),
+                attachments: vec![image],
+            })
+            .await
+            .unwrap();
         let model = MockModel::new([ChatCompletion {
             id: None,
             model: None,
             message: ChatMessage::assistant("done"),
             finish_reason: Some("stop".into()),
             usage: None,
-        }]);
+        }])
+        .with_vision(true);
         let (sender, mut events) = tokio::sync::mpsc::channel(128);
         Agent::new(model.clone(), ToolRegistry::new(), AgentConfig::default())
             .with_inbox(inbox)
@@ -396,6 +415,9 @@ mod tests {
             .await
             .unwrap();
         let requests = model.requests();
+        assert!(requests[0].messages.iter().any(|message| matches!(message,
+            ChatMessage::User { content, attachments } if content.is_empty() && attachments.len() == 1 && attachments[0].name() == "queued.png")));
+
         assert!(requests[0].messages.iter().any(
             |message| matches!(message, ChatMessage::User { content, .. } if content == "edited")
         ));
@@ -405,11 +427,15 @@ mod tests {
             if let AgentEvent::InputReceived {
                 message_id,
                 content,
+                ..
             } = event
             {
                 received.push((message_id, content));
             }
         }
-        assert_eq!(received, [(2, "edited".into()), (3, "last".into())]);
+        assert_eq!(
+            received,
+            [(2, "edited".into()), (3, "last".into()), (4, String::new())]
+        );
     }
 }

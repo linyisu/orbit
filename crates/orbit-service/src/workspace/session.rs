@@ -103,6 +103,7 @@ pub enum Command {
         effort: Option<String>,
     },
     Steer {
+        images: Vec<orbit_protocol::ImageUpload>,
         message: String,
         accepted: oneshot::Sender<i64>,
     },

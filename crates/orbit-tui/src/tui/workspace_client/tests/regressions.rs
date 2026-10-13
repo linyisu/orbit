@@ -407,6 +407,7 @@ fn queued_input_replay_has_one_user_message() {
                 prompt: "queued prompt".into(),
             },
             Update::agent(orbit_agent::events::AgentEvent::InputReceived {
+                attachments: vec![],
                 message_id: 1,
                 content: "queued prompt".into(),
             }),

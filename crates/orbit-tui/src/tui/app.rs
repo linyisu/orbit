@@ -713,6 +713,7 @@ impl UiState {
             AgentEvent::InputReceived {
                 message_id,
                 content,
+                ..
             } => {
                 self.pending_input.received(message_id);
                 self.finish_thinking();

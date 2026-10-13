@@ -1,5 +1,7 @@
 //! The Tokio transport lives off the GPUI thread. Dropping a window disconnects
 //! its client; it never sends Cancel to a running agent.
+#[path = "backend/queue_images.rs"]
+mod queue_images;
 use std::{path::PathBuf, time::Duration};
 
 use anyhow::{Context, Result, bail};
@@ -310,6 +312,7 @@ async fn run_connection(
     events: &mpsc::Sender<Event>,
     progress: orbit_client::interaction::Progress,
 ) -> Result<()> {
+    let queue_cache = queue_images::cache_database(&options)?;
     let connection_options = options.connection_options()?;
     let connection = orbit_client::prepare_connection(
         &connection_options,
@@ -405,6 +408,7 @@ async fn run_connection(
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut quota_tasks = tokio::task::JoinSet::new();
     let mut review_tasks = tokio::task::JoinSet::new();
+    let mut queue_images = std::collections::HashMap::new();
     let mut questions_revision = None;
     let mut subagent: Option<(String, usize)> = None;
     let mut last_page = None;
@@ -490,9 +494,14 @@ async fn run_connection(
                             });
                             continue;
                         }
+                        let queue_session = match &request { Request::InputQueue { session, .. } => Some(session.clone()), _ => None };
                         let response = match client.request(request).await {
                             Ok(Response::Error(error)) => Err(error),
-                            Ok(response) => Ok(response),
+                            Ok(mut response) => {
+                                if let Some(session) = queue_session {
+                                    queue_images::localize(&mut client, &session, &mut response, &mut queue_images, &queue_cache).await.map(|()| response).map_err(|error| format!("{error:#}"))
+                                } else { Ok(response) }
+                            },
                             Err(error) => Err(format!("{error:#}")),
                         };
                         let _ = result.send(response);
@@ -527,14 +536,7 @@ async fn run_connection(
                         }
                     }
                     Command::Send { session, id, prompt, paths, steer } => {
-                        let result = if steer {
-                            match client.request(Request::Steer { session, message: prompt }).await {
-                                Ok(Response::InputQueued { .. } | Response::Ok) => Ok(()),
-                                Ok(Response::Error(error)) => Err(anyhow::anyhow!(error)),
-                                Err(error) => Err(error),
-                                _ => Err(anyhow::anyhow!("服务未确认补充输入")),
-                            }
-                        } else { send(&mut client, session, id.clone(), prompt, paths).await };
+                        let result = send(&mut client, session, id.clone(), prompt, paths, steer).await;
                         let event = match result {
                             Ok(()) => Event::Sent { id },
                             Err(error) => Event::SendFailed { id, error: format!("{error:#}") },
@@ -588,24 +590,38 @@ async fn send(
     id: String,
     prompt: String,
     paths: Vec<PathBuf>,
+    steer: bool,
 ) -> Result<()> {
     let images = tokio::task::spawn_blocking(move || {
         orbit_client::attachments::uploads(&orbit_client::attachments::paths(paths)?)
     })
     .await
     .context("读取图片失败")??;
-    match client
-        .request(Request::Start {
+    let request = if steer {
+        if images.is_empty() {
+            Request::Steer {
+                session,
+                message: prompt,
+            }
+        } else {
+            Request::SteerImages {
+                session,
+                message: prompt,
+                images,
+            }
+        }
+    } else {
+        Request::Start {
             session,
             request_id: id,
             prompt,
             images,
             compact: false,
             model: None,
-        })
-        .await?
-    {
-        Response::Ok => Ok(()),
+        }
+    };
+    match client.request(request).await? {
+        Response::Ok | Response::InputQueued { .. } => Ok(()),
         Response::Error(error) => bail!(error),
         _ => bail!("服务未确认发送，请检查会话状态。"),
     }

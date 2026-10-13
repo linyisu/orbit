@@ -81,6 +81,7 @@ async fn running_edit_remove_use_real_inbox_and_canonical_consumption_under_send
             .unwrap();
         inbox
             .push(InboxMessage {
+                attachments: vec![],
                 id,
                 content: content.into(),
             })
@@ -243,6 +244,7 @@ async fn drained_but_not_checkpointed_is_claimed_and_cannot_be_rewritten_in_data
     let inbox = AgentInbox::default();
     inbox
         .push(InboxMessage {
+            attachments: vec![],
             id,
             content: "claimed".into(),
         })

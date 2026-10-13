@@ -221,6 +221,7 @@ mod tests {
             .unwrap()
             .send(Ok(Response::InputQueue(Snapshot::List {
                 entries: vec![Entry {
+                    images: vec![],
                     id: 3,
                     content: "original".into(),
                     state: State::Queued,
@@ -296,6 +297,7 @@ mod tests {
             .send(Ok(Response::InputQueue(Snapshot::List {
                 entries: (1..40)
                     .map(|id| Entry {
+                        images: vec![],
                         id,
                         content: format!("queued {id}"),
                         state: State::Queued,

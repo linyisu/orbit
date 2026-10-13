@@ -44,31 +44,17 @@ pub(super) async fn start(
     if !resources.model.supports_vision() {
         tools.remove("read_image");
     }
-    use base64::Engine;
     anyhow::ensure!(
         !compact || uploads.is_empty(),
         "compaction does not accept images"
     );
-    anyhow::ensure!(
-        uploads.is_empty() || resources.model.supports_vision(),
-        "selected model does not support images"
-    );
-    anyhow::ensure!(
-        uploads.is_empty() || !resources.policy.disabled(orbit_protocol::Capability::Image),
-        "image capability is disabled"
-    );
-    let assets = orbit_tools::image_assets::ImageAssets::for_database(session.store.path());
-    let attachments =
-        tokio::task::spawn_blocking(move || -> Result<Vec<orbit_model::types::Attachment>> {
-            uploads
-                .into_iter()
-                .map(|image| {
-                    let bytes = base64::engine::general_purpose::STANDARD.decode(image.data)?;
-                    assets.import_bytes(image.name, bytes)
-                })
-                .collect()
-        })
-        .await??;
+    let attachments = import_images(
+        session.store.path(),
+        resources.model.supports_vision(),
+        resources.policy.disabled(orbit_protocol::Capability::Image),
+        uploads,
+    )
+    .await?;
     let image_assets = attachments
         .iter()
         .map(|attachment| orbit_protocol::MessageImage {
@@ -153,4 +139,35 @@ pub(super) async fn needs_compaction(setup: &crate::PreparedWorkspace) -> Result
             .input_context_tokens
             .saturating_mul(85)
             / 100)
+}
+
+pub(super) async fn import_images(
+    database: &std::path::Path,
+    vision: bool,
+    disabled: bool,
+    uploads: Vec<orbit_protocol::ImageUpload>,
+) -> Result<Vec<orbit_model::types::Attachment>> {
+    use base64::Engine;
+    anyhow::ensure!(
+        uploads.is_empty() || vision,
+        "selected model does not support images"
+    );
+    anyhow::ensure!(
+        uploads.is_empty() || !disabled,
+        "image capability is disabled"
+    );
+    let assets = orbit_tools::image_assets::ImageAssets::for_database(database);
+    let attachments =
+        tokio::task::spawn_blocking(move || -> Result<Vec<orbit_model::types::Attachment>> {
+            uploads
+                .into_iter()
+                .map(|image| {
+                    let bytes = base64::engine::general_purpose::STANDARD.decode(image.data)?;
+                    assets.import_bytes(image.name, bytes)
+                })
+                .collect()
+        })
+        .await??;
+
+    Ok(attachments)
 }

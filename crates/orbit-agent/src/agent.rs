@@ -351,12 +351,16 @@ where
             }
             if let Some(inbox) = &self.inbox {
                 for input in inbox.drain().await {
-                    let message = ChatMessage::user(input.content.clone());
+                    let message = ChatMessage::user_with_attachments(
+                        input.content.clone(),
+                        input.attachments.clone(),
+                    );
                     history.push(message.clone());
                     if let Some(journal) = &self.journal {
                         journal.record_message(message);
                     }
                     let event = AgentEvent::InputReceived {
+                        attachments: input.attachments,
                         message_id: input.id,
                         content: input.content,
                     };

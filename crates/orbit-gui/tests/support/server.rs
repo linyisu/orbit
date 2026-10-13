@@ -551,7 +551,26 @@ fn main() -> anyhow::Result<()> {
             "subagents" => child_agents.execute(&workspace, &request),
             "read_subagent" => child_agents.read(&workspace, &request),
             "send_subagent" => child_agents.send_legacy(&workspace, &request),
-            "steer" => {
+            "steer" | "steer_images" => {
+                let mut queued_images = Vec::new();
+                for (index, upload) in request["images"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .enumerate()
+                {
+                    let path = std::path::Path::new(&workspace).join(format!("queued-{index}.png"));
+                    use base64::Engine;
+                    std::fs::write(
+                        &path,
+                        base64::engine::general_purpose::STANDARD
+                            .decode(upload["data"].as_str().unwrap())?,
+                    )?;
+                    queued_images.push(orbit_protocol::MessageImage {
+                        name: upload["name"].as_str().unwrap().into(),
+                        path: path.to_string_lossy().into_owned(),
+                    });
+                }
                 let id = if std::path::Path::new(&workspace)
                     .join(".fixture-input-queue-live")
                     .exists()
@@ -560,6 +579,7 @@ fn main() -> anyhow::Result<()> {
                         &workspace,
                         &session,
                         request["message"].as_str().unwrap_or_default(),
+                        queued_images,
                     )?
                 } else {
                     history.entry(session.clone()).or_default().push(json!({"Agent":{"InputReceived":{"message_id":8,"content":request["message"]}}}));

@@ -105,14 +105,6 @@ impl Workspace {
                             },
                         )))
                     })
-                    .when(self.busy && !self.paths.is_empty(), |view| {
-                        view.child(
-                            div()
-                                .text_sm()
-                                .text_color(cx.theme().muted_foreground)
-                                .child("图片已加入草稿，当前响应结束后可发送"),
-                        )
-                    })
                     .child(
                         Textarea::new(&self.input)
                             .on_paste(move |item, window, cx| {
@@ -323,7 +315,7 @@ impl Workspace {
                                 )
                             })
                             .when(
-                                !self.busy || !self.input.read(cx).value().trim().is_empty(),
+                                !self.busy || !self.input.read(cx).value().trim().is_empty() || !self.paths.is_empty(),
                                 |view| {
                                     view.child(
                                         Button::new("send")
