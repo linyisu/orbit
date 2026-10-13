@@ -422,6 +422,9 @@ fn main() -> anyhow::Result<()> {
                             [json!({"Agent":{"Model":{"TextDelta":include_str!("code.md")}}})]
                                 .into();
                     }
+                    if prompt == "syntax-highlighting" {
+                        pending = [json!({"Agent":{"Model":{"TextDelta":include_str!("syntax-highlighting.md")}}})].into();
+                    }
                     if prompt == "font-fallback" {
                         pending = [json!({"Agent":{"Model":{"TextDelta":include_str!("font-fallback.md")}}})].into();
                     }

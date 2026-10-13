@@ -49,6 +49,7 @@ TUI 图标需要 Nerd Font 字体。图片按终端能力选择 Kitty、Sixel �
 | `orbit-cli` | 命令行参数、入口分发、输出与信号 | [README](crates/orbit-cli/README.md) |
 | `orbit-tui` | 终端绘制、排版、键鼠交互、标签与弹窗 | [README](crates/orbit-tui/README.md) |
 | `orbit-gui` | GPUI Kit 原生会话、消息、输入、额度与 Shell 外观 | [README](crates/orbit-gui/README.md) |
+| `orbit-syntax` | TUI、GUI 共用的语法包与语言识别 | [README](crates/orbit-syntax/README.md) |
 | `orbit-client` | 本地、SSH、WSL 连接、部署和事件订阅 | [README](crates/orbit-client/README.md) |
 | `orbit-protocol` | 请求、事件封装、能力与分帧 | [README](crates/orbit-protocol/README.md) |
 | `orbit-config` | 共享配置、模型目录与连接编辑 | [README](crates/orbit-config/README.md) |
@@ -70,6 +71,8 @@ flowchart TD
     CLI[orbit-cli] --> CLIENT[orbit-client]
     TUI[orbit-tui] --> CLIENT
     GUI[orbit-gui] --> CLIENT
+    TUI --> SYNTAX[orbit-syntax]
+    GUI --> SYNTAX
     CLIENT --> LOCAL[本地进程]
     CLIENT --> SSH[SSH]
     CLIENT --> WSL[WSL]

@@ -1,5 +1,6 @@
 //! Product palette and shared geometry. Component and Shell consume the same
 //! resolved tokens; feature views never introduce literal palette colors.
+mod syntax;
 use gpui_kit::component::{Theme, ThemeSet};
 use gpui_kit::{App, FontFallbacks, Global, SharedString};
 use std::rc::Rc;
@@ -143,14 +144,13 @@ pub(crate) fn install(cx: &mut App) {
         }
         theme.focus_ring = true;
     });
+    syntax::install(cx);
 }
 
 #[cfg(test)]
 mod tests {
     use super::{fallback_families, resolve_family};
     use gpui_kit::SharedString;
-    use gpui_kit::component::ThemeSet;
-    use gpui_kit::component::highlighter::{HighlightTheme, SyntaxHighlighter};
 
     #[test]
     fn removed_font_uses_default_without_losing_other_font_choice() {
@@ -178,39 +178,5 @@ mod tests {
             ["Noto Color Emoji", "Noto Sans CJK SC", "DejaVu Sans"],
         );
         assert!(fallback_families(&["Chosen font".to_owned()]).is_empty());
-    }
-
-    #[test]
-    fn shipped_grammars_distinguish_code_from_comments_in_both_themes() {
-        let themes: ThemeSet =
-            serde_json::from_str(include_str!("../appearance/theme.json")).unwrap();
-        for (language, source, token) in [
-            ("bash", "cargo run -- --check # 只读检查", "cargo"),
-            ("sh", "cargo run -- --check # 只读检查", "cargo"),
-            ("rust", "fn main() {} // 中文注释", "fn"),
-            ("python", "return 42 # 中文注释", "return"),
-        ] {
-            let mut highlighter = SyntaxHighlighter::new(language);
-            highlighter.update(None, &source.into(), None);
-            for config in &themes.themes {
-                let theme = HighlightTheme {
-                    name: config.name.to_string(),
-                    appearance: config.mode,
-                    style: config.highlight.clone().unwrap(),
-                };
-                let styles = highlighter.styles(&(0..source.len()), &theme);
-                let color_at = |offset| {
-                    styles.iter().rev().find_map(|(range, style)| {
-                        range.contains(&offset).then_some(style.color).flatten()
-                    })
-                };
-                let code = color_at(source.find(token).unwrap());
-                let comment =
-                    color_at(source.find("中文").or_else(|| source.find("只读")).unwrap());
-                assert!(code.is_some(), "{language} code must be highlighted");
-                assert!(comment.is_some(), "{language} comments must be highlighted");
-                assert_ne!(code, comment, "{language} comments must be distinct");
-            }
-        }
     }
 }

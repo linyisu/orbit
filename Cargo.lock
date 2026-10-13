@@ -7337,6 +7337,7 @@ dependencies = [
  "orbit-model",
  "orbit-protocol",
  "orbit-runtime",
+ "orbit-syntax",
  "orbit-tools",
  "pulldown-cmark",
  "ratex-layout",
@@ -7347,6 +7348,7 @@ dependencies = [
  "serde",
  "serde_json",
  "similar",
+ "syntect",
  "tempfile",
  "tokio",
 ]
@@ -7467,6 +7469,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "orbit-syntax"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "syntect",
+ "two-face",
+]
+
+[[package]]
 name = "orbit-tools"
 version = "0.1.0"
 dependencies = [
@@ -7535,6 +7547,7 @@ dependencies = [
  "orbit-model",
  "orbit-protocol",
  "orbit-runtime",
+ "orbit-syntax",
  "orbit-tools",
  "pulldown-cmark",
  "ratatui",
@@ -7554,7 +7567,6 @@ dependencies = [
  "tokio",
  "tokio-util",
  "toml 0.9.12+spec-1.1.0",
- "two-face",
  "unicode-linebreak",
  "unicode-segmentation",
  "unicode-width",

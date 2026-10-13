@@ -12,6 +12,7 @@ members = [
     "crates/orbit-client",
     "crates/orbit-config",
     "crates/orbit-protocol",
+    "crates/orbit-syntax",
     "crates/orbit-tui",
     "crates/orbit-gui",
     "crates/orbit-server",
@@ -36,6 +37,7 @@ edition = "2024"
 orbit-client = { path = "crates/orbit-client" }
 orbit-config = { path = "crates/orbit-config" }
 orbit-protocol = { path = "crates/orbit-protocol" }
+orbit-syntax = { path = "crates/orbit-syntax" }
 # Internal workspace crates
 orbit-build = { path = "crates/orbit-build" }
 orbit-service = { path = "crates/orbit-service" }

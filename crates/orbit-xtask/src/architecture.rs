@@ -12,6 +12,7 @@ const DEPENDENCIES: &[(&str, &[&str])] = &[
     ("orbit-build", &[]),
     ("orbit-auth", &[]),
     ("orbit-protocol", &[]),
+    ("orbit-syntax", &[]),
     (
         "orbit-config",
         &[
@@ -66,6 +67,7 @@ const DEPENDENCIES: &[(&str, &[&str])] = &[
     (
         "orbit-tui",
         &[
+            "orbit-syntax",
             "orbit-build",
             "orbit-config",
             "orbit-agent",
@@ -80,6 +82,7 @@ const DEPENDENCIES: &[(&str, &[&str])] = &[
     (
         "orbit-gui",
         &[
+            "orbit-syntax",
             "orbit-build",
             "orbit-client",
             "orbit-auth",

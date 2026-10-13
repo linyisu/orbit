@@ -10,6 +10,7 @@ path = "src/main.rs"
 [dependencies]
 orbit-client.workspace = true
 orbit-protocol.workspace = true
+orbit-syntax.workspace = true
 
 anyhow.workspace = true
 arboard.workspace = true
@@ -53,8 +54,6 @@ url.workspace = true
 
 [build-dependencies]
 orbit-build.workspace = true
-syntect.workspace = true
-two-face.workspace = true
 
 [dev-dependencies]
 orbit-config = { workspace = true, features = ["test-support"] }

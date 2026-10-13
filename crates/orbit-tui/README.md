@@ -28,7 +28,7 @@
 | [workspace_client.rs](src/tui/workspace_client.rs)、[workspace_client/](src/tui/workspace_client) | 统一会话标签、认证、连接日志和目录选择 |
 | [theme.rs](src/tui/theme.rs)、[icons.rs](src/tui/icons.rs) | 主题与图标 |
 
-语法文件、语言目录和许可证位于 [assets/](assets)。构建脚本生成本包的语法缓存。
+语法文件、语言目录和许可证由 [orbit-syntax](../orbit-syntax/README.md) 统一管理，TUI 与 GUI 共用构建时生成的语法包和语言识别规则；终端配色与排版仍由本包管理。
 
 ## 工作区连接
 
