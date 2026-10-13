@@ -49,6 +49,7 @@ struct MessageRow {
     index: usize,
     title: SharedString,
     text: Entity<TextViewState>,
+    literal: Option<SharedString>,
     source_len: usize,
     deferred_text: Option<String>,
     muted: bool,
@@ -516,24 +517,14 @@ impl MessageRow {
             title: "".into(),
             text: cx.new(|cx| {
                 if user {
-                    // Display user input literally. Escape Markdown punctuation
-                    // and use hard breaks so deliberate newlines stay visible.
-                    let mut text = String::with_capacity(source.len());
-                    for ch in source.chars() {
-                        if ch == '\n' {
-                            text.push_str("  \n");
-                        } else {
-                            if ch.is_ascii_punctuation() {
-                                text.push('\\');
-                            }
-                            text.push(ch);
-                        }
-                    }
-                    TextViewState::markdown(&text, cx)
+                    // User messages are source text, never Markdown. In particular,
+                    // indentation and punctuation in pasted code must stay literal.
+                    TextViewState::markdown("", cx)
                 } else {
                     TextViewState::markdown(&markdown::prose(if muted { "" } else { source }), cx)
                 }
             }),
+            literal: user.then(|| source.to_owned().into()),
             source_len: source.len(),
             deferred_text: muted.then(|| source.to_owned()),
             muted,
@@ -620,6 +611,11 @@ impl Render for MessageRow {
                 ))
             })
             .when(self.expanded, |view| {
+                if let Some(source) = &self.literal {
+                    return view.child(div().min_w_0().whitespace_normal().child(
+                        gpui_kit::base::SelectableText::new("user-source", source.clone()),
+                    ));
+                }
                 let text = TextView::new(&self.text)
                     .when(!self.user, |view| view.w_full())
                     .min_w_0()

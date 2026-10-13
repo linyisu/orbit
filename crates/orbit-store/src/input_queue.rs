@@ -3,9 +3,26 @@
 //! durable received flag alone cannot identify a message already drained.
 use anyhow::{Context, Result, ensure};
 use orbit_agent::inbox::InboxMessage;
+use sea_orm::sea_query::Expr;
 use sea_orm::*;
 
 use crate::{entities::*, store::Store};
+
+// Match session loading: a project's current path takes precedence over the
+// legacy path stored on its sessions. Resolve it inside the queue transaction
+// so the same workspace guard protects both reads and mutations.
+fn queue_workspace(session: &str) -> Select<sessions::Entity> {
+    sessions::Entity::find_by_id(session)
+        .select_only()
+        .column_as(
+            Expr::expr(sea_query::Func::coalesce([
+                Expr::col((projects::Entity, projects::Column::Path)).into(),
+                Expr::col((sessions::Entity, sessions::Column::Workspace)).into(),
+            ])),
+            "workspace",
+        )
+        .join(JoinType::LeftJoin, sessions::Relation::Project.def())
+}
 
 #[derive(Debug)]
 pub struct PendingInputQueue {
@@ -19,9 +36,7 @@ impl Store {
         let session = session.to_owned();
         self.read_access(move |conn| async move {
             let tx = conn.begin().await?;
-            let workspace = sessions::Entity::find_by_id(&session)
-                .select_only()
-                .column(sessions::Column::Workspace)
+            let workspace = queue_workspace(&session)
                 .into_tuple::<String>()
                 .one(&tx)
                 .await?
@@ -84,9 +99,7 @@ impl Store {
         let expected = expected.to_owned();
         self.write_access(move |conn| async move {
             let tx = conn.begin().await?;
-            let workspace = sessions::Entity::find_by_id(&session)
-                .select_only()
-                .column(sessions::Column::Workspace)
+            let workspace = queue_workspace(&session)
                 .into_tuple::<String>()
                 .one(&tx)
                 .await?

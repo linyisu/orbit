@@ -588,16 +588,6 @@ impl Render for Workspace {
                                                         cx,
                                                     );
                                                 })),
-                                        )
-                                        .child(div().flex_1())
-                                        .child(
-                                            Button::new("open-staged-messages")
-                                                .ghost()
-                                                .xsmall()
-                                                .label("暂存消息…")
-                                                .on_click(cx.listener(|view, _, window, cx| {
-                                                    view.open_input_queue(window, cx)
-                                                })),
                                         ),
                                 )
                             })
@@ -608,7 +598,7 @@ impl Render for Workspace {
                                         .when(Preferences::comfortable_width(cx), |view| {
                                             view.max_w(rems(CONTENT_WIDTH_REM))
                                         })
-                                        .child(super::input_queue::preview(&queue, cx)),
+                                        .child(queue),
                                 )
                             })
                             .child(

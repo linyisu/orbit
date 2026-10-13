@@ -3,6 +3,70 @@ use orbit_agent::{checkpoint::ExecutionCheckpoint, events::AgentEvent};
 use orbit_model::types::ChatMessage;
 
 #[tokio::test]
+async fn queue_uses_current_project_path_and_rejects_legacy_workspace() {
+    let root = tempfile::tempdir().unwrap();
+    let store = Store::open(root.path().join("sessions.db")).await.unwrap();
+    let workspace = root.path().to_string_lossy().into_owned();
+    let writer = store
+        .create(workspace.clone(), "test".into())
+        .await
+        .unwrap();
+    let session = writer.id().to_owned();
+    let id = store
+        .queue_session_input(&session, "original".into())
+        .await
+        .unwrap();
+    let stale_session = session.clone();
+    store
+        .write_access(move |conn| async move {
+            sessions::Entity::update_many()
+                .col_expr(
+                    sessions::Column::Workspace,
+                    Expr::value("/legacy-project-path"),
+                )
+                .filter(sessions::Column::Id.eq(stale_session))
+                .exec(&conn)
+                .await?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    assert_eq!(store.session(&session).await.unwrap().workspace, workspace);
+    assert_eq!(
+        store.input_queue(&session).await.unwrap().workspace,
+        workspace
+    );
+    assert!(
+        writer
+            .edit_queued_input("/legacy-project-path", id, "original", "wrong".into())
+            .await
+            .is_err()
+    );
+    writer
+        .edit_queued_input(&workspace, id, "original", "edited".into())
+        .await
+        .unwrap();
+    assert!(
+        writer
+            .remove_queued_input("/legacy-project-path", id, "edited")
+            .await
+            .is_err()
+    );
+    writer
+        .remove_queued_input(&workspace, id, "edited")
+        .await
+        .unwrap();
+    assert!(
+        store
+            .input_queue(&session)
+            .await
+            .unwrap()
+            .messages
+            .is_empty()
+    );
+}
+
+#[tokio::test]
 async fn exact_content_cas_preserves_ids_order_and_durable_removal() {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("sessions.db");

@@ -3,11 +3,9 @@ use super::*;
 use gpui_kit::component::{
     IndexPath,
     list::{List, ListDelegate, ListItem, ListState},
-    spinner::Spinner,
 };
 use orbit_protocol::input_queue::{Action, Entry, Snapshot, State};
 mod preview;
-pub(super) use preview::preview;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Operation {
@@ -178,6 +176,8 @@ pub(super) struct InputQueue {
     run: Option<i64>,
     next: Option<i64>,
     loaded: bool,
+    expanded: bool,
+    feedback: bool,
     error: Option<String>,
     request: Task<()>,
 }
@@ -224,8 +224,11 @@ impl Workspace {
         let Some(panel) = self.ensure_input_queue(window, cx) else {
             return;
         };
-        present(panel.clone(), window, cx);
-        panel.read(cx).list.focus_handle(cx).focus(window, cx);
+        panel.update(cx, |panel, cx| {
+            panel.expanded = true;
+            panel.feedback = true;
+            cx.notify();
+        });
         let panel = panel.downgrade();
         // This action still leases Workspace. Scope checks and dispatch must
         // wait for that lease to end rather than reentering the parent entity.
@@ -245,35 +248,14 @@ impl Workspace {
         let busy = self.busy;
         cx.defer(move |cx| {
             let _ = panel.update(cx, |panel, cx| {
-                if panel.current_scope(cx) && (force || busy || !panel.rows.is_empty()) {
+                if panel.current_scope(cx)
+                    && (force || (panel.selected.is_none() && !panel.expanded))
+                    && (force || busy || !panel.rows.is_empty())
+                {
                     panel.load(None, cx);
                 }
             });
         });
-    }
-
-    pub(super) fn edit_queued_input(
-        &mut self,
-        id: i64,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(panel) = self.ensure_input_queue(window, cx) else {
-            return;
-        };
-        panel.update(cx, |queue, cx| {
-            if let Some(ix) = queue.rows.iter().position(|row| row.entry.id == id) {
-                queue.selected = Some(id);
-                queue.list.update(cx, |list, cx| {
-                    list.set_selected_index(Some(IndexPath::new(ix)), window, cx)
-                });
-                cx.notify();
-            }
-        });
-        present(panel.clone(), window, cx);
-        if let Some(row) = panel.read(cx).rows.iter().find(|row| row.entry.id == id) {
-            row.draft.focus_handle(cx).focus(window, cx);
-        }
     }
 }
 
@@ -313,6 +295,8 @@ impl InputQueue {
             run: None,
             next: None,
             loaded: false,
+            expanded: false,
+            feedback: false,
             error: (!connected).then(|| "连接已断开，恢复连接后可读取输入队列。".into()),
             request: Task::ready(()),
         }
@@ -453,7 +437,19 @@ impl InputQueue {
             Ok(response) => response,
             Err(error) => {
                 self.requests.finish(serial);
-                self.error = Some(error);
+                self.error = Some(error.clone());
+                if std::mem::take(&mut self.feedback) {
+                    cx.spawn(async move |panel, cx| {
+                        let _ = panel.update_in(cx, |_, window, cx| {
+                            use gpui_kit::component::notification::Notification;
+                            window.push_notification(Notification::error(error), cx);
+                        });
+                    })
+                    .detach();
+                }
+                if self.rows.is_empty() {
+                    self.expanded = false;
+                }
                 cx.notify();
                 return;
             }
@@ -534,6 +530,9 @@ impl InputQueue {
                     {
                         row.draft
                             .update(cx, |draft, cx| draft.set_value(stored, window, cx));
+                        if self.selected == Some(*id) {
+                            self.selected = None;
+                        }
                     }
                     row.entry = entry;
                     row.confirmed = true;
@@ -546,14 +545,9 @@ impl InputQueue {
                 Operation::Remove { id, .. },
                 Ok(Response::InputQueue(Snapshot::Removed { id: received })),
             ) if received == *id => {
-                let removed = self.rows.iter().position(|row| row.entry.id == *id);
                 self.rows.retain(|row| row.entry.id != *id);
                 if self.selected == Some(*id) {
-                    self.selected = removed.and_then(|index| {
-                        self.rows
-                            .get(index.min(self.rows.len().saturating_sub(1)))
-                            .map(|row| row.entry.id)
-                    });
+                    self.selected = None;
                 }
                 self.sync_list(window, cx);
                 self.refresh_after_mutation(cx);
@@ -573,6 +567,19 @@ impl InputQueue {
                     row.error = Some(error.clone());
                 }
                 self.error = Some(error);
+            }
+        }
+        if self.rows.is_empty() {
+            self.expanded = false;
+        }
+        if std::mem::take(&mut self.feedback) {
+            use gpui_kit::component::notification::Notification;
+            if let Some(error) = &self.error {
+                window.push_notification(Notification::error(error.clone()), cx);
+            } else if self.rows.is_empty() {
+                window.push_notification("暂无待处理消息", cx);
+            } else {
+                self.list.focus_handle(cx).focus(window, cx);
             }
         }
     }
@@ -644,17 +651,12 @@ impl InputQueue {
             .selected_index()
             .and_then(|index| self.list.read(cx).delegate().items.get(index.row))
             .map(|item| item.id);
-        if let Some(id) = previous
-            && self.rows.iter().any(|row| row.entry.id == id)
-        {
-            self.selected = Some(id);
-        }
         if !self
             .rows
             .iter()
             .any(|row| Some(row.entry.id) == self.selected)
         {
-            self.selected = self.rows.first().map(|row| row.entry.id);
+            self.selected = None;
         }
         let selected = self
             .rows
@@ -718,54 +720,40 @@ impl InputQueue {
         self.start(operation, cx);
     }
 
-    fn confirm_remove(&mut self, id: i64, window: &mut Window, cx: &mut Context<Self>) {
+    fn remove(&mut self, id: i64, cx: &mut Context<Self>) {
         if !self.requests.ready() {
             return;
         }
         let Some(row) = self.rows.iter().find(|row| row.entry.id == id) else {
             return;
         };
-        if !row.confirmed || !row.entry.editable() {
+        if !row.confirmed || !row.entry.editable() || row.uncertain {
             return;
         }
-        let operation = Operation::Remove {
-            id,
-            expected: row.entry.content.clone(),
-            run: self.run,
-        };
-        let serial = self.requests.serial;
-        let panel = cx.weak_entity();
-        window.open_alert_dialog(cx, move |dialog, _, _| {
-            let panel = panel.clone();
-            let operation = operation.clone();
-            dialog.title(format!("取消输入 #{id}？"))
-                .child("这条尚未被 Agent 读取的文字将从队列中移除，无法恢复。")
-                .on_ok(|_, _, _| false)
-                .footer(h_flex().w_full().flex_wrap().justify_end().gap_2()
-                    .child(Button::new("keep-queued-input").label("保留输入")
-                        .on_click(|_, window, cx| window.close_dialog(cx)))
-                    .child(Button::new("remove-queued-input").danger().label("取消输入")
-                        .on_click(move |_, window, cx| {
-                            window.close_dialog(cx);
-                            let operation = operation.clone();
-                            // Confirmation may have outlived a reconnect or refresh.
-                            let _ = panel.update(cx, |panel, cx| {
-                                let matching = panel.requests.ready()
-                                    && panel.requests.serial == serial
-                                    && panel.rows.iter().any(|row| {
-                                    row.entry.id == id && row.confirmed && row.entry.editable()
-                                        && matches!(&operation, Operation::Remove { expected, run, .. }
-                                            if *run == panel.run && expected == &row.entry.content)
-                                });
-                                if matching {
-                                    panel.start(operation, cx);
-                                } else {
-                                    panel.error = Some("队列状态已改变，请刷新后重新确认取消。".into());
-                                    cx.notify();
-                                }
-                            });
-                        })))
-        });
+        self.start(
+            Operation::Remove {
+                id,
+                expected: row.entry.content.clone(),
+                run: self.run,
+            },
+            cx,
+        );
+    }
+
+    fn select(&mut self, id: Option<i64>, window: &mut Window, cx: &mut Context<Self>) {
+        self.selected = id;
+        self.sync_list(window, cx);
+        if let Some(row) = self.rows.iter().find(|row| Some(row.entry.id) == id) {
+            row.draft.focus_handle(cx).focus(window, cx);
+        } else {
+            let owner = self.owner.clone();
+            cx.defer_in(window, move |_, window, cx| {
+                let _ = owner.update(cx, |workspace, cx| {
+                    workspace.input.focus_handle(cx).focus(window, cx);
+                });
+            });
+        }
+        cx.notify();
     }
 
     fn editor(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
@@ -777,7 +765,6 @@ impl InputQueue {
             return div()
                 .text_sm()
                 .text_color(cx.theme().muted_foreground)
-                .child("选择一条输入查看内容。关闭面板不会取消输入。")
                 .into_any_element();
         };
         let id = row.entry.id;
@@ -803,7 +790,27 @@ impl InputQueue {
             .w_full()
             .min_w_0()
             .gap_2()
-            .child(div().text_sm().child(format!("输入 #{id} · {state}")))
+            .child(
+                h_flex()
+                    .gap_2()
+                    .child(
+                        div()
+                            .flex_1()
+                            .text_sm()
+                            .child(format!("编辑暂存消息 · {state}")),
+                    )
+                    .child(
+                        Button::new("close-queued-editor")
+                            .ghost()
+                            .xsmall()
+                            .icon(IconName::X)
+                            .tooltip("收起编辑，保留草稿")
+                            .accessibility_label("收起暂存消息编辑")
+                            .on_click(
+                                cx.listener(|panel, _, window, cx| panel.select(None, window, cx)),
+                            ),
+                    ),
+            )
             .child(
                 Textarea::new(&row.draft)
                     .h(if compact { rems(4.) } else { rems(7.) })
@@ -843,11 +850,9 @@ impl InputQueue {
                         .child(
                             Button::new("cancel-queued-input")
                                 .small()
-                                .label("取消输入…")
+                                .label("撤回")
                                 .disabled(!mutable)
-                                .on_click(cx.listener(move |panel, _, window, cx| {
-                                    panel.confirm_remove(id, window, cx)
-                                })),
+                                .on_click(cx.listener(move |panel, _, _, cx| panel.remove(id, cx))),
                         )
                         .child(
                             Button::new("save-queued-input")
@@ -863,150 +868,9 @@ impl InputQueue {
     }
 }
 
-fn present(panel: Entity<InputQueue>, window: &mut Window, cx: &mut App) {
-    window.open_sheet(cx, move |sheet, window, cx| {
-        // Dismissing this sheet does not drop the panel-owned drafts or pending
-        // receipts. The Workspace retains the entity for the same scope.
-        let editor = panel.update(cx, |panel, cx| panel.editor(window, cx));
-        sheet
-            .title("输入队列")
-            .size(
-                (window.rem_size() * 42.)
-                    .min((window.viewport_size().width - window.rem_size() * 2.).max(px(0.))),
-            )
-            .child(panel.clone())
-            .footer(editor)
-    });
-}
-
 impl Render for InputQueue {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let loading = matches!(self.requests.pending, Some(Operation::List { .. }));
-        let focus = self.list.focus_handle(cx);
-        let compact = window.viewport_size().height < window.rem_size() * 36.;
-        let row = self
-            .rows
-            .iter()
-            .find(|row| Some(row.entry.id) == self.selected);
-        // Sheet owns the body viewport. This content uses natural height and
-        // never introduces a percentage-height body inside that scroll owner.
-        v_flex()
-            .id("input-queue")
-            .tab_group()
-            .w_full()
-            .min_w_0()
-            .py_2()
-            .gap_3()
-            .child(
-                h_flex()
-                    .gap_2()
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .text_sm()
-                            .text_color(cx.theme().muted_foreground)
-                            .child(format!("{} 条输入 · 按提交顺序", self.rows.len())),
-                    )
-                    .child(
-                        Button::new("refresh-input-queue")
-                            .small()
-                            .ghost()
-                            .label("刷新")
-                            .disabled(!self.requests.connected || self.requests.pending.is_some())
-                            .on_click(cx.listener(|panel, _, _, cx| panel.load(None, cx))),
-                    ),
-            )
-            .when(loading, |view| {
-                view.child(
-                    h_flex()
-                        .gap_2()
-                        .child(Spinner::new().small())
-                        .child("正在加载输入队列…"),
-                )
-            })
-            .when_some(self.error.clone(), |view, error| {
-                view.child(
-                    div()
-                        .text_sm()
-                        .whitespace_normal()
-                        .text_color(cx.theme().danger)
-                        .child(error),
-                )
-            })
-            .when(!self.rows.is_empty(), |view| {
-                view.child(
-                    div()
-                        .h(if compact { rems(5.) } else { rems(12.) })
-                        .max_h(window.viewport_size().height * 0.3)
-                        .min_h_0()
-                        .min_w_0()
-                        .flex_shrink_0()
-                        .border_1()
-                        .border_color(cx.theme().border)
-                        .rounded_lg()
-                        .track_focus(&focus)
-                        .tab_index(0)
-                        .child(List::new(&self.list)),
-                )
-            })
-            .when_some(row, |view, row| {
-                view.child(
-                    div()
-                        .text_sm()
-                        .whitespace_normal()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(if !row.confirmed {
-                            "此输入尚未加载最新状态。加载后续页或刷新后才能修改；本地草稿仍可复制。"
-                        } else {
-                            state_explanation(row.entry.state)
-                        }),
-                )
-                .when_some(
-                    row.error
-                        .clone()
-                        .filter(|error| self.error.as_ref() != Some(error)),
-                    |view, error| {
-                        view.child(
-                            div()
-                                .text_sm()
-                                .whitespace_normal()
-                                .text_color(cx.theme().danger)
-                                .child(error),
-                        )
-                    },
-                )
-                .when(row.uncertain, |view| {
-                    view.child(
-                        div()
-                            .text_sm()
-                            .whitespace_normal()
-                            .text_color(cx.theme().warning)
-                            .child("上次操作结果尚未确认。先刷新队列，再决定是否重新提交。"),
-                    )
-                })
-            })
-            .when(self.rows.is_empty() && self.loaded && !loading, |view| {
-                view.child(
-                    div()
-                        .text_sm()
-                        .text_color(cx.theme().muted_foreground)
-                        .child("暂无等待处理的输入。任务运行时发送的后续消息会显示在这里。"),
-                )
-            })
-            .when_some(self.next, |view, after| {
-                view.child(
-                    Button::new("load-more-queued-inputs")
-                        .small()
-                        .label("加载后续输入")
-                        .disabled(
-                            self.requests.pending.is_some()
-                                || !self.requests.connected
-                                || self.requests.needs_refresh,
-                        )
-                        .on_click(cx.listener(move |panel, _, _, cx| panel.load(Some(after), cx))),
-                )
-            })
+        preview::preview(self, window, cx)
     }
 }
 
@@ -1017,16 +881,6 @@ fn state_label(state: State) -> &'static str {
         State::Finishing => "任务正在结束",
         State::Idle => "等待下次任务",
         State::Unavailable => "当前不可修改",
-    }
-}
-
-fn state_explanation(state: State) -> &'static str {
-    match state {
-        State::Queued => "Agent 尚未读取，可保存修改或取消这条输入。",
-        State::Idle => "这条输入保留在会话中，等待下次任务处理。可以修改或取消。",
-        State::Claimed => "Agent 已领取这条输入，无法再编辑或撤销。可以查看和复制内容。",
-        State::Finishing => "Agent 正在结束这一轮任务，队列暂时只读。刷新后可查看最新状态。",
-        State::Unavailable => "这条输入已离开队列，或由其他连接处理。当前只读，本地草稿已保留。",
     }
 }
 
@@ -1055,21 +909,28 @@ impl ListDelegate for QueueList {
         let item = self.items.get(index.row)?;
         Some(
             ListItem::new(SharedString::from(format!("queued-input-{}", item.id)))
-                .h_16()
+                .h_8()
                 .px_3()
                 .confirmed(self.selected == Some(index))
                 .accessibility_label(format!("输入 #{}，{}，{}", item.id, item.state, item.title))
                 .child(
-                    v_flex()
+                    h_flex()
                         .w_full()
                         .min_w_0()
-                        .gap_1()
-                        .child(div().text_sm().text_ellipsis().child(item.title.clone()))
+                        .gap_2()
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .text_sm()
+                                .text_ellipsis()
+                                .child(item.title.clone()),
+                        )
                         .child(
                             div()
                                 .text_xs()
                                 .text_color(cx.theme().muted_foreground)
-                                .child(format!("#{} · {}", item.id, item.state)),
+                                .child(item.state),
                         ),
                 ),
         )
