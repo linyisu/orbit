@@ -1,0 +1,1421 @@
+diff --git a/crates/base/src/lib.rs b/crates/base/src/lib.rs
+index 3f409e9d..36d928f9 100644
+--- a/crates/base/src/lib.rs
++++ b/crates/base/src/lib.rs
+@@ -59,6 +59,7 @@ mod reduce_motion;
+ mod resizable;
+ mod root;
+ mod scroll_bounce;
++mod scroll_containment;
+ mod scrollable_mask;
+ mod scrollbar;
+ mod select;
+@@ -163,6 +164,7 @@ pub use resizable::{
+ };
+ pub use root::{Root, RootPlugin};
+ pub use scroll_bounce::{ScrollBounce, ScrollBounceMotion};
++pub use scroll_containment::ScrollContainment;
+ pub use scrollable_mask::{RoundedFrameCover, ScrollableMask};
+ pub use scrollbar::{
+     Scrollbar, ScrollbarAxis, ScrollbarEntrance, ScrollbarHandle, ScrollbarMode, ScrollbarMotion,
+diff --git a/crates/base/src/root.rs b/crates/base/src/root.rs
+index 16ea0565..bfc09d9b 100644
+--- a/crates/base/src/root.rs
++++ b/crates/base/src/root.rs
+@@ -2,15 +2,20 @@
+ use crate::input::Copy;
+ use crate::{StyledExt, TextSelectionLayer};
+ use gpui::{
+-    AnyElement, AnyView, App, AppContext, ClipboardItem, Context, Div, Entity, Global,
+-    InteractiveElement, IntoElement, KeyBinding, ParentElement, Render, Stateful, StyleRefinement,
+-    Styled, Window, actions, div,
++    AnyElement, AnyView, App, AppContext, ClipboardItem, Context, Div, Entity, FontFallbacks,
++    Global, InteractiveElement, IntoElement, KeyBinding, ParentElement, Render, Stateful,
++    StyleRefinement, Styled, Window, actions, div,
+ };
+ use std::{any::TypeId, rc::Rc};
+ 
+ actions!(root, [Tab, TabPrev]);
+ const CONTEXT: &str = "Root";
+ 
++/// A presentation-supplied chain, kept outside the component theme projection
++/// so changing appearance cannot discard character coverage.
++struct RootFontFallbacks(Option<FontFallbacks>);
++impl Global for RootFontFallbacks {}
++
+ pub(crate) fn init(cx: &mut App) {
+     cx.bind_keys([
+         KeyBinding::new("tab", Tab, Some(CONTEXT)),
+@@ -96,6 +101,14 @@ pub struct Root {
+ }
+ 
+ impl Root {
++    /// Set the native glyph fallback chain inherited by window content,
++    /// component overlays, and text editors. The application chooses families;
++    /// Base only passes their coverage policy to GPUI's text system.
++    pub fn set_font_fallbacks(fallbacks: Option<FontFallbacks>, cx: &mut App) {
++        cx.set_global(RootFontFallbacks(fallbacks));
++        cx.refresh_windows();
++    }
++
+     /// Register a presentation plugin once per application. Re-registering its
+     /// type replaces the factory for future windows rather than mounting it twice.
+     pub fn register_plugin<V: RootPlugin>(
+@@ -301,6 +314,9 @@ impl Render for Root {
+         for plugin in &self.plugins {
+             (plugin.style)(&mut content, window, cx);
+         }
++        if let Some(fallbacks) = cx.try_global::<RootFontFallbacks>() {
++            content.text_style().font_fallbacks = fallbacks.0.clone();
++        }
+         let mut content = content.refine_style(&self.style).into_any_element();
+         for plugin in &self.plugins {
+             content = (plugin.decorate)(content, self, window, cx);
+diff --git a/crates/base/src/scroll_containment.rs b/crates/base/src/scroll_containment.rs
+new file mode 100644
+index 00000000..7ae23f90
+--- /dev/null
++++ b/crates/base/src/scroll_containment.rs
+@@ -0,0 +1,210 @@
++//! Prevent capture-based nested scrollers from handing wheel input to ancestors.
++use gpui::{
++    AnyElement, App, Bounds, Element, ElementId, GlobalElementId, Hitbox, HitboxBehavior,
++    InspectorElementId, IntoElement, LayoutId, Pixels, ScrollWheelEvent, Window,
++};
++
++/// Contains unused wheel input after a child's capture-phase scroll handlers.
++///
++/// Pair with a scroller using [`crate::ScrollableMask`]. Its inner masks handle
++/// movement first; this boundary consumes the remainder, including input at
++/// either edge or when the content fits. Ancestor virtual lists never receive
++/// that remainder. Layout, pointer clicks, keyboard input, and appearance stay
++/// with the child. Bubble-only child scrollers need their own ScrollableMask.
++pub struct ScrollContainment {
++    id: ElementId,
++    child: AnyElement,
++}
++
++impl ScrollContainment {
++    pub fn new(id: impl Into<ElementId>, child: impl IntoElement) -> Self {
++        Self {
++            id: id.into(),
++            child: child.into_any_element(),
++        }
++    }
++}
++
++impl IntoElement for ScrollContainment {
++    type Element = Self;
++    fn into_element(self) -> Self {
++        self
++    }
++}
++
++impl Element for ScrollContainment {
++    type RequestLayoutState = ();
++    type PrepaintState = Hitbox;
++
++    fn id(&self) -> Option<ElementId> {
++        Some(self.id.clone())
++    }
++
++    fn source_location(&self) -> Option<&'static std::panic::Location<'static>> {
++        None
++    }
++
++    fn request_layout(
++        &mut self,
++        _: Option<&GlobalElementId>,
++        _: Option<&InspectorElementId>,
++        window: &mut Window,
++        cx: &mut App,
++    ) -> (LayoutId, ()) {
++        (self.child.request_layout(window, cx), ())
++    }
++
++    fn prepaint(
++        &mut self,
++        _: Option<&GlobalElementId>,
++        _: Option<&InspectorElementId>,
++        bounds: Bounds<Pixels>,
++        _: &mut (),
++        window: &mut Window,
++        cx: &mut App,
++    ) -> Hitbox {
++        self.child.prepaint(window, cx);
++        // The child may occlude its background; register this normal hitbox
++        // afterwards so containment remains active without occluding the child.
++        window.insert_hitbox(bounds, HitboxBehavior::Normal)
++    }
++
++    fn paint(
++        &mut self,
++        _: Option<&GlobalElementId>,
++        _: Option<&InspectorElementId>,
++        _: Bounds<Pixels>,
++        _: &mut (),
++        hitbox: &mut Hitbox,
++        window: &mut Window,
++        cx: &mut App,
++    ) {
++        self.child.paint(window, cx);
++        let hitbox = hitbox.id;
++        // Capture handlers run in registration order. Register after the child
++        // so its masks can move first, but before any ancestor's bubble handler.
++        window.on_mouse_event(move |_: &ScrollWheelEvent, phase, window, cx| {
++            if phase.capture() && hitbox.should_handle_scroll(window) {
++                cx.stop_propagation();
++            }
++        });
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use crate::ScrollableMask;
++    use gpui::{
++        Axis, Context, InteractiveElement, IntoElement, ListAlignment, ListOffset, ListState,
++        ParentElement, Render, ScrollDelta, ScrollHandle, ScrollWheelEvent,
++        StatefulInteractiveElement, Styled, TestAppContext, VisualTestContext, Window, div, list,
++        point, px,
++    };
++
++    struct NestedScroll {
++        outer: ScrollHandle,
++        inner: ListState,
++    }
++
++    impl Render for NestedScroll {
++        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
++            div()
++                .id("outer")
++                .w_full()
++                .h(px(200.))
++                .overflow_y_scroll()
++                .track_scroll(&self.outer)
++                .child(ScrollContainment::new(
++                    "inner-boundary",
++                    div()
++                        .occlude()
++                        .relative()
++                        .w_full()
++                        .h(px(60.))
++                        .child(
++                            list(self.inner.clone(), |_, _, _| {
++                                div().w_full().h(px(50.)).into_any_element()
++                            })
++                            .size_full(),
++                        )
++                        .child(ScrollableMask::new(Axis::Vertical, &self.inner)),
++                ))
++                .child(div().w_full().h(px(400.)))
++        }
++    }
++
++    fn setup<'a>(
++        cx: &'a mut TestAppContext,
++        outer: &ScrollHandle,
++        inner: &ListState,
++    ) -> &'a mut VisualTestContext {
++        let (_, cx) = cx.add_window_view({
++            let outer = outer.clone();
++            let inner = inner.clone();
++            move |_, _| NestedScroll { outer, inner }
++        });
++        cx.run_until_parked();
++        cx.update(|window, cx| {
++            _ = window.draw(cx);
++        });
++        cx
++    }
++
++    fn wheel(cx: &mut VisualTestContext, y: f32, delta: f32) {
++        cx.simulate_event(ScrollWheelEvent {
++            position: point(px(10.), px(y)),
++            delta: ScrollDelta::Pixels(point(px(0.), px(delta))),
++            ..Default::default()
++        });
++        cx.update(|window, cx| {
++            _ = window.draw(cx);
++        });
++    }
++
++    #[gpui::test]
++    fn inner_scrolls_but_both_edges_never_move_the_outer_view(cx: &mut TestAppContext) {
++        let outer = ScrollHandle::new();
++        let inner = ListState::new(8, ListAlignment::Top, px(400.));
++        let cx = setup(cx, &outer, &inner);
++        wheel(cx, 10., -40.);
++        assert!(inner.scroll_px_offset_for_scrollbar().y < px(0.));
++        assert_eq!(outer.offset().y, px(0.));
++
++        inner.scroll_to_end();
++        cx.update(|window, cx| {
++            _ = window.draw(cx);
++        });
++        let bottom = inner.scroll_px_offset_for_scrollbar().y;
++        wheel(cx, 10., -40.);
++        assert_eq!(inner.scroll_px_offset_for_scrollbar().y, bottom);
++        assert_eq!(outer.offset().y, px(0.));
++
++        // Outside the boundary the outer conversation still scrolls normally.
++        wheel(cx, 150., -40.);
++        assert_eq!(outer.offset().y, px(-40.));
++        inner.scroll_to(ListOffset {
++            item_ix: 0,
++            offset_in_item: px(0.),
++        });
++        cx.update(|window, cx| {
++            _ = window.draw(cx);
++        });
++        wheel(cx, 10., 40.);
++        assert_eq!(inner.scroll_px_offset_for_scrollbar().y, px(0.));
++        assert_eq!(outer.offset().y, px(-40.));
++    }
++
++    #[gpui::test]
++    fn empty_or_fitting_content_also_contains_wheel_input(cx: &mut TestAppContext) {
++        for count in [0, 1] {
++            let outer = ScrollHandle::new();
++            let inner = ListState::new(count, ListAlignment::Top, px(400.));
++            let cx = setup(cx, &outer, &inner);
++            wheel(cx, 10., -40.);
++            assert_eq!(outer.offset().y, px(0.));
++            wheel(cx, 150., -40.);
++            assert_eq!(outer.offset().y, px(-40.));
++        }
++    }
++}
+diff --git a/crates/base/src/selectable_text.rs b/crates/base/src/selectable_text.rs
+index f53b6116..bea6c9e0 100644
+--- a/crates/base/src/selectable_text.rs
++++ b/crates/base/src/selectable_text.rs
+@@ -24,6 +24,7 @@ pub struct SelectableText {
+     document_order: u64,
+     text_style: Option<TextStyleRefinement>,
+     selection_color: Option<Hsla>,
++    scroll_viewport: Option<Bounds<Pixels>>,
+ }
+ 
+ impl SelectableText {
+@@ -50,6 +51,7 @@ impl SelectableText {
+             document_order: 0,
+             text_style: None,
+             selection_color: None,
++            scroll_viewport: None,
+         }
+     }
+ 
+@@ -72,6 +74,13 @@ impl SelectableText {
+         self
+     }
+ 
++    /// Supplies the owning scroller's viewport for drag auto-scroll. Decorative
++    /// clipping bounds must not initiate scrolling inside a fully visible run.
++    pub fn scroll_viewport(mut self, bounds: Bounds<Pixels>) -> Self {
++        self.scroll_viewport = Some(bounds);
++        self
++    }
++
+     fn paint_selection(
+         layout: &gpui::TextLayout,
+         range: Range<usize>,
+@@ -188,10 +197,13 @@ impl Element for SelectableText {
+         self.styled_text
+             .prepaint(global_id, inspector_id, bounds, &mut (), window, cx);
+         let hitbox = window.insert_hitbox(bounds, HitboxBehavior::Normal);
+-        let registration = TextSelectionRegistration::new(hitbox.clone(), bounds)
++        let mut registration = TextSelectionRegistration::new(hitbox.clone(), bounds)
+             .with_document_order(self.document_order)
+             .with_text_bounds(vec![bounds])
+             .with_rendered_element(handle, window, cx);
++        if let Some(viewport) = self.scroll_viewport {
++            registration = registration.with_scroll_viewport(viewport);
++        }
+         handle.register(registration, window, cx);
+         hitbox
+     }
+diff --git a/crates/base/src/sheet.rs b/crates/base/src/sheet.rs
+index f969647d..4555d2c3 100644
+--- a/crates/base/src/sheet.rs
++++ b/crates/base/src/sheet.rs
+@@ -119,6 +119,7 @@ impl RenderOnce for Sheet {
+         let on_close = self.on_close;
+         let escape_request = request_close.clone();
+         let escape_notify = on_close.clone();
++        let pointer_focus = self.focus.clone();
+ 
+         anchored().position(point(px(0.), px(0.))).child(
+             self.base
+@@ -132,6 +133,15 @@ impl RenderOnce for Sheet {
+                 .key_context(CONTEXT)
+                 .track_focus(&self.focus)
+                 .focus_trap("sheet", &self.focus)
++                .on_mouse_down(MouseButton::Left, move |_, window, cx| {
++                    // A retained background handle can regain focus while the
++                    // sheet is open. Buttons preserve focus on mouse-down and
++                    // may dispatch actions on click, so repair that route before
++                    // their click handler runs. Keep valid child focus intact.
++                    if !pointer_focus.contains_focused(window, cx) {
++                        pointer_focus.focus(window, cx);
++                    }
++                })
+                 .on_action(move |_: &Cancel, window, cx| {
+                     cx.propagate();
+                     close(&escape_request, &escape_notify, window, cx);
+@@ -169,7 +179,7 @@ impl RenderOnce for Sheet {
+ #[cfg(test)]
+ mod tests {
+     use super::*;
+-    use gpui::{Context, Render, point, px};
++    use gpui::{Context, Render, StatefulInteractiveElement as _, point, px};
+     use std::{cell::RefCell, rc::Rc};
+ 
+     struct Harness {
+@@ -267,4 +277,90 @@ mod tests {
+         cx.simulate_click(point(px(20.), px(80.)), Default::default());
+         assert_eq!(&*events.borrow(), &["request", "closed"]);
+     }
++
++    #[gpui::test]
++    fn close_button_recovers_from_focus_outside_the_sheet(cx: &mut gpui::TestAppContext) {
++        cx.update(crate::init);
++        let events = Rc::new(RefCell::new(Vec::new()));
++        let outside = cx.update(|cx| cx.focus_handle());
++        let (_, cx) = cx.add_window_view({
++            let events = events.clone();
++            let outside = outside.clone();
++            move |_, cx| CloseButtonHarness {
++                focus: cx.focus_handle(),
++                outside,
++                child: None,
++                events,
++            }
++        });
++        cx.update(|window, cx| {
++            outside.focus(window, cx);
++            window.draw(cx).clear(cx);
++        });
++        cx.simulate_click(point(px(30.), px(30.)), Default::default());
++        cx.run_until_parked();
++        assert_eq!(&*events.borrow(), &["request", "closed"]);
++    }
++
++    #[gpui::test]
++    fn close_button_preserves_valid_child_focus(cx: &mut gpui::TestAppContext) {
++        cx.update(crate::init);
++        let events = Rc::new(RefCell::new(Vec::new()));
++        let child = cx.update(|cx| cx.focus_handle());
++        let (_, cx) = cx.add_window_view({
++            let events = events.clone();
++            let child = child.clone();
++            move |_, cx| CloseButtonHarness {
++                focus: cx.focus_handle(),
++                outside: cx.focus_handle(),
++                child: Some(child),
++                events,
++            }
++        });
++        cx.update(|window, cx| {
++            child.focus(window, cx);
++            window.draw(cx).clear(cx);
++        });
++        cx.simulate_click(point(px(30.), px(30.)), Default::default());
++        cx.run_until_parked();
++        assert!(cx.update(|window, _| child.is_focused(window)));
++        assert_eq!(&*events.borrow(), &["request", "closed"]);
++    }
++
++    struct CloseButtonHarness {
++        focus: FocusHandle,
++        outside: FocusHandle,
++        child: Option<FocusHandle>,
++        events: Rc<RefCell<Vec<&'static str>>>,
++    }
++
++    impl Render for CloseButtonHarness {
++        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
++            let requested = self.events.clone();
++            let closed = self.events.clone();
++            div().track_focus(&self.outside).child(
++                Sheet::new(cx)
++                    .focus_handle(self.focus.clone())
++                    .request_close(move |_, _| requested.borrow_mut().push("request"))
++                    .on_close(move |_, _, _| closed.borrow_mut().push("closed"))
++                    .surface(
++                        div().size(px(100.)).child(
++                            div()
++                                .id("close")
++                                .size(px(60.))
++                                .when_some(self.child.clone(), |this, child| {
++                                    this.track_focus(&child)
++                                })
++                                // Match Component Button's pointer contract.
++                                .on_mouse_down(MouseButton::Left, |_, window, _| {
++                                    window.prevent_default();
++                                })
++                                .on_click(|_, window, cx| {
++                                    window.dispatch_action(Box::new(Cancel), cx);
++                                }),
++                        ),
++                    ),
++            )
++        }
++    }
+ }
+diff --git a/crates/base/src/text/inline.rs b/crates/base/src/text/inline.rs
+index b184f0b7..6bc5cbf9 100644
+--- a/crates/base/src/text/inline.rs
++++ b/crates/base/src/text/inline.rs
+@@ -217,6 +217,7 @@ pub(super) struct Inline {
+     text_style: Option<TextStyle>,
+     paint_origin: Option<Point<Pixels>>,
+     selection_bounds: Option<Bounds<Pixels>>,
++    selection_paint_bounds: Option<Bounds<Pixels>>,
+     selection_source: Option<(Arc<Mutex<InlineState>>, Range<usize>)>,
+     /// Range highlight backgrounds, painted behind the text.
+     range_backgrounds: Vec<(Range<usize>, Hsla)>,
+@@ -380,6 +381,7 @@ impl Inline {
+             text_style: None,
+             paint_origin: None,
+             selection_bounds: None,
++            selection_paint_bounds: None,
+             selection_source: None,
+             range_backgrounds: Vec::new(),
+             reveal: None,
+@@ -407,6 +409,11 @@ impl Inline {
+         self
+     }
+ 
++    pub(super) fn selection_paint_bounds(mut self, bounds: Bounds<Pixels>) -> Self {
++        self.selection_paint_bounds = Some(bounds);
++        self
++    }
++
+     pub(super) fn selection_source(
+         mut self,
+         state: Arc<Mutex<InlineState>>,
+@@ -1004,7 +1011,32 @@ impl Element for Inline {
+                 .text_view_state()
+                 .map(|state| state.read(cx).text_view_style.selection())
+                 .unwrap_or_else(|| crate::Theme::global(cx).tokens.colors.selection);
+-            Self::paint_selection(selection, &text_layout, &bounds, window, color);
++            if let Some(row) = self.selection_paint_bounds {
++                let start = selection.start.min(selection.end);
++                let end = selection.start.max(selection.end);
++                if start < end
++                    && let (Some(first), Some(last)) = (
++                        text_layout.position_for_index(start),
++                        text_layout.position_for_index(end),
++                    )
++                {
++                    // A flow fragment shares its row's height, regardless of
++                    // its font size. Include code padding only when selection
++                    // reaches that edge, leaving partial selections precise.
++                    let left = if start == 0 { row.left() } else { first.x };
++                    let right = if end == state.text.len() {
++                        row.right()
++                    } else {
++                        last.x
++                    };
++                    window.paint_quad(gpui::fill(
++                        Bounds::from_corners(point(left, row.top()), point(right, row.bottom())),
++                        color,
++                    ));
++                }
++            } else {
++                Self::paint_selection(selection, &text_layout, &bounds, window, color);
++            }
+             if let Some((start, end)) = Self::selection_edges(selection, &text_layout)
+                 && let Some(text_view_state) = GlobalState::global(cx).text_view_state()
+             {
+diff --git a/crates/base/src/text/inline_flow.rs b/crates/base/src/text/inline_flow.rs
+index 7e06a421..99324b47 100644
+--- a/crates/base/src/text/inline_flow.rs
++++ b/crates/base/src/text/inline_flow.rs
+@@ -10,8 +10,9 @@ use gpui::{
+     AbsoluteLength, AnyElement, App, AvailableSpace, Bounds, DefiniteLength, Element, ElementId,
+     GlobalElementId, Hsla, ImageSource, InspectorElementId, InteractiveElement as _, IntoElement,
+     LayoutId, LineFragment as WrapLineFragment, ObjectFit, Pixels, Refineable as _, ShapedLine,
+-    SharedString, Size, StatefulInteractiveElement as _, Styled, StyledImage as _, TextRun,
+-    TextStyle, WhiteSpace, Window, img, point, prelude::FluentBuilder as _, px, relative, size,
++    SharedString, Size, StatefulInteractiveElement as _, Styled, StyledImage as _, TextAlign,
++    TextRun, TextStyle, WhiteSpace, Window, img, point, prelude::FluentBuilder as _, px, relative,
++    size,
+ };
+ 
+ use crate::text::text_view::{LinkClickHandlerFn, handle_link_click};
+@@ -169,11 +170,34 @@ struct InlineFlowTypography {
+ 
+ #[derive(Default)]
+ struct InlineFlowLayout {
++    lines: Vec<(Range<usize>, Pixels)>,
+     fragments: Vec<PositionedFragment>,
+     size: Size<Pixels>,
+     wrap_width: Option<Pixels>,
+ }
+ 
++impl InlineFlowLayout {
++    // Use the final layout box, including nowrap cells whose measurement has
++    // no wrap width. Paint, hit testing and selection share this translation.
++    fn aligned_fragments(
++        &self,
++        width: Pixels,
++        align: TextAlign,
++    ) -> impl Iterator<Item = (usize, &PositionedFragment, Pixels)> {
++        self.lines.iter().flat_map(move |(range, line_width)| {
++            let spare = (width - *line_width).max(Pixels::ZERO);
++            let offset = match align {
++                TextAlign::Left => Pixels::ZERO,
++                TextAlign::Center => spare / 2.,
++                TextAlign::Right => spare,
++            };
++            range
++                .clone()
++                .map(move |ix| (ix, &self.fragments[ix], offset))
++        })
++    }
++}
++
+ enum PositionedFragment {
+     Object {
+         item_ix: usize,
+@@ -464,7 +488,10 @@ impl Element for InlineFlow {
+             .map(|(ix, _)| ix);
+ 
+         let mut text_fragment_count = 0;
+-        for (fragment_ix, fragment) in layout.fragments.iter().enumerate() {
++        for (fragment_ix, fragment, offset) in
++            layout.aligned_fragments(bounds.size.width, text_style.text_align)
++        {
++            let flow_origin = bounds.origin + point(offset, Pixels::ZERO);
+             match fragment {
+                 PositionedFragment::Object {
+                     item_ix,
+@@ -490,10 +517,7 @@ impl Element for InlineFlow {
+                         accessibility_label.clone(),
+                         (**object).clone(),
+                         selected.clone(),
+-                        Bounds::new(
+-                            bounds.origin + selection_bounds.origin,
+-                            selection_bounds.size,
+-                        ),
++                        Bounds::new(flow_origin + selection_bounds.origin, selection_bounds.size),
+                         Bounds::new(
+                             point(bounds.left(), bounds.top() + selection_bounds.top()),
+                             size(bounds.size.width, selection_bounds.size.height),
+@@ -502,7 +526,7 @@ impl Element for InlineFlow {
+                     .link(link.clone(), self.link_click_handler.clone())
+                     .into_any_element();
+                     element.prepaint_as_root(
+-                        bounds.origin + *origin,
++                        flow_origin + *origin,
+                         size(
+                             AvailableSpace::Definite(object_size.width),
+                             AvailableSpace::Definite(object_size.height),
+@@ -548,7 +572,7 @@ impl Element for InlineFlow {
+                     };
+                     let background = code_background.map(|(background, color)| {
+                         (
+-                            Bounds::new(bounds.origin + background.origin, background.size),
++                            Bounds::new(flow_origin + background.origin, background.size),
+                             color,
+                         )
+                     });
+@@ -559,6 +583,8 @@ impl Element for InlineFlow {
+                     fragment_style.font_size = font_size.into();
+                     fragment_style.line_height = fragment_size.height.into();
+                     fragment_style.white_space = WhiteSpace::Nowrap;
++                    // Alignment belongs to the whole line, never each fragment.
++                    fragment_style.text_align = TextAlign::Left;
+                     let mut element = Inline::new(
+                         state,
+                         links.clone(),
+@@ -579,11 +605,15 @@ impl Element for InlineFlow {
+                             .map(|reveal| reveal.clamp(source_range.start, source_range.end)),
+                     )
+                     .text_style(fragment_style.clone())
++                    .selection_paint_bounds(Bounds::new(
++                        flow_origin + selection_bounds.origin,
++                        selection_bounds.size,
++                    ))
+                     .selection_bounds(Bounds::new(
+                         point(bounds.left(), bounds.top() + selection_bounds.top()),
+                         size(bounds.size.width, selection_bounds.size.height),
+                     ))
+-                    .paint_origin(bounds.origin + origin + point(padding, Pixels::ZERO))
++                    .paint_origin(flow_origin + origin + point(padding, Pixels::ZERO))
+                     .into_any_element();
+                     // The `Inline` is its own layout root, with no box around
+                     // it: its text measures with the window's text style, so
+@@ -593,7 +623,7 @@ impl Element for InlineFlow {
+                             Some(fragment_style.subtract(&Default::default())),
+                             |window| {
+                                 element.prepaint_as_root(
+-                                    bounds.origin + origin + point(padding, Pixels::ZERO),
++                                    flow_origin + origin + point(padding, Pixels::ZERO),
+                                     size(
+                                         AvailableSpace::Definite(
+                                             fragment_size.width - padding * 2.,
+@@ -632,7 +662,7 @@ impl Element for InlineFlow {
+                         self.link_click_handler.clone(),
+                     );
+                     element.prepaint_as_root(
+-                        bounds.origin + origin,
++                        flow_origin + origin,
+                         size(
+                             AvailableSpace::Definite(fragment_size.width),
+                             AvailableSpace::Definite(fragment_size.height),
+@@ -886,6 +916,7 @@ fn layout_measured_flow(
+     let line_ranges = line_ranges(items, image_sizes, &objects, text_style, wrap_width, window);
+     let font_size = text_style.font_size.to_pixels(rem_size);
+     let mut fragments = Vec::new();
++    let mut lines = Vec::new();
+     let mut max_width = Pixels::ZERO;
+     let mut y = Pixels::ZERO;
+ 
+@@ -1031,6 +1062,7 @@ fn layout_measured_flow(
+             item_start = item_end;
+         }
+ 
++        let first_fragment = fragments.len();
+         let mut x = Pixels::ZERO;
+         for mut fragment in line_fragments {
+             // Give a text run's glyph box equal leading on both sides, as
+@@ -1094,11 +1126,13 @@ fn layout_measured_flow(
+             fragments.push(positioned);
+         }
+ 
++        lines.push((first_fragment..fragments.len(), line_width));
+         max_width = max_width.max(line_width);
+         y += line_ascent + line_descent;
+     }
+ 
+     InlineFlowLayout {
++        lines,
+         fragments,
+         size: size(max_width, y),
+         wrap_width,
+@@ -1743,6 +1777,53 @@ mod tests {
+         }
+     }
+ 
++    #[test]
++    fn mixed_lines_align_as_a_whole_including_nowrap_and_short_final_lines() {
++        use super::super::inline::test_fonts::{BODY, MONO, WideMonoTextSystem};
++        use gpui::{Empty, TestApp};
++        let mut app = TestApp::with_text_system(Arc::new(WideMonoTextSystem));
++        let mut window = app.open_window(|_, _| Empty);
++        let style = TextStyle {
++            font_family: BODY.into(),
++            font_size: px(16.).into(),
++            ..Default::default()
++        };
++        let items = vec![MeasureItem::Text {
++            text: "code 中文\nshort".into(),
++            links: vec![],
++            highlights: vec![(
++                0..4,
++                InlineHighlight {
++                    style: Default::default(),
++                    font_family: Some(MONO.into()),
++                    font_size_scale: Some(0.875),
++                },
++            )],
++        }];
++        window.update(|_, window, cx| {
++            for wrap in [None, Some(px(120.))] {
++                let layout = layout_flow(&items, &[None], &style, wrap, window, cx);
++                assert!(layout.lines.len() >= 2);
++                for (align, fraction) in [
++                    (TextAlign::Left, 0.),
++                    (TextAlign::Center, 0.5),
++                    (TextAlign::Right, 1.),
++                ] {
++                    for width in [px(1.), px(240.)] {
++                        let aligned = layout.aligned_fragments(width, align).collect::<Vec<_>>();
++                        assert_eq!(aligned.len(), layout.fragments.len());
++                        for (range, line_width) in &layout.lines {
++                            let expected = (width - *line_width).max(Pixels::ZERO) * fraction;
++                            for ix in range.clone() {
++                                assert_eq!(aligned[ix].2, expected);
++                            }
++                        }
++                    }
++                }
++            }
++        });
++    }
++
+     #[test]
+     fn atomic_objects_wrap_and_share_a_baseline_at_multiple_font_sizes() {
+         use super::super::inline::test_draw::in_prepaint;
+diff --git a/crates/base/src/text/node.rs b/crates/base/src/text/node.rs
+index 11147620..cf53d156 100644
+--- a/crates/base/src/text/node.rs
++++ b/crates/base/src/text/node.rs
+@@ -2197,35 +2197,62 @@ impl CodeBlock {
+     ) -> AnyElement {
+         let style = &node_cx.style;
+         let leaf_key = self.span.map(|span| TextLeafKey::block(span.start));
+-        // The language sits quietly in the top-right corner, where custom
+-        // actions go instead when the caller provides them; the top padding
+-        // keeps the first line clear of it. Like the actions, it stays out of
+-        // the scrolled content so it holds its corner.
+-        let lang_label = self
++        let scrolling = matches!(style.code_block().overflow.y, Some(Overflow::Scroll));
++        // Normal blocks measure their header in flow. A fixed top inset leaves
++        // a phantom line and lets actions overlap code at larger text scales.
++        // Height-capped blocks retain their pinned corner controls.
++        let mut lang_label = self
+             .lang()
+-            .filter(|lang| !lang.is_empty() && node_cx.code_block_actions.is_none())
++            .filter(|lang| !lang.is_empty() && (!scrolling || node_cx.code_block_actions.is_none()))
+             .map(|lang| {
+                 div()
+-                    .absolute()
+-                    .top(px(7.))
+-                    .right_3()
++                    .when(scrolling, |label| label.absolute().top(px(7.)).right_3())
+                     .font_family(cx.theme().tokens.typography.sans.clone())
+                     .text_size(cx.theme().tokens.typography.xs.size)
+-                    .line_height(px(16.))
++                    .line_height(relative(1.4))
+                     .text_color(style.muted_foreground())
+                     .child(lang)
+             });
++        let mut actions = node_cx.code_block_actions.clone().map(|actions| {
++            div()
++                .id("actions")
++                .when(scrolling, |slot| {
++                    slot.absolute()
++                        .top_2()
++                        .right_2()
++                        .bg(style.code_background())
++                })
++                .font_family(cx.theme().tokens.typography.sans.clone())
++                .child(actions(&self, window, cx))
++        });
++        let header = if !scrolling && (lang_label.is_some() || actions.is_some()) {
++            Some(
++                div()
++                    .flex()
++                    .items_center()
++                    .justify_between()
++                    .gap_2()
++                    .mb_1()
++                    .children(lang_label.take())
++                    .child(div().flex_1())
++                    .children(actions.take()),
++            )
++        } else {
++            None
++        };
+ 
+         let block = div()
+             .w_full()
+             .min_w_0()
+             .px_4()
+-            .pt(if lang_label.is_some() {
+-                px(28.)
++            .pt(if !scrolling {
++                rems(0.5)
++            } else if lang_label.is_some() {
++                rems(1.75)
+             } else {
+-                px(14.)
++                rems(0.875)
+             })
+-            .pb(px(14.))
++            .pb(if scrolling { rems(0.875) } else { rems(0.5) })
+             .bg(style.code_background())
+             .border_1()
+             .border_color(style.border())
+@@ -2234,6 +2261,7 @@ impl CodeBlock {
+             .line_height(relative(1.6))
+             .relative()
+             .refine_style(&style.code_block())
++            .children(header)
+             .child(
+                 Inline::new(
+                     self.state.clone(),
+@@ -2254,20 +2282,10 @@ impl CodeBlock {
+                 .range_backgrounds(node_cx.range_backgrounds(leaf_key).to_vec())
+                 .reveal(node_cx.reveal_at(leaf_key, 0, self.code().len())),
+             );
+-        let actions = node_cx.code_block_actions.clone().map(|actions| {
+-            div()
+-                .id("actions")
+-                .absolute()
+-                .top_2()
+-                .right_2()
+-                .bg(style.code_background())
+-                .rounded(cx.theme().tokens.radius.md)
+-                .child(actions(&self, window, cx))
+-        });
+         // The id scopes the caller's action ids per code block, so plain ids
+         // like `"copy"` don't collide across blocks.
+         let id = block_element_id("codeblock", self.span, options.ix);
+-        let block = if matches!(style.code_block().overflow.y, Some(Overflow::Scroll)) {
++        let block = if scrolling {
+             let scroll_handle = window
+                 .use_keyed_state(
+                     block_element_id("codeblock-scroll", self.span, options.ix),
+@@ -2299,11 +2317,7 @@ impl CodeBlock {
+                 .children(lang_label)
+                 .into_any_element()
+         } else {
+-            // Without actions nothing under the block needs element state.
+-            match actions {
+-                Some(actions) => block.id(id).child(actions).into_any_element(),
+-                None => block.children(lang_label).into_any_element(),
+-            }
++            block.id(id).into_any_element()
+         };
+ 
+         gapped(
+@@ -2344,10 +2358,10 @@ pub(crate) struct NodeContext {
+ 
+ impl NodeContext {
+     fn image_source(&self, image: &ImageNode) -> ImageSource {
+-        match &self.image_source {
+-            Some(resolve) => resolve(&image.url),
+-            None => image.source(),
+-        }
++        self.image_source
++            .as_ref()
++            .and_then(|resolve| resolve(&image.url))
++            .unwrap_or_else(|| image.source())
+     }
+ 
+     pub(super) fn add_ref(&mut self, identifier: SharedString, link: LinkMark) {
+@@ -2945,12 +2959,14 @@ fn table_cell_padding_x(style: &TextViewStyle, rem_size: Pixels) -> f32 {
+     let padding = &style.table_cell().padding;
+     let side = |length: Option<DefiniteLength>| match length {
+         Some(DefiniteLength::Absolute(length)) => f32::from(length.to_pixels(rem_size)),
+-        _ => CELL_PAD_PX / 2.,
++        _ => f32::from(rems(0.75).to_pixels(rem_size)),
+     };
+     side(padding.left) + side(padding.right)
+ }
+ 
+-const CELL_PAD_PX: f32 = 24.0; // px_3 horizontal padding
++// Cached widths use the default padding at 16px rem; layout adds the
++// difference for the actual rem and any cell padding refinement.
++const CELL_PAD_PX: f32 = 24.0;
+ const CELL_MIN_PX: f32 = 48.0;
+ const CELL_BORDER_PX: f32 = 1.0; // border_r_1 drawn by every column but the last
+ 
+@@ -3656,6 +3672,15 @@ impl BlockNode {
+         div()
+             .pb(block_gap(options, style))
+             .w_full()
++            // No-wrap tables already retain their intrinsic column widths.
++            // Stop at their natural size instead of stretching the empty space.
++            .when(scroll && nowrap, |this| {
++                this.max_w(px(columns
++                    .iter()
++                    .map(|column| column.max + column.divider)
++                    .sum::<f32>()
++                    + TABLE_BORDER_PX))
++            })
+             .child(body)
+             // Custom actions row (e.g. copy / download) rendered below the
+             // table. The hook's element spans full width; alignment is up to
+diff --git a/crates/base/src/text/state.rs b/crates/base/src/text/state.rs
+index 81d8a9aa..7fc11403 100644
+--- a/crates/base/src/text/state.rs
++++ b/crates/base/src/text/state.rs
+@@ -116,6 +116,7 @@ pub struct TextViewState {
+     pub(super) code_block_highlighter: Option<std::sync::Arc<CodeBlockHighlighterFn>>,
+     pub(super) table_actions: Option<std::sync::Arc<TableActionsFn>>,
+     pub(super) image_source: Option<std::sync::Arc<super::text_view::ImageSourceFn>>,
++    image_source_override: Option<std::sync::Arc<super::text_view::ImageSourceFn>>,
+     pub(super) link_click_handler: Option<std::sync::Arc<LinkClickHandlerFn>>,
+     pub(super) markdown_extensions: Arc<MarkdownExtensions>,
+ 
+@@ -223,6 +224,7 @@ impl TextViewState {
+             table_actions: None,
+             link_click_handler: None,
+             image_source: None,
++            image_source_override: None,
+             markdown_extensions: Arc::default(),
+             is_selecting: false,
+             preserve_inline_selection: false,
+@@ -483,6 +485,17 @@ impl TextViewState {
+         }
+     }
+ 
++    /// Install a persistent resource resolver on this document. Returning `None`
++    /// retains the built-in URI and data URL handling. Replacing the resolver
++    /// invalidates resource measurements without changing the text or selection.
++    pub fn set_image_source_override<F>(&mut self, resolver: F, cx: &mut Context<Self>)
++    where
++        F: Fn(&gpui::SharedUri) -> Option<gpui::ImageSource> + Send + Sync + 'static,
++    {
++        self.image_source_override = Some(Arc::new(resolver));
++        self.invalidate_inline_layout(cx);
++    }
++
+     /// Remeasure inline resources after their prepared content or metrics change.
+     ///
+     /// Call from the resource owner's completion handler, through a weak entity
+@@ -1075,7 +1088,10 @@ impl Render for TextViewState {
+             code_block_highlighter: self.code_block_highlighter.clone(),
+             table_actions: self.table_actions.clone(),
+             link_click_handler: self.link_click_handler.clone(),
+-            image_source: self.image_source.clone(),
++            image_source: self
++                .image_source_override
++                .clone()
++                .or_else(|| self.image_source.clone()),
+             markdown_extensions: self.markdown_extensions.clone(),
+             stream_fade,
+             range_highlights: self.range_highlights.clone(),
+diff --git a/crates/base/src/text/text_view.rs b/crates/base/src/text/text_view.rs
+index f5a461e3..3b428b14 100644
+--- a/crates/base/src/text/text_view.rs
++++ b/crates/base/src/text/text_view.rs
+@@ -94,7 +94,7 @@ impl TextViewDefaults {
+ pub(crate) type TableActionsFn =
+     dyn Fn(&TableData, &mut Window, &mut App) -> AnyElement + Send + Sync;
+ 
+-pub(crate) type ImageSourceFn = dyn Fn(&gpui::SharedUri) -> gpui::ImageSource + Send + Sync;
++pub(crate) type ImageSourceFn = dyn Fn(&gpui::SharedUri) -> Option<gpui::ImageSource> + Send + Sync;
+ 
+ pub(crate) type LinkClickHandlerFn =
+     dyn Fn(&SharedString, &ClickEvent, &mut Window, &mut App) + Send + Sync;
+@@ -266,7 +266,7 @@ impl TextView {
+     where
+         F: Fn(&gpui::SharedUri) -> gpui::ImageSource + Send + Sync + 'static,
+     {
+-        self.image_source = Some(Arc::new(resolver));
++        self.image_source = Some(Arc::new(move |uri| Some(resolver(uri))));
+         self
+     }
+ 
+@@ -2761,10 +2761,12 @@ mod tests {
+             text_view: Entity<TextViewState>,
+             width: Pixels,
+             style: TextViewStyle,
++            rem_size: Pixels,
+         }
+ 
+         impl Render for TableRoot {
+-            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
++            fn render(&mut self, window: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
++                window.set_rem_size(self.rem_size);
+                 div()
+                     .w(self.width)
+                     .child(TextView::new(&self.text_view).style(self.style.clone()))
+@@ -2773,11 +2775,11 @@ mod tests {
+ 
+         let short = "Operating revenue (USD)";
+         let source = format!(
+-            "| {short} | Note |\n| --- | --- |\n| {short} | x |\n| 1 | {} |",
++            "| {short} | Note |\n| --- | --- |\n| {short} | x |\n| 1 | {} |\n| 1 | x |",
+             "word ".repeat(30)
+         );
+         // Heights of the first column's cells, top to bottom.
+-        let first_column = |width: f32, style: TextViewStyle| {
++        let first_column = |width: f32, style: TextViewStyle, rem_size: f32| {
+             let mut app = TestApp::with_text_system(Arc::new(WideMonoTextSystem));
+             app.update(crate::init);
+             let cell = style.table_cell().clone().bg(gpui::rgb(CELL_BACKGROUND));
+@@ -2785,6 +2787,7 @@ mod tests {
+             let mut window = app.open_window(|_, cx| TableRoot {
+                 text_view: cx.new(|cx| TextViewState::markdown(&source, cx)),
+                 width: px(width),
++                rem_size: px(rem_size),
+                 style,
+             });
+             window.draw();
+@@ -2817,24 +2820,34 @@ mod tests {
+         };
+ 
+         for (layout, style) in [("wrap", TextViewStyle::default()), ("scroll", scroll())] {
+-            let fits = first_column(4000., style.clone());
+-            let narrow = first_column(700., style);
+-            assert_eq!(fits.len(), 3, "{layout}: three rows");
+-            assert_eq!(fits[0], fits[2], "{layout}: the header fits on one line");
+-            assert_eq!(narrow[..2], fits[..2], "{layout}: the short column wraps");
++            for rem_size in [12., 16., 20., 24.] {
++                let fits = first_column(4000., style.clone(), rem_size);
++                // Leave room for the short column plus the scrolling long-column floor.
++                let narrow = first_column(700_f32.max(rem_size * 40.), style.clone(), rem_size);
++                assert_eq!(fits.len(), 4, "{layout}, rem={rem_size}: four rows");
++                assert_eq!(
++                    fits[0], fits[3],
++                    "{layout}, rem={rem_size}: the header fits on one line"
++                );
++                assert_eq!(
++                    narrow[..2],
++                    fits[..2],
++                    "{layout}, rem={rem_size}: the short column wraps"
++                );
++            }
+         }
+ 
+-        let single_line = first_column(4000., TextViewStyle::default())[0];
++        let single_line = first_column(4000., TextViewStyle::default(), 16.)[0];
+         let padded = TextViewStyle::default().with_table_cell(StyleRefinement::default().px_4());
+         assert_eq!(
+-            first_column(4000., padded)[0],
++            first_column(4000., padded, 16.)[0],
+             single_line,
+             "the cell padding refinement leaves the text its measured width"
+         );
+         let bold = TextViewStyle::default()
+             .with_table(StyleRefinement::default().font_weight(gpui::FontWeight::BOLD));
+         assert_eq!(
+-            first_column(4000., bold)[0],
++            first_column(4000., bold, 16.)[0],
+             single_line,
+             "the table text refinement is measured"
+         );
+diff --git a/crates/base/src/text_selection.rs b/crates/base/src/text_selection.rs
+index 2828822c..08a501eb 100644
+--- a/crates/base/src/text_selection.rs
++++ b/crates/base/src/text_selection.rs
+@@ -222,6 +222,7 @@ pub struct TextSelectionRegistration {
+     document_order: u64,
+     text_bounds: Vec<Bounds<Pixels>>,
+     self_scroll: bool,
++    scroll_viewport: Option<Bounds<Pixels>>,
+     selection_edges: Option<(Bounds<Pixels>, Bounds<Pixels>)>,
+     rendered: Option<WeakEntity<RenderedMarker>>,
+ }
+@@ -237,6 +238,7 @@ impl TextSelectionRegistration {
+             document_order: 0,
+             text_bounds: Vec::new(),
+             self_scroll: false,
++            scroll_viewport: None,
+             selection_edges: None,
+             rendered: None,
+         }
+@@ -286,6 +288,13 @@ impl TextSelectionRegistration {
+         self
+     }
+ 
++    /// Sets the actual scrolling viewport when a decorative clipping ancestor
++    /// (for example, a rounded message bubble) has a smaller content mask.
++    pub fn with_scroll_viewport(mut self, bounds: Bounds<Pixels>) -> Self {
++        self.scroll_viewport = Some(bounds);
++        self
++    }
++
+     /// Sets the participant's content scroll offset.
+     pub fn with_scroll_offset(mut self, scroll_offset: Point<Pixels>) -> Self {
+         self.scroll_offset = scroll_offset;
+@@ -2266,7 +2275,9 @@ impl WindowSelectionState {
+         // scrollable ancestor. It remains stable as the participant itself
+         // moves, so selection keeps scrolling the same related region even
+         // after the anchor text has moved out of view.
+-        let visible_bounds = registration.hitbox.content_mask.bounds;
++        let visible_bounds = registration
++            .scroll_viewport
++            .unwrap_or(registration.hitbox.content_mask.bounds);
+         // Keeps the synthesized wheel event hit-testing inside the mask.
+         const HIT_TEST_INSET: Pixels = px(1.);
+         // A collapsed mask leaves an empty clamp range below — stop.
+@@ -4210,6 +4221,44 @@ mod tests {
+         assert_eq!(commands.borrow().last(), Some(&None));
+     }
+ 
++    #[gpui::test]
++    fn decorative_clip_edges_do_not_scroll_inside_the_supplied_viewport(cx: &mut TestAppContext) {
++        let window = cx.add_window(|_, cx| WindowSelectionView {
++            selection: TextSelectionHandle::new("unused", cx),
++        });
++        window
++            .update(cx, |_, window, cx| {
++                let state = cx.new(|_| WindowSelectionState::default());
++                let participant = FakeParticipant::new("participant", cx);
++                state.update(cx, |state, cx| {
++                    participant.register(state, 0., TextSelectionScopeId::default(), 0, cx);
++                    state.begin(point(px(1.), px(1.)), false, cx);
++                    let clipped = Bounds::new(point(px(0.), px(0.)), size(px(100.), px(60.)));
++                    let viewport = Bounds::new(point(px(0.), px(0.)), size(px(100.), px(300.)));
++                    state.register_participant(
++                        participant.selection.clone(),
++                        TextSelectionRegistration::new(
++                            Hitbox {
++                                id: HitboxId::placeholder(),
++                                bounds: clipped,
++                                content_mask: ContentMask { bounds: clipped },
++                                behavior: HitboxBehavior::Normal,
++                            },
++                            clipped,
++                        )
++                        .with_text_bounds(vec![clipped])
++                        .with_scroll_viewport(viewport),
++                        cx,
++                    );
++                    state.update_in_window(point(px(20.), px(55.)), window, cx);
++                    assert!(!state.auto_scroll.is_active());
++                    state.update_in_window(point(px(20.), px(295.)), window, cx);
++                    assert!(state.auto_scroll.is_active());
++                });
++            })
++            .unwrap();
++    }
++
+     #[gpui::test]
+     fn drag_auto_scroll_stops_when_the_content_mask_collapses(cx: &mut TestAppContext) {
+         let window = cx.add_window(|_, cx| WindowSelectionView {
+diff --git a/crates/component/src/diff/gutter_tests.rs b/crates/component/src/diff/gutter_tests.rs
+new file mode 100644
+index 00000000..958a3a16
+--- /dev/null
++++ b/crates/component/src/diff/gutter_tests.rs
+@@ -0,0 +1,49 @@
++use super::{DiffFile, DiffMode, DiffSide, LayoutKey, code_width, displayed_gutters};
++use gpui::px;
++
++#[test]
++fn single_gutter_tracks_source_numbers_after_insertion_and_deletion() {
++    let patch =
++        "--- a/a.rs\n+++ b/a.rs\n@@ -28,4 +28,4 @@\n keep\n+inserted\n next\n-removed\n tail\n";
++    let files = DiffFile::parse(patch).unwrap();
++    let file = &files[0];
++    for (old, new, expected_side, expected_number) in [
++        (Some(0), Some(0), DiffSide::Modified, 28),
++        (None, Some(1), DiffSide::Modified, 29),
++        (Some(1), Some(2), DiffSide::Modified, 30),
++        (Some(2), None, DiffSide::Original, 30),
++        (Some(3), Some(3), DiffSide::Modified, 31),
++    ] {
++        let source = [
++            Some((DiffSide::Original, old)),
++            Some((DiffSide::Modified, new)),
++        ];
++        let displayed = displayed_gutters(source, true);
++        let (side, index) = displayed[0].unwrap();
++        assert!(displayed[1].is_none());
++        assert_eq!(side, expected_side);
++        assert_eq!(file.line_number(side, index.unwrap()), expected_number);
++        // The default dual-lane mode still exposes both source mappings.
++        assert_eq!(displayed_gutters(source, false), source);
++    }
++}
++
++#[test]
++fn single_gutter_width_and_layout_invalidation() {
++    let width = |mode, single| code_width(px(100.), px(30.), px(16.), mode, single);
++    assert_eq!(width(DiffMode::Unified, true), px(162.));
++    assert_eq!(width(DiffMode::Unified, false), px(192.));
++    assert_eq!(width(DiffMode::Split, true), width(DiffMode::Split, false));
++    let layout = |single| {
++        LayoutKey::new(
++            px(16.),
++            px(14.),
++            "mono".into(),
++            DiffMode::Unified,
++            true,
++            single,
++            false,
++        )
++    };
++    assert_ne!(layout(true), layout(false));
++}
+diff --git a/crates/component/src/diff/mod.rs b/crates/component/src/diff/mod.rs
+index 09ae6699..78302cbd 100644
+--- a/crates/component/src/diff/mod.rs
++++ b/crates/component/src/diff/mod.rs
+@@ -204,6 +204,7 @@ pub struct Diff {
+     state: Entity<DiffState>,
+     style: StyleRefinement,
+     line_number: bool,
++    single_line_number: bool,
+     syntax_highlight: bool,
+     header_visible: bool,
+     hover_highlight: DiffHoverHighlight,
+@@ -233,6 +234,7 @@ impl Diff {
+             state: state.clone(),
+             style: StyleRefinement::default(),
+             line_number: true,
++            single_line_number: false,
+             syntax_highlight: true,
+             header_visible: true,
+             hover_highlight: DiffHoverHighlight::default(),
+@@ -253,6 +255,14 @@ impl Diff {
+         self.line_number = value;
+         self
+     }
++    /// Shows one line-number lane in unified mode. Default is false.
++    ///
++    /// Context and added lines use modified line numbers; removed lines use
++    /// original line numbers. Split mode keeps one lane on each side.
++    pub fn single_line_number(mut self, value: bool) -> Self {
++        self.single_line_number = value;
++        self
++    }
+     /// Emphasizes syntax once the state has prepared it. Default is true.
+     pub fn syntax_highlight(mut self, value: bool) -> Self {
+         self.syntax_highlight = value;
+@@ -468,6 +478,7 @@ fn render_diff(
+         px(0.)
+     };
+     let mode = state.mode();
++    let single_line_number = props.single_line_number && mode == DiffMode::Unified;
+     let soft_wrap = props.soft_wrap;
+     let layout = LayoutKey::new(
+         rem,
+@@ -475,6 +486,7 @@ fn render_diff(
+         font_family.clone(),
+         mode,
+         props.line_number,
++        single_line_number,
+         soft_wrap,
+     );
+     if state.update_layout(layout, row_height) {
+@@ -488,6 +500,7 @@ fn render_diff(
+                 &font_family,
+                 gutter_width,
+                 mode,
++                single_line_number,
+                 window,
+                 cx,
+             )
+@@ -513,6 +526,7 @@ fn render_diff(
+         rem,
+         expansion_lines: state.expansion_lines(),
+         line_number: props.line_number,
++        single_line_number,
+         syntax_highlight: props.syntax_highlight,
+         header_visible: props.header_visible,
+         hover_highlight: props.hover_highlight,
+@@ -692,7 +706,7 @@ fn render_diff(
+                                 px(0.)
+                             } else {
+                                 let painted = state.geometry().borrow().painted_width();
+-                                code_width(painted, gutter_width, rem, mode)
++                                code_width(painted, gutter_width, rem, mode, single_line_number)
+                             };
+                             if state.record_paint(bounds.size, painted) {
+                                 cx.notify();
+@@ -746,6 +760,7 @@ struct CodePresentation {
+     rem: Pixels,
+     expansion_lines: usize,
+     line_number: bool,
++    single_line_number: bool,
+     syntax_highlight: bool,
+     header_visible: bool,
+     hover_highlight: DiffHoverHighlight,
+@@ -783,23 +798,55 @@ impl CodePresentation {
+     }
+ }
+ 
++/// Keep both source mappings for selection, but display only the modified
++/// number when available (or the original number on deleted lines).
++fn displayed_gutters(
++    gutters: [Option<(DiffSide, Option<usize>)>; 2],
++    single_line_number: bool,
++) -> [Option<(DiffSide, Option<usize>)>; 2] {
++    if !single_line_number {
++        return gutters;
++    }
++    let lane = gutters
++        .iter()
++        .flatten()
++        .copied()
++        .find(|(side, ix)| *side == DiffSide::Modified && ix.is_some())
++        .or_else(|| {
++            gutters
++                .iter()
++                .flatten()
++                .copied()
++                .find(|(_, ix)| ix.is_some())
++        });
++    [lane, None]
++}
++
+ /// Total row width for code of `width` in the current mode.
+-fn code_width(width: Pixels, gutter_width: Pixels, rem: Pixels, mode: DiffMode) -> Pixels {
++fn code_width(
++    width: Pixels,
++    gutter_width: Pixels,
++    rem: Pixels,
++    mode: DiffMode,
++    single_line_number: bool,
++) -> Pixels {
+     if mode == DiffMode::Split {
+         (width + gutter_width + rem * 2.) * 2.
+     } else {
+-        width + gutter_width * 2. + rem * 2.
++        width + gutter_width * if single_line_number { 1. } else { 2. } + rem * 2.
+     }
+ }
+ 
+ /// Estimates content width from the lines widest in display cells, then
+ /// shapes those candidates with the code font for resolved geometry.
++#[allow(clippy::too_many_arguments)]
+ fn measure_code_width(
+     files: &[DiffFile],
+     font_size: Pixels,
+     family: &SharedString,
+     gutter_width: Pixels,
+     mode: DiffMode,
++    single_line_number: bool,
+     window: &mut Window,
+     cx: &App,
+ ) -> Pixels {
+@@ -849,7 +896,13 @@ fn measure_code_width(
+                 .width
+         })
+         .fold(px(0.), Pixels::max);
+-    code_width(width, gutter_width, window.rem_size(), mode)
++    code_width(
++        width,
++        gutter_width,
++        window.rem_size(),
++        mode,
++        single_line_number,
++    )
+ }
+ 
+ fn render_row(
+@@ -1630,6 +1683,7 @@ fn code_line(
+                 code.geometry.clone(),
+             )
+         }));
++    let gutters = displayed_gutters(gutters, code.single_line_number);
+     let gutters_width = if code.line_number {
+         code.gutter_width * gutters.iter().flatten().count() as f32
+     } else {
+@@ -1857,3 +1911,6 @@ mod review_tests;
+ mod selection_tests;
+ #[cfg(test)]
+ mod tests;
++
++#[cfg(test)]
++mod gutter_tests;
+diff --git a/crates/component/src/diff/state.rs b/crates/component/src/diff/state.rs
+index 7a8ddf51..594120fb 100644
+--- a/crates/component/src/diff/state.rs
++++ b/crates/component/src/diff/state.rs
+@@ -100,6 +100,7 @@ pub(crate) struct LayoutKey {
+     font_family: SharedString,
+     mode: DiffMode,
+     line_number: bool,
++    single_line_number: bool,
+     soft_wrap: bool,
+ }
+ 
+@@ -110,6 +111,7 @@ impl LayoutKey {
+         font_family: SharedString,
+         mode: DiffMode,
+         line_number: bool,
++        single_line_number: bool,
+         soft_wrap: bool,
+     ) -> Self {
+         Self {
+@@ -118,6 +120,7 @@ impl LayoutKey {
+             font_family,
+             mode,
+             line_number,
++            single_line_number,
+             soft_wrap,
+         }
+     }

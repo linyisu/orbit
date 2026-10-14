@@ -1,0 +1,2 @@
+# Unified patches prefix unchanged blank lines with a space.
+patches/*.patch -whitespace
