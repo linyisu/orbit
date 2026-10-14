@@ -39,9 +39,11 @@ impl LoadWarning {
     pub(crate) fn id(&self) -> &'static str {
         self.id
     }
+
     pub(crate) fn configured(&self) -> &str {
         &self.configured
     }
+
     pub(crate) fn message(&self) -> &str {
         &self.message
     }
@@ -67,6 +69,7 @@ impl fmt::Display for ValidationError {
         }
     }
 }
+
 impl std::error::Error for ValidationError {}
 
 #[derive(Clone, Copy, Debug)]
@@ -83,15 +86,19 @@ impl Command {
     pub(crate) fn id(&self) -> &'static str {
         self.id
     }
+
     pub(crate) fn label(&self) -> &'static str {
         self.label
     }
+
     pub(crate) fn default_binding(&self) -> &'static str {
         self.default
     }
+
     pub(crate) fn group(&self) -> &'static str {
         self.group
     }
+
     pub(crate) fn scope(&self) -> &'static str {
         if self.composer {
             "消息输入框"
@@ -99,6 +106,7 @@ impl Command {
             "应用所有窗口"
         }
     }
+
     pub(crate) fn action_name(&self) -> &'static str {
         (self.action)().name()
     }
@@ -296,7 +304,9 @@ pub(crate) fn configured(id: &str, cx: &App) -> Option<String> {
 }
 
 pub(crate) fn load_warnings(cx: &App) -> Vec<LoadWarning> {
-    cx.global::<KeymapState>().warnings.clone()
+    cx.global::<KeymapState>()
+        .warnings
+        .clone()
 }
 
 pub(crate) fn is_customized(id: &str, cx: &App) -> bool {
@@ -358,7 +368,9 @@ fn normalize(command: &Command, text: &str) -> Result<String, ValidationError> {
     {
         return Err(invalid("快捷键格式无效"));
     }
-    let parts = text.split_whitespace().collect::<Vec<_>>();
+    let parts = text
+        .split_whitespace()
+        .collect::<Vec<_>>();
     if parts.is_empty() || parts.len() > 3 {
         return Err(invalid("请输入 1 至 3 击快捷键，用空格分隔"));
     }
@@ -444,9 +456,15 @@ fn valid_key(key: &str) -> bool {
 }
 
 fn overlapping(left: &str, right: &str) -> bool {
-    let left = left.split_whitespace().collect::<Vec<_>>();
-    let right = right.split_whitespace().collect::<Vec<_>>();
-    left.iter().zip(&right).all(|(left, right)| left == right)
+    let left = left
+        .split_whitespace()
+        .collect::<Vec<_>>();
+    let right = right
+        .split_whitespace()
+        .collect::<Vec<_>>();
+    left.iter()
+        .zip(&right)
+        .all(|(left, right)| left == right)
 }
 
 fn conflicting_commands(id: &str, binding: &str, overrides: &Overrides) -> Vec<&'static Command> {
@@ -488,7 +506,10 @@ fn reject_conflicts(id: &str, binding: &str, overrides: &Overrides) -> Result<()
         Ok(())
     } else {
         Err(ValidationError::Conflict {
-            commands: commands.iter().map(|command| command.id).collect(),
+            commands: commands
+                .iter()
+                .map(|command| command.id)
+                .collect(),
         })
     }
 }
@@ -521,7 +542,10 @@ fn edit(
     let conflicts = conflicting_commands(id, &binding, overrides);
     if !replace && !conflicts.is_empty() {
         return Err(ValidationError::Conflict {
-            commands: conflicts.iter().map(|command| command.id).collect(),
+            commands: conflicts
+                .iter()
+                .map(|command| command.id)
+                .collect(),
         });
     }
     let mut next = overrides.clone();
@@ -574,6 +598,7 @@ struct KeymapState {
     protected: Vec<NativeBinding>,
     warnings: Vec<LoadWarning>,
 }
+
 impl Global for KeymapState {}
 
 struct NativeBinding {
@@ -590,7 +615,10 @@ fn native_input_bindings(keymap: &Keymap) -> Vec<NativeBinding> {
                 .predicate()
                 .is_some_and(|predicate| predicate.depth_of(&input).is_some())
                 && !binding.action().as_any().is::<Unbind>()
-                && !binding.action().as_any().is::<NoAction>()
+                && !binding
+                    .action()
+                    .as_any()
+                    .is::<NoAction>()
         })
         .filter_map(|binding| {
             let text = binding
@@ -601,7 +629,10 @@ fn native_input_bindings(keymap: &Keymap) -> Vec<NativeBinding> {
                 .join(" ");
             // These keys were already intentionally overridden by Orbit. Keeping
             // them available preserves the existing defaults on every platform.
-            if COMMANDS.iter().any(|command| command.default == text) {
+            if COMMANDS
+                .iter()
+                .any(|command| command.default == text)
+            {
                 None
             } else {
                 Some(NativeBinding {
@@ -682,7 +713,9 @@ fn restore(stored: &Overrides, protected: &[NativeBinding]) -> (Overrides, Vec<L
         let invalid = COMMANDS
             .iter()
             .filter(|command| {
-                active.get(command.id).is_some_and(|value| value.is_some())
+                active
+                    .get(command.id)
+                    .is_some_and(|value| value.is_some())
                     && effective(command, &active).is_some_and(|binding| {
                         !conflicting_commands(command.id, binding, &active).is_empty()
                     })
@@ -736,8 +769,8 @@ fn edit_stored(
     Ok(stored)
 }
 
+/// All key sequences pass normalize first; predicates are static constants.
 fn binding(text: &str, action: Box<dyn Action>, context: &str) -> KeyBinding {
-    // All key sequences pass normalize first; predicates are static constants.
     KeyBinding::load(
         text,
         action,
@@ -909,9 +942,11 @@ mod tests {
     #[test]
     fn replacement_rechecks_prefix_conflicts_and_clears_them_atomically() {
         let initial = Overrides::new();
-        assert!(
-            matches!(edit(&initial, "toggle_sidebar", "ctrl-p ctrl-b", false), Err(ValidationError::Conflict { commands }) if commands == ["search_sessions"])
-        );
+        assert!(matches!(
+            edit(&initial, "toggle_sidebar", "ctrl-p ctrl-b", false),
+            Err(ValidationError::Conflict { commands })
+                if commands == ["search_sessions"]
+        ));
         let next = edit(&initial, "toggle_sidebar", "ctrl-p ctrl-b", true).unwrap();
         assert_eq!(next.get("search_sessions"), Some(&None));
         assert_eq!(
@@ -1117,7 +1152,10 @@ mod tests {
         ]);
         let (active, warnings) = restore(&stored, &protected);
         assert_eq!(
-            warnings.iter().map(LoadWarning::id).collect::<Vec<_>>(),
+            warnings
+                .iter()
+                .map(LoadWarning::id)
+                .collect::<Vec<_>>(),
             ["toggle_sidebar", "search_sessions"]
         );
         assert_eq!(

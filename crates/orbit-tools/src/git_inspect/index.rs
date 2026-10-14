@@ -24,9 +24,9 @@ use super::{
     repository_root,
 };
 
-const MAX_INDEX_BYTES: usize = 32 * 1024 * 1024;
-const MAX_FILE_BYTES: usize = 8 * 1024 * 1024;
-const MAX_ADMIN_BYTES: usize = 1024 * 1024;
+const MAX_INDEX_BYTES: usize = 32 * 1_024 * 1_024;
+const MAX_FILE_BYTES: usize = 8 * 1_024 * 1_024;
+const MAX_ADMIN_BYTES: usize = 1_024 * 1_024;
 
 pub struct ReviewedFile {
     pub patch: String,
@@ -47,7 +47,11 @@ pub fn review_index_patch(
     let before = context
         .as_ref()
         .map_err(|error| error.to_string())
-        .and_then(|context| context.snapshot(path).map_err(|error| error.to_string()));
+        .and_then(|context| {
+            context
+                .snapshot(path)
+                .map_err(|error| error.to_string())
+        });
     match before {
         Ok(before) => {
             let context = context.as_ref().map_err(failed)?;
@@ -82,7 +86,11 @@ pub fn update_review_index(
     staged: bool,
     cancellation: CancellationToken,
 ) -> Result<(), ToolError> {
-    if receipt.len() != 64 || !receipt.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+    if receipt.len() != 64
+        || !receipt
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit())
+    {
         return Err(invalid("缺少有效审查凭据，请刷新差异"));
     }
     let context = IndexContext::new(workspace, &cancellation)?;
@@ -132,7 +140,10 @@ pub fn update_review_index(
                 Some(&objects),
                 false,
             )?;
-            let oid = std::str::from_utf8(&oid).map_err(failed)?.trim().to_owned();
+            let oid = std::str::from_utf8(&oid)
+                .map_err(failed)?
+                .trim()
+                .to_owned();
             validate_oid(&oid, before.hash_bytes)?;
             context.install_object(&objects, &oid)?;
             context.command(
@@ -221,7 +232,9 @@ pub fn update_review_index(
             conflict()
         });
     }
-    lock.file.write_all(&intended).map_err(failed)?;
+    lock.file
+        .write_all(&intended)
+        .map_err(failed)?;
     lock.file.sync_all().map_err(failed)?;
     if context.snapshot(path)?.receipt != receipt {
         return Err(conflict());
@@ -230,11 +243,14 @@ pub fn update_review_index(
     lock.publish(&context.admin)?;
     // A failed directory sync follows the atomic publish; clearly report that
     // the result may already be visible instead of suggesting a blind retry.
-    context.admin.sync_all().map_err(|error| {
-        failed(format!(
-            "暂存区可能已更新，但持久化未确认；请刷新后再操作：{error}"
-        ))
-    })?;
+    context
+        .admin
+        .sync_all()
+        .map_err(|error| {
+            failed(format!(
+                "暂存区可能已更新，但持久化未确认；请刷新后再操作：{error}"
+            ))
+        })?;
     Ok(())
 }
 
@@ -254,7 +270,9 @@ impl<'a> IndexContext<'a> {
     ) -> Result<Self, ToolError> {
         let deadline = Instant::now() + GIT_TIMEOUT;
         repository_root(workspace.root(), cancellation)?;
-        let root = workspace.open_directory(Path::new("")).map_err(failed)?;
+        let root = workspace
+            .open_directory(Path::new(""))
+            .map_err(failed)?;
         let admin = directory_at(&root, ".git")
             .map_err(|_| failed("暂存操作需要本工作区内的普通 .git 目录；链接工作树仅供审查"))?;
         let objects = directory_at(&admin, "objects")?;
@@ -285,7 +303,12 @@ impl<'a> IndexContext<'a> {
             || identity(&admin.metadata().map_err(failed)?)
                 != identity(&self.admin.metadata().map_err(failed)?)
             || identity(&objects.metadata().map_err(failed)?)
-                != identity(&self.objects.metadata().map_err(failed)?)
+                != identity(
+                    &self
+                        .objects
+                        .metadata()
+                        .map_err(failed)?,
+                )
         {
             return Err(conflict());
         }
@@ -366,13 +389,19 @@ impl<'a> IndexContext<'a> {
         untracked: bool,
     ) -> Result<String, ToolError> {
         let entries = index_entries(snapshot.index.as_deref(), snapshot.hash_bytes)?;
-        let entry = entries.iter().find(|entry| entry.path == path.as_bytes());
+        let entry = entries
+            .iter()
+            .find(|entry| entry.path == path.as_bytes());
         if untracked && (entry.is_some() || snapshot.worktree.is_none() || staged) {
             return Err(invalid("文件已不属于未跟踪列表，请刷新审查"));
         }
         let indexed = entry
             .map(|entry| {
-                let oid: String = entry.oid.iter().map(|byte| format!("{byte:02x}")).collect();
+                let oid: String = entry
+                    .oid
+                    .iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect();
                 self.blob(&oid, entry.mode)
             })
             .transpose()?;
@@ -447,8 +476,12 @@ impl<'a> IndexContext<'a> {
         }
         let head_bytes = read_at(&self.admin, "HEAD", MAX_ADMIN_BYTES)?
             .ok_or_else(|| failed("Git HEAD is missing"))?;
-        let head_text = std::str::from_utf8(&head_bytes).map_err(failed)?.trim();
-        let head_ref = head_text.strip_prefix("ref: ").map(str::to_owned);
+        let head_text = std::str::from_utf8(&head_bytes)
+            .map_err(failed)?
+            .trim();
+        let head_ref = head_text
+            .strip_prefix("ref: ")
+            .map(str::to_owned);
         if let Some(name) = &head_ref {
             validate_ref(name)?;
             read_relative_admin(&self.admin, name, MAX_ADMIN_BYTES)?;
@@ -464,7 +497,9 @@ impl<'a> IndexContext<'a> {
             None,
             true,
         )?;
-        let head = std::str::from_utf8(&head).map_err(failed)?.trim();
+        let head = std::str::from_utf8(&head)
+            .map_err(failed)?
+            .trim();
         let head = if head.is_empty() {
             None
         } else {
@@ -475,7 +510,10 @@ impl<'a> IndexContext<'a> {
         let mut digest = Sha256::new();
         for bytes in [
             b"orbit-review-index-v1".as_slice(),
-            self.workspace.root().as_os_str().as_encoded_bytes(),
+            self.workspace
+                .root()
+                .as_os_str()
+                .as_encoded_bytes(),
             path.as_bytes(),
             &head_bytes,
         ] {
@@ -628,9 +666,10 @@ struct GitLock {
     file: File,
     published: bool,
 }
+
 impl GitLock {
+    /// A descriptor exhaustion after CREATE must not strand a lock.
     fn acquire(parent: &File, name: &str) -> Result<Self, ToolError> {
-        // A descriptor exhaustion after CREATE must not strand a lock.
         let parent = parent.try_clone().map_err(failed)?;
         let fd = openat(
             &parent,
@@ -652,6 +691,7 @@ impl GitLock {
             published: false,
         })
     }
+
     fn owns_path(&self) -> bool {
         let Ok(fd) = openat(
             &self.parent,
@@ -668,6 +708,7 @@ impl GitLock {
             identity(&current) == identity(&owned) && current.is_file() && current.nlink() == 1
         })
     }
+
     fn publish(&mut self, admin: &File) -> Result<(), ToolError> {
         if !self.owns_path() {
             return Err(conflict());
@@ -677,6 +718,7 @@ impl GitLock {
         Ok(())
     }
 }
+
 impl Drop for GitLock {
     fn drop(&mut self) {
         if !self.published && self.owns_path() {
@@ -714,7 +756,9 @@ fn raw_patch(
             let directory = temporary.path().join(side);
             std::fs::create_dir(&directory).map_err(failed)?;
             let mut output = private_file(&directory.join("review"))?;
-            output.write_all(&file.bytes).map_err(failed)?;
+            output
+                .write_all(&file.bytes)
+                .map_err(failed)?;
             if file.mode == 0o100755 {
                 fchmod(&output, Mode::from_raw_mode(0o700)).map_err(failed)?;
             }
@@ -821,6 +865,7 @@ fn quoted_patch_path(path: &str) -> String {
     quoted.push('"');
     quoted
 }
+
 fn directory_at(parent: &File, name: impl rustix::path::Arg) -> Result<File, ToolError> {
     openat(
         parent,
@@ -831,6 +876,7 @@ fn directory_at(parent: &File, name: impl rustix::path::Arg) -> Result<File, Too
     .map(File::from)
     .map_err(failed)
 }
+
 fn open_directory_absolute(path: &Path) -> Result<File, ToolError> {
     let mut directory = File::open("/").map_err(failed)?;
     for component in path.components() {
@@ -842,6 +888,7 @@ fn open_directory_absolute(path: &Path) -> Result<File, ToolError> {
     }
     Ok(directory)
 }
+
 fn fd_path(file: &File) -> PathBuf {
     PathBuf::from(format!(
         "/proc/{}/fd/{}",
@@ -849,14 +896,17 @@ fn fd_path(file: &File) -> PathBuf {
         file.as_raw_fd()
     ))
 }
+
 fn path_text(path: &Path) -> Result<String, ToolError> {
     path.to_str()
         .map(str::to_owned)
         .ok_or_else(|| failed("temporary Git path is not UTF-8"))
 }
+
 fn identity(metadata: &Metadata) -> (u64, u64) {
     (metadata.dev(), metadata.ino())
 }
+
 fn fingerprint(metadata: &Metadata) -> (u64, u64, u64, u32, i64, i64, i64, i64) {
     (
         metadata.dev(),
@@ -889,6 +939,7 @@ fn read_file(mut file: File, limit: usize) -> Result<Vec<u8>, ToolError> {
     }
     Ok(bytes)
 }
+
 fn read_at(parent: &File, name: &str, limit: usize) -> Result<Option<Vec<u8>>, ToolError> {
     match openat(
         parent,
@@ -901,9 +952,12 @@ fn read_at(parent: &File, name: &str, limit: usize) -> Result<Option<Vec<u8>>, T
         Err(error) => Err(failed(error)),
     }
 }
+
 fn read_path(path: &Path, limit: usize) -> Result<Option<Vec<u8>>, ToolError> {
-    let parent =
-        open_directory_absolute(path.parent().ok_or_else(|| failed("invalid index path"))?)?;
+    let parent = open_directory_absolute(
+        path.parent()
+            .ok_or_else(|| failed("invalid index path"))?,
+    )?;
     read_at(
         &parent,
         path.file_name()
@@ -912,6 +966,7 @@ fn read_path(path: &Path, limit: usize) -> Result<Option<Vec<u8>>, ToolError> {
         limit,
     )
 }
+
 fn admin_parent(admin: &File, name: &str) -> Result<Option<(File, String)>, ToolError> {
     let mut parent = admin.try_clone().map_err(failed)?;
     let path = Path::new(name);
@@ -942,6 +997,7 @@ fn admin_parent(admin: &File, name: &str) -> Result<Option<(File, String)>, Tool
     }
     Err(failed("empty Git administrative path"))
 }
+
 fn read_relative_admin(
     admin: &File,
     name: &str,
@@ -952,10 +1008,13 @@ fn read_relative_admin(
     };
     read_at(&parent, &leaf, limit)
 }
+
+/// Unlike read-only review, index updates intentionally refuse all symlink components so a regular
+/// file snapshot can never stage a symlink target.
 fn read_worktree(workspace: &Workspace, path: &str) -> Result<Option<Worktree>, ToolError> {
-    // Unlike read-only review, index updates intentionally refuse all symlink
-    // components so a regular file snapshot can never stage a symlink target.
-    let root = workspace.open_directory(Path::new("")).map_err(failed)?;
+    let root = workspace
+        .open_directory(Path::new(""))
+        .map_err(failed)?;
     let Some((parent, leaf)) = admin_parent(&root, path)? else {
         return Ok(None);
     };
@@ -974,7 +1033,9 @@ fn read_worktree(workspace: &Workspace, path: &str) -> Result<Option<Worktree>, 
             // The strict nofollow descriptor supplies the bytes; the retained
             // Workspace separately authorizes that exact inode (including
             // protected hardlink aliases), rather than a newly built registry.
-            let authorized = workspace.open_read(Path::new(path)).map_err(failed)?;
+            let authorized = workspace
+                .open_read(Path::new(path))
+                .map_err(failed)?;
             if identity(&before) != identity(&authorized.metadata().map_err(failed)?) {
                 return Err(conflict());
             }
@@ -1007,6 +1068,7 @@ fn read_worktree(workspace: &Workspace, path: &str) -> Result<Option<Worktree>, 
         Err(error) => Err(failed(error)),
     }
 }
+
 fn validate_ref(name: &str) -> Result<(), ToolError> {
     if !name.starts_with("refs/heads/")
         || name.ends_with('/')
@@ -1014,7 +1076,9 @@ fn validate_ref(name: &str) -> Result<(), ToolError> {
         || name.contains('@')
         || name.contains('\\')
         || name.contains(':')
-        || name.bytes().any(|byte| byte <= 32 || byte == 127)
+        || name
+            .bytes()
+            .any(|byte| byte <= 32 || byte == 127)
         || name
             .split('/')
             .any(|part| part.is_empty() || part.starts_with('.') || part.ends_with(".lock"))
@@ -1023,15 +1087,22 @@ fn validate_ref(name: &str) -> Result<(), ToolError> {
     }
     Ok(())
 }
+
 fn validate_oid(oid: &str, bytes: usize) -> Result<(), ToolError> {
-    if oid.len() != bytes * 2 || !oid.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+    if oid.len() != bytes * 2
+        || !oid
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit())
+    {
         return Err(failed("Git object id is invalid"));
     }
     Ok(())
 }
+
 fn conflict() -> ToolError {
     failed("文件、Git HEAD 或暂存区已变更，请刷新差异后重新审查；此次操作未覆盖工作区文件")
 }
+
 fn digest_field(digest: &mut Sha256, bytes: Option<&[u8]>) {
     digest.update([u8::from(bytes.is_some())]);
     if let Some(bytes) = bytes {
@@ -1048,6 +1119,7 @@ struct IndexEntry<'a> {
     flags: u16,
     extended: u16,
 }
+
 fn validate_index(bytes: &[u8], hash_bytes: usize, path: &str) -> Result<(), ToolError> {
     for entry in index_entries(Some(bytes), hash_bytes)? {
         if entry.path == path.as_bytes()
@@ -1062,6 +1134,7 @@ fn validate_index(bytes: &[u8], hash_bytes: usize, path: &str) -> Result<(), Too
     }
     Ok(())
 }
+
 fn index_entries(
     bytes: Option<&[u8]>,
     hash_bytes: usize,
@@ -1086,7 +1159,11 @@ fn index_entries(
         if cursor.saturating_add(fixed) > end {
             return Err(failed("Git index 条目不完整"));
         }
-        let mode = u32::from_be_bytes(bytes[cursor + 24..cursor + 28].try_into().unwrap());
+        let mode = u32::from_be_bytes(
+            bytes[cursor + 24..cursor + 28]
+                .try_into()
+                .unwrap(),
+        );
         let oid = &bytes[cursor + 40..cursor + 40 + hash_bytes];
         let flags = u16::from_be_bytes(
             bytes[cursor + 40 + hash_bytes..cursor + fixed]
@@ -1098,7 +1175,11 @@ fn index_entries(
             if version != 3 || cursor + 2 > end {
                 return Err(failed("Git index 扩展条目无效"));
             }
-            let value = u16::from_be_bytes(bytes[cursor..cursor + 2].try_into().unwrap());
+            let value = u16::from_be_bytes(
+                bytes[cursor..cursor + 2]
+                    .try_into()
+                    .unwrap(),
+            );
             cursor += 2;
             value
         } else {
@@ -1126,7 +1207,11 @@ fn index_entries(
             return Err(failed("Git index extension is incomplete"));
         }
         let signature = &bytes[cursor..cursor + 4];
-        let length = u32::from_be_bytes(bytes[cursor + 4..cursor + 8].try_into().unwrap()) as usize;
+        let length = u32::from_be_bytes(
+            bytes[cursor + 4..cursor + 8]
+                .try_into()
+                .unwrap(),
+        ) as usize;
         if !signature[0].is_ascii_uppercase() {
             return Err(failed("split/sparse 或未知必需 index 扩展仅供审查"));
         }
@@ -1141,9 +1226,12 @@ fn index_entries(
 trait SplitOnceByte {
     fn split_once_byte(&self, byte: u8) -> Option<(&[u8], &[u8])>;
 }
+
 impl SplitOnceByte for [u8] {
     fn split_once_byte(&self, byte: u8) -> Option<(&[u8], &[u8])> {
-        let position = self.iter().position(|value| *value == byte)?;
+        let position = self
+            .iter()
+            .position(|value| *value == byte)?;
         Some((&self[..position], &self[position + 1..]))
     }
 }

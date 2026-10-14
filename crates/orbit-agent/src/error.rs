@@ -22,7 +22,8 @@ pub enum AgentError {
     )]
     MaxToolCalls,
     #[error(
-        "estimated context {estimated} tokens exceeds budget {limit}; use /compact or raise context_tokens"
+        "estimated context {estimated} tokens exceeds budget {limit}; use /compact or raise \
+            context_tokens"
     )]
     ContextBudget { estimated: usize, limit: usize },
     #[error("context compaction failed: {0}")]

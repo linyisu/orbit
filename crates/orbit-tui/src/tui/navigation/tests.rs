@@ -40,7 +40,9 @@ fn hover_jump_and_latest_preserve_the_draft_and_stream_anchor() {
 
     state.input.insert("保留草稿");
     let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
-    terminal.draw(|f| render::draw(f, &mut state)).unwrap();
+    terminal
+        .draw(|f| render::draw(f, &mut state))
+        .unwrap();
     let bottom = state.navigation.area.bottom() - 1;
 
     assert_eq!(
@@ -55,7 +57,9 @@ fn hover_jump_and_latest_preserve_the_draft_and_stream_anchor() {
     assert_eq!(handle(&mut state, &hover), Some(true));
     assert_eq!(handle(&mut state, &hover), Some(false));
 
-    terminal.draw(|f| render::draw(f, &mut state)).unwrap();
+    terminal
+        .draw(|f| render::draw(f, &mut state))
+        .unwrap();
     let screen: String = terminal
         .backend()
         .buffer()
@@ -64,8 +68,16 @@ fn hover_jump_and_latest_preserve_the_draft_and_stream_anchor() {
         .map(|c| c.symbol())
         .collect();
 
-    assert!(screen.replace(' ', "").contains("问题1"));
-    assert!(!screen.replace(' ', "").contains("第2轮"));
+    assert!(
+        screen
+            .replace(' ', "")
+            .contains("问题1")
+    );
+    assert!(
+        !screen
+            .replace(' ', "")
+            .contains("第2轮")
+    );
     assert_eq!(
         handle(
             &mut state,
@@ -74,7 +86,9 @@ fn hover_jump_and_latest_preserve_the_draft_and_stream_anchor() {
         Some(true)
     );
 
-    terminal.draw(|f| render::draw(f, &mut state)).unwrap();
+    terminal
+        .draw(|f| render::draw(f, &mut state))
+        .unwrap();
 
     assert_eq!(state.max_scroll - state.scroll, target);
     assert!(!state.follow_bottom);
@@ -85,8 +99,12 @@ fn hover_jump_and_latest_preserve_the_draft_and_stream_anchor() {
         text.push_str("more\n");
     }
 
-    state.transcript_layout.invalidate_from(last);
-    terminal.draw(|f| render::draw(f, &mut state)).unwrap();
+    state
+        .transcript_layout
+        .invalidate_from(last);
+    terminal
+        .draw(|f| render::draw(f, &mut state))
+        .unwrap();
 
     assert_eq!(state.max_scroll - state.scroll, target);
 
@@ -118,9 +136,13 @@ fn hover_jump_and_latest_preserve_the_draft_and_stream_anchor() {
 #[test]
 fn opening_an_overlay_clears_a_navigation_preview() {
     let mut state = UiState::new("model");
-    state.transcript.push(TranscriptItem::User("first".into()));
+    state
+        .transcript
+        .push(TranscriptItem::User("first".into()));
     let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
-    terminal.draw(|f| render::draw(f, &mut state)).unwrap();
+    terminal
+        .draw(|f| render::draw(f, &mut state))
+        .unwrap();
     let (row, _, _) = state.navigation.targets[0].clone();
     let column = state.navigation.area.x;
 
@@ -131,7 +153,9 @@ fn opening_an_overlay_clears_a_navigation_preview() {
     assert_eq!(state.navigation.hovered, Some(Target::Round(row)));
 
     state.show_help = true;
-    terminal.draw(|f| render::draw(f, &mut state)).unwrap();
+    terminal
+        .draw(|f| render::draw(f, &mut state))
+        .unwrap();
 
     assert_eq!(state.navigation.hovered, None);
 }
@@ -139,13 +163,19 @@ fn opening_an_overlay_clears_a_navigation_preview() {
 #[test]
 fn leaving_a_dot_erases_its_rendered_preview() {
     let mut state = UiState::new("model");
-    state.transcript.push(TranscriptItem::User("first".into()));
+    state
+        .transcript
+        .push(TranscriptItem::User("first".into()));
     let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
-    terminal.draw(|f| render::draw(f, &mut state)).unwrap();
+    terminal
+        .draw(|f| render::draw(f, &mut state))
+        .unwrap();
     let (row, _, _) = state.navigation.targets[0].clone();
     let column = state.navigation.area.x;
     handle(&mut state, &mouse(MouseEventKind::Moved, column, row));
-    terminal.draw(|f| render::draw(f, &mut state)).unwrap();
+    terminal
+        .draw(|f| render::draw(f, &mut state))
+        .unwrap();
     let shown = terminal
         .backend()
         .buffer()
@@ -159,7 +189,9 @@ fn leaving_a_dot_erases_its_rendered_preview() {
     assert_ne!(state.navigation.tooltip_area, Rect::default());
 
     handle(&mut state, &mouse(MouseEventKind::Moved, 0, 0));
-    terminal.draw(|f| render::draw(f, &mut state)).unwrap();
+    terminal
+        .draw(|f| render::draw(f, &mut state))
+        .unwrap();
 
     assert_eq!(state.navigation.tooltip_area, Rect::default());
 }
@@ -167,9 +199,11 @@ fn leaving_a_dot_erases_its_rendered_preview() {
 #[test]
 fn preview_is_at_most_one_quarter_of_window_and_scrolls_long_text() {
     let mut state = UiState::new("model");
-    state.transcript.push(TranscriptItem::User(
-        "abcdefghijklmnopqrstuvwxyz 中文预览内容".repeat(3),
-    ));
+    state
+        .transcript
+        .push(TranscriptItem::User(
+            "abcdefghijklmnopqrstuvwxyz 中文预览内容".repeat(3),
+        ));
     let mut terminal = Terminal::new(TestBackend::new(90, 24)).unwrap();
     terminal
         .draw(|frame| render::draw(frame, &mut state))
@@ -186,8 +220,12 @@ fn preview_is_at_most_one_quarter_of_window_and_scrolls_long_text() {
         .to_owned();
 
     assert_eq!(area.width, 22);
-    state.navigation.preview_scroll.as_mut().unwrap().2 =
-        Instant::now() - std::time::Duration::from_secs(1);
+    state
+        .navigation
+        .preview_scroll
+        .as_mut()
+        .unwrap()
+        .2 = Instant::now() - std::time::Duration::from_secs(1);
     assert!(state.navigation.advance_preview());
     terminal
         .draw(|frame| render::draw(frame, &mut state))
@@ -208,7 +246,9 @@ fn crowded_navigation_reaches_all_rounds_and_resize_rebuilds_targets() {
         .map(|i| TranscriptItem::User(format!("round {i}")))
         .collect();
     let mut terminal = Terminal::new(TestBackend::new(50, 15)).unwrap();
-    terminal.draw(|f| render::draw(f, &mut state)).unwrap();
+    terminal
+        .draw(|f| render::draw(f, &mut state))
+        .unwrap();
 
     for _ in 0..40 {
         let area = state.navigation.area;
@@ -216,7 +256,9 @@ fn crowded_navigation_reaches_all_rounds_and_resize_rebuilds_targets() {
             &mut state,
             &mouse(MouseEventKind::ScrollDown, area.x, area.y),
         );
-        terminal.draw(|f| render::draw(f, &mut state)).unwrap();
+        terminal
+            .draw(|f| render::draw(f, &mut state))
+            .unwrap();
     }
 
     assert!(
@@ -230,7 +272,9 @@ fn crowded_navigation_reaches_all_rounds_and_resize_rebuilds_targets() {
     );
 
     let mut larger = Terminal::new(TestBackend::new(100, 30)).unwrap();
-    larger.draw(|f| render::draw(f, &mut state)).unwrap();
+    larger
+        .draw(|f| render::draw(f, &mut state))
+        .unwrap();
 
     for (y, offset, _) in &state.navigation.targets {
         assert!(*y < state.navigation.area.bottom() - 1);
@@ -241,9 +285,13 @@ fn crowded_navigation_reaches_all_rounds_and_resize_rebuilds_targets() {
 #[test]
 fn output_keeps_a_blank_column_before_navigation() {
     let mut state = UiState::new("model");
-    state.transcript.push(TranscriptItem::User("x".repeat(200)));
+    state
+        .transcript
+        .push(TranscriptItem::User("x".repeat(200)));
     let mut terminal = Terminal::new(TestBackend::new(40, 12)).unwrap();
-    terminal.draw(|f| render::draw(f, &mut state)).unwrap();
+    terminal
+        .draw(|f| render::draw(f, &mut state))
+        .unwrap();
 
     let gap = state.navigation.area.x - 1;
 
@@ -259,7 +307,9 @@ fn navigation_auto_follows_latest_rounds_when_crowded() {
         .map(|i| TranscriptItem::User(format!("round {i}")))
         .collect();
     let mut terminal = Terminal::new(TestBackend::new(50, 15)).unwrap();
-    terminal.draw(|f| render::draw(f, &mut state)).unwrap();
+    terminal
+        .draw(|f| render::draw(f, &mut state))
+        .unwrap();
 
     assert!(
         state
@@ -282,7 +332,9 @@ fn navigation_auto_follows_latest_rounds_when_crowded() {
     let area = state.navigation.area;
     for _ in 0..25 {
         handle(&mut state, &mouse(MouseEventKind::ScrollUp, area.x, area.y));
-        terminal.draw(|f| render::draw(f, &mut state)).unwrap();
+        terminal
+            .draw(|f| render::draw(f, &mut state))
+            .unwrap();
     }
 
     assert_eq!(state.navigation.first, 0);
@@ -305,7 +357,9 @@ fn active_dot_is_always_visible_in_navigation_targets() {
         .collect();
     let mut terminal = Terminal::new(TestBackend::new(60, 20)).unwrap();
 
-    terminal.draw(|f| render::draw(f, &mut state)).unwrap();
+    terminal
+        .draw(|f| render::draw(f, &mut state))
+        .unwrap();
     let buffer = terminal.backend().buffer();
     let has_active = state
         .navigation
@@ -317,7 +371,9 @@ fn active_dot_is_always_visible_in_navigation_targets() {
 
     state.follow_bottom = false;
     state.scroll = 100;
-    terminal.draw(|f| render::draw(f, &mut state)).unwrap();
+    terminal
+        .draw(|f| render::draw(f, &mut state))
+        .unwrap();
     let buffer = terminal.backend().buffer();
     let has_active = state
         .navigation
@@ -331,7 +387,9 @@ fn active_dot_is_always_visible_in_navigation_targets() {
     );
 
     state.scroll = state.max_scroll;
-    terminal.draw(|f| render::draw(f, &mut state)).unwrap();
+    terminal
+        .draw(|f| render::draw(f, &mut state))
+        .unwrap();
     let buffer = terminal.backend().buffer();
     let has_active = state
         .navigation
@@ -348,7 +406,7 @@ fn active_dot_is_always_visible_in_navigation_targets() {
 #[test]
 fn scrolling_changes_navigation_and_current_location_can_be_found_without_moving_content() {
     let mut state = UiState::new("orbit-model");
-    state.transcript = (0..1000)
+    state.transcript = (0..1_000)
         .map(|i| TranscriptItem::User(format!("Orbit round {i}")))
         .collect();
     let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
@@ -374,7 +432,11 @@ fn scrolling_changes_navigation_and_current_location_can_be_found_without_moving
     let old_caption = row_text(&original, caption);
     let new_caption = row_text(scrolled, state.navigation.current_area);
     assert_ne!(old_caption, new_caption);
-    assert!(new_caption.replace(' ', "").contains("当前1000/1000"));
+    assert!(
+        new_caption
+            .replace(' ', "")
+            .contains("当前1000/1000")
+    );
     assert!(
         !state
             .navigation
@@ -383,7 +445,10 @@ fn scrolling_changes_navigation_and_current_location_can_be_found_without_moving
             .any(|(_, _, text)| text == "Orbit round 999")
     );
     for (row, _, text) in &state.navigation.targets {
-        if let Some((old_row, _, _)) = original_targets.iter().find(|(_, _, old)| old == text) {
+        if let Some((old_row, _, _)) = original_targets
+            .iter()
+            .find(|(_, _, old)| old == text)
+        {
             assert_eq!(original[(rail.x, *old_row)].fg, scrolled[(rail.x, *row)].fg);
         }
     }
@@ -395,7 +460,12 @@ fn scrolling_changes_navigation_and_current_location_can_be_found_without_moving
         if let (ratatui::style::Color::Rgb(ar, ag, ab), ratatui::style::Color::Rgb(br, bg, bb)) =
             (a, b)
         {
-            assert!(ar.abs_diff(br).max(ag.abs_diff(bg)).max(ab.abs_diff(bb)) <= 24);
+            assert!(
+                ar.abs_diff(br)
+                    .max(ag.abs_diff(bg))
+                    .max(ab.abs_diff(bb))
+                    <= 24
+            );
         }
     }
 
@@ -459,7 +529,9 @@ fn scrolling_changes_navigation_and_current_location_can_be_found_without_moving
         state.max_scroll
     );
     let mut small = Terminal::new(TestBackend::new(28, 18)).unwrap();
-    small.draw(|frame| render::draw(frame, &mut state)).unwrap();
+    small
+        .draw(|frame| render::draw(frame, &mut state))
+        .unwrap();
     assert!(state.navigation.current_area.right() < 28);
     assert!(state.navigation.current_area.y >= state.selection.viewport.bottom());
 }

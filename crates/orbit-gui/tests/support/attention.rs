@@ -3,8 +3,34 @@ use serde_json::{Value, json};
 
 pub(super) fn approvals(workspace: &str) -> Vec<Value> {
     vec![
-        json!({"id":71,"preview":{"Mcp":{"server":"fixture-tools","tool":"inspect_sample","arguments":"{\"sample_id\":\"fixture-item-7\",\"mode\":\"summary\"}"}}}),
-        json!({"id":72,"preview":{"Command":{"command":format!("printf 'read-only diagnostics\\n'\n{}", "printf 'detail\\n'\n".repeat(60)),"cwd":workspace,"timeout_seconds":30,"workspace_access":"read","network_allowed":false,"external_capabilities":[],"external_write":false,"git":null}}}),
+        json!({
+            "id": 71,
+            "preview": {
+                "Mcp": {
+                    "server": "fixture-tools",
+                    "tool": "inspect_sample",
+                    "arguments": "{\"sample_id\":\"fixture-item-7\",\"mode\":\"summary\"}"
+                }
+            }
+        }),
+        json!({
+            "id": 72,
+            "preview": {
+                "Command": {
+                    "command": format!(
+                        "printf 'read-only diagnostics\\n'\n{}",
+                        "printf 'detail\\n'\n".repeat(60)
+                    ),
+                    "cwd": workspace,
+                    "timeout_seconds": 30,
+                    "workspace_access": "read",
+                    "network_allowed": false,
+                    "external_capabilities": [],
+                    "external_write": false,
+                    "git": null
+                }
+            }
+        }),
     ]
 }
 
@@ -19,5 +45,14 @@ pub(super) fn file_approval(workspace: &str) -> Value {
             "import fixture.Line30;\nimport fixture.GeneratedIndex;\n",
         )
         .replace("import fixture.Line40;\n", "");
-    json!({"id":73,"preview":{"Write":{"path":format!("{workspace}/SampleCatalog.java"),"before":before,"after":after}}})
+    json!({
+        "id": 73,
+        "preview": {
+            "Write": {
+                "path": format!("{workspace}/SampleCatalog.java"),
+                "before": before,
+                "after": after
+            }
+        }
+    })
 }

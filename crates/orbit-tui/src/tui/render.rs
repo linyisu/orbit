@@ -83,7 +83,10 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
             || state.marketplace_dialog.is_some()
         {
             super::handle_list_hover(state, &crossterm::event::Event::Mouse(mouse));
-        } else if state.menu_area.contains((mouse.column, mouse.row).into()) {
+        } else if state
+            .menu_area
+            .contains((mouse.column, mouse.row).into())
+        {
             super::completion::select_with_mouse(state, &mouse);
         }
 
@@ -134,7 +137,10 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
     if state.info_dialog.is_some() {
         super::dialogs::draw(frame, state);
     }
-    if let Some(position) = state.ime_cursor.filter(|p| frame.area().contains(*p)) {
+    if let Some(position) = state
+        .ime_cursor
+        .filter(|p| frame.area().contains(*p))
+    {
         frame.set_cursor_position(position);
     }
     state.overlay_needs_layout = false;
@@ -235,7 +241,9 @@ fn draw_contents(frame: &mut Frame<'_>, state: &mut UiState) {
     if home {
         let composer_height = input_height + attachment_height + details_height + 3;
         let header_height = u16::from(state.tabs.len() > 1);
-        let available_height = area.height.saturating_sub(header_height);
+        let available_height = area
+            .height
+            .saturating_sub(header_height);
         let logo_height = 7.min(available_height.saturating_sub(composer_height + 3));
         let group_height = logo_height + 1 + composer_height + 2;
         let x = area.x + area.width.saturating_sub(content_width) / 2;
@@ -264,11 +272,15 @@ fn draw_contents(frame: &mut Frame<'_>, state: &mut UiState) {
     };
     let pending_area = Rect::new(
         areas[1].x,
-        areas[1].bottom().saturating_sub(pending_height),
+        areas[1]
+            .bottom()
+            .saturating_sub(pending_height),
         areas[1].width,
         pending_height,
     );
-    areas[1].height = areas[1].height.saturating_sub(pending_height);
+    areas[1].height = areas[1]
+        .height
+        .saturating_sub(pending_height);
     let parent_area = areas[3];
     let menu_height = panel_height.min(areas[4].y.saturating_sub(area.y + 1));
     areas[3] = Rect::new(
@@ -302,7 +314,9 @@ fn draw_contents(frame: &mut Frame<'_>, state: &mut UiState) {
         super::approval::draw_in(frame, state, areas[2]);
         state.selection.approval = areas[2];
     }
-    state.pending_input.draw(frame, pending_area);
+    state
+        .pending_input
+        .draw(frame, pending_area);
 
     if menu_height == 0 {
         super::subagents::draw_parent(frame, state, parent_area);
@@ -518,7 +532,10 @@ fn composer_details(state: &UiState, width: usize) -> Vec<Line<'static>> {
         return Vec::new();
     }
 
-    let (provider, model) = state.model.split_once("::").unwrap_or(("", &state.model));
+    let (provider, model) = state
+        .model
+        .split_once("::")
+        .unwrap_or(("", &state.model));
     let accent = Style::default().fg(ACCENT);
     let mut fields = vec![
         Span::styled(
@@ -650,7 +667,9 @@ pub(super) fn handle_transcript_hover(
         return None;
     }
 
-    let offset = state.max_scroll.saturating_sub(state.scroll);
+    let offset = state
+        .max_scroll
+        .saturating_sub(state.scroll);
     let hit = |point| {
         state
             .transcript_layout
@@ -750,7 +769,11 @@ pub(super) fn scrolling_title(
 
     let graphemes: Vec<&str> = text.graphemes(true).collect();
     let separator = [" ", " ", " ", " "];
-    let cycle_items: Vec<&str> = graphemes.iter().copied().chain(separator).collect();
+    let cycle_items: Vec<&str> = graphemes
+        .iter()
+        .copied()
+        .chain(separator)
+        .collect();
 
     let step = (elapsed.as_millis().saturating_sub(100) / 120) as usize;
     let start = step % cycle_items.len();
@@ -788,7 +811,9 @@ fn tab_control_style(state: &UiState, target: &super::TabAction) -> Style {
                 .bg(THEME.tab_hover_background)
                 .add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(ACCENT).bg(THEME.tab_background)
+            Style::default()
+                .fg(ACCENT)
+                .bg(THEME.tab_background)
         };
     }
     super::theme::control_style(hover)
@@ -810,7 +835,11 @@ fn draw_header(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
             }
         })
         .collect();
-    let active_index = state.tabs.iter().position(|tab| tab.active).unwrap_or(0);
+    let active_index = state
+        .tabs
+        .iter()
+        .position(|tab| tab.active)
+        .unwrap_or(0);
     let budget = area.width.saturating_sub(8) as usize;
     let tab_width = SESSION_TAB_WIDTH.min(budget);
     let mut start = 0;
@@ -821,7 +850,12 @@ fn draw_header(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
 
     let mut x = area.x + 2;
 
-    for (index, tab) in state.tabs.iter().enumerate().skip(start) {
+    for (index, tab) in state
+        .tabs
+        .iter()
+        .enumerate()
+        .skip(start)
+    {
         let available = area.right().saturating_sub(x + 5) as usize;
 
         if tab_width < 6 || available < tab_width {
@@ -841,15 +875,24 @@ fn draw_header(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
             String::new()
         };
         let title_width = width.saturating_sub(5 + spinner_prefix.width() as u16) as usize;
-        let elapsed = state.tab_hover.as_ref().and_then(|(action, since)| {
-            (*action == super::TabAction::Select(tab.id.clone())).then(|| since.elapsed())
-        });
+        let elapsed = state
+            .tab_hover
+            .as_ref()
+            .and_then(|(action, since)| {
+                (*action == super::TabAction::Select(tab.id.clone())).then(|| since.elapsed())
+            });
         let title = scrolling_title(&titles[index], title_width, elapsed);
         let display_title = format!("{spinner_prefix}{title}");
         let rect = Rect::new(x, area.y, width, 1);
-        let hovered = state.tab_hover.as_ref().is_some_and(|(action, _)| {
-            matches!(action, super::TabAction::Select(id) | super::TabAction::Close(id) if id == &tab.id)
-        });
+        let hovered = state
+            .tab_hover
+            .as_ref()
+            .is_some_and(|(action, _)| {
+                matches!(
+                    action,
+                    super::TabAction::Select(id) | super::TabAction::Close(id) if id == &tab.id
+                )
+            });
         let style = if tab.active {
             Style::default()
                 .fg(crate::tui::theme::THEME.on_accent)
@@ -896,8 +939,12 @@ fn draw_header(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
             );
         }
 
-        state.tab_areas.push((rect, tab.id.clone()));
-        state.tab_close_areas.push((close, tab.id.clone()));
+        state
+            .tab_areas
+            .push((rect, tab.id.clone()));
+        state
+            .tab_close_areas
+            .push((close, tab.id.clone()));
         x = x.saturating_add(width + 1);
     }
 
@@ -1018,11 +1065,19 @@ fn draw_welcome(frame: &mut Frame<'_>, area: Rect) {
     }
 
     let mut logo = welcome();
-    let mut width = logo.iter().map(Line::width).max().unwrap_or(0) as u16;
+    let mut width = logo
+        .iter()
+        .map(Line::width)
+        .max()
+        .unwrap_or(0) as u16;
 
     if width > area.width.saturating_sub(4) || logo.len() > area.height as usize {
         logo = wordmark();
-        width = logo.iter().map(Line::width).max().unwrap_or(0) as u16;
+        width = logo
+            .iter()
+            .map(Line::width)
+            .max()
+            .unwrap_or(0) as u16;
     }
 
     if width > area.width.saturating_sub(4) || logo.len() > area.height as usize {
@@ -1102,7 +1157,11 @@ pub(super) fn draw_transcript_in(
     let previous_max = state.max_scroll;
     let previous_offset = previous_max.saturating_sub(state.scroll);
     let scroll_anchor = (!state.follow_bottom)
-        .then(|| state.transcript_layout.anchor_at(previous_offset))
+        .then(|| {
+            state
+                .transcript_layout
+                .anchor_at(previous_offset)
+        })
         .flatten();
     state.transcript_layout.update_expanded(
         &state.transcript,
@@ -1116,16 +1175,20 @@ pub(super) fn draw_transcript_in(
         .saturating_sub(state.selection.viewport.height as usize);
 
     if !state.follow_bottom {
-        if let Some(offset) =
-            scroll_anchor.and_then(|anchor| state.transcript_layout.offset_for_anchor(anchor))
-        {
+        if let Some(offset) = scroll_anchor.and_then(|anchor| {
+            state
+                .transcript_layout
+                .offset_for_anchor(anchor)
+        }) {
             state.scroll = state
                 .max_scroll
                 .saturating_sub(offset.min(state.max_scroll));
         } else {
-            state.scroll = state
-                .scroll
-                .saturating_add(state.max_scroll.saturating_sub(previous_max));
+            state.scroll = state.scroll.saturating_add(
+                state
+                    .max_scroll
+                    .saturating_sub(previous_max),
+            );
         }
     }
 
@@ -1133,7 +1196,9 @@ pub(super) fn draw_transcript_in(
     let offset = if state.follow_bottom {
         state.max_scroll
     } else {
-        state.max_scroll.saturating_sub(state.scroll)
+        state
+            .max_scroll
+            .saturating_sub(state.scroll)
     };
 
     state
@@ -1143,12 +1208,9 @@ pub(super) fn draw_transcript_in(
         .transcript_layout
         .draw(frame, state.selection.viewport, offset);
     if let Some(focus) = &state.footnote_focus {
-        state.transcript_layout.paint_footnote_focus(
-            frame,
-            state.selection.viewport,
-            offset,
-            focus,
-        );
+        state
+            .transcript_layout
+            .paint_footnote_focus(frame, state.selection.viewport, offset, focus);
     }
     if !state.selection.dragging()
         && let Some(point) = state.transcript_pointer
@@ -1158,7 +1220,9 @@ pub(super) fn draw_transcript_in(
             .is_some()
     {
         let absolute = offset + usize::from(point.1 - state.selection.viewport.y);
-        let decorations = state.transcript_layout.decorations(absolute);
+        let decorations = state
+            .transcript_layout
+            .decorations(absolute);
         let columns = state.selection.viewport.x..state.selection.viewport.right();
         let first = columns.clone().find(|&x| {
             matches!(
@@ -1175,11 +1239,17 @@ pub(super) fn draw_transcript_in(
 
         if let (Some(first), Some(last)) = (first, last) {
             let end = last
-                .saturating_add(frame.buffer_mut()[(last, point.1)].symbol().width().max(1) as u16)
+                .saturating_add(
+                    frame.buffer_mut()[(last, point.1)]
+                        .symbol()
+                        .width()
+                        .max(1) as u16,
+                )
                 .min(state.selection.viewport.right());
             for x in first..end {
                 let cell = &mut frame.buffer_mut()[(x, point.1)];
-                cell.set_bg(THEME.accent).set_fg(THEME.on_accent);
+                cell.set_bg(THEME.accent)
+                    .set_fg(THEME.on_accent);
             }
         }
     }
@@ -1200,14 +1270,19 @@ pub(super) fn draw_transcript_in(
     {
         match state.transcript.get(index) {
             Some(TranscriptItem::Thinking(_)) => {
-                if state.transcript_layout.item_offset(index)
+                if state
+                    .transcript_layout
+                    .item_offset(index)
                     == Some(offset + usize::from(point.1 - state.selection.viewport.y))
                 {
                     for x in state.selection.viewport.x..state.selection.viewport.right() {
                         let cell = &mut frame.buffer_mut()[(x, point.1)];
                         if cell.symbol() != " " {
                             cell.set_fg(THINKING_BRIGHT);
-                            cell.set_style(cell.style().add_modifier(Modifier::BOLD));
+                            cell.set_style(
+                                cell.style()
+                                    .add_modifier(Modifier::BOLD),
+                            );
                         }
                     }
                 }
@@ -1218,8 +1293,12 @@ pub(super) fn draw_transcript_in(
                     .transcript_layout
                     .group_at(state.selection.viewport, offset, point)
                     .is_some();
-                let absolute =
-                    offset + usize::from(point.1.saturating_sub(state.selection.viewport.y));
+                let absolute = offset
+                    + usize::from(
+                        point
+                            .1
+                            .saturating_sub(state.selection.viewport.y),
+                    );
                 if let Some(header) = state
                     .transcript_layout
                     .tool_header_range(index, group_header)
@@ -1231,7 +1310,9 @@ pub(super) fn draw_transcript_in(
                             .min(offset + usize::from(state.selection.viewport.height));
                     for row_abs in visible {
                         let y = state.selection.viewport.y + (row_abs - offset) as u16;
-                        let decorations = state.transcript_layout.decorations(row_abs);
+                        let decorations = state
+                            .transcript_layout
+                            .decorations(row_abs);
                         for x in state.selection.viewport.x..state.selection.viewport.right() {
                             if decorations.iter().any(|range| {
                                 range.contains(&usize::from(x - state.selection.viewport.x))
@@ -1241,7 +1322,10 @@ pub(super) fn draw_transcript_in(
 
                             let cell = &mut frame.buffer_mut()[(x, y)];
                             if cell.symbol() != " " {
-                                cell.set_style(cell.style().add_modifier(Modifier::BOLD));
+                                cell.set_style(
+                                    cell.style()
+                                        .add_modifier(Modifier::BOLD),
+                                );
                                 if cell.fg == TOOL_FINISHED {
                                     cell.set_fg(THEME.tool_hover);
                                 }
@@ -1330,7 +1414,10 @@ pub(super) fn transcript_lines_at_width(
             TranscriptItem::Tool(row) => {
                 let framed = expanded && width >= 10;
                 if framed {
-                    if lines.last().is_some_and(|line| line.to_string().is_empty()) {
+                    if lines
+                        .last()
+                        .is_some_and(|line| line.to_string().is_empty())
+                    {
                         lines.pop();
                     }
                 } else if index > 0
@@ -1473,7 +1560,9 @@ fn draw_composer(
     }
 
     let inner = Rect {
-        height: inner.height.saturating_sub(1 + details_height),
+        height: inner
+            .height
+            .saturating_sub(1 + details_height),
         ..inner
     };
     let thumbnail_width = inner.width;
@@ -1552,7 +1641,9 @@ fn draw_composer(
 
     let prompt_area = Rect {
         y: inner.y + attachment_height,
-        height: inner.height.saturating_sub(attachment_height),
+        height: inner
+            .height
+            .saturating_sub(attachment_height),
         ..inner
     };
 
@@ -1583,7 +1674,12 @@ pub(super) fn draw_prompt(
         .saturating_sub(text_area.height.saturating_sub(1) as usize);
     // The right padding also holds the caret before a newline after a full row.
     state.input_area = Rect {
-        width: (text_area.width + 1).min(frame.area().right().saturating_sub(text_area.x)),
+        width: (text_area.width + 1).min(
+            frame
+                .area()
+                .right()
+                .saturating_sub(text_area.x),
+        ),
         ..text_area
     };
     state.input_scroll = scroll;
@@ -1599,7 +1695,10 @@ pub(super) fn draw_prompt(
 
     frame.render_widget(Paragraph::new(text), text_area);
 
-    for (row, columns) in state.input.selection_cells(state.input_width) {
+    for (row, columns) in state
+        .input
+        .selection_cells(state.input_width)
+    {
         if row >= scroll && row < scroll + text_area.height as usize {
             let y = text_area.y + (row - scroll) as u16;
             for column in columns {
@@ -1652,7 +1751,11 @@ fn draw_panel(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
         state.menu_offset = state
             .menu_offset
             .min(state.menu_index)
-            .max(state.menu_index.saturating_sub(visible.saturating_sub(1)))
+            .max(
+                state
+                    .menu_index
+                    .saturating_sub(visible.saturating_sub(1)),
+            )
             .min(max_first);
     }
 
@@ -1673,7 +1776,10 @@ fn draw_panel(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
         let row = completion_row(
             frame,
             Rect::new(area.x, area.y + row as u16, area.width, 1),
-            command.display.as_deref().unwrap_or(&command.name),
+            command
+                .display
+                .as_deref()
+                .unwrap_or(&command.name),
             &command.description,
             selected,
         );

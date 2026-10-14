@@ -24,7 +24,7 @@ use crate::config::{
 const SOURCE_URL: &str = "https://models.dev/api.json";
 const CACHE_LIFETIME: Duration = Duration::from_secs(86_400);
 const REFRESH_TIMEOUT: Duration = Duration::from_secs(3);
-const MAX_CATALOG_BYTES: usize = 20 * 1024 * 1024;
+const MAX_CATALOG_BYTES: usize = 20 * 1_024 * 1_024;
 
 #[derive(Clone, Deserialize, Serialize)]
 struct Catalog {
@@ -108,7 +108,13 @@ fn normalize(payload: Value) -> Result<Catalog> {
         "model metadata contains no usable providers"
     );
     Ok(Catalog {
-        source: json!({"url":SOURCE_URL,"retrieved_at":SystemTime::now().duration_since(SystemTime::UNIX_EPOCH)?.as_secs(),"license":"MIT"}),
+        source: json!({
+            "url": SOURCE_URL,
+            "retrieved_at": SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)?
+                .as_secs(),
+            "license": "MIT"
+        }),
         providers,
     })
 }
@@ -184,8 +190,13 @@ pub(crate) struct MetadataUpdate {
     pub status: String,
     pub error: Option<String>,
 }
+
 pub(crate) async fn update(config: &mut FileConfig, force: bool, network: bool) -> MetadataUpdate {
-    if !config.providers.values().any(|p| api_format(p.api_format)) {
+    if !config
+        .providers
+        .values()
+        .any(|p| api_format(p.api_format))
+    {
         return MetadataUpdate {
             status: "公共规格：此连接使用账号专属目录".into(),
             error: None,
@@ -236,7 +247,9 @@ pub(crate) async fn update(config: &mut FileConfig, force: bool, network: bool) 
             }
         }
     };
-    let catalog = catalog.as_ref().unwrap_or_else(|| bundled());
+    let catalog = catalog
+        .as_ref()
+        .unwrap_or_else(|| bundled());
     for provider in config.providers.values_mut() {
         catalog.supplement(provider);
     }
@@ -293,11 +306,14 @@ impl Catalog {
             .providers
             .iter()
             .filter(|(id, entry)| {
-                let api = entry.api.as_deref().or(match id.as_str() {
-                    "openai" => Some("https://api.openai.com/v1"),
-                    "anthropic" => Some("https://api.anthropic.com/v1"),
-                    _ => None,
-                });
+                let api = entry
+                    .api
+                    .as_deref()
+                    .or(match id.as_str() {
+                        "openai" => Some("https://api.openai.com/v1"),
+                        "anthropic" => Some("https://api.anthropic.com/v1"),
+                        _ => None,
+                    });
                 api.and_then(endpoint).as_ref() == Some(&base)
             })
             .collect::<Vec<_>>();
@@ -306,12 +322,14 @@ impl Catalog {
         }
         let format = provider.spec.api_format;
         for model in &mut provider.models {
-            let mut specs = catalogs.iter().filter_map(|(id, catalog)| {
-                catalog
-                    .models
-                    .get(&model.id)
-                    .map(|spec| (id.as_str(), spec))
-            });
+            let mut specs = catalogs
+                .iter()
+                .filter_map(|(id, catalog)| {
+                    catalog
+                        .models
+                        .get(&model.id)
+                        .map(|spec| (id.as_str(), spec))
+                });
             let Some((id, spec)) = specs.next() else {
                 continue;
             };
@@ -327,17 +345,28 @@ impl Spec {
     // Explicit profiles and live serving metadata have already been applied.
     // Unknown endpoints and IDs never borrow limits from a similarly named model.
     fn supplement(&self, model: &mut ModelProfile, provider: &str, format: ApiFormat) {
-        model.context_tokens = model
-            .context_tokens
-            .or(self.limit.context.filter(|n| *n >= MIN_CONTEXT_TOKENS));
-        model.input_context_tokens = model.input_context_tokens.or(self.limit.input.filter(|n| {
-            *n >= MIN_CONTEXT_TOKENS && model.context_tokens.is_none_or(|context| *n <= context)
-        }));
+        model.context_tokens = model.context_tokens.or(self
+            .limit
+            .context
+            .filter(|n| *n >= MIN_CONTEXT_TOKENS));
+        model.input_context_tokens = model
+            .input_context_tokens
+            .or(self.limit.input.filter(|n| {
+                *n >= MIN_CONTEXT_TOKENS
+                    && model
+                        .context_tokens
+                        .is_none_or(|context| *n <= context)
+            }));
         model.max_output_tokens = model
             .max_output_tokens
             .or(self.limit.output.filter(|n| *n > 0));
         if model.supports_vision.is_none() && !self.modalities.input.is_empty() {
-            model.supports_vision = Some(self.modalities.input.iter().any(|kind| kind == "image"));
+            model.supports_vision = Some(
+                self.modalities
+                    .input
+                    .iter()
+                    .any(|kind| kind == "image"),
+            );
         }
         if model.reasoning.is_none() {
             let adapter = match (provider, format) {

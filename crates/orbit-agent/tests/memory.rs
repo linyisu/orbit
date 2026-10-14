@@ -8,7 +8,13 @@ use orbit_model::types::{ChatCompletion, ChatMessage, ToolCall};
 use tokio_util::sync::CancellationToken;
 
 fn call(id: &str, name: &str, path: &str) -> ToolCall {
-    ToolCall::function(id, name, serde_json::json!({ "path": path }))
+    ToolCall::function(
+        id,
+        name,
+        serde_json::json!({
+            "path": path
+        }),
+    )
 }
 
 fn summary() -> TaskSummary {
@@ -71,11 +77,19 @@ fn only_confirmed_file_receipts_are_recorded_not_failed_tools_or_model_claims() 
     let activity = FileActivity::from_events(&events);
 
     assert_eq!(
-        activity.read.iter().cloned().collect::<Vec<_>>(),
+        activity
+            .read
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>(),
         ["source.rs"]
     );
     assert_eq!(
-        activity.written.iter().cloned().collect::<Vec<_>>(),
+        activity
+            .written
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>(),
         ["source.rs"]
     );
 
@@ -130,17 +144,38 @@ async fn repeated_compaction_and_event_reload_keep_confirmed_files_and_cut_metad
         &call("old", "edit_file", "original.rs"),
         r#"{"path":"original.rs","written_bytes":80}"#,
     );
-    let mut history=vec![ChatMessage::system("system"),ChatMessage::user("exact current goal"),
-        ChatMessage::assistant_tool_calls(vec![call("r","read_file","large.rs")]),
-        ChatMessage::tool("r",serde_json::json!({ "path": "large.rs", "total_lines": 100, "content": "detail ".repeat(2600) }).to_string()),
-        ChatMessage::assistant_tool_calls(vec![call("last","read_file","recent.rs")]),
-        ChatMessage::tool("last",r#"{"path":"recent.rs","total_lines":1,"content":"recent"}"#)];
-    let plan = autocompact::plan(&history, &[], 1000, 8000)
+    let mut history = vec![
+        ChatMessage::system("system"),
+        ChatMessage::user("exact current goal"),
+        ChatMessage::assistant_tool_calls(vec![call("r", "read_file", "large.rs")]),
+        ChatMessage::tool(
+            "r",
+            serde_json::json!({
+                "path": "large.rs",
+                "total_lines": 100,
+                "content": "detail ".repeat(2_600)
+            })
+            .to_string(),
+        ),
+        ChatMessage::assistant_tool_calls(vec![call("last", "read_file", "recent.rs")]),
+        ChatMessage::tool(
+            "last",
+            r#"{"path":"recent.rs","total_lines":1,"content":"recent"}"#,
+        ),
+    ];
+    let plan = autocompact::plan(&history, &[], 1_000, 8_000)
         .unwrap()
         .with_files(&activity);
-    let first = autocompact::execute(&backend(), plan, &[], 1000, 8000, CancellationToken::new())
-        .await
-        .unwrap();
+    let first = autocompact::execute(
+        &backend(),
+        plan,
+        &[],
+        1_000,
+        8_000,
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap();
 
     assert_eq!(first.record.source_messages, 6);
     assert_eq!(first.record.retained_from, 4);
@@ -159,17 +194,17 @@ async fn repeated_compaction_and_event_reload_keep_confirmed_files_and_cut_metad
 
     history = first.history;
     history.extend([
-        ChatMessage::assistant("more data ".repeat(2000)),
+        ChatMessage::assistant("more data ".repeat(2_000)),
         ChatMessage::user("next goal"),
     ]);
     let second = autocompact::execute(
         &backend(),
-        autocompact::plan(&history, &[], 1000, 8000)
+        autocompact::plan(&history, &[], 1_000, 8_000)
             .unwrap()
             .with_files(&reloaded),
         &[],
-        1000,
-        8000,
+        1_000,
+        8_000,
         CancellationToken::new(),
     )
     .await
@@ -188,13 +223,13 @@ async fn manual_compaction_uses_same_structure_and_records_its_boundary() {
     let history = vec![
         ChatMessage::system("system"),
         ChatMessage::user("old"),
-        ChatMessage::assistant("long ".repeat(2000)),
+        ChatMessage::assistant("long ".repeat(2_000)),
         ChatMessage::user("recent"),
         ChatMessage::assistant("done"),
         ChatMessage::user("latest"),
         ChatMessage::assistant("done"),
     ];
-    let result = context::compact(&backend(), history, &[], 32000, CancellationToken::new())
+    let result = context::compact(&backend(), history, &[], 32_000, CancellationToken::new())
         .await
         .unwrap();
 

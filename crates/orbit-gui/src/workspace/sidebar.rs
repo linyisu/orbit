@@ -28,9 +28,14 @@ struct HostNavigation {
     placements: Vec<Placement>,
     projects: Projects,
 }
+
 impl HostNavigation {
     fn rebuild(&mut self, cx: &mut App) {
-        let selected = self.tree.read(cx).selected_item().cloned();
+        let selected = self
+            .tree
+            .read(cx)
+            .selected_item()
+            .cloned();
         self.groups = organization::grouped_items(
             &self.sessions,
             &self.placements,
@@ -45,6 +50,7 @@ impl HostNavigation {
         });
     }
 }
+
 impl Sidebar {
     pub(crate) fn new(cx: &mut Context<Self>) -> Self {
         let preferences = cx.observe_global::<Preferences>(|sidebar: &mut Self, cx| {
@@ -74,9 +80,14 @@ impl Sidebar {
             _preferences: preferences,
         }
     }
+
     pub(crate) fn bind(&mut self, owner: &Entity<Workspace>, cx: &mut Context<Self>) {
         let view = owner.read(cx);
-        let selection_changed = self.owner.as_ref().and_then(WeakEntity::upgrade).as_ref()
+        let selection_changed = self
+            .owner
+            .as_ref()
+            .and_then(WeakEntity::upgrade)
+            .as_ref()
             != Some(owner)
             || self.info.as_ref().map(|info| &info.id) != view.info.as_ref().map(|info| &info.id);
         let options = view.options.clone();
@@ -130,7 +141,10 @@ impl Sidebar {
                 &host.projects,
                 &host.groups,
             );
-            for group in groups.iter_mut().flat_map(|section| &mut section.children) {
+            for group in groups
+                .iter_mut()
+                .flat_map(|section| &mut section.children)
+            {
                 if group.id.as_ref() == format!("project:{location}")
                     && !host
                         .groups
@@ -157,7 +171,9 @@ impl Sidebar {
         };
         if selection_changed || catalog_changed {
             host.tree.update(cx, |tree, cx| {
-                let ix = selected.as_ref().and_then(|id| tree.index_of(id));
+                let ix = selected
+                    .as_ref()
+                    .and_then(|id| tree.index_of(id));
                 if tree.selected_index() != ix {
                     tree.set_selected_index(ix, cx);
                 }
@@ -166,12 +182,15 @@ impl Sidebar {
         self.owner = Some(owner.downgrade());
         cx.notify();
     }
+
     pub(crate) fn visible(&self) -> bool {
         self.visible
     }
+
     fn navigation(&self) -> &Entity<TreeState> {
         &self.hosts[self.host.expect("bound sidebar")].tree
     }
+
     fn with_owner(
         &mut self,
         cx: &mut Context<Self>,
@@ -182,6 +201,7 @@ impl Sidebar {
             let _ = owner.update(cx, |view, cx| f(view, window, cx));
         }
     }
+
     fn select_session(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
         self.with_owner(
             cx,
@@ -189,6 +209,7 @@ impl Sidebar {
             window,
         );
     }
+
     pub(crate) fn toggle(&mut self, cx: &mut Context<Self>) {
         self.visible = !self.visible;
         cx.notify();
@@ -197,7 +218,11 @@ impl Sidebar {
 
 impl Render for Sidebar {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let Some(owner) = self.owner.as_ref().and_then(|owner| owner.upgrade()) else {
+        let Some(owner) = self
+            .owner
+            .as_ref()
+            .and_then(|owner| owner.upgrade())
+        else {
             return div().into_any_element();
         };
         let active = owner.read(cx);
@@ -503,7 +528,12 @@ impl Render for Sidebar {
                             })),
                     ),
             )
-            .child(div().flex_1().min_h_0().child(self.project_tree(cx)))
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .child(self.project_tree(cx)),
+            )
             .when(
                 matches!(
                     Preferences::save_status(cx),

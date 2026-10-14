@@ -90,6 +90,7 @@ impl Workspace {
                     ),
             )
     }
+
     pub(super) fn report_error(&mut self, error: impl Into<SharedString>, cx: &mut Context<Self>) {
         self.error = Some(error.into());
         if let Some(form) = &self.question_form {
@@ -164,24 +165,24 @@ impl Workspace {
                         .when(disconnected, |row| {
                             row.when(remote, |row| {
                                 row.child(
-                                    Button::new("edit-connection").label("修改连接…").on_click(
-                                        move |_, window, cx| {
+                                    Button::new("edit-connection")
+                                        .label("修改连接…")
+                                        .on_click(move |_, window, cx| {
                                             window.close_dialog(cx);
                                             let _ = edit.update(cx, |view, cx| {
                                                 view.remote_connection_dialog(window, cx)
                                             });
-                                        },
-                                    ),
+                                        }),
                                 )
                             })
                             .child(
-                                Button::new("retry-project").label("重试").on_click(
-                                    move |_, window, cx| {
+                                Button::new("retry-project")
+                                    .label("重试")
+                                    .on_click(move |_, window, cx| {
                                         window.close_dialog(cx);
                                         let _ =
                                             retry.update(cx, |view, cx| view.connect(window, cx));
-                                    },
-                                ),
+                                    }),
                             )
                         }),
                 )

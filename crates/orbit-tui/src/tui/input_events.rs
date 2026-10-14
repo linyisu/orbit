@@ -75,11 +75,18 @@ mod tests {
             key,
         ] {
             assert_eq!(
-                next(&mut stream, &mut pending).await.unwrap().unwrap(),
+                next(&mut stream, &mut pending)
+                    .await
+                    .unwrap()
+                    .unwrap(),
                 expected
             );
         }
-        assert!(next(&mut stream, &mut pending).await.is_none());
+        assert!(
+            next(&mut stream, &mut pending)
+                .await
+                .is_none()
+        );
     }
 
     #[tokio::test]
@@ -94,11 +101,17 @@ mod tests {
         .chain(stream::pending());
         let mut pending = None;
         assert_eq!(
-            next(&mut stream, &mut pending).await.unwrap().unwrap(),
+            next(&mut stream, &mut pending)
+                .await
+                .unwrap()
+                .unwrap(),
             left
         );
         assert_eq!(
-            next(&mut stream, &mut pending).await.unwrap().unwrap(),
+            next(&mut stream, &mut pending)
+                .await
+                .unwrap()
+                .unwrap(),
             right
         );
         assert_eq!(
@@ -111,7 +124,10 @@ mod tests {
         );
         let mut stream = stream::iter([Ok(left.clone())]).chain(stream::pending());
         assert_eq!(
-            next(&mut stream, &mut pending).await.unwrap().unwrap(),
+            next(&mut stream, &mut pending)
+                .await
+                .unwrap()
+                .unwrap(),
             left
         );
     }

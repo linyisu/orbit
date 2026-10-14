@@ -39,6 +39,7 @@ pub(crate) struct Snapshot {
     pub(crate) active: String,
     pub(crate) tasks: Vec<SavedTask>,
 }
+
 impl Snapshot {
     pub(crate) fn deduplicate_tabs(&mut self) {
         let mut kept: Vec<SavedTask> = Vec::new();
@@ -73,9 +74,9 @@ impl Snapshot {
         }
     }
 
+    /// SSH/WSL and directories belong to individual tabs. Service and data overrides identify the
+    /// launch profile; fixture runs must stay isolated.
     fn matches(&self, options: &Options) -> bool {
-        // SSH/WSL and directories belong to individual tabs. Service and data
-        // overrides identify the launch profile; fixture runs must stay isolated.
         self.origin.config == options.config
             && self.origin.server == options.server
             && self.origin.database == options.database
@@ -101,10 +102,11 @@ pub(crate) struct Loaded {
     pub(crate) saved: Option<Snapshot>,
     pub(crate) errors: tokio::sync::watch::Receiver<Option<String>>,
 }
+
 impl Drop for Writer {
+    /// main retains this guard until the application event loop exits. Drain the last queued edit
+    /// even if the window has already been destroyed.
     fn drop(&mut self) {
-        // main retains this guard until the application event loop exits. Drain
-        // the last queued edit even if the window has already been destroyed.
         let _ = self.sender.send(WriteRequest::Stop);
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
@@ -120,7 +122,9 @@ impl Storage {
                 let snapshot: Snapshot = serde_json::from_slice(&bytes)
                     .with_context(|| format!("无法读取任务恢复文件 {}", path.display()))?;
                 anyhow::ensure!(snapshot.version == 1, "任务恢复文件版本不受支持");
-                snapshot.matches(options).then_some(snapshot)
+                snapshot
+                    .matches(options)
+                    .then_some(snapshot)
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
             Err(error) => return Err(error.into()),
@@ -179,7 +183,9 @@ impl Storage {
     }
 
     pub(crate) fn save(&self, snapshot: Snapshot) {
-        let _ = self.sender.send(WriteRequest::Save(Box::new(snapshot)));
+        let _ = self
+            .sender
+            .send(WriteRequest::Save(Box::new(snapshot)));
     }
 }
 
@@ -203,11 +209,19 @@ fn save(path: &Path, mut snapshot: Snapshot, previous: &mut Option<Vec<u8>>) -> 
     let assets = path.with_extension("assets");
     for task in &mut snapshot.tasks {
         for file in &task.clipboard_files {
-            if !task.paths.iter().any(|path| path == file.path()) {
+            if !task
+                .paths
+                .iter()
+                .any(|path| path == file.path())
+            {
                 continue;
             }
             std::fs::create_dir_all(&assets)?;
-            let destination = assets.join(file.path().file_name().context("图片缺少文件名")?);
+            let destination = assets.join(
+                file.path()
+                    .file_name()
+                    .context("图片缺少文件名")?,
+            );
             if !destination.exists() {
                 let mut copy = tempfile::NamedTempFile::new_in(&assets)?;
                 std::io::copy(&mut file.reopen()?, &mut copy)?;
@@ -321,12 +335,24 @@ mod tests {
         assert_eq!(restored.active, "second");
         assert_eq!(restored.tasks.len(), 2);
         assert_eq!(restored.tasks[0].text, "草稿\n第二行");
-        assert!(restored.tasks[0].options.resume.is_none());
+        assert!(
+            restored.tasks[0]
+                .options
+                .resume
+                .is_none()
+        );
         assert_eq!(
-            restored.tasks[1].options.resume.as_deref(),
+            restored.tasks[1]
+                .options
+                .resume
+                .as_deref(),
             Some("saved-session")
         );
-        assert!(!restored.tasks[1].options.relink_on_resume);
+        assert!(
+            !restored.tasks[1]
+                .options
+                .relink_on_resume
+        );
     }
 
     #[test]
@@ -339,7 +365,9 @@ mod tests {
             .suffix(".png")
             .tempfile()
             .unwrap();
-        image.write_all(b"fixture image bytes").unwrap();
+        image
+            .write_all(b"fixture image bytes")
+            .unwrap();
         let temporary_path = image.path().to_path_buf();
         let mut draft = task(options.clone(), "one");
         draft.paths = vec![temporary_path.clone()];
@@ -422,8 +450,12 @@ mod tests {
         let (loaded, writer) = Storage::load(&options).unwrap();
         let image = Arc::new(tempfile::NamedTempFile::new().unwrap());
         let mut failed = initial;
-        failed.tasks[0].paths.push(image.path().to_path_buf());
-        failed.tasks[0].clipboard_files.push(image);
+        failed.tasks[0]
+            .paths
+            .push(image.path().to_path_buf());
+        failed.tasks[0]
+            .clipboard_files
+            .push(image);
         loaded.storage.save(failed);
         drop(writer);
         assert!(

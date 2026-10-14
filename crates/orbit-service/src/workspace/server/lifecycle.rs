@@ -160,9 +160,10 @@ fn compare_executables(current: &Path, peer: &Path) -> Result<bool> {
     if current_metadata.len() != peer_metadata.len() {
         return Ok(false);
     }
+
     fn digest(file: &mut std::fs::File) -> Result<sha2::digest::Output<Sha256>> {
         let mut hash = Sha256::new();
-        let mut buffer = [0; 64 * 1024];
+        let mut buffer = [0; 64 * 1_024];
         loop {
             let count = file.read(&mut buffer)?;
             if count == 0 {
@@ -223,7 +224,9 @@ async fn retire_version(
             // Released daemons close a mismatched Hello. Reconnect using the
             // announced version only for Hello/Shutdown, never for sessions.
             let address = stream.peer_addr()?;
-            let socket = address.as_pathname().context("后台服务没有可重连的地址")?;
+            let socket = address
+                .as_pathname()
+                .context("后台服务没有可重连的地址")?;
             let replacement = UnixStream::connect(socket).await?;
             ensure!(
                 verify_owner(&replacement)? == owner,

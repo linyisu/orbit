@@ -43,19 +43,28 @@ async fn finish_invocation(
 impl SessionWriter {
     /// Move only this locked session. Historical messages and events remain intact.
     /// Write receipts from earlier workspaces must never be offered for undo here.
+    /// A worktree changes a child's execution directory, not the logical project whose task board
+    /// it shares with its parent.
     pub async fn move_to(
         &self,
         directory: &Path,
         git_baseline: Option<serde_json::Value>,
     ) -> Result<crate::types::Session> {
-        // A worktree changes a child's execution directory, not the logical
-        // project whose task board it shares with its parent.
         let project_id = if self.store.is_subagent(&self.id).await? {
-            self.store.session(&self.id).await?.project_id
+            self.store
+                .session(&self.id)
+                .await?
+                .project_id
         } else {
-            self.store.resolve_project(directory).await?.id
+            self.store
+                .resolve_project(directory)
+                .await?
+                .id
         };
-        let path = directory.canonicalize()?.to_string_lossy().into_owned();
+        let path = directory
+            .canonicalize()?
+            .to_string_lossy()
+            .into_owned();
         let id = self.id.clone();
         let baseline = git_baseline
             .map(|value| serde_json::to_string(&value))
@@ -275,7 +284,9 @@ impl SessionWriter {
     }
 
     pub async fn append(&self, events: Vec<AgentEvent>) -> Result<()> {
-        let run = self.active_run.context("no active run")?;
+        let run = self
+            .active_run
+            .context("no active run")?;
 
         self.store
             .write_access(move |conn| async move {
@@ -293,7 +304,9 @@ impl SessionWriter {
     pub fn execution_journal(&self) -> Result<Arc<dyn orbit_agent::checkpoint::ExecutionJournal>> {
         Ok(Arc::new(crate::execution::Journal {
             store: self.store.clone(),
-            run: self.active_run.context("no active run")?,
+            run: self
+                .active_run
+                .context("no active run")?,
             session: self.id.clone(),
             commit_lock: tokio::sync::Mutex::new(()),
             pending: Mutex::new(Vec::new()),
@@ -307,7 +320,8 @@ impl SessionWriter {
         events: Vec<AgentEvent>,
         history: Option<Vec<ChatMessage>>,
     ) -> Result<()> {
-        self.finish_with_result(status, events, history, None).await
+        self.finish_with_result(status, events, history, None)
+            .await
     }
 
     pub async fn finish_subagent(
@@ -366,9 +380,12 @@ impl SessionWriter {
             bail!("no active run")
         };
 
-        let elapsed_ms = self
-            .active_started
-            .map(|started| started.elapsed().as_millis().min(i64::MAX as u128) as i64);
+        let elapsed_ms = self.active_started.map(|started| {
+            started
+                .elapsed()
+                .as_millis()
+                .min(i64::MAX as u128) as i64
+        });
         let status = status.to_owned();
         let id = self.id.clone();
         let database = self.store.path().to_owned();

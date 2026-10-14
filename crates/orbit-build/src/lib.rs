@@ -24,7 +24,11 @@ pub fn embed_workspace_server() {
         .expect("workspace root");
     let output = PathBuf::from(env::var_os("OUT_DIR").unwrap());
     // A separate target directory avoids waiting on the parent Cargo build lock.
-    let cache = output.ancestors().nth(4).unwrap().join("workspace-server");
+    let cache = output
+        .ancestors()
+        .nth(4)
+        .unwrap()
+        .join("workspace-server");
     let compiler_variable = format!("CC_{}", target.replace('-', "_"));
     let local_compiler = root.join("target/portable-toolchain/install/bin/musl-gcc");
     let compiler = env::var_os(&compiler_variable).unwrap_or_else(|| {
@@ -52,7 +56,9 @@ pub fn embed_workspace_server() {
     ] {
         println!(
             "cargo:rerun-if-changed={}",
-            root.join("crates").join(package).display()
+            root.join("crates")
+                .join(package)
+                .display()
         );
     }
     println!("cargo:rerun-if-env-changed={compiler_variable}");
@@ -98,7 +104,9 @@ pub fn embed_workspace_server() {
          `rustup target add {target}`; CC_<target> can select a musl compiler."
     );
 
-    let server = cache.join(&target).join("release/orbit-workspace-server");
+    let server = cache
+        .join(&target)
+        .join("release/orbit-workspace-server");
     publish(server);
 }
 

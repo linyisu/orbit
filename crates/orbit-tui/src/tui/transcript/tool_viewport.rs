@@ -39,7 +39,10 @@ impl Entry {
     }
 
     fn set_tool_offset(&mut self, mut view: ToolViewport, offset: usize, width: u16) {
-        view.offset = offset.min(view.total.saturating_sub(MAX_TOOL_BODY_ROWS));
+        view.offset = offset.min(
+            view.total
+                .saturating_sub(MAX_TOOL_BODY_ROWS),
+        );
         let bottom = (view.offset + MAX_TOOL_BODY_ROWS).min(view.total);
         let mut visible = Vec::new();
         let first = view
@@ -70,7 +73,10 @@ impl Entry {
         }
         let old = view.rows.clone();
         let new_end = old.start + visible.len();
-        let body_disclosure = self.disclosures.iter().any(|row| old.contains(row));
+        let body_disclosure = self
+            .disclosures
+            .iter()
+            .any(|row| old.contains(row));
         self.disclosures = self
             .disclosures
             .iter()
@@ -85,7 +91,8 @@ impl Entry {
             })
             .collect();
         if body_disclosure {
-            self.disclosures.extend(old.start..new_end);
+            self.disclosures
+                .extend(old.start..new_end);
         }
         self.rows.splice(old, visible);
         view.rows.end = new_end;
@@ -155,7 +162,9 @@ impl TranscriptLayout {
             return false;
         }
         let absolute = offset + usize::from(point.1 - area.y);
-        let index = self.entries.partition_point(|entry| entry.end <= absolute);
+        let index = self
+            .entries
+            .partition_point(|entry| entry.end <= absolute);
         let Some(entry) = self.entries.get_mut(index) else {
             return false;
         };
@@ -174,7 +183,10 @@ impl TranscriptLayout {
         let next = view
             .offset
             .saturating_add_signed(lines)
-            .min(view.total.saturating_sub(MAX_TOOL_BODY_ROWS));
+            .min(
+                view.total
+                    .saturating_sub(MAX_TOOL_BODY_ROWS),
+            );
         if next != view.offset {
             let view = entry.tool_body.take().unwrap();
             entry.set_tool_offset(view, next, self.width);
@@ -193,7 +205,10 @@ mod tests {
         TranscriptItem::Tool(ToolRow {
             id: "viewport".into(),
             name: "read_file".into(),
-            arguments: serde_json::json!({"path": "viewport.txt"}).to_string(),
+            arguments: serde_json::json!({
+                "path": "viewport.txt"
+            })
+            .to_string(),
             status: ToolStatus::Finished,
             output,
         })
@@ -204,24 +219,45 @@ mod tests {
         let view = entry.tool_body.as_ref().unwrap();
         entry.rows[view.rows.clone()]
             .iter()
-            .flat_map(|row| row.wrapped.iter().map(ToString::to_string))
+            .flat_map(|row| {
+                row.wrapped
+                    .iter()
+                    .map(ToString::to_string)
+            })
             .collect()
     }
 
     #[test]
     fn web_links_keep_absolute_hit_targets_while_scrolling_grouped_and_standalone_bodies() {
         for grouped in [false, true] {
-            let items = (0..if grouped { 2 } else { 1 }).map(|i| TranscriptItem::Tool(ToolRow {
-                id: format!("fetch-{i}"),
-                name: "web_fetch".into(),
-                arguments: serde_json::json!({"url":"https://docs.orbit.example/topic/"}).to_string(),
-                status: ToolStatus::Finished,
-                output: serde_json::json!({
-                    "url":"https://docs.orbit.example/topic/",
-                    "content":(1..=16).map(|n| format!("* [很长的文档链接 {n}][{n}]\n")).collect::<String>(),
-                    "links":(1..=16).map(|n| serde_json::json!({"n":n,"url":format!("https://docs.orbit.example/page/{n}")})).collect::<Vec<_>>()
-                }).to_string(),
-            })).collect::<Vec<_>>();
+            let items = (0..if grouped { 2 } else { 1 })
+                .map(|i| {
+                    TranscriptItem::Tool(ToolRow {
+                        id: format!("fetch-{i}"),
+                        name: "web_fetch".into(),
+                        arguments: serde_json::json!({
+                            "url": "https://docs.orbit.example/topic/"
+                        })
+                        .to_string(),
+                        status: ToolStatus::Finished,
+                        output: serde_json::json!({
+                            "url": "https://docs.orbit.example/topic/",
+                            "content": (1..=16)
+                                .map(|n| format!("* [很长的文档链接 {n}][{n}]\n"))
+                                .collect::<String>(),
+                            "links": (1..=16)
+                                .map(|n| serde_json::json!({
+                                    "n": n,
+                                    "url": format!(
+                                        "https://docs.orbit.example/page/{n}"
+                                    )
+                                }))
+                                .collect::<Vec<_>>()
+                        })
+                        .to_string(),
+                    })
+                })
+                .collect::<Vec<_>>();
             for width in [24, 80, 40] {
                 let mut layout = TranscriptLayout::default();
                 layout.update_expanded(
@@ -306,7 +342,14 @@ mod tests {
         assert_eq!(body(&layout), scrolled);
         layout.update(&items, Some(0), 80);
         assert_eq!(body(&layout).len(), MAX_TOOL_BODY_ROWS);
-        assert_eq!(layout.entries[0].tool_body.as_ref().unwrap().offset, 3);
+        assert_eq!(
+            layout.entries[0]
+                .tool_body
+                .as_ref()
+                .unwrap()
+                .offset,
+            3
+        );
 
         let area = Rect::new(0, 0, 80, layout.height() as u16);
         layout.scroll_tool_body(area, 0, point, isize::MAX);

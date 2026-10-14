@@ -73,9 +73,13 @@ impl Local {
     }
 
     pub fn remember_model(&self, qualified: &str) -> Result<()> {
-        let (provider, model) = qualified.split_once("::").context("模型缺少连接名称")?;
+        let (provider, model) = qualified
+            .split_once("::")
+            .context("模型缺少连接名称")?;
         let path = self.selection_path()?;
-        let directory = path.parent().context("模型偏好目录无效")?;
+        let directory = path
+            .parent()
+            .context("模型偏好目录无效")?;
         std::fs::create_dir_all(directory)?;
         let mut file = tempfile::NamedTempFile::new_in(directory)?;
         serde_json::to_writer(
@@ -98,7 +102,9 @@ mod tests {
     #[tokio::test]
     async fn opening_model_selection_does_not_contact_providers() {
         let root = tempfile::tempdir().unwrap();
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .unwrap();
         let config = root.path().join("config.toml");
         TestConfig::new()
             .provider(
@@ -162,16 +168,28 @@ mod tests {
         let second = local(dir.path(), "second.toml");
         assert_eq!(first.selected_model().await.unwrap(), None);
         assert!(!first.selection_path().unwrap().exists());
-        first.remember_model("two::chosen").unwrap();
+        first
+            .remember_model("two::chosen")
+            .unwrap();
         assert_eq!(
-            first.selected_model().await.unwrap().as_deref(),
+            first
+                .selected_model()
+                .await
+                .unwrap()
+                .as_deref(),
             Some("two::chosen")
         );
         assert_eq!(second.selected_model().await.unwrap(), None);
-        first.remember_model("one::chosen").unwrap();
+        first
+            .remember_model("one::chosen")
+            .unwrap();
         assert_eq!(first.last_model().unwrap().as_deref(), Some("one::chosen"));
         let snapshot = first.snapshot().await.unwrap();
-        assert!(!snapshot.content.contains("default_provider"));
+        assert!(
+            !snapshot
+                .content
+                .contains("default_provider")
+        );
         let config = FileConfig::parse(&snapshot.content, &first.auth).unwrap();
         assert_eq!(config.providers["one"].models[0].id, "first");
     }
@@ -180,7 +198,9 @@ mod tests {
     async fn unavailable_preference_requires_selection_and_explicit_errors_preserve_it() {
         let dir = tempfile::tempdir().unwrap();
         let mut local = local(dir.path(), "config.toml");
-        local.remember_model("one::removed").unwrap();
+        local
+            .remember_model("one::removed")
+            .unwrap();
         assert_eq!(local.selected_model().await.unwrap(), None);
         local.model = Some("chosen".into());
         assert!(local.selected_model().await.is_err());
@@ -188,7 +208,11 @@ mod tests {
         assert!(local.selected_model().await.is_err());
         local.model = Some("first".into());
         assert_eq!(
-            local.selected_model().await.unwrap().as_deref(),
+            local
+                .selected_model()
+                .await
+                .unwrap()
+                .as_deref(),
             Some("one::first")
         );
         assert_eq!(local.last_model().unwrap().as_deref(), Some("one::removed"));

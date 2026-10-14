@@ -1,3 +1,5 @@
+//! Single-request command line and session administration over orbit-client.
+
 use std::{
     fs,
     io::{self, Read, Write},
@@ -284,7 +286,9 @@ async fn admin(
 ) -> Result<()> {
     let connection = workspace::prepare_connection(
         &workspace::ConnectionOptions::local(
-            std::env::current_dir()?.to_string_lossy().into_owned(),
+            std::env::current_dir()?
+                .to_string_lossy()
+                .into_owned(),
         ),
         config,
         database,
@@ -316,7 +320,12 @@ async fn chat(
     let prompt = read_chat_prompt(&args)?;
     let policy = orbit_protocol::SessionPolicy {
         read_only: matches!(args.mode, ChatMode::ReadOnly),
-        disabled: args.disabled.iter().copied().map(Into::into).collect(),
+        disabled: args
+            .disabled
+            .iter()
+            .copied()
+            .map(Into::into)
+            .collect(),
     };
     anyhow::ensure!(
         args.images.is_empty() || !policy.disabled(orbit_protocol::Capability::Image),
@@ -329,7 +338,9 @@ async fn chat(
         identity: None,
         wsl: None,
         wsl_user: None,
-        workspace: std::env::current_dir()?.to_string_lossy().into_owned(),
+        workspace: std::env::current_dir()?
+            .to_string_lossy()
+            .into_owned(),
         server: None,
         upload_server: None,
         allow_mcp_start: args.allow_mcp_start,
@@ -342,9 +353,14 @@ async fn chat(
         .ok_or_else(|| anyhow::anyhow!("本地配置不可用"))?;
     local.model = args.model.clone();
     let selected = if args.resume.is_none() {
-        Some(local.selected_model().await?.ok_or_else(|| {
-            anyhow::anyhow!("首次运行请使用 --model 连接名::模型名，或在 TUI 中选择模型")
-        })?)
+        Some(
+            local
+                .selected_model()
+                .await?
+                .ok_or_else(|| {
+                    anyhow::anyhow!("首次运行请使用 --model 连接名::模型名，或在 TUI 中选择模型")
+                })?,
+        )
     } else {
         None
     };

@@ -15,7 +15,10 @@ pub(super) async fn execute(
     busy: bool,
 ) -> Result<Snapshot> {
     ensure!(
-        !setup.resources.policy.disabled(Capability::Files),
+        !setup
+            .resources
+            .policy
+            .disabled(Capability::Files),
         "文件功能已禁用"
     );
     match action {
@@ -55,7 +58,10 @@ pub(super) async fn execute(
                 next_offset: listing.next_offset,
                 scan_truncated: listing.scan_truncated,
                 readonly: setup.resources.policy.read_only
-                    || setup.resources.policy.disabled(Capability::Write),
+                    || setup
+                        .resources
+                        .policy
+                        .disabled(Capability::Write),
             })
         }
         Action::Save {
@@ -69,7 +75,10 @@ pub(super) async fn execute(
                 "当前会话为只读，无法保存文件"
             );
             ensure!(
-                !setup.resources.policy.disabled(Capability::Write),
+                !setup
+                    .resources
+                    .policy
+                    .disabled(Capability::Write),
                 "文件写入已禁用"
             );
             setup

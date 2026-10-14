@@ -134,10 +134,16 @@ pub(super) fn thumbnails(state: &UiState, width: u16) -> super::media::thumbnail
     media.files = None;
     super::media::thumbnails::Strip::composer(
         &media,
-        state.attachments.iter().map(|attachment| {
-            let path = attachment.path().to_string_lossy().into_owned();
-            (super::media::Source::Image(path), String::new())
-        }),
+        state
+            .attachments
+            .iter()
+            .map(|attachment| {
+                let path = attachment
+                    .path()
+                    .to_string_lossy()
+                    .into_owned();
+                (super::media::Source::Image(path), String::new())
+            }),
         width,
     )
 }
@@ -163,7 +169,14 @@ pub(super) fn move_attachment_vertical(state: &mut UiState, down: bool) {
         None => strip.areas.last().map(|area| area.y),
     };
     let column = current.map_or_else(
-        || state.input.visual_lines(state.input_width).1.column as u16 + 2,
+        || {
+            state
+                .input
+                .visual_lines(state.input_width)
+                .1
+                .column as u16
+                + 2
+        },
         |area| area.x + area.width / 2,
     );
     if let Some(row) = row {

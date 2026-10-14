@@ -58,7 +58,11 @@ fn wait_for(context: &Context, source: &Source, width: u16, height: u16) -> Arc<
         if let Some(picture) = context.picture(source, width, height, false) {
             return picture;
         }
-        assert!(context.error(source, width, height, false).is_none());
+        assert!(
+            context
+                .error(source, width, height, false)
+                .is_none()
+        );
         assert!(Instant::now() < until, "media worker did not finish");
         std::thread::sleep(Duration::from_millis(5));
     }
@@ -73,12 +77,13 @@ fn remote_previews_use_session_proxy_and_isolate_cache_after_rebind() {
         .map(|color| {
             let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
             listener.set_nonblocking(true).unwrap();
-            let client = Arc::new(orbit_tools::web_fetch::WebClient::new(
-                &orbit_tools::web_fetch::WebConfig {
+            let client = Arc::new(
+                orbit_tools::web_fetch::WebClient::new(&orbit_tools::web_fetch::WebConfig {
                     proxy: Some(format!("http://{}", listener.local_addr().unwrap())),
                     ..Default::default()
-                },
-            ).unwrap());
+                })
+                .unwrap(),
+            );
             let worker = std::thread::spawn(move || {
                 let deadline = Instant::now() + Duration::from_secs(5);
                 let mut stream = loop {
@@ -93,20 +98,36 @@ fn remote_previews_use_session_proxy_and_isolate_cache_after_rebind() {
                     }
                 };
 
-                stream.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
-                let mut request = [0; 4096];
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(3)))
+                    .unwrap();
+                let mut request = [0; 4_096];
                 let count = stream.read(&mut request).unwrap();
-                assert!(String::from_utf8_lossy(&request[..count]).starts_with(
-                    "GET http://proxy-only.invalid/picture.png HTTP/1.1"
-                ));
+                assert!(
+                    String::from_utf8_lossy(&request[..count])
+                        .starts_with("GET http://proxy-only.invalid/picture.png HTTP/1.1")
+                );
                 let mut bytes = std::io::Cursor::new(Vec::new());
                 image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
-                    8, 8, image::Rgba(color),
-                )).write_to(&mut bytes, image::ImageFormat::Png).unwrap();
-                stream.write_all(format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", bytes.get_ref().len()
-                ).as_bytes()).unwrap();
-                stream.write_all(bytes.get_ref()).unwrap();
+                    8,
+                    8,
+                    image::Rgba(color),
+                ))
+                .write_to(&mut bytes, image::ImageFormat::Png)
+                .unwrap();
+                stream
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: \
+                        {}\r\nConnection: close\r\n\r\n",
+                            bytes.get_ref().len()
+                        )
+                        .as_bytes(),
+                    )
+                    .unwrap();
+                stream
+                    .write_all(bytes.get_ref())
+                    .unwrap();
             });
             (client, worker)
         })
@@ -123,7 +144,11 @@ fn remote_previews_use_session_proxy_and_isolate_cache_after_rebind() {
         second.shared.as_ref().unwrap()
     ));
     assert!(!first.same_cache(&second));
-    assert!(second.cached_picture(&source, 10, 4).is_none());
+    assert!(
+        second
+            .cached_picture(&source, 10, 4)
+            .is_none()
+    );
     let second_picture = wait_for(&second, &source, 10, 4);
     assert!(!Arc::ptr_eq(&first_picture, &second_picture));
     let math = Source::Math {
@@ -202,8 +227,18 @@ async fn new_tabs_share_terminal_media_and_keep_graphics_when_switching_back() {
     tabs.open_session(&first, None);
     let second = tabs.active_remote.clone().unwrap();
     assert_ne!(first, second);
-    assert!(tabs.remote[&second].state.media.same_cache(&media));
-    assert!(tabs.remote[&second].state.media_preview.is_none());
+    assert!(
+        tabs.remote[&second]
+            .state
+            .media
+            .same_cache(&media)
+    );
+    assert!(
+        tabs.remote[&second]
+            .state
+            .media_preview
+            .is_none()
+    );
     tabs.remote
         .get_mut(&second)
         .unwrap()
@@ -244,7 +279,10 @@ fn replayed_sessions_keep_media_capabilities_for_formula_output() {
         tab.state
             .transcript
             .iter()
-            .any(|item| matches!(item, TranscriptItem::Assistant(text) if text.contains("\\int")))
+            .any(|item| matches!(
+                item,
+                TranscriptItem::Assistant(text) if text.contains("\\int")
+            ))
     );
     assert_ui_graphics(&mut tab.state);
 }
@@ -257,13 +295,15 @@ async fn restored_read_image_results_upload_complete_rgba_with_selection_and_row
 
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("image.png");
-    image::RgbImage::from_pixel(1800, 520, image::Rgb([80, 120, 160]))
+    image::RgbImage::from_pixel(1_800, 520, image::Rgb([80, 120, 160]))
         .save(&path)
         .unwrap();
     let call = ToolCall::function(
         "image",
         "read_image",
-        serde_json::json!({"path": "image.png"}),
+        serde_json::json!({
+            "path": "image.png"
+        }),
     );
     let mut media = context(ProtocolType::Kitty);
     media.workspace = dir.path().into();
@@ -280,7 +320,11 @@ async fn restored_read_image_results_upload_complete_rgba_with_selection_and_row
             orbit_protocol::Update::Agent(Box::new(AgentEvent::ToolStarted { call: call.clone() })),
             orbit_protocol::Update::Agent(Box::new(AgentEvent::ToolFinished {
                 call,
-                content: serde_json::json!({"path": "image.png", "loaded": true}).to_string(),
+                content: serde_json::json!({
+                    "path": "image.png",
+                    "loaded": true
+                })
+                .to_string(),
                 changes: Vec::new(),
             })),
         ],
@@ -290,7 +334,12 @@ async fn restored_read_image_results_upload_complete_rgba_with_selection_and_row
     let index = state
         .transcript
         .iter()
-        .position(|item| matches!(item, TranscriptItem::Tool(row) if row.name == "read_image"))
+        .position(|item| {
+            matches!(
+                item,
+                TranscriptItem::Tool(row) if row.name == "read_image"
+            )
+        })
         .unwrap();
     state.expanded.insert(index);
     let rendered = assert_ui_graphics(state);
@@ -309,7 +358,13 @@ async fn restored_read_image_results_upload_complete_rgba_with_selection_and_row
         })
         .unwrap();
 
-    let cell = state.media.shared.as_ref().unwrap().picker.font_size();
+    let cell = state
+        .media
+        .shared
+        .as_ref()
+        .unwrap()
+        .picker
+        .font_size();
     let expected = usize::from(picture.size.width)
         * usize::from(cell.width)
         * usize::from(picture.size.height)
@@ -318,7 +373,10 @@ async fn restored_read_image_results_upload_complete_rgba_with_selection_and_row
     let mut uploads = Vec::new();
     for (variant, protocol) in [
         &picture.protocol,
-        picture.selected_protocol.as_ref().unwrap(),
+        picture
+            .selected_protocol
+            .as_ref()
+            .unwrap(),
     ]
     .into_iter()
     .enumerate()
@@ -340,7 +398,10 @@ async fn restored_read_image_results_upload_complete_rgba_with_selection_and_row
         assert!(output.contains("a=T,U=1,f=32"));
         assert!(output.contains('\u{10eeee}'));
         let mut pixels = Vec::new();
-        let commands = output.split("\x1b_G").skip(1).collect::<Vec<_>>();
+        let commands = output
+            .split("\x1b_G")
+            .skip(1)
+            .collect::<Vec<_>>();
         assert!(commands.len() > 1, "large images must span multiple chunks");
         for (index, command) in commands.iter().enumerate() {
             let (control, payload) = command.split_once(';').unwrap();
@@ -365,7 +426,12 @@ async fn restored_read_image_results_upload_complete_rgba_with_selection_and_row
                 .all(|cell| !cell.symbol().contains("a=T"))
         );
     }
-    assert!(uploads[0].as_chunks::<4>().0.contains(&[80, 120, 160, 255]));
+    assert!(
+        uploads[0]
+            .as_chunks::<4>()
+            .0
+            .contains(&[80, 120, 160, 255])
+    );
     assert_ne!(uploads[0], uploads[1]);
     clear_layers();
 }
@@ -390,19 +456,32 @@ fn multiline_math_fallback_keeps_line_breaks_click_targets_and_copyable_tex() {
             let rows = buffer
                 .content
                 .chunks(80)
-                .map(|cells| cells.iter().map(|c| c.symbol()).collect::<String>())
+                .map(|cells| {
+                    cells
+                        .iter()
+                        .map(|c| c.symbol())
+                        .collect::<String>()
+                })
                 .collect::<Vec<_>>();
 
-            assert!(rows.iter().any(|row| row.contains(r"\frac{a}{b}")));
-            assert!(rows.iter().any(|row| row.contains(r"\sqrt{x}")));
             assert!(
-                rows.iter().all(|row| !row.contains(r"\n")),
+                rows.iter()
+                    .any(|row| row.contains(r"\frac{a}{b}"))
+            );
+            assert!(
+                rows.iter()
+                    .any(|row| row.contains(r"\sqrt{x}"))
+            );
+            assert!(
+                rows.iter()
+                    .all(|row| !row.contains(r"\n")),
                 "thinking={thinking}, protocol={protocol:?}: {rows:?}"
             );
-            assert!(
-                (0..area.height)
-                    .any(|y| (0..80).any(|x| layout.media_at(area, 0, (x, y)).is_some()))
-            );
+            assert!((0..area.height).any(|y| (0..80).any(|x| {
+                layout
+                    .media_at(area, 0, (x, y))
+                    .is_some()
+            })));
             let mut selection = Selection::default();
             selection.viewport = area;
             selection
@@ -424,7 +503,8 @@ fn multiline_math_fallback_keeps_line_breaks_click_targets_and_copyable_tex() {
 #[test]
 fn framed_tool_and_finished_thinking_keep_formula_targets_and_fallback_lines() {
     use crate::tui::app::{ThinkingRow, ToolRow, ToolStatus};
-    let source = "$$\n\\frac{a}{b}\n\\sqrt{x}\n$$\n\n行内 $\\frac{1}{2} + \\frac{3}{4} + \\frac{5}{6} + \\frac{7}{8}$";
+    let source = "$$\n\\frac{a}{b}\n\\sqrt{x}\n$$\n\n行内 $\\frac{1}{2} + \\frac{3}{4} + \
+        \\frac{5}{6} + \\frac{7}{8}$";
     let mut thought = ThinkingRow::from(source.to_owned());
     thought.finished = true;
     for item in [
@@ -434,8 +514,11 @@ fn framed_tool_and_finished_thinking_keep_formula_targets_and_fallback_lines() {
             name: "web_fetch".into(),
             arguments: r#"{"url":"https://orbit.example/math"}"#.into(),
             status: ToolStatus::Finished,
-            output: serde_json::json!({"url":"https://orbit.example/math", "content":source})
-                .to_string(),
+            output: serde_json::json!({
+                "url": "https://orbit.example/math",
+                "content": source
+            })
+            .to_string(),
         }),
     ] {
         let mut state = UiState::new("mock");
@@ -452,24 +535,54 @@ fn framed_tool_and_finished_thinking_keep_formula_targets_and_fallback_lines() {
         let rows = buffer
             .content
             .chunks(36)
-            .map(|cells| cells.iter().map(|c| c.symbol()).collect::<String>())
+            .map(|cells| {
+                cells
+                    .iter()
+                    .map(|c| c.symbol())
+                    .collect::<String>()
+            })
             .collect::<Vec<_>>();
 
         assert!(
-            rows.iter().any(|row| row.contains(r"\frac{a}{b}")),
+            rows.iter()
+                .any(|row| row.contains(r"\frac{a}{b}")),
             "{rows:?}"
         );
-        assert!(rows.iter().any(|row| row.contains(r"\sqrt{x}")), "{rows:?}");
-        assert!(rows.iter().all(|row| !row.contains(r"\n")), "{rows:?}");
+        assert!(
+            rows.iter()
+                .any(|row| row.contains(r"\sqrt{x}")),
+            "{rows:?}"
+        );
+        assert!(
+            rows.iter()
+                .all(|row| !row.contains(r"\n")),
+            "{rows:?}"
+        );
         for tex in ["\\frac{a}{b}", "\\frac{1}{2}"] {
-            assert!((0..area.height).any(|y| (0..area.width).any(|x| matches!(layout.media_at(area, 0, (x, y)), Some(Source::Math { tex: found, .. }) if found.contains(tex)))));
+            assert!((0..area.height).any(|y| (0..area.width).any(|x| matches!(
+                layout.media_at(area, 0, (x, y)),
+                Some(Source::Math { tex: found, .. }) if found.contains(tex)
+            ))));
         }
     }
 }
 
 #[test]
 fn screenshot_formulas_render_through_the_full_async_ui_pipeline() {
-    let source = "## 内联公式\n质能方程 $E = mc^2$；欧拉恒等式 $e^{i\\pi} + 1 = 0$\n求根公式 $x = \\frac{-b \\pm \\sqrt{b^2 - 4ac}}{2a}$\n希腊字母 $\\alpha\\ \\beta\\ \\gamma\\ \\theta\\ \\lambda\\ \\sigma\\ \\omega$\n常用符号 $\\in\\ \\notin\\ \\subset\\ \\supset\\ \\cup\\ \\cap\\ \\forall\\ \\exists\\ \\leq\\ \\geq\\ \\approx\\ \\sim\\ \\to\\ \\implies\\ \\iff$\n\n## 块级公式\n\n$$\n\\int_{-\\infty}^{\\infty}e^{-x^2}\\,dx=\\sqrt{\\pi}\n$$\n\n黎曼 zeta 函数 ($\\operatorname{Re}(s)>1$)：\n\n$$\n\\zeta(s)=\\sum_{n=1}^{\\infty}\\frac{1}{n^{s}}=\\prod_{p\\ \\text{prime}}\\frac{1}{1-p^{-s}}\n$$\n\n$$\nA=\\begin{pmatrix}1&2\\\\3&4\\end{pmatrix}\\qquad A^{-1}=\\frac{1}{-2}\\begin{pmatrix}4&-2\\\\-3&1\\end{pmatrix}\n$$\n\n$$\n\\begin{aligned}f'(x)&=\\lim_{h\\to0}\\frac{f(x+h)-f(x)}{h}\\\\[6pt]f(x)&=\\sum_{n=0}^{\\infty}\\frac{f^{(n)}(0)}{n!}x^n\\end{aligned}\n$$\n\n$$\n\\operatorname{sgn}(x)=\\begin{cases}-1,&x<0\\\\0,&x=0\\\\1,&x>0\\end{cases}\n$$\n\n$$\n\\begin{aligned}\\nabla\\cdot\\mathbf{E}&=\\frac{\\rho}{\\varepsilon_0}\\\\\\nabla\\cdot\\mathbf{B}&=0\\\\\\nabla\\times\\mathbf{E}&=-\\frac{\\partial\\mathbf{B}}{\\partial t}\\\\\\nabla\\times\\mathbf{B}&=\\mu_0\\mathbf{J}+\\mu_0\\varepsilon_0\\frac{\\partial\\mathbf{E}}{\\partial t}\\end{aligned}\n$$";
+    let source = "## 内联公式\n质能方程 $E = mc^2$；欧拉恒等式 $e^{i\\pi} + 1 = 0$\n求根公式 $x = \\frac{-b \\pm \
+        \\sqrt{b^2 - 4ac}}{2a}$\n希腊字母 $\\alpha\\ \\beta\\ \\gamma\\ \\theta\\ \\lambda\\ \
+        \\sigma\\ \\omega$\n常用符号 $\\in\\ \\notin\\ \\subset\\ \\supset\\ \\cup\\ \\cap\\ \
+        \\forall\\ \\exists\\ \\leq\\ \\geq\\ \\approx\\ \\sim\\ \\to\\ \\implies\\ \\iff$\n\n## \
+        块级公式\n\n$$\n\\int_{-\\infty}^{\\infty}e^{-x^2}\\,dx=\\sqrt{\\pi}\n$$\n\n黎曼 zeta 函数 \
+        ($\\operatorname{Re}(s)>1$)：\n\n$$\n\\zeta(s)=\\sum_{n=1}^{\\infty}\\frac{1}{n^{s}}=\\prod\
+        _{p\\ \\text{prime}}\\frac{1}{1-p^{-s}}\n$$\n\n$$\nA=\\begin{pmatrix}1&2\\\\3&4\\end{pmatr\
+        ix}\\qquad A^{-1}=\\frac{1}{-2}\\begin{pmatrix}4&-2\\\\-3&1\\end{pmatrix}\n$$\n\n$$\n\\beg\
+        in{aligned}f'(x)&=\\lim_{h\\to0}\\frac{f(x+h)-f(x)}{h}\\\\[6pt]f(x)&=\\sum_{n=0}^{\\infty}\
+        \\frac{f^{(n)}(0)}{n!}x^n\\end{aligned}\n$$\n\n$$\n\\operatorname{sgn}(x)=\\begin{cases}-1\
+        ,&x<0\\\\0,&x=0\\\\1,&x>0\\end{cases}\n$$\n\n$$\n\\begin{aligned}\\nabla\\cdot\\mathbf{E}&\
+        =\\frac{\\rho}{\\varepsilon_0}\\\\\\nabla\\cdot\\mathbf{B}&=0\\\\\\nabla\\times\\mathbf{E}\
+        &=-\\frac{\\partial\\mathbf{B}}{\\partial t}\\\\\\nabla\\times\\mathbf{B}&=\\mu_0\\mathbf{\
+        J}+\\mu_0\\varepsilon_0\\frac{\\partial\\mathbf{E}}{\\partial t}\\end{aligned}\n$$";
     let mut state = UiState::new("mock");
     state.media = context(ProtocolType::Kitty);
     state
@@ -479,14 +592,25 @@ fn screenshot_formulas_render_through_the_full_async_ui_pipeline() {
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         draw_ui(&mut state, &mut terminal);
-        let cache = state.media.shared.as_ref().unwrap().cache.lock().unwrap();
+        let cache = state
+            .media
+            .shared
+            .as_ref()
+            .unwrap()
+            .cache
+            .lock()
+            .unwrap();
         for (key, entry) in cache.iter() {
             if let Value::Failed(error) = &entry.value {
                 panic!("{:?}: {error}", key.source);
             }
         }
 
-        if cache.len() == 12 && cache.values().all(|v| matches!(v.value, Value::Ready(_))) {
+        if cache.len() == 12
+            && cache
+                .values()
+                .all(|v| matches!(v.value, Value::Ready(_)))
+        {
             break;
         }
         assert!(Instant::now() < deadline, "cached {} formulas", cache.len());
@@ -521,16 +645,23 @@ fn ratex_unicode_fonts_do_not_write_to_terminal() {
     let dir = tempfile::tempdir().unwrap();
     let mut fonts = usvg::fontdb::Database::new();
     fonts.load_system_fonts();
-    let override_font = fonts.faces().find_map(|face| match &face.source {
-        usvg::fontdb::Source::File(path) | usvg::fontdb::Source::SharedFile(path, _) => {
-            Some(format!("{}#{}", path.display(), face.index))
-        }
+    let override_font = fonts
+        .faces()
+        .find_map(|face| match &face.source {
+            usvg::fontdb::Source::File(path) | usvg::fontdb::Source::SharedFile(path, _) => {
+                Some(format!("{}#{}", path.display(), face.index))
+            }
 
-        usvg::fontdb::Source::Binary(_) => None,
-    });
+            usvg::fontdb::Source::Binary(_) => None,
+        });
     let mut sources = vec![
         None,
-        Some(dir.path().join("missing.ttf").display().to_string()),
+        Some(
+            dir.path()
+                .join("missing.ttf")
+                .display()
+                .to_string(),
+        ),
     ];
     if let Some(font) = override_font {
         sources.push(Some(font));
@@ -571,7 +702,7 @@ fn ratex_unicode_formula_uses_glyphs_or_text_fallback() {
                 assert!(!svg.contains("<text"));
                 assert!(baseline > 0.0);
 
-                let image = decode::raster_svg(svg.as_bytes(), 1200, 400, None, false)
+                let image = decode::raster_svg(svg.as_bytes(), 1_200, 400, None, false)
                     .unwrap()
                     .to_rgba8();
                 assert!(image.pixels().any(|p| p[3] > 0));
@@ -598,7 +729,7 @@ fn ratex_embeds_fraction_integral_and_matrix_glyphs_on_transparent_pixels() {
             !svg.contains("<text"),
             "must not depend on a system math font"
         );
-        let image = decode::raster_svg(svg.as_bytes(), 1200, 400, None, false)
+        let image = decode::raster_svg(svg.as_bytes(), 1_200, 400, None, false)
             .unwrap()
             .to_rgba8();
         assert!(baseline > 0.0);
@@ -685,7 +816,11 @@ fn image_display_composites_transparency_without_changing_sources_or_math() {
         let key = context.key(&source, 40, 20, false);
         let picture = decoder.prepare(&key, picker).unwrap();
         let default = pixels(&picture.protocol, picture.size);
-        assert!(default.iter().all(|pixel| pixel[3] == 255));
+        assert!(
+            default
+                .iter()
+                .all(|pixel| pixel[3] == 255)
+        );
         assert!(default.contains(&[232, 234, 237, 255]));
         assert!(default.contains(&[0, 0, 0, 255]));
         for background in [Background::Light, Background::Dark, Background::Original] {
@@ -698,14 +833,26 @@ fn image_display_composites_transparency_without_changing_sources_or_math() {
             let output = pixels(&picture.protocol, picture.size);
             match background.color() {
                 Some([r, g, b]) => {
-                    assert!(output.iter().all(|pixel| pixel[3] == 255));
+                    assert!(
+                        output
+                            .iter()
+                            .all(|pixel| pixel[3] == 255)
+                    );
                     assert!(output.contains(&[r, g, b, 255]));
                     assert!(output.contains(&[0, 0, 0, 255]));
-                    assert!(output.iter().any(|pixel| pixel[0] > r && pixel[1] < g));
+                    assert!(
+                        output
+                            .iter()
+                            .any(|pixel| pixel[0] > r && pixel[1] < g)
+                    );
                 }
                 None => {
                     assert!(output.iter().any(|pixel| pixel[3] == 0));
-                    assert!(output.iter().any(|pixel| (120..=135).contains(&pixel[3])));
+                    assert!(
+                        output
+                            .iter()
+                            .any(|pixel| (120..=135).contains(&pixel[3]))
+                    );
                 }
             }
         }
@@ -725,7 +872,13 @@ fn image_display_composites_transparency_without_changing_sources_or_math() {
         let key = context.key(&source, 40, 20, false);
         let picture = decoder.prepare(&key, picker).unwrap();
         let output = pixels(&picture.protocol, picture.size);
-        let selected = pixels(picture.selected_protocol.as_ref().unwrap(), picture.size);
+        let selected = pixels(
+            picture
+                .selected_protocol
+                .as_ref()
+                .unwrap(),
+            picture.size,
+        );
         let width = usize::from(picture.size.width * picker.font_size().width);
         let ink_right = output
             .iter()
@@ -740,7 +893,9 @@ fn image_display_composites_transparency_without_changing_sources_or_math() {
         );
         assert!(output.iter().any(|pixel| pixel[3] == 0));
         assert!(
-            selected.iter().all(|pixel| pixel[3] == 255),
+            selected
+                .iter()
+                .all(|pixel| pixel[3] == 255),
             "{tex}: selection must remain continuous"
         );
     }
@@ -750,7 +905,10 @@ fn image_display_composites_transparency_without_changing_sources_or_math() {
 fn parser_attaches_media_only_to_semantic_math_and_images() {
     let source = r"公式 $x^2$、转义 \$ 和代码 `$literal$` ![示意](plot.svg)";
     let lines = markdown::document(source, 80);
-    let media = lines.iter().flat_map(|l| &l.media).collect::<Vec<_>>();
+    let media = lines
+        .iter()
+        .flat_map(|l| &l.media)
+        .collect::<Vec<_>>();
     assert_eq!(media.len(), 2);
     assert_eq!(
         media[0].source,
@@ -775,7 +933,10 @@ fn parser_attaches_media_only_to_semantic_math_and_images() {
     assert!(
         markdown::document("<img src='plot.svg' alt='示意'>", 80)
             .iter()
-            .any(|l| l.media.iter().any(|m| matches!(m.source, Source::Image(_))))
+            .any(|l| l
+                .media
+                .iter()
+                .any(|m| matches!(m.source, Source::Image(_))))
     );
     let display = markdown::document("$$\n\\frac{a}{b}\n$$\n后文", 80);
     assert!(display.iter().any(|l| {
@@ -784,7 +945,12 @@ fn parser_attaches_media_only_to_semantic_math_and_images() {
             .any(|m| matches!(m.source, Source::Math { display: true, .. }))
     }));
     let empty_alt = markdown::document("![](plot.png)", 80);
-    assert!(empty_alt[0].line.to_string().contains("图片"));
+    assert!(
+        empty_alt[0]
+            .line
+            .to_string()
+            .contains("图片")
+    );
     assert_eq!(
         empty_alt[0].media[0].source,
         Source::Image("plot.png".into())
@@ -802,14 +968,27 @@ fn inline_graphics_keep_pending_targets_links_and_unicode_word_breaks() {
     let request = requests(&line, 38).remove(0);
     ready(&context, request.source, request.width, request.height);
     let rows = layout(line, &context, 38);
-    assert!(rows.iter().any(|l| !l.graphics.is_empty()));
-    assert!(rows.iter().all(|l| l.line.width() <= 38));
-    assert!(rows.iter().any(|l| l.line.to_string().contains("English")));
     assert!(
         rows.iter()
-            .any(|l| l.links.iter().any(|l| l.url == "https://example.com"))
+            .any(|l| !l.graphics.is_empty())
     );
-    let pending = rows.iter().flat_map(|l| &l.media).collect::<Vec<_>>();
+    assert!(
+        rows.iter()
+            .all(|l| l.line.width() <= 38)
+    );
+    assert!(
+        rows.iter()
+            .any(|l| l.line.to_string().contains("English"))
+    );
+    assert!(rows.iter().any(|l| {
+        l.links
+            .iter()
+            .any(|l| l.url == "https://example.com")
+    }));
+    let pending = rows
+        .iter()
+        .flat_map(|l| &l.media)
+        .collect::<Vec<_>>();
     assert!(!pending.is_empty());
     assert!(
         pending
@@ -842,7 +1021,11 @@ fn nested_frame_keeps_rails_and_right_edge_on_every_image_row() {
         "no empty thinking rail before image"
     );
     for line in rows {
-        assert!(line.line.to_string().starts_with("┊ │ "));
+        assert!(
+            line.line
+                .to_string()
+                .starts_with("┊ │ ")
+        );
         assert!(line.line.to_string().ends_with(" │"));
         assert_eq!(line.line.width(), 64);
         assert_eq!(
@@ -862,20 +1045,34 @@ fn asynchronous_local_media_reuses_cache_and_math_falls_back_in_halfblocks() {
         .unwrap();
     context.workspace = dir.path().into();
     let source = Source::Image("plot.png".into());
-    assert!(context.cached_picture(&source, 20, 12).is_none());
+    assert!(
+        context
+            .cached_picture(&source, 20, 12)
+            .is_none()
+    );
     let first = wait_for(&context, &source, 20, 12);
     assert!(context.changed());
     assert!(!context.changed());
     assert!(Arc::ptr_eq(
         &first,
-        &context.picture(&source, 20, 12, false).unwrap()
+        &context
+            .picture(&source, 20, 12, false)
+            .unwrap()
     ));
     let math = Source::Math {
         tex: "x^2".into(),
         display: false,
     };
-    assert!(context.picture(&math, 20, 10, false).is_none());
-    assert!(context.error(&math, 20, 10, false).is_some());
+    assert!(
+        context
+            .picture(&math, 20, 10, false)
+            .is_none()
+    );
+    assert!(
+        context
+            .error(&math, 20, 10, false)
+            .is_some()
+    );
     let line = markdown::document("公式 $x^2$", 80).remove(0);
     assert_eq!(layout(line.clone(), &context, 80)[0].line, line.line);
 }
@@ -901,14 +1098,26 @@ fn only_visible_media_is_requested_and_remote_images_do_not_require_a_preview() 
     );
     let mut terminal = Terminal::new(TestBackend::new(80, 4)).unwrap();
     begin_frame();
-    terminal.draw(|f| layout.draw(f, f.area(), 0)).unwrap();
-    let cache = context.shared.as_ref().unwrap().cache.lock().unwrap();
+    terminal
+        .draw(|f| layout.draw(f, f.area(), 0))
+        .unwrap();
+    let cache = context
+        .shared
+        .as_ref()
+        .unwrap()
+        .cache
+        .lock()
+        .unwrap();
     assert!(!cache.is_empty());
     assert!(cache.len() <= 4, "only the visible rows are requested");
     drop(cache);
     // The worker rejects private destinations before network I/O.
     let remote = Source::Image("http://127.0.0.1/image.png".into());
-    assert!(context.cached_picture(&remote, 80, 12).is_none());
+    assert!(
+        context
+            .cached_picture(&remote, 80, 12)
+            .is_none()
+    );
     assert!(
         !context
             .shared
@@ -920,7 +1129,11 @@ fn only_visible_media_is_requested_and_remote_images_do_not_require_a_preview() 
             .keys()
             .any(|k| k.source == remote)
     );
-    assert!(context.picture(&remote, 80, 12, false).is_none());
+    assert!(
+        context
+            .picture(&remote, 80, 12, false)
+            .is_none()
+    );
     assert!(
         context
             .shared
@@ -964,7 +1177,11 @@ fn copied_graphics_use_tex_once_without_protocol_bytes_or_thinking_rails() {
     assert!(copied.contains(source), "{copied:?}");
     assert_eq!(copied.matches(r"\frac{a}{b}").count(), 1);
     assert!(!copied.contains(['┊', '│', '\x1b']));
-    assert!(layout.media_at(area, 0, (0, 0)).is_none()); // thinking rail
+    assert!(
+        layout
+            .media_at(area, 0, (0, 0))
+            .is_none()
+    );
 }
 
 #[test]
@@ -990,7 +1207,8 @@ fn selecting_one_slice_selects_the_entire_occurrence_and_restores_each_protocol(
             let request = requests(&line, 80).remove(0);
             if matches!(request.source, Source::Math { .. }) && protocol == ProtocolType::Halfblocks
             {
-                continue; // This protocol deliberately retains selectable TeX.
+                // This protocol deliberately retains selectable TeX.
+                continue;
             }
 
             let picture = ready(&context, request.source, request.width, request.height);
@@ -1082,7 +1300,13 @@ fn selecting_one_slice_selects_the_entire_occurrence_and_restores_each_protocol(
                         layout.draw(f, area, 0);
                         selection.paint(f);
                         LAYER.with(|layer| {
-                            assert!(layer.borrow().current.iter().all(|p| !p.selected))
+                            assert!(
+                                layer
+                                    .borrow()
+                                    .current
+                                    .iter()
+                                    .all(|p| !p.selected)
+                            )
                         });
                         paint(f.buffer_mut());
                     })
@@ -1117,7 +1341,10 @@ fn clipped_media_copies_its_source_even_when_the_baseline_is_offscreen() {
         })
         .unwrap();
     let offset = top + usize::from(picture.size.height) - 1;
-    let copy = &layout.selection_metadata(offset).unwrap().copy[0];
+    let copy = &layout
+        .selection_metadata(offset)
+        .unwrap()
+        .copy[0];
     assert_ne!(copy.row, copy.baseline);
     let area = Rect::new(4, 3, 80, 1);
     let mut selection = Selection::default();
@@ -1186,7 +1413,10 @@ fn selecting_an_inline_formula_preserves_the_surrounding_text_and_other_formula(
         let before = terminal.backend().buffer().clone();
         let (row, copy) = (0..layout.height())
             .find_map(|row| {
-                let copy = layout.selection_metadata(row)?.copy.get(1)?;
+                let copy = layout
+                    .selection_metadata(row)?
+                    .copy
+                    .get(1)?;
                 (copy.row == 0).then_some((row, copy))
             })
             .unwrap();
@@ -1240,7 +1470,8 @@ fn selecting_an_inline_formula_preserves_the_surrounding_text_and_other_formula(
                     assert_eq!(
                         f.buffer_mut()[(column, y)].bg,
                         crate::tui::theme::THEME.selection,
-                        "{tex}: surrounding parentheses and formula must share a continuous selection"
+                        "{tex}: surrounding parentheses and formula must share a continuous \
+                            selection"
                     );
                 }
                 paint(f.buffer_mut());
@@ -1325,7 +1556,12 @@ fn compositor_crops_rows_occludes_dialogs_and_uploads_kitty_only_once() {
     occlude(area);
     let mut buffer = Buffer::empty(buffer.area);
     paint(&mut buffer);
-    assert!(buffer.content.iter().all(|c| c.symbol() == " "));
+    assert!(
+        buffer
+            .content
+            .iter()
+            .all(|c| c.symbol() == " ")
+    );
     clear_layers();
 }
 
@@ -1339,7 +1575,9 @@ fn preview_consumes_input_and_closes_without_touching_the_composer() {
         },
     );
     let mut terminal = Terminal::new(TestBackend::new(90, 30)).unwrap();
-    terminal.draw(|f| preview.draw(f)).unwrap();
+    terminal
+        .draw(|f| preview.draw(f))
+        .unwrap();
     let buffer = terminal.backend().buffer();
     let (x, y) = (0..30)
         .find_map(|y| {
@@ -1350,7 +1588,9 @@ fn preview_consumes_input_and_closes_without_touching_the_composer() {
         .unwrap();
 
     preview.handle(&mouse(MouseEventKind::Moved, x - 1, y));
-    terminal.draw(|f| preview.draw(f)).unwrap();
+    terminal
+        .draw(|f| preview.draw(f))
+        .unwrap();
     let buffer = terminal.backend().buffer();
     assert_eq!(buffer[(x - 1, y)].bg, buffer[(x + 1, y)].bg);
     assert_ne!(buffer[(x - 1, y)].bg, ratatui::style::Color::Reset);
@@ -1372,7 +1612,9 @@ fn preview_consumes_input_and_closes_without_touching_the_composer() {
     );
     for (w, h) in [(1, 1), (4, 3), (40, 12)] {
         let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
-        terminal.draw(|f| preview.draw(f)).unwrap();
+        terminal
+            .draw(|f| preview.draw(f))
+            .unwrap();
     }
 
     clear_layers();
@@ -1416,9 +1658,15 @@ fn scrolling_a_picture_clips_slices_and_keeps_the_rest_of_the_frame_clean() {
         Some(request.source)
     );
     let buffer = terminal.backend().buffer();
-    assert!(buffer.content.iter().enumerate().all(|(i, c)| {
-        area.contains(((i % 90) as u16, (i / 90) as u16).into()) || c.symbol() == " "
-    }));
+    assert!(
+        buffer
+            .content
+            .iter()
+            .enumerate()
+            .all(|(i, c)| {
+                area.contains(((i % 90) as u16, (i / 90) as u16).into()) || c.symbol() == " "
+            })
+    );
     LAYER.with(|l| {
         let layer = l.borrow();
         assert_eq!(layer.current[0].fragment.row, 3);
@@ -1613,8 +1861,14 @@ fn images_render_without_clicking_and_only_wrapped_links_show_navigation_hints()
             TranscriptItem::Tool(ToolRow {
                 id: "read-image".into(),
                 name: "read_image".into(),
-                arguments: serde_json::json!({"path": path}).to_string(),
-                output: serde_json::json!({"path": path}).to_string(),
+                arguments: serde_json::json!({
+                    "path": path
+                })
+                .to_string(),
+                output: serde_json::json!({
+                    "path": path
+                })
+                .to_string(),
                 status: ToolStatus::Finished,
             }),
             false,
@@ -1695,7 +1949,9 @@ fn images_render_without_clicking_and_only_wrapped_links_show_navigation_hints()
         }
 
         assert_eq!(
-            shown.replace(' ', "").contains("Ctrl+Click跳转"),
+            shown
+                .replace(' ', "")
+                .contains("Ctrl+Click跳转"),
             linked,
             "{shown:?}"
         );
@@ -1804,7 +2060,8 @@ fn linked_image_hints_stay_outside_pixels_while_the_pointer_moves() {
     let documents = [
         format!("before\n\n{image}\n\nbetween\n\n{image}\n\nafter"),
         format!(
-            "<table><tr><td><a href='{target}'><img src='{}'></a></td><td><a href='{target}'><img src='{}'></a></td></tr></table>",
+            "<table><tr><td><a href='{target}'><img src='{}'></a></td><td><a href='{target}'><img \
+                src='{}'></a></td></tr></table>",
             path.display(),
             path.display()
         ),
@@ -2013,7 +2270,12 @@ fn cropped_image_hover_uses_current_bounds_after_scroll_and_resize() {
                 &mouse(MouseEventKind::Moved, point.0, y),
             );
             draw(&mut state, &mut terminal, area);
-            assert!(state.link_tooltip_area.intersection(picture).is_empty());
+            assert!(
+                state
+                    .link_tooltip_area
+                    .intersection(picture)
+                    .is_empty()
+            );
             LAYER.with(|layer| {
                 assert_eq!(
                     layer
@@ -2034,7 +2296,12 @@ fn cropped_image_hover_uses_current_bounds_after_scroll_and_resize() {
             .picture_area_at(area, 4, point)
             .unwrap();
         assert_eq!(next, picture);
-        assert!(state.link_tooltip_area.intersection(next).is_empty());
+        assert!(
+            state
+                .link_tooltip_area
+                .intersection(next)
+                .is_empty()
+        );
         LAYER.with(|layer| {
             assert_eq!(layer.borrow().current.len(), 3);
             assert_eq!(layer.borrow().current[0].fragment.row, 4);
@@ -2052,7 +2319,10 @@ fn image_alt_urls_are_not_implicit_navigation_targets() {
         format!("![{label}][image]\n\n[image]: image.png"),
     ] {
         let lines = markdown::document(&source, 80);
-        let image = lines.iter().find(|line| !line.media.is_empty()).unwrap();
+        let image = lines
+            .iter()
+            .find(|line| !line.media.is_empty())
+            .unwrap();
         assert!(image.links.is_empty(), "{source}");
         assert_eq!(image.media[0].source, Source::Image("image.png".into()));
     }
@@ -2063,11 +2333,14 @@ fn table_formulas_share_cell_layout_keep_borders_links_and_copy_complete_tex() {
     let tex = [r"e^{i\pi}", r"\frac{a}{b}", "S", "R"];
     let sources = [
         format!(
-            "| $S$ | $R$ | 右对齐 |\n| :--- | :---: | ---: |\n| 中文 | [链接](https://orbit.example/docs) | ${}$ |\n| `code` | ${}$ | 42 |\n",
+            "| $S$ | $R$ | 右对齐 |\n| :--- | :---: | ---: |\n| 中文 | [链接](https://orbit.example/docs) \
+                | ${}$ |\n| `code` | ${}$ | 42 |\n",
             tex[0], tex[1]
         ),
         format!(
-            "<table><tr><th>$S$</th><th>$R$</th></tr><tr><td>中文</td><td align='right'>${}$</td></tr><tr><td colspan='2' align='center'>[链接](https://orbit.example/docs) ${}$</td></tr></table>",
+            "<table><tr><th>$S$</th><th>$R$</th></tr><tr><td>中文</td><td \
+                align='right'>${}$</td></tr><tr><td colspan='2' \
+                align='center'>[链接](https://orbit.example/docs) ${}$</td></tr></table>",
             tex[0], tex[1]
         ),
     ];
@@ -2087,7 +2360,10 @@ fn table_formulas_share_cell_layout_keep_borders_links_and_copy_complete_tex() {
                     .flat_map(|line| layout(line, &context, width))
                     .collect::<Vec<_>>();
                 let mut requested = std::collections::HashSet::new();
-                for request in pending.iter().flat_map(|line| &line.media_requests) {
+                for request in pending
+                    .iter()
+                    .flat_map(|line| &line.media_requests)
+                {
                     if requested.insert((request.source.clone(), request.width, request.height)) {
                         ready(
                             &context,
@@ -2109,9 +2385,14 @@ fn table_formulas_share_cell_layout_keep_borders_links_and_copy_complete_tex() {
                     .collect::<Vec<_>>()
                     .join("\n");
 
-                assert!(rendered.iter().any(|line| !line.graphics.is_empty()));
                 assert!(
-                    tex.iter().all(|tex| !text.contains(&format!("${tex}$"))),
+                    rendered
+                        .iter()
+                        .any(|line| !line.graphics.is_empty())
+                );
+                assert!(
+                    tex.iter()
+                        .all(|tex| !text.contains(&format!("${tex}$"))),
                     "{text}"
                 );
                 assert!(
@@ -2139,7 +2420,9 @@ fn table_formulas_share_cell_layout_keep_borders_links_and_copy_complete_tex() {
                             ..usize::from(graphic.x + graphic.picture.size.width)
                         {
                             assert!(
-                                !decorations.iter().any(|range| range.contains(&column)),
+                                !decorations
+                                    .iter()
+                                    .any(|range| range.contains(&column)),
                                 "formula overlaps table border"
                             );
                         }
@@ -2181,7 +2464,9 @@ fn table_math_decodes_automatically_and_only_requests_visible_rows() {
     for row in 0..80 {
         source.push_str(&format!("| {row} | $x_{{{row}}}$ |\n"));
     }
-    state.transcript.push(TranscriptItem::Assistant(source));
+    state
+        .transcript
+        .push(TranscriptItem::Assistant(source));
     let mut terminal = Terminal::new(TestBackend::new(60, 24)).unwrap();
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
@@ -2261,7 +2546,12 @@ fn composer_thumbnails_use_the_attachment_area_without_labels() {
     let picture = state
         .media
         .cached_picture(
-            &Source::Image(state.attachments[0].path().to_string_lossy().into_owned()),
+            &Source::Image(
+                state.attachments[0]
+                    .path()
+                    .to_string_lossy()
+                    .into_owned(),
+            ),
             thumbnails::COMPOSER_SIZE.width,
             thumbnails::COMPOSER_SIZE.height,
         )
@@ -2350,21 +2640,23 @@ fn message_thumbnails_are_spaced_above_text_and_remain_individually_previewable(
                 thumbnails::MESSAGE_SIZE.height,
             );
         }
-        state.transcript.push(TranscriptItem::UserWithImages {
-            text: "message text".into(),
-            images: selected
-                .iter()
-                .map(|source| {
-                    let Source::Image(path) = source else {
-                        unreachable!()
-                    };
-                    orbit_protocol::MessageImage {
-                        name: "private filename.png".into(),
-                        path: path.clone(),
-                    }
-                })
-                .collect(),
-        });
+        state
+            .transcript
+            .push(TranscriptItem::UserWithImages {
+                text: "message text".into(),
+                images: selected
+                    .iter()
+                    .map(|source| {
+                        let Source::Image(path) = source else {
+                            unreachable!()
+                        };
+                        orbit_protocol::MessageImage {
+                            name: "private filename.png".into(),
+                            path: path.clone(),
+                        }
+                    })
+                    .collect(),
+            });
         let mut terminal = Terminal::new(TestBackend::new(width, 30)).unwrap();
         draw_ui(&mut state, &mut terminal);
         let area = state.selection.viewport;
@@ -2409,7 +2701,11 @@ fn message_thumbnails_are_spaced_above_text_and_remain_individually_previewable(
             bounds[0].x, text_x,
             "single and multiple images align with the caption"
         );
-        assert!(bounds.iter().all(|image| image.bottom() < text_y));
+        assert!(
+            bounds
+                .iter()
+                .all(|image| image.bottom() < text_y)
+        );
         if bounds.len() == 2 && bounds[1].y < bounds[0].bottom() {
             assert_eq!(bounds[1].x, bounds[0].right() + 1);
             let gap = (bounds[0].right(), bounds[0].y);
@@ -2445,7 +2741,9 @@ fn export_formula_gallery() {
         std::fs::write(format!("/tmp/orbit-formula-{n}.svg"), svg).unwrap();
     }
 
-    gallery.save("/tmp/orbit-ratex-gallery.png").unwrap();
+    gallery
+        .save("/tmp/orbit-ratex-gallery.png")
+        .unwrap();
 }
 
 #[test]
@@ -2468,7 +2766,10 @@ fn thinking_formulas_keep_combined_rails_on_every_wrapped_and_graphic_row() {
             }
             let rows = layout(line, &context, width);
             assert!(rows.len() > 2);
-            assert!(rows.iter().any(|line| !line.graphics.is_empty()));
+            assert!(
+                rows.iter()
+                    .any(|line| !line.graphics.is_empty())
+            );
             for row in rows {
                 assert!(
                     row.text().starts_with(prefix),

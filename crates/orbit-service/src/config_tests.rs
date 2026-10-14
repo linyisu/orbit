@@ -35,7 +35,9 @@ async fn project_resources_follow_the_destination_without_changing_process_cwd()
     let options = WorkspaceOptions {
         model: Some("test::test".into()),
         initial_directory: old.clone(),
-        auth_directory: directory.path().join("home/.config/orbit/auth"),
+        auth_directory: directory
+            .path()
+            .join("home/.config/orbit/auth"),
         config,
         database: directory.path().join("test.db"),
         allow_mcp_start: false,
@@ -44,7 +46,9 @@ async fn project_resources_follow_the_destination_without_changing_process_cwd()
         instruction_dir: None,
         editor_command: "vi".into(),
     };
-    let prepared = prepare_workspace(&options, &old, None).await.unwrap();
+    let prepared = prepare_workspace(&options, &old, None)
+        .await
+        .unwrap();
 
     assert!(!options.auth_directory.exists());
     assert!(
@@ -65,7 +69,9 @@ async fn project_resources_follow_the_destination_without_changing_process_cwd()
             orbit_model::types::ToolCall::function(
                 "read",
                 "read_file",
-                serde_json::json!({ "path": "marker.txt" }),
+                serde_json::json!({
+                    "path": "marker.txt"
+                }),
             ),
             tokio_util::sync::CancellationToken::new(),
         )
@@ -82,7 +88,11 @@ async fn project_resources_follow_the_destination_without_changing_process_cwd()
     );
     assert_eq!(prepared.session.id(), id);
     assert_eq!(
-        prepared.session.snapshot.session.workspace,
+        prepared
+            .session
+            .snapshot
+            .session
+            .workspace,
         old.to_string_lossy()
     );
     assert_eq!(std::env::current_dir().unwrap(), original_cwd);
@@ -92,7 +102,9 @@ async fn project_resources_follow_the_destination_without_changing_process_cwd()
 async fn fresh_launch_uses_its_directory_instead_of_the_previous_session() {
     let directory = tempfile::tempdir().unwrap();
     let first = directory.path().join("first");
-    let second = directory.path().join("second/subdirectory");
+    let second = directory
+        .path()
+        .join("second/subdirectory");
     std::fs::create_dir_all(&first).unwrap();
     std::fs::create_dir_all(&second).unwrap();
     std::fs::write(first.join("marker.txt"), "previous workspace").unwrap();
@@ -123,16 +135,36 @@ async fn fresh_launch_uses_its_directory_instead_of_the_previous_session() {
         instruction_dir: None,
         editor_command: "vi".into(),
     };
-    let previous = prepare_workspace(&options, &first, None).await.unwrap();
-    let fresh = prepare_workspace(&options, &second, None).await.unwrap();
+    let previous = prepare_workspace(&options, &first, None)
+        .await
+        .unwrap();
+    let fresh = prepare_workspace(&options, &second, None)
+        .await
+        .unwrap();
     assert_ne!(previous.session.id(), fresh.session.id());
-    assert!(fresh.session.store.projects().await.unwrap().is_empty());
+    assert!(
+        fresh
+            .session
+            .store
+            .projects()
+            .await
+            .unwrap()
+            .is_empty()
+    );
     assert_eq!(fresh.resources.workspace.root(), second);
     assert_eq!(
         fresh.session.snapshot.session.workspace,
         second.to_str().unwrap()
     );
-    assert!(fresh.session.store.list().await.unwrap().is_empty());
+    assert!(
+        fresh
+            .session
+            .store
+            .list()
+            .await
+            .unwrap()
+            .is_empty()
+    );
     let output = fresh
         .resources
         .tools
@@ -140,15 +172,25 @@ async fn fresh_launch_uses_its_directory_instead_of_the_previous_session() {
             orbit_model::types::ToolCall::function(
                 "read",
                 "read_file",
-                serde_json::json!({"path": "marker.txt"}),
+                serde_json::json!({
+                    "path": "marker.txt"
+                }),
             ),
             CancellationToken::new(),
         )
         .await
         .unwrap();
 
-    assert!(output.content.contains("launch workspace"));
-    assert!(!output.content.contains("previous workspace"));
+    assert!(
+        output
+            .content
+            .contains("launch workspace")
+    );
+    assert!(
+        !output
+            .content
+            .contains("previous workspace")
+    );
 }
 
 #[test]
@@ -211,7 +253,12 @@ fn disabled_commands_hide_audit_and_export_tools() {
         ));
     }
 
-    filter_tools(&mut tools, &[Capability::Command].into_iter().collect());
+    filter_tools(
+        &mut tools,
+        &[Capability::Command]
+            .into_iter()
+            .collect(),
+    );
 
     assert!(tools.definitions().is_empty());
 }

@@ -86,8 +86,14 @@ pub(super) async fn run(
                     match result? {
                         Ok((secret, ids)) => {
                             return crate::connections::save_api_key(
-                                &options.config, &options.auth_directory, provider, secret, ids,
-                            ).await.map(Some);
+                                &options.config,
+                                &options.auth_directory,
+                                provider,
+                                secret,
+                                ids,
+                            )
+                            .await
+                            .map(Some);
                         }
                         Err(error) => message = format!("连接失败：{error}"),
                     }
@@ -104,7 +110,11 @@ pub(super) async fn run(
         match event? {
             Event::Key(event) if event.kind != KeyEventKind::Release => match event.code {
                 KeyCode::Esc => return Ok(None),
-                KeyCode::Char('c') if event.modifiers.contains(KeyModifiers::CONTROL) => {
+                KeyCode::Char('c')
+                    if event
+                        .modifiers
+                        .contains(KeyModifiers::CONTROL) =>
+                {
                     return Ok(None);
                 }
                 KeyCode::Enter if task.is_none() && !key.text.trim().is_empty() => {

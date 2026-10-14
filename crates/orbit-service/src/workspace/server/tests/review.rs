@@ -64,7 +64,10 @@ async fn index_actor_checks_scope_disabled_capabilities_and_readonly_before_writ
         (None, true, "只读会话"),
     ] {
         let fixture = Fixture::new("http://127.0.0.1:1/v1").await;
-        let root = &fixture.service.options.initial_directory;
+        let root = &fixture
+            .service
+            .options
+            .initial_directory;
         initialize_git(root);
         let before = fs::read(root.join(".git/index")).unwrap();
         let mut setup =
@@ -73,7 +76,9 @@ async fn index_actor_checks_scope_disabled_capabilities_and_readonly_before_writ
                 .unwrap();
         setup.resources.policy.disabled = disabled.into_iter().collect();
         setup.resources.policy.read_only = readonly;
-        let handle = Handle::spawn(setup, None).await.unwrap();
+        let handle = Handle::spawn(setup, None)
+            .await
+            .unwrap();
         let workspace = root.display().to_string();
         for staged in [true, false] {
             let error = actor_review(
@@ -83,7 +88,11 @@ async fn index_actor_checks_scope_disabled_capabilities_and_readonly_before_writ
             )
             .await
             .unwrap_err();
-            assert!(error.to_string().contains("工作区已切换"));
+            assert!(
+                error
+                    .to_string()
+                    .contains("工作区已切换")
+            );
             let error = actor_review(&handle, &workspace, index_action(staged, "0".repeat(64)))
                 .await
                 .unwrap_err();
@@ -99,15 +108,23 @@ async fn index_actor_checks_scope_disabled_capabilities_and_readonly_before_writ
                     .is_empty()
             );
         }
-        handle.command(session::Command::Close).await.unwrap();
+        handle
+            .command(session::Command::Close)
+            .await
+            .unwrap();
     }
 }
 
 #[tokio::test]
 async fn index_actor_refuses_updates_while_an_agent_is_running() {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .unwrap();
     let fixture = Fixture::new(&format!("http://{}/v1", listener.local_addr().unwrap())).await;
-    let root = &fixture.service.options.initial_directory;
+    let root = &fixture
+        .service
+        .options
+        .initial_directory;
     initialize_git(root);
     let before = fs::read(root.join(".git/index")).unwrap();
     let session = fixture.handle.info.id.clone();
@@ -135,7 +152,11 @@ async fn index_actor_refuses_updates_while_an_agent_is_running() {
             })
             .await
             .unwrap_err();
-        assert!(error.to_string().contains("请先结束正在运行的任务"));
+        assert!(
+            error
+                .to_string()
+                .contains("请先结束正在运行的任务")
+        );
         assert_eq!(fs::read(root.join(".git/index")).unwrap(), before);
     }
     fixture
@@ -159,11 +180,20 @@ async fn index_actor_refuses_updates_while_an_agent_is_running() {
 #[tokio::test]
 async fn successful_index_transactions_do_not_create_agent_runs_or_file_undo_receipts() {
     let fixture = Fixture::new("http://127.0.0.1:1/v1").await;
-    let root = &fixture.service.options.initial_directory;
+    let root = &fixture
+        .service
+        .options
+        .initial_directory;
     initialize_git(root);
     let session = fixture.handle.info.id.clone();
     let workspace = root.display().to_string();
-    let persisted_before = fixture.handle.store.list().await.unwrap().len();
+    let persisted_before = fixture
+        .handle
+        .store
+        .list()
+        .await
+        .unwrap()
+        .len();
     for (kind, staged, expected) in [
         (Kind::Unstaged, true, b"working\n".as_slice()),
         (Kind::Staged, false, b"base\n".as_slice()),
@@ -208,7 +238,13 @@ async fn successful_index_transactions_do_not_create_agent_runs_or_file_undo_rec
                 .is_empty()
         );
         assert_eq!(
-            fixture.handle.store.list().await.unwrap().len(),
+            fixture
+                .handle
+                .store
+                .list()
+                .await
+                .unwrap()
+                .len(),
             persisted_before
         );
         assert!(!fixture.page(0).await.busy);
@@ -220,7 +256,10 @@ async fn desktop_review_and_undo_respect_disabled_capabilities() {
     let fixture = Fixture::new("http://127.0.0.1:1/v1").await;
     let mut setup = crate::workspace::setup::prepare_workspace(
         &fixture.service.options,
-        &fixture.service.options.initial_directory,
+        &fixture
+            .service
+            .options
+            .initial_directory,
         None,
     )
     .await
@@ -254,7 +293,9 @@ async fn desktop_review_and_undo_respect_disabled_capabilities() {
         .contains("文件功能已禁用")
     );
     setup.resources.policy.disabled = vec![orbit_protocol::Capability::Write];
-    let handle = Handle::spawn(setup, None).await.unwrap();
+    let handle = Handle::spawn(setup, None)
+        .await
+        .unwrap();
     assert!(
         handle
             .command(session::Command::Undo { path: None })
@@ -267,9 +308,15 @@ async fn desktop_review_and_undo_respect_disabled_capabilities() {
 
 #[tokio::test]
 async fn checkpoint_review_waits_for_approval_and_refuses_stale_receipts_and_disk_changes() {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .unwrap();
     let fixture = Fixture::new(&format!("http://{}/v1", listener.local_addr().unwrap())).await;
-    let inside = fixture.service.options.initial_directory.join("inside.txt");
+    let inside = fixture
+        .service
+        .options
+        .initial_directory
+        .join("inside.txt");
     fs::write(&inside, "original").unwrap();
     let model = tokio::spawn(super::permissions::write_model(
         listener,
@@ -288,7 +335,9 @@ async fn checkpoint_review_waits_for_approval_and_refuses_stale_receipts_and_dis
         })
         .await
         .unwrap();
-    fixture.wait(|page| !page.busy && page.next > 0).await;
+    fixture
+        .wait(|page| !page.busy && page.next > 0)
+        .await;
     model.await.unwrap();
     assert_eq!(fs::read_to_string(&inside).unwrap(), "inside");
     let workspace = fixture

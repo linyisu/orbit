@@ -14,9 +14,10 @@ fn tools_expand_independently_and_commands_expand_in_full() {
                 id: i.to_string(),
                 name: "run_command".into(),
                 status: ToolStatus::Finished,
-                arguments:
-                    serde_json::json!({ "command": format!("echo {} end-{i}", "long ".repeat(30)) })
-                        .to_string(),
+                arguments: serde_json::json!({
+                    "command": format!("echo {} end-{i}", "long ".repeat(30))
+                })
+                .to_string(),
                 output: "one\ntwo\nthree\nfour".into(),
             }));
     }
@@ -48,7 +49,10 @@ fn tools_expand_independently_and_commands_expand_in_full() {
 fn parse_ansi_to_spans_strips_charset_and_preserves_clean_text() {
     let raw = "\x1b[31m-\x1b(B\x1b[m\x1b[32m+    let cell = &mut frame;\x1b(B\x1b[m";
     let spans = parse_ansi_to_spans(raw);
-    let joined: String = spans.iter().map(|s| s.content.as_ref()).collect();
+    let joined: String = spans
+        .iter()
+        .map(|s| s.content.as_ref())
+        .collect();
     assert!(!joined.contains("\u{1b}"));
     assert!(!joined.contains("(B"));
     assert_eq!(joined, "-+    let cell = &mut frame;");
@@ -63,8 +67,8 @@ fn completed_thinking_drops_trailing_blank_rows_without_changing_content() {
         (Some(0), "思考 0ms"),
         (Some(75), "思考 75ms"),
         (Some(999), "思考 999ms"),
-        (Some(1000), "思考 1.0s"),
-        (Some(7500), "思考 7.5s"),
+        (Some(1_000), "思考 1.0s"),
+        (Some(7_500), "思考 7.5s"),
     ] {
         row.elapsed = millis.map(std::time::Duration::from_millis);
         let lines = transcript_lines(&[TranscriptItem::Thinking(row.clone())], true);
@@ -92,7 +96,7 @@ fn completed_reasoning_collapses_and_header_hover_and_click_reveal_it() {
     let TranscriptItem::Thinking(row) = &mut state.transcript[0] else {
         unreachable!()
     };
-    row.elapsed = Some(std::time::Duration::from_millis(7500));
+    row.elapsed = Some(std::time::Duration::from_millis(7_500));
     let collapsed = render(&mut state, 90, 30);
     assert!(collapsed.contains("7.5s"), "{collapsed}");
     assert!(
@@ -104,7 +108,9 @@ fn completed_reasoning_collapses_and_header_hover_and_click_reveal_it() {
     assert!(collapsed.contains("final response"));
 
     let area = state.selection.viewport;
-    let offset = state.max_scroll.saturating_sub(state.scroll);
+    let offset = state
+        .max_scroll
+        .saturating_sub(state.scroll);
     let point = (area.y..area.bottom())
         .find_map(|y| {
             (area.x..area.right()).find_map(|x| {
@@ -127,7 +133,9 @@ fn completed_reasoning_collapses_and_header_hover_and_click_reveal_it() {
     state.thinking_hover_started =
         Some(std::time::Instant::now() - std::time::Duration::from_millis(150));
     let mut terminal = Terminal::new(TestBackend::new(90, 30)).unwrap();
-    terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+    terminal
+        .draw(|frame| draw(frame, &mut state))
+        .unwrap();
     assert!(
         terminal
             .backend()
@@ -160,7 +168,12 @@ fn completed_reasoning_collapses_and_header_hover_and_click_reveal_it() {
             (blank.0 - 1, blank.1),
         ))
         .unwrap();
-    assert!(state.selection.click(&released).is_none());
+    assert!(
+        state
+            .selection
+            .click(&released)
+            .is_none()
+    );
     assert!(state.expanded.contains(&0));
     state.selection.clear();
 
@@ -168,7 +181,10 @@ fn completed_reasoning_collapses_and_header_hover_and_click_reveal_it() {
         .selection
         .handle(&mouse(MouseEventKind::Down(MouseButton::Left), blank))
         .unwrap();
-    let clicked = state.selection.click(&released).unwrap();
+    let clicked = state
+        .selection
+        .click(&released)
+        .unwrap();
     assert!(super::super::toggle_transcript_at(&mut state, clicked));
     assert!(!render(&mut state, 90, 30).contains("private working text"));
 
@@ -180,7 +196,9 @@ fn completed_reasoning_collapses_and_header_hover_and_click_reveal_it() {
     });
 
     assert_eq!(handle_transcript_hover(&mut state, &leave), Some(true));
-    terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+    terminal
+        .draw(|frame| draw(frame, &mut state))
+        .unwrap();
     assert!(
         terminal
             .backend()
@@ -204,8 +222,10 @@ fn collapsed_tool_cards_fit_width_and_bound_the_preview() {
             id: "call".into(),
             name: "run_command".into(),
             status,
-            arguments: serde_json::json!({ "command": format!("中文\t{}", "command ".repeat(50)) })
-                .to_string(),
+            arguments: serde_json::json!({
+                "command": format!("中文\t{}", "command ".repeat(50))
+            })
+            .to_string(),
             output: "hidden result".into(),
         });
 
@@ -213,10 +233,18 @@ fn collapsed_tool_cards_fit_width_and_bound_the_preview() {
             let lines = transcript_lines_at_width(std::slice::from_ref(&item), false, width);
             assert!(lines.len() <= 9);
             assert!(
-                lines.iter().all(|line| line.width() <= usize::from(width)),
+                lines
+                    .iter()
+                    .all(|line| line.width() <= usize::from(width)),
                 "{lines:?}"
             );
-            assert!(lines.last().unwrap().to_string().is_empty());
+            assert!(
+                lines
+                    .last()
+                    .unwrap()
+                    .to_string()
+                    .is_empty()
+            );
         }
     }
 }
@@ -238,9 +266,21 @@ fn hovered_title_scrolls_without_splitting_wide_or_combining_characters() {
         })
         .collect();
 
-    assert!(frames.iter().all(|frame| frame.width() <= 12));
-    assert!(frames.iter().any(|frame| frame.ends_with("最后内容")));
-    assert!(frames.iter().all(|frame| !frame.starts_with('\u{301}')));
+    assert!(
+        frames
+            .iter()
+            .all(|frame| frame.width() <= 12)
+    );
+    assert!(
+        frames
+            .iter()
+            .any(|frame| frame.ends_with("最后内容"))
+    );
+    assert!(
+        frames
+            .iter()
+            .all(|frame| !frame.starts_with('\u{301}'))
+    );
 }
 
 #[test]
@@ -290,7 +330,11 @@ async fn editor_returns_to_home_until_the_draft_is_sent() {
     assert_eq!(state.status, RunStatus::Idle);
     assert!(state.input_area.x > 20);
     assert!(state.input_area.y < 30);
-    assert!(screen.replace(' ', "").contains("尚未发送的草稿"));
+    assert!(
+        screen
+            .replace(' ', "")
+            .contains("尚未发送的草稿")
+    );
     assert_eq!(state.tabs.len(), 1);
 
     let prompt = state.input.take().unwrap();
@@ -320,7 +364,9 @@ fn home_centers_composer_and_conversation_exposes_new_session_button() {
     assert!(state.tab_areas.is_empty());
     assert_eq!(state.new_tab_area, Rect::default());
 
-    state.transcript.push(TranscriptItem::User("Hello".into()));
+    state
+        .transcript
+        .push(TranscriptItem::User("Hello".into()));
     render(&mut state, 140, 40);
 
     assert!(state.input_area.y > home_input.y);
@@ -350,7 +396,9 @@ fn composer_metadata_is_below_input_without_a_background_or_sidebar() {
         state.input.set("draft".into());
         let mut terminal = Terminal::new(TestBackend::new(width, 24)).unwrap();
 
-        terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+        terminal
+            .draw(|frame| draw(frame, &mut state))
+            .unwrap();
 
         let buffer = terminal.backend().buffer();
         let metadata: String = (state.input_area.bottom()..22)
@@ -365,7 +413,10 @@ fn composer_metadata_is_below_input_without_a_background_or_sidebar() {
         for y in 0..24 {
             for x in 0..width {
                 let cell = &buffer[(x, y)];
-                if state.new_tab_area.contains((x, y).into()) {
+                if state
+                    .new_tab_area
+                    .contains((x, y).into())
+                {
                     assert_eq!(cell.bg, THEME.tab_background);
                 } else {
                     assert!(cell.bg == Color::Reset || cell.bg == THEME.caret);
@@ -400,11 +451,20 @@ fn selected_tab_remains_visible_and_clickable_at_narrow_width() {
             active: index == 4,
         })
         .collect();
-    state.transcript.push(TranscriptItem::User("Hello".into()));
+    state
+        .transcript
+        .push(TranscriptItem::User("Hello".into()));
     for width in [40, 100] {
         let mut terminal = Terminal::new(TestBackend::new(width, 16)).unwrap();
-        terminal.draw(|frame| draw(frame, &mut state)).unwrap();
-        assert!(state.tab_areas.iter().any(|(_, id)| id == "session-4"));
+        terminal
+            .draw(|frame| draw(frame, &mut state))
+            .unwrap();
+        assert!(
+            state
+                .tab_areas
+                .iter()
+                .any(|(_, id)| id == "session-4")
+        );
         assert!(
             state
                 .tab_areas
@@ -448,7 +508,9 @@ fn selected_tab_remains_visible_and_clickable_at_narrow_width() {
             state.tab_hover = hover
                 .clone()
                 .map(|action| (action, std::time::Instant::now()));
-            terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+            terminal
+                .draw(|frame| draw(frame, &mut state))
+                .unwrap();
             for (area, id) in &state.tab_areas {
                 let expected = if id == "session-4" {
                     ACCENT
@@ -466,7 +528,11 @@ fn selected_tab_remains_visible_and_clickable_at_narrow_width() {
                     }
                     let cell = &terminal.backend().buffer()[(x, area.y)];
                     next_glyph = x + cell.cell_width().max(1);
-                    assert!(!cell.modifier.contains(Modifier::UNDERLINED));
+                    assert!(
+                        !cell
+                            .modifier
+                            .contains(Modifier::UNDERLINED)
+                    );
                     if x < area.right() - 3 || hover != Some(TabAction::Close(id.clone())) {
                         assert_eq!(cell.bg, expected);
                     }
@@ -485,11 +551,15 @@ fn selected_tab_remains_visible_and_clickable_at_narrow_width() {
 fn tool_previews_bound_single_line_payloads_without_changing_results() {
     use super::super::app::ToolRow;
 
-    let output = "中文".repeat(20000);
+    let output = "中文".repeat(20_000);
     let item = TranscriptItem::Tool(ToolRow {
         id: "write".into(),
         name: "write_file".into(),
-        arguments: serde_json::json!({ "path": "report.md", "content": output }).to_string(),
+        arguments: serde_json::json!({
+            "path": "report.md",
+            "content": output
+        })
+        .to_string(),
         status: ToolStatus::Finished,
         output: output.clone(),
     });
@@ -501,8 +571,18 @@ fn tool_previews_bound_single_line_payloads_without_changing_results() {
             .contains("report.md · 1 行 · 120000 字节")
     );
     assert!(short.len() <= 9);
-    assert!(short.last().unwrap().to_string().is_empty());
-    assert!(!short.iter().any(|line| line.to_string().contains("[展开]")));
+    assert!(
+        short
+            .last()
+            .unwrap()
+            .to_string()
+            .is_empty()
+    );
+    assert!(
+        !short
+            .iter()
+            .any(|line| line.to_string().contains("[展开]"))
+    );
     let expanded = transcript_lines(std::slice::from_ref(&item), true);
     assert!(expanded.len() > short.len());
     let TranscriptItem::Tool(row) = &item else {
@@ -510,9 +590,14 @@ fn tool_previews_bound_single_line_payloads_without_changing_results() {
     };
     assert_eq!(row.output, output);
     assert!(
-        tool_summary(&serde_json::json!({ "command": "x".repeat(10000) }).to_string())
-            .chars()
-            .count()
+        tool_summary(
+            &serde_json::json!({
+                "command": "x".repeat(10_000)
+            })
+            .to_string()
+        )
+        .chars()
+        .count()
             < 170
     );
 }
@@ -522,12 +607,17 @@ fn incomplete_command_logs_are_not_presented_as_complete() {
     let row = super::super::app::ToolRow {
         id: "command".into(),
         name: "run_command".into(),
-        arguments: serde_json::json!({"command":"example"}).to_string(),
+        arguments: serde_json::json!({
+            "command": "example"
+        })
+        .to_string(),
         status: ToolStatus::Finished,
         output: serde_json::json!({
-            "stdout":"tail", "exit_code":0, "output_id":"sample",
-            "retained_output_truncated":true,
-            "retained_output_error":"disk full",
+            "stdout": "tail",
+            "exit_code": 0,
+            "output_id": "sample",
+            "retained_output_truncated": true,
+            "retained_output_error": "disk full",
         })
         .to_string(),
     };
@@ -546,10 +636,21 @@ fn command_cards_show_all_returned_output_without_internal_log_instructions() {
         .map(|n| format!("output line {n}\n"))
         .collect::<String>();
     let row = super::super::app::ToolRow {
-        id: "command".into(), name: "run_command".into(),
-        arguments: serde_json::json!({"command":"example"}).to_string(),
+        id: "command".into(),
+        name: "run_command".into(),
+        arguments: serde_json::json!({
+            "command": "example"
+        })
+        .to_string(),
         status: ToolStatus::Finished,
-        output: serde_json::json!({"stdout":stdout,"stderr":"stderr content","exit_code":0,"output_id":"cmd-example","retained_output_truncated":false}).to_string(),
+        output: serde_json::json!({
+            "stdout": stdout,
+            "stderr": "stderr content",
+            "exit_code": 0,
+            "output_id": "cmd-example",
+            "retained_output_truncated": false
+        })
+        .to_string(),
     };
     let text = tool_card(&row, true, 100)
         .iter()
@@ -577,7 +678,11 @@ fn tool_card_collapsed_single_line_and_expanded_box_click_behavior() {
         })
         .to_string(),
         status: ToolStatus::Finished,
-        output: serde_json::json!({ "written_bytes": 22, "created": true }).to_string(),
+        output: serde_json::json!({
+            "written_bytes": 22,
+            "created": true
+        })
+        .to_string(),
     };
 
     let collapsed = tool_card(&row, false, 80);
@@ -587,15 +692,36 @@ fn tool_card_collapsed_single_line_and_expanded_box_click_behavior() {
             .to_string()
             .starts_with("  write_file hello.py")
     );
-    assert!(!collapsed[0].to_string().contains(icons::CHECK));
-    assert!(!collapsed[0].to_string().contains(icons::LOADING));
-    assert!(!collapsed[0].to_string().contains(icons::CLOSE));
+    assert!(
+        !collapsed[0]
+            .to_string()
+            .contains(icons::CHECK)
+    );
+    assert!(
+        !collapsed[0]
+            .to_string()
+            .contains(icons::LOADING)
+    );
+    assert!(
+        !collapsed[0]
+            .to_string()
+            .contains(icons::CLOSE)
+    );
 
     let expanded = tool_card(&row, true, 80);
     assert!(expanded.len() >= 4);
     assert!(expanded[0].to_string().starts_with('╭') && expanded[0].to_string().ends_with('╮'));
-    assert!(expanded[1].to_string().contains("write_file hello.py"));
-    assert!(expanded[2].to_string().starts_with("│ ") && expanded[2].to_string().ends_with(" │"));
+    assert!(
+        expanded[1]
+            .to_string()
+            .contains("write_file hello.py")
+    );
+    assert!(
+        expanded[2]
+            .to_string()
+            .starts_with("│ ")
+            && expanded[2].to_string().ends_with(" │")
+    );
     assert!(
         expanded[3]
             .to_string()
@@ -674,19 +800,31 @@ fn tool_card_edit_file_renders_diff_backgrounds_across_row() {
     assert_eq!(rem_line.spans[0].content, "│");
     assert_eq!(rem_line.spans[1].style.bg, rem_bg);
     assert_eq!(rem_line.spans.last().unwrap().content, "│");
-    assert_eq!(rem_line.spans[rem_line.spans.len() - 2].style.bg, rem_bg);
+    assert_eq!(
+        rem_line.spans[rem_line.spans.len() - 2]
+            .style
+            .bg,
+        rem_bg
+    );
 
     let add_bg = Some(crate::tui::theme::THEME.diff_added_bg);
     assert_eq!(add_line.spans[0].content, "│");
     assert_eq!(add_line.spans[1].style.bg, add_bg);
     assert_eq!(add_line.spans.last().unwrap().content, "│");
-    assert_eq!(add_line.spans[add_line.spans.len() - 2].style.bg, add_bg);
+    assert_eq!(
+        add_line.spans[add_line.spans.len() - 2]
+            .style
+            .bg,
+        add_bg
+    );
 }
 
 #[test]
 fn file_previews_keep_markdown_source_while_fetched_documents_render_structure() {
     use super::super::app::ToolRow;
-    let content = "# Orbit Guide\n\n- **Orbit** uses `Rust`.\n\n| Item | Link |\n| --- | --- |\n| Docs | [Orbit](https://orbit.example/docs) |\n\n```rust\nlet url = \"https://orbit.example/code\";\n```\n\n---";
+    let content = "# Orbit Guide\n\n- **Orbit** uses `Rust`.\n\n| Item | Link |\n| --- | --- |\n| \
+        Docs | [Orbit](https://orbit.example/docs) |\n\n```rust\nlet url = \
+        \"https://orbit.example/code\";\n```\n\n---";
     let numbered = content
         .lines()
         .enumerate()
@@ -697,13 +835,20 @@ fn file_previews_keep_markdown_source_while_fetched_documents_render_structure()
         let row = ToolRow {
             id: "orbit-preview".into(),
             name: name.into(),
-            arguments: serde_json::json!({ "path": "docs/Orbit Guide.MD", "content": content })
-                .to_string(),
+            arguments: serde_json::json!({
+                "path": "docs/Orbit Guide.MD",
+                "content": content
+            })
+            .to_string(),
             status: ToolStatus::Finished,
             output: serde_json::json!({
                 "path": "docs/Orbit Guide.MD",
                 "format": "pdf",
-                "content": if name == "read_file" { &numbered } else { content },
+                "content": if name == "read_file" {
+                    &numbered
+                } else {
+                    content
+                },
                 "start_line": 40,
                 "end_line": 53,
                 "start_char": 0,
@@ -726,7 +871,10 @@ fn file_previews_keep_markdown_source_while_fetched_documents_render_structure()
                 .collect::<Vec<_>>()
                 .join("\n");
             let source = matches!(name, "read_file" | "write_file");
-            let links: Vec<_> = card.iter().flat_map(|line| &line.links).collect();
+            let links: Vec<_> = card
+                .iter()
+                .flat_map(|line| &line.links)
+                .collect();
             assert!(
                 width == 10
                     || links
@@ -785,13 +933,26 @@ fn file_previews_keep_markdown_source_while_fetched_documents_render_structure()
 fn web_fetch_resolves_relative_and_paginated_reference_links_against_final_url() {
     use super::super::app::ToolRow;
     let base = "https://docs.orbit.example/guide/topic.html";
-    let content = "* [当前文档][1]\n* [旧版](../archive/)\n* [其他站点](//other.orbit.example/help)\n* [不安全](javascript:alert)\n";
+    let content = "* [当前文档][1]\n* [旧版](../archive/)\n* [其他站点](//other.orbit.example/help)\n* \
+        [不安全](javascript:alert)\n";
     for definitions in ["", "\n[1]: /docs/\n"] {
         let row = ToolRow {
-            id:"fetch".into(), name:"web_fetch".into(),
-            arguments:serde_json::json!({"url":"https://docs.orbit.example/redirect"}).to_string(),
-            status:ToolStatus::Finished,
-            output:serde_json::json!({"url":base, "content":format!("{content}{definitions}"), "links":[{"n":1,"url":"https://docs.orbit.example/docs/"}]}).to_string(),
+            id: "fetch".into(),
+            name: "web_fetch".into(),
+            arguments: serde_json::json!({
+                "url": "https://docs.orbit.example/redirect"
+            })
+            .to_string(),
+            status: ToolStatus::Finished,
+            output: serde_json::json!({
+                "url": base,
+                "content": format!("{content}{definitions}"),
+                "links": [{
+                    "n": 1,
+                    "url": "https://docs.orbit.example/docs/"
+                }]
+            })
+            .to_string(),
         };
         for width in [18, 40, 100] {
             let lines = tool_card_with_links(&row, true, width);
@@ -821,33 +982,63 @@ fn web_fetch_title_is_not_a_link_but_wrapped_body_urls_keep_the_full_target() {
     use super::super::app::ToolRow;
     let url = "https://orbit.example/docs/rendering/";
     let row = ToolRow {
-        id: "orbit-fetch".into(), name: "web_fetch".into(),
-        arguments: serde_json::json!({"url":url}).to_string(),
+        id: "orbit-fetch".into(),
+        name: "web_fetch".into(),
+        arguments: serde_json::json!({
+            "url": url
+        })
+        .to_string(),
         status: ToolStatus::Finished,
-        output: serde_json::json!({"url":url, "content":"[Orbit 文档](https://orbit.example/docs/rendering/)", "total_chars":64}).to_string(),
+        output: serde_json::json!({
+            "url": url,
+            "content": "[Orbit 文档](https://orbit.example/docs/rendering/)",
+            "total_chars": 64
+        })
+        .to_string(),
     };
 
     for width in [16, 32, 80] {
         let collapsed = tool_card_with_links(&row, false, width);
-        assert!(collapsed.iter().all(|line| line.links.is_empty()));
+        assert!(
+            collapsed
+                .iter()
+                .all(|line| line.links.is_empty())
+        );
         let expanded = tool_card_with_links(&row, true, width);
         let blank = expanded
             .iter()
-            .position(|line| line.line.to_string().trim_matches(['│', ' ']).is_empty())
+            .position(|line| {
+                line.line
+                    .to_string()
+                    .trim_matches(['│', ' '])
+                    .is_empty()
+            })
             .unwrap();
-        assert!(expanded[..blank].iter().all(|line| line.links.is_empty()));
+        assert!(
+            expanded[..blank]
+                .iter()
+                .all(|line| line.links.is_empty())
+        );
         let targets: Vec<_> = expanded[blank..]
             .iter()
             .flat_map(|line| &line.links)
             .collect();
         assert!(targets.len() > 1);
-        assert!(targets.iter().all(|link| link.url == url));
-        assert!(expanded.iter().any(|line| line.links.iter().any(|link| {
-            line.line
-                .to_string()
-                .get(link.start..link.end)
-                .is_some_and(|label| label.contains("Orbit"))
-        })));
+        assert!(
+            targets
+                .iter()
+                .all(|link| link.url == url)
+        );
+        assert!(
+            expanded
+                .iter()
+                .any(|line| line.links.iter().any(|link| {
+                    line.line
+                        .to_string()
+                        .get(link.start..link.end)
+                        .is_some_and(|label| label.contains("Orbit"))
+                }))
+        );
     }
 }
 
@@ -862,14 +1053,31 @@ fn source_colors_and_multiline_state_match_across_code_previews() {
         .enumerate()
         .map(|(index, line)| format!("{}: {line}\n", index + 1))
         .collect::<String>();
-    let tools: Vec<_> = ["read_file", "write_file", "edit_file"].into_iter().map(|name| ToolRow {
-        id: "orbit-code".into(),
-        name: name.into(),
-        arguments: serde_json::json!({ "path": "src/Orbit Code.RS", "content": content, "old_text": "", "new_text": content }).to_string(),
-        status: ToolStatus::Finished,
-        output: serde_json::json!({ "path": "src/Orbit Code.RS", "content": numbered, "end_line": samples.len() }).to_string(),
-    }).collect();
-    let cards: Vec<_> = tools.iter().map(|row| tool_card(row, true, 100)).collect();
+    let tools: Vec<_> = ["read_file", "write_file", "edit_file"]
+        .into_iter()
+        .map(|name| ToolRow {
+            id: "orbit-code".into(),
+            name: name.into(),
+            arguments: serde_json::json!({
+                "path": "src/Orbit Code.RS",
+                "content": content,
+                "old_text": "",
+                "new_text": content
+            })
+            .to_string(),
+            status: ToolStatus::Finished,
+            output: serde_json::json!({
+                "path": "src/Orbit Code.RS",
+                "content": numbered,
+                "end_line": samples.len()
+            })
+            .to_string(),
+        })
+        .collect();
+    let cards: Vec<_> = tools
+        .iter()
+        .map(|row| tool_card(row, true, 100))
+        .collect();
     let message = markdown::document(&format!("```rust\n{content}\n```"), 100);
     let mut approval = UiState::new("mock");
     approval.approval = Some(orbit_tools::approval::ApprovalPreview::Write(
@@ -902,7 +1110,9 @@ fn source_colors_and_multiline_state_match_across_code_previews() {
         }
         let actual = (source_row..30)
             .find_map(|y| {
-                let row: String = (0..100).map(|x| buffer[(x, y)].symbol()).collect();
+                let row: String = (0..100)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect();
                 row.find(sample).map(|start| {
                     source_row = y + 1;
                     let x = row[..start].width() as u16;
@@ -934,23 +1144,37 @@ fn collapsed_tools_keep_one_blank_line_between_them() {
     let row1 = ToolRow {
         id: "1".into(),
         name: "run_command".into(),
-        arguments: serde_json::json!({ "command": "git status" }).to_string(),
+        arguments: serde_json::json!({
+            "command": "git status"
+        })
+        .to_string(),
         status: ToolStatus::Finished,
         output: "clean".into(),
     };
     let row2 = ToolRow {
         id: "2".into(),
         name: "read_file".into(),
-        arguments: serde_json::json!({ "path": "main.rs" }).to_string(),
+        arguments: serde_json::json!({
+            "path": "main.rs"
+        })
+        .to_string(),
         status: ToolStatus::Finished,
         output: "fn main() {}".into(),
     };
     let items = vec![TranscriptItem::Tool(row1), TranscriptItem::Tool(row2)];
     let lines = transcript_lines(&items, false);
     assert_eq!(lines.len(), 4);
-    assert!(lines[0].to_string().contains("run_command"));
+    assert!(
+        lines[0]
+            .to_string()
+            .contains("run_command")
+    );
     assert!(lines[1].to_string().is_empty());
-    assert!(lines[2].to_string().contains("read_file"));
+    assert!(
+        lines[2]
+            .to_string()
+            .contains("read_file")
+    );
     assert!(lines[3].to_string().is_empty());
 
     let mut layout = super::super::transcript::TranscriptLayout::default();
@@ -964,10 +1188,14 @@ fn hovering_expanded_thinking_content_preserves_its_syntax_style() {
         super::super::app::ThinkingRow::from("```rust\nlet orbit = 1;\n```".to_owned());
     thinking.finished = true;
     let mut state = UiState::new("orbit-model");
-    state.transcript.push(TranscriptItem::Thinking(thinking));
+    state
+        .transcript
+        .push(TranscriptItem::Thinking(thinking));
     state.expanded.insert(0);
     let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
-    terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+    terminal
+        .draw(|frame| draw(frame, &mut state))
+        .unwrap();
     let before = terminal.backend().buffer().clone();
     let area = state.selection.viewport;
     let y = (area.y..area.bottom())
@@ -983,13 +1211,17 @@ fn hovering_expanded_thinking_content_preserves_its_syntax_style() {
         state.transcript_layout.disclosure_at(
             &state.transcript,
             area,
-            state.max_scroll.saturating_sub(state.scroll),
+            state
+                .max_scroll
+                .saturating_sub(state.scroll),
             point,
         ),
         Some(0)
     );
     state.transcript_pointer = Some(point);
-    terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+    terminal
+        .draw(|frame| draw(frame, &mut state))
+        .unwrap();
     for x in area.x..area.right() {
         assert_eq!(terminal.backend().buffer()[(x, y)], before[(x, y)]);
     }
@@ -1002,26 +1234,37 @@ fn hovering_wrapped_tool_titles_highlights_all_title_rows_without_changing_bodie
     for (name, arguments) in [
         (
             "run_command",
-            serde_json::json!({"command": format!("cat <<'PYEOF' > /tmp/demo.py\n{}\nPYEOF", "中文 e\u{301} print('test') ".repeat(20))}),
+            serde_json::json!({
+                "command": format!(
+                    "cat <<'PYEOF' > /tmp/demo.py\n{}\nPYEOF",
+                    "中文 e\u{301} print('test') ".repeat(20)
+                )
+            }),
         ),
         (
             "read_file",
-            serde_json::json!({"path": format!("crates/{}/source.rs", "unicode-中文/".repeat(25))}),
+            serde_json::json!({
+                "path": format!("crates/{}/source.rs", "unicode-中文/".repeat(25))
+            }),
         ),
         (
             "search_text",
-            serde_json::json!({"query": "长搜索词 e\u{301} ".repeat(25)}),
+            serde_json::json!({
+                "query": "长搜索词 e\u{301} ".repeat(25)
+            }),
         ),
     ] {
         for width in [28, 70] {
             let mut state = UiState::new("model");
-            state.transcript.push(TranscriptItem::Tool(ToolRow {
-                id: "wrapped-title".into(),
-                name: name.into(),
-                arguments: arguments.to_string(),
-                status: ToolStatus::Finished,
-                output: "RESULT_MARKER\nlast output".into(),
-            }));
+            state
+                .transcript
+                .push(TranscriptItem::Tool(ToolRow {
+                    id: "wrapped-title".into(),
+                    name: name.into(),
+                    arguments: arguments.to_string(),
+                    status: ToolStatus::Finished,
+                    output: "RESULT_MARKER\nlast output".into(),
+                }));
             state.expanded.insert(0);
             state.follow_bottom = false;
             state.scroll = usize::MAX;
@@ -1107,7 +1350,8 @@ fn hovering_wrapped_tool_titles_highlights_all_title_rows_without_changing_bodie
                                 if !original.symbol().trim().is_empty() {
                                     assert!(
                                         cell.modifier.contains(Modifier::BOLD),
-                                        "{name} at {width}, scrolled {scrolled}: ({x}, {y}) from {hover_y}"
+                                        "{name} at {width}, scrolled {scrolled}: ({x}, {y}) from \
+                                            {hover_y}"
                                     );
                                     if original.fg == TOOL_FINISHED {
                                         assert_eq!(cell.fg, THEME.tool_hover);
@@ -1116,7 +1360,8 @@ fn hovering_wrapped_tool_titles_highlights_all_title_rows_without_changing_bodie
                             } else {
                                 assert_eq!(
                                     cell, original,
-                                    "{name} at {width}, scrolled {scrolled}: ({x}, {y}) from {hover_y}"
+                                    "{name} at {width}, scrolled {scrolled}: ({x}, {y}) from \
+                                        {hover_y}"
                                 );
                             }
                         }
@@ -1134,7 +1379,10 @@ fn collapsed_multiline_command_titles_fill_the_row_instead_of_stopping_at_quotes
         "python3 -c \"\n    import pathlib\n    target = '{}'\n    print(target)\n\"",
         "中文 e\u{301} long_value_".repeat(40)
     );
-    let arguments = serde_json::json!({"command":command}).to_string();
+    let arguments = serde_json::json!({
+        "command": command
+    })
+    .to_string();
     let row = ToolRow {
         id: "multiline".into(),
         name: "run_command".into(),
@@ -1172,8 +1420,10 @@ fn collapsed_multiline_command_titles_fill_the_row_instead_of_stopping_at_quotes
 #[test]
 fn command_preview_skips_a_shell_safety_preamble() {
     let summary = tool_summary(
-        &serde_json::json!({ "command": "set -e\ncargo test --workspace --all-features" })
-            .to_string(),
+        &serde_json::json!({
+            "command": "set -e\ncargo test --workspace --all-features"
+        })
+        .to_string(),
     );
 
     assert!(summary.starts_with("cargo test --workspace"), "{summary}");
@@ -1197,13 +1447,17 @@ fn command_menu_keeps_composer_anchored_and_highlights_the_entire_selection() {
         }
 
         let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
-        terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+        terminal
+            .draw(|frame| draw(frame, &mut state))
+            .unwrap();
         let input = state.input_area;
         let viewport = state.selection.viewport;
         let scroll = state.max_scroll;
         state.input.set("/".into());
 
-        terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+        terminal
+            .draw(|frame| draw(frame, &mut state))
+            .unwrap();
 
         assert_eq!(state.input_area, input);
         assert_eq!(state.selection.viewport, viewport);
@@ -1255,7 +1509,9 @@ fn command_menu_limits_visible_items_and_tracks_selection() {
 
 fn render(state: &mut UiState, width: u16, height: u16) -> String {
     let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-    terminal.draw(|frame| draw(frame, state)).unwrap();
+    terminal
+        .draw(|frame| draw(frame, state))
+        .unwrap();
 
     terminal
         .backend()
@@ -1280,13 +1536,15 @@ fn reasoning_is_visible_and_expansion_only_affects_one_visible_collapsible() {
     assert!(render(&mut state, 100, 30).contains("reasoning visible now"));
 
     for (id, name) in [("older", "read_file"), ("latest", "search_text")] {
-        state.transcript.push(TranscriptItem::Tool(ToolRow {
-            id: id.into(),
-            name: name.into(),
-            arguments: "{}".into(),
-            status: ToolStatus::Finished,
-            output: format!("first\nsecond\nthird\n{id}-detail"),
-        }));
+        state
+            .transcript
+            .push(TranscriptItem::Tool(ToolRow {
+                id: id.into(),
+                name: name.into(),
+                arguments: "{}".into(),
+                status: ToolStatus::Finished,
+                output: format!("first\nsecond\nthird\n{id}-detail"),
+            }));
     }
 
     let collapsed = render(&mut state, 100, 30);
@@ -1314,9 +1572,13 @@ fn reasoning_is_visible_and_expansion_only_affects_one_visible_collapsible() {
     assert!(!render(&mut state, 100, 30).contains("latest-detail"));
 
     let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
-    terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+    terminal
+        .draw(|frame| draw(frame, &mut state))
+        .unwrap();
     let buffer = terminal.backend().buffer();
-    let footer: String = (0..100).map(|x| buffer[(x, 29)].symbol()).collect();
+    let footer: String = (0..100)
+        .map(|x| buffer[(x, 29)].symbol())
+        .collect();
 
     assert!(footer.contains("/96k"));
     assert!(!footer.contains("model") && !footer.contains("auto"));
@@ -1330,27 +1592,36 @@ fn clicking_memory_hint_toggles_that_memory_instead_of_the_last_tool() {
     use crossterm::event::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
     let mut state = UiState::new("model");
-    state.transcript.push(TranscriptItem::Tool(ToolRow {
-        id: "memory".into(),
-        name: "memory_save".into(),
-        status: ToolStatus::Finished,
-        arguments: r#"{"title":"审查记录"}"#.into(),
-        output: serde_json::json!({
-            "memory": { "category": "fact", "content": "long text ".repeat(40) }
-        })
-        .to_string(),
-    }));
-    state.transcript.push(TranscriptItem::Tool(ToolRow {
-        id: "later".into(),
-        name: "other_tool".into(),
-        status: ToolStatus::Finished,
-        arguments: "{}".into(),
-        output: "first\nsecond\nthird".into(),
-    }));
+    state
+        .transcript
+        .push(TranscriptItem::Tool(ToolRow {
+            id: "memory".into(),
+            name: "memory_save".into(),
+            status: ToolStatus::Finished,
+            arguments: r#"{"title":"审查记录"}"#.into(),
+            output: serde_json::json!({
+                "memory": {
+                    "category": "fact",
+                    "content": "long text ".repeat(40)
+                }
+            })
+            .to_string(),
+        }));
+    state
+        .transcript
+        .push(TranscriptItem::Tool(ToolRow {
+            id: "later".into(),
+            name: "other_tool".into(),
+            status: ToolStatus::Finished,
+            arguments: "{}".into(),
+            output: "first\nsecond\nthird".into(),
+        }));
     let mut terminal = Terminal::new(TestBackend::new(100, 40)).unwrap();
 
     for expected in [Some(0), None] {
-        terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+        terminal
+            .draw(|frame| draw(frame, &mut state))
+            .unwrap();
         let point = (0..40)
             .find_map(|y| {
                 (0..100).find_map(|x| {
@@ -1359,7 +1630,9 @@ fn clicking_memory_hint_toggles_that_memory_instead_of_the_last_tool() {
                         .disclosure_at(
                             &state.transcript,
                             state.selection.viewport,
-                            state.max_scroll.saturating_sub(state.scroll),
+                            state
+                                .max_scroll
+                                .saturating_sub(state.scroll),
                             (x, y),
                         )
                         .filter(|index| *index == 0)
@@ -1397,17 +1670,35 @@ fn tool_controls_expand_read_search_and_generic_outputs_and_keep_the_draft() {
     let cases = [
         (
             "read_file",
-            serde_json::json!({ "start_line": 1, "end_line": 1, "content": format!("1: {}", "中文".repeat(80)) })
+            serde_json::json!({
+                "start_line": 1,
+                "end_line": 1,
+                "content": format!("1: {}", "中文".repeat(80))
+            })
             .to_string(),
         ),
         (
             "search_text",
-            serde_json::json!({ "matches": [{ "path": "src/main.rs", "line": 2, "text": "hit", "context": [{ "line": 1, "text": "context" }] }] })
+            serde_json::json!({
+                "matches": [{
+                    "path": "src/main.rs",
+                    "line": 2,
+                    "text": "hit",
+                    "context": [{
+                        "line": 1,
+                        "text": "context"
+                    }]
+                }]
+            })
             .to_string(),
         ),
         (
             "run_command",
-            serde_json::json!({ "stdout": "first\nsecond\nthird\n", "stderr": "", "exit_code": 0 })
+            serde_json::json!({
+                "stdout": "first\nsecond\nthird\n",
+                "stderr": "",
+                "exit_code": 0
+            })
             .to_string(),
         ),
         ("mcp_external", "result ".repeat(80)),
@@ -1416,23 +1707,29 @@ fn tool_controls_expand_read_search_and_generic_outputs_and_keep_the_draft() {
 
     for (name, output) in cases {
         let mut state = UiState::new("model");
-        state.input.set("unfinished draft".into());
-        state.transcript.push(TranscriptItem::Tool(ToolRow {
-            id: "first".into(),
-            name: name.into(),
-            arguments: "{}".into(),
-            status: if name == "failed_tool" {
-                ToolStatus::Failed
-            } else {
-                ToolStatus::Finished
-            },
-            output: output.clone(),
-        }));
+        state
+            .input
+            .set("unfinished draft".into());
+        state
+            .transcript
+            .push(TranscriptItem::Tool(ToolRow {
+                id: "first".into(),
+                name: name.into(),
+                arguments: "{}".into(),
+                status: if name == "failed_tool" {
+                    ToolStatus::Failed
+                } else {
+                    ToolStatus::Finished
+                },
+                output: output.clone(),
+            }));
 
         for expected in [Some(0), None] {
             render(&mut state, 90, 32);
             let area = state.selection.viewport;
-            let offset = state.max_scroll.saturating_sub(state.scroll);
+            let offset = state
+                .max_scroll
+                .saturating_sub(state.scroll);
             let point = (area.y..area.bottom())
                 .find_map(|y| {
                     (area.x..area.right()).find_map(|x| {
@@ -1466,13 +1763,17 @@ fn shortcut_collapses_scrolled_tool_with_clickable_output() {
     let mut state = UiState::new("model");
 
     for index in 0..3 {
-        state.transcript.push(TranscriptItem::Tool(ToolRow {
-            id: index.to_string(),
-            name: format!("tool_{index}"),
-            arguments: "{}".into(),
-            status: ToolStatus::Finished,
-            output: (0..100).map(|line| format!("detail {line}\n")).collect(),
-        }));
+        state
+            .transcript
+            .push(TranscriptItem::Tool(ToolRow {
+                id: index.to_string(),
+                name: format!("tool_{index}"),
+                arguments: "{}".into(),
+                status: ToolStatus::Finished,
+                output: (0..100)
+                    .map(|line| format!("detail {line}\n"))
+                    .collect(),
+            }));
     }
     state
         .transcript
@@ -1480,11 +1781,18 @@ fn shortcut_collapses_scrolled_tool_with_clickable_output() {
 
     render(&mut state, 90, 24);
     super::super::toggle_transcript_item(&mut state, 1);
-    let after_tool = state.transcript_layout.item_offset(2).unwrap();
-    state.scroll = state.max_scroll.saturating_sub(after_tool - 5);
+    let after_tool = state
+        .transcript_layout
+        .item_offset(2)
+        .unwrap();
+    state.scroll = state
+        .max_scroll
+        .saturating_sub(after_tool - 5);
     render(&mut state, 90, 24);
     let area = state.selection.viewport;
-    let offset = state.max_scroll.saturating_sub(state.scroll);
+    let offset = state
+        .max_scroll
+        .saturating_sub(state.scroll);
     assert_eq!(offset, after_tool - 5);
     assert!((area.y..area.bottom()).any(|y| {
         state
@@ -1544,7 +1852,9 @@ fn permission_mode_changes_only_repaint_the_mode_field() {
         state.workspace = "/project".into();
         state.input.set("未发送的草稿".into());
         let mut terminal = Terminal::new(TestBackend::new(width, 30)).unwrap();
-        terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+        terminal
+            .draw(|frame| draw(frame, &mut state))
+            .unwrap();
         let baseline = terminal.backend().buffer().clone();
         let start = baseline
             .content
@@ -1562,7 +1872,9 @@ fn permission_mode_changes_only_repaint_the_mode_field() {
             state.permissions.apply(confirmed, 1);
             for pending in [Some(Mode::Ask), Some(Mode::Auto), Some(Mode::Yolo), None] {
                 state.permissions.pending = pending;
-                terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+                terminal
+                    .draw(|frame| draw(frame, &mut state))
+                    .unwrap();
                 for (index, (before, after)) in baseline
                     .content
                     .iter()
@@ -1573,7 +1885,8 @@ fn permission_mode_changes_only_repaint_the_mode_field() {
                         assert!(
                             index / width as usize == y
                                 && (x..x + 5).contains(&(index % width as usize)),
-                            "mode change moved or repainted another field: width={width}, confirmed={confirmed:?}, pending={pending:?}, cell={index}"
+                            "mode change moved or repainted another field: width={width}, \
+                                confirmed={confirmed:?}, pending={pending:?}, cell={index}"
                         );
                     }
                 }
@@ -1604,7 +1917,11 @@ fn environment_labels_never_appear_in_composer_details_or_workspace_footer() {
                 .to_string()
                 .contains("model")
         );
-        assert!(footer(&state, 120).to_string().contains("/project"));
+        assert!(
+            footer(&state, 120)
+                .to_string()
+                .contains("/project")
+        );
     }
 }
 
@@ -1662,7 +1979,7 @@ fn running_status_shows_the_actual_cancel_shortcut() {
 
     state.status = RunStatus::Completed;
     state.started_at = None;
-    state.elapsed = std::time::Duration::from_millis(7500);
+    state.elapsed = std::time::Duration::from_millis(7_500);
     let completed = render(&mut state, 100, 24);
     assert!(!completed.contains("7.5s"));
 }
@@ -1678,7 +1995,9 @@ fn pending_images_render_as_chips_above_the_prompt() {
             mime_type: "image/png".into(),
             path: "/tmp/unused.png".into(),
         });
-    state.input.insert("describe this image");
+    state
+        .input
+        .insert("describe this image");
     let screen = render(&mut state, 80, 24);
 
     assert!(!screen.contains("capture.png"));
@@ -1688,7 +2007,9 @@ fn pending_images_render_as_chips_above_the_prompt() {
 
     state.attachment_cursor = Some(0);
     let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
-    terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+    terminal
+        .draw(|frame| draw(frame, &mut state))
+        .unwrap();
 
     assert!(!terminal.backend().cursor_visible());
 
@@ -1705,11 +2026,15 @@ fn pending_images_render_as_chips_above_the_prompt() {
 #[test]
 fn details_hover_fills_spaces_and_wide_glyphs_without_underlining_the_caption() {
     let mut state = UiState::new("mock");
-    state.transcript.push(TranscriptItem::Assistant(
-        "<details><summary>点击展开 / 折叠</summary>正文</details>".into(),
-    ));
+    state
+        .transcript
+        .push(TranscriptItem::Assistant(
+            "<details><summary>点击展开 / 折叠</summary>正文</details>".into(),
+        ));
     let mut terminal = Terminal::new(TestBackend::new(80, 30)).unwrap();
-    terminal.draw(|f| draw(f, &mut state)).unwrap();
+    terminal
+        .draw(|f| draw(f, &mut state))
+        .unwrap();
     let area = state.selection.viewport;
     let point = (area.y..area.bottom())
         .find_map(|y| {
@@ -1737,14 +2062,20 @@ fn details_hover_fills_spaces_and_wide_glyphs_without_underlining_the_caption() 
             for x in first..end {
                 assert_eq!(buffer[(x, point.1)].bg, THEME.accent);
                 assert_eq!(buffer[(x, point.1)].fg, THEME.on_accent);
-                assert!(!buffer[(x, point.1)].modifier.contains(Modifier::UNDERLINED));
+                assert!(
+                    !buffer[(x, point.1)]
+                        .modifier
+                        .contains(Modifier::UNDERLINED)
+                );
             }
 
             assert_eq!(buffer[(first - 1, point.1)].bg, Color::Reset);
         })
         .unwrap();
     state.transcript_pointer = None;
-    terminal.draw(|f| draw(f, &mut state)).unwrap();
+    terminal
+        .draw(|f| draw(f, &mut state))
+        .unwrap();
     assert_eq!(
         terminal.backend().buffer()[(first, point.1)].bg,
         Color::Reset
@@ -1754,9 +2085,17 @@ fn details_hover_fills_spaces_and_wide_glyphs_without_underlining_the_caption() 
 #[test]
 fn details_code_block_retains_one_border_color_including_its_closing_corner() {
     let mut state = UiState::new("mock");
-    state.transcript.push(TranscriptItem::Assistant("<details open><summary>展开</summary>\n\n```json\n{\"status\": \"success\"}\n```\n</details>".into()));
+    state
+        .transcript
+        .push(TranscriptItem::Assistant(
+            "<details open><summary>展开</summary>\n\n```json\
+        \n{\"status\": \"success\"}\n```\n</details>"
+                .into(),
+        ));
     let mut terminal = Terminal::new(TestBackend::new(80, 30)).unwrap();
-    terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+    terminal
+        .draw(|frame| draw(frame, &mut state))
+        .unwrap();
     let buffer = terminal.backend().buffer();
     let mut found = Vec::new();
     for y in 0..30 {
@@ -1789,14 +2128,20 @@ fn footnote_click_jumps_within_its_message_without_a_hover_tooltip() {
         "引用[^named]。\n\n{}\n[^named]: 正确脚注需要在窗口缩窄后仍然完整高亮，多行说明继续保持相同的脚注落点。\n\n    第二段补充说明\n",
         "正文\n".repeat(30)
     );
-    state.transcript.push(TranscriptItem::Assistant(body));
-    state.transcript.push(TranscriptItem::Assistant(
-        "第二条[^named]。\n\n[^named]: 另一条脚注\n".into(),
-    ));
+    state
+        .transcript
+        .push(TranscriptItem::Assistant(body));
+    state
+        .transcript
+        .push(TranscriptItem::Assistant(
+            "第二条[^named]。\n\n[^named]: 另一条脚注\n".into(),
+        ));
     state.follow_bottom = false;
     state.scroll = usize::MAX;
     let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
-    terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+    terminal
+        .draw(|frame| draw(frame, &mut state))
+        .unwrap();
     let area = state.selection.viewport;
     let point = (area.y..area.bottom())
         .find_map(|y| {
@@ -1811,16 +2156,23 @@ fn footnote_click_jumps_within_its_message_without_a_hover_tooltip() {
         .unwrap();
 
     state.link_hovered = Some(point);
-    terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+    terminal
+        .draw(|frame| draw(frame, &mut state))
+        .unwrap();
     assert!(state.link_tooltip_area.is_empty());
-    let target = state.transcript_layout.footnote_at(area, 0, point).unwrap();
+    let target = state
+        .transcript_layout
+        .footnote_at(area, 0, point)
+        .unwrap();
     assert!(super::super::jump_footnote_at(&mut state, point));
     assert_eq!(
         state.max_scroll - state.scroll,
         target.min(state.max_scroll)
     );
     assert!(!state.follow_bottom);
-    terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+    terminal
+        .draw(|frame| draw(frame, &mut state))
+        .unwrap();
     let visible = (area.y..area.bottom())
         .map(|y| {
             (area.x..area.right())
@@ -1840,8 +2192,12 @@ fn footnote_click_jumps_within_its_message_without_a_hover_tooltip() {
     assert!(!visible.contains("无法打开链接"));
     for width in [40, 80] {
         terminal.backend_mut().resize(width, 20);
-        terminal.resize(Rect::new(0, 0, width, 20)).unwrap();
-        terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+        terminal
+            .resize(Rect::new(0, 0, width, 20))
+            .unwrap();
+        terminal
+            .draw(|frame| draw(frame, &mut state))
+            .unwrap();
         let highlighted = terminal
             .backend()
             .buffer()
@@ -1854,10 +2210,15 @@ fn footnote_click_jumps_within_its_message_without_a_hover_tooltip() {
         assert!(highlighted.contains("第二段补充说明"), "{highlighted}");
         assert!(!highlighted.contains("另一条脚注"), "{highlighted}");
     }
-    state.footnote_focus.as_mut().unwrap().since =
-        std::time::Instant::now() - std::time::Duration::from_secs(3);
+    state
+        .footnote_focus
+        .as_mut()
+        .unwrap()
+        .since = std::time::Instant::now() - std::time::Duration::from_secs(3);
     assert!(state.expire_footnote_focus());
-    terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+    terminal
+        .draw(|frame| draw(frame, &mut state))
+        .unwrap();
     assert!(
         terminal
             .backend()
@@ -1871,9 +2232,11 @@ fn footnote_click_jumps_within_its_message_without_a_hover_tooltip() {
 #[test]
 fn file_approval_keeps_conversation_and_draft_visible() {
     let mut state = UiState::new("mock");
-    state.transcript.push(TranscriptItem::Assistant(
-        "Conversation remains visible".into(),
-    ));
+    state
+        .transcript
+        .push(TranscriptItem::Assistant(
+            "Conversation remains visible".into(),
+        ));
     state.input.insert("my draft");
     state.approval = Some(orbit_tools::approval::ApprovalPreview::Write(
         orbit_tools::approval::WritePreview {
@@ -1883,7 +2246,9 @@ fn file_approval_keeps_conversation_and_draft_visible() {
         },
     ));
     let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
-    terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+    terminal
+        .draw(|frame| draw(frame, &mut state))
+        .unwrap();
     let text: String = terminal
         .backend()
         .buffer()
@@ -1954,7 +2319,9 @@ fn transcript_and_footer_selection_keeps_the_native_input_cursor() {
             .unwrap();
         assert_eq!(state.input.cursor, cursor);
         assert!(terminal.backend().cursor_visible());
-        terminal.backend_mut().assert_cursor_position(caret);
+        terminal
+            .backend_mut()
+            .assert_cursor_position(caret);
         if footer {
             assert!(state.selection.text().contains("/96k"));
         } else {
@@ -1971,12 +2338,16 @@ fn native_cursor_tracks_unicode_input_streaming_and_dialog_focus() {
 
     for (input, column) in [("", 4), ("你好", 8), ("你e\u{301}", 7), ("第一行\n你好", 8)] {
         state.input.set(input.into());
-        terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+        terminal
+            .draw(|frame| draw(frame, &mut state))
+            .unwrap();
         let position = state.ime_cursor.unwrap();
 
         assert_eq!(position.x, column);
 
-        terminal.backend_mut().assert_cursor_position(position);
+        terminal
+            .backend_mut()
+            .assert_cursor_position(position);
 
         assert!(terminal.backend().cursor_visible());
         assert_eq!(
@@ -1988,8 +2359,12 @@ fn native_cursor_tracks_unicode_input_streaming_and_dialog_focus() {
         state.apply(orbit_agent::events::AgentEvent::Model(
             orbit_model::types::StreamEvent::TextDelta("输出中".into()),
         ));
-        terminal.draw(|frame| draw(frame, &mut state)).unwrap();
-        terminal.backend_mut().assert_cursor_position(position);
+        terminal
+            .draw(|frame| draw(frame, &mut state))
+            .unwrap();
+        terminal
+            .backend_mut()
+            .assert_cursor_position(position);
     }
 
     state.picker = Some(crate::tui::dialogs::SessionPicker::new(Vec::new()));
@@ -1997,9 +2372,13 @@ fn native_cursor_tracks_unicode_input_streaming_and_dialog_focus() {
         &mut state,
         crossterm::event::Event::Paste("中文".repeat(80)),
     );
-    terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+    terminal
+        .draw(|frame| draw(frame, &mut state))
+        .unwrap();
     let position = state.ime_cursor.unwrap();
-    terminal.backend_mut().assert_cursor_position(position);
+    terminal
+        .backend_mut()
+        .assert_cursor_position(position);
 
     assert_eq!(
         terminal.backend().buffer()[(position.x, position.y)].symbol(),
@@ -2015,10 +2394,14 @@ fn native_caret_does_not_overwrite_wide_characters_or_the_end_of_full_rows() {
     let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
     while !state.input.text.is_empty() {
         state.input.backspace();
-        terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+        terminal
+            .draw(|frame| draw(frame, &mut state))
+            .unwrap();
         let caret = state.ime_cursor.unwrap();
         assert!(terminal.backend().cursor_visible());
-        terminal.backend_mut().assert_cursor_position(caret);
+        terminal
+            .backend_mut()
+            .assert_cursor_position(caret);
         assert_eq!(
             terminal.backend().buffer()[(caret.x, caret.y)].symbol(),
             " "
@@ -2029,9 +2412,13 @@ fn native_caret_does_not_overwrite_wide_characters_or_the_end_of_full_rows() {
         );
     }
 
-    state.input.set(format!("{}\nnext", "a".repeat(74)));
+    state
+        .input
+        .set(format!("{}\nnext", "a".repeat(74)));
     state.input.set_cursor(74);
-    terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+    terminal
+        .draw(|frame| draw(frame, &mut state))
+        .unwrap();
     let caret = state.ime_cursor.unwrap();
     assert_eq!(caret.x, state.input_area.right() - 1);
     assert_eq!(
@@ -2065,7 +2452,11 @@ fn frozen_copy_selection_excludes_transient_cursor_effects() {
             .unwrap();
     }
 
-    assert!(state.cursor_motion.active(std::time::Instant::now()));
+    assert!(
+        state
+            .cursor_motion
+            .active(std::time::Instant::now())
+    );
     let area = state.selection.viewport;
     state
         .selection
@@ -2093,7 +2484,9 @@ fn input_selection_paints_whole_graphemes_and_does_not_freeze_the_transcript() {
     let mut state = UiState::new("orbit-model");
     state.input.set("你好👩‍💻 Orbit".into());
     state.input.begin_selection(0);
-    state.input.extend_selection("你好👩‍💻".len());
+    state
+        .input
+        .extend_selection("你好👩‍💻".len());
     let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
     terminal
         .draw(|frame| {
@@ -2171,13 +2564,13 @@ fn usage_footer_shows_two_meters_on_home_and_chat_without_hover_details() {
                     Limit {
                         label: "Gemini Models · Weekly Limit Remaining · weekly".into(),
                         remaining_fraction: Some(0.59),
-                        resets_at: Some((now + 6 * 86400 + 17 * 3600 + 59).to_string()),
+                        resets_at: Some((now + 6 * 86_400 + 17 * 3_600 + 59).to_string()),
                         ..Default::default()
                     },
                     Limit {
                         label: "Gemini Models · Five Hour Limit Remaining · 5h".into(),
                         remaining_fraction: Some(0.96),
-                        resets_at: Some((now + 4 * 3600 + 12 * 60 + 59).to_string()),
+                        resets_at: Some((now + 4 * 3_600 + 12 * 60 + 59).to_string()),
                         ..Default::default()
                     },
                     Limit {
@@ -2256,7 +2649,9 @@ fn context_indicator_reveals_its_budget_on_hover() {
     let mut state = UiState::new("model");
     state.context_used_tokens = 51_200;
     let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
-    terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+    terminal
+        .draw(|frame| draw(frame, &mut state))
+        .unwrap();
     let indicator = state.context_indicator_area;
 
     assert_eq!(indicator.width, 7);
@@ -2270,7 +2665,9 @@ fn context_indicator_reveals_its_budget_on_hover() {
 
     assert_eq!(handle_context_hover(&mut state, &hover), Some(true));
 
-    terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+    terminal
+        .draw(|frame| draw(frame, &mut state))
+        .unwrap();
     let content: String = terminal
         .backend()
         .buffer()
@@ -2309,7 +2706,11 @@ fn small_nonempty_context_is_not_displayed_as_zero() {
     ] {
         state.context_used_tokens = tokens;
 
-        assert!(footer(&state, 120).to_string().contains(expected));
+        assert!(
+            footer(&state, 120)
+                .to_string()
+                .contains(expected)
+        );
     }
 }
 
@@ -2318,11 +2719,15 @@ fn link_hover_shows_and_clears_its_ctrl_click_hint() {
     use crossterm::event::{Event, KeyModifiers, MouseEvent, MouseEventKind};
 
     let mut state = UiState::new("model");
-    state.transcript.push(TranscriptItem::Assistant(
-        "打开 https://example.com/docs 查看文档。".into(),
-    ));
+    state
+        .transcript
+        .push(TranscriptItem::Assistant(
+            "打开 https://example.com/docs 查看文档。".into(),
+        ));
     let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
-    terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+    terminal
+        .draw(|frame| draw(frame, &mut state))
+        .unwrap();
     let offset = state.max_scroll;
     let target = (state.selection.viewport.y..state.selection.viewport.bottom()).find_map(|y| {
         (state.selection.viewport.x..state.selection.viewport.right()).find_map(|x| {
@@ -2342,7 +2747,9 @@ fn link_hover_shows_and_clears_its_ctrl_click_hint() {
 
     assert_eq!(handle_link_hover(&mut state, &hover), Some(true));
 
-    terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+    terminal
+        .draw(|frame| draw(frame, &mut state))
+        .unwrap();
     let shown: String = terminal
         .backend()
         .buffer()
@@ -2351,7 +2758,12 @@ fn link_hover_shows_and_clears_its_ctrl_click_hint() {
         .map(|cell| cell.symbol())
         .collect();
 
-    assert!(shown.replace(' ', "").contains("Ctrl+Click跳转"), "{shown}");
+    assert!(
+        shown
+            .replace(' ', "")
+            .contains("Ctrl+Click跳转"),
+        "{shown}"
+    );
 
     let leave = Event::Mouse(MouseEvent {
         kind: MouseEventKind::Moved,
@@ -2362,7 +2774,9 @@ fn link_hover_shows_and_clears_its_ctrl_click_hint() {
 
     assert_eq!(handle_link_hover(&mut state, &leave), Some(true));
 
-    terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+    terminal
+        .draw(|frame| draw(frame, &mut state))
+        .unwrap();
     let hidden: String = terminal
         .backend()
         .buffer()
@@ -2372,7 +2786,9 @@ fn link_hover_shows_and_clears_its_ctrl_click_hint() {
         .collect();
 
     assert!(
-        !hidden.replace(' ', "").contains("Ctrl+Click跳转"),
+        !hidden
+            .replace(' ', "")
+            .contains("Ctrl+Click跳转"),
         "{hidden}"
     );
 }
@@ -2384,14 +2800,22 @@ fn table_link_hint_is_anchored_near_the_label_and_restores_covered_content() {
 
     let url = "https://orbit.example/docs";
     let source = format!(
-        "## 五、引用\n\n> 第一层引用。\n>\n> 引用块内的行内代码：`code` 与 **粗体**。\n\n## 六、表格\n\n| 左对齐 | 居中 | 右对齐 |\n| :--- | :---: | ---: |\n| 左对齐文本 | 居中文字 | 123456 |\n| 单元格内**粗体** | 单元格内*斜体* | 0.42 |\n| `行内代码` | [链接👩‍💻]({url}) | $e^{{i\\pi}}$ |\n\n## 七、代码块\n\n带语言标注的代码块：\n\n```python\n# 斐波那契数列\ndef fib(n: int) -> int:\n    a, b = 0, 1\n    for _ in range(n):\n        a, b = b, a + b\n    return a\n```\n"
+        "## 五、引用\n\n> 第一层引用。\n>\n> 引用块内的行内代码：`code` 与 **粗体**。\n\n## 六、表格\n\n| 左对齐 | 居中 | 右对齐 |\n| \
+            :--- | :---: | ---: |\n| 左对齐文本 | 居中文字 | 123456 |\n| 单元格内**粗体** | 单元格内*斜体* | 0.42 |\n| \
+            `行内代码` | [链接👩‍💻]({url}) | $e^{{i\\pi}}$ |\n\n## 七、代码块\n\n带语言标注的代码块：\n\n```python\n# \
+            斐波那契数列\ndef fib(n: int) -> int:\n    a, b = 0, 1\n    for _ in range(n):\n        a, \
+            b = b, a + b\n    return a\n```\n"
     );
     let mut state = UiState::new("mock");
-    state.transcript.push(TranscriptItem::Assistant(source));
+    state
+        .transcript
+        .push(TranscriptItem::Assistant(source));
 
     for width in [44, 80, 140] {
         let mut terminal = Terminal::new(TestBackend::new(width, 60)).unwrap();
-        terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+        terminal
+            .draw(|frame| draw(frame, &mut state))
+            .unwrap();
         let original = terminal.backend().buffer().clone();
         let viewport = state.selection.viewport;
         let points: Vec<_> = (viewport.y..viewport.bottom())
@@ -2418,7 +2842,9 @@ fn table_link_hint_is_anchored_near_the_label_and_restores_covered_content() {
             });
 
             assert_eq!(handle_link_hover(&mut state, &hover), Some(index == 0));
-            terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+            terminal
+                .draw(|frame| draw(frame, &mut state))
+                .unwrap();
             let hint = state.link_tooltip_area;
             assert!(!hint.is_empty());
             assert_eq!(hint.y, y + 1, "tooltip drifted away from table link");
@@ -2445,7 +2871,9 @@ fn table_link_hint_is_anchored_near_the_label_and_restores_covered_content() {
                 modifiers: KeyModifiers::NONE,
             }),
         );
-        terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+        terminal
+            .draw(|frame| draw(frame, &mut state))
+            .unwrap();
         assert!(state.link_tooltip_area.is_empty());
         for (restored, original) in terminal
             .backend()
@@ -2470,11 +2898,15 @@ fn wrapped_text_link_hints_stay_fixed_for_each_occurrence() {
     let title = "中文👩‍💻abcdef".repeat(16);
     for width in [30, 64, 140] {
         let mut state = UiState::new("mock");
-        state.transcript.push(TranscriptItem::Assistant(format!(
-            "开始 [{title}]({url}) 结束\n\n分隔正文\n\n第二个 [{title}]({url})。"
-        )));
+        state
+            .transcript
+            .push(TranscriptItem::Assistant(format!(
+                "开始 [{title}]({url}) 结束\n\n分隔正文\n\n第二个 [{title}]({url})。"
+            )));
         let mut terminal = Terminal::new(TestBackend::new(width, 120)).unwrap();
-        terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+        terminal
+            .draw(|frame| draw(frame, &mut state))
+            .unwrap();
         let viewport = state.selection.viewport;
         let points: Vec<_> = (viewport.y..viewport.bottom())
             .flat_map(|y| (viewport.x..viewport.right()).map(move |x| (x, y)))
@@ -2494,7 +2926,9 @@ fn wrapped_text_link_hints_stay_fixed_for_each_occurrence() {
 
         assert_eq!(subjects.len(), 2, "width {width}");
         assert!(
-            subjects.iter().all(|area| area.height > 1),
+            subjects
+                .iter()
+                .all(|area| area.height > 1),
             "width {width}: {subjects:?}"
         );
 
@@ -2517,7 +2951,9 @@ fn wrapped_text_link_hints_stay_fixed_for_each_occurrence() {
                 });
 
                 assert_eq!(handle_link_hover(&mut state, &hover), Some(index == 0));
-                terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+                terminal
+                    .draw(|frame| draw(frame, &mut state))
+                    .unwrap();
                 let hint = state.link_tooltip_area;
                 assert!(!hint.is_empty());
                 assert_eq!(hint.y, subject.bottom());
@@ -2538,11 +2974,15 @@ fn repository_url_in_a_table_has_hover_feedback_after_wrapping_and_resize() {
     let url = "https://github.com/example-org/sample-app";
     let mut state = UiState::new("model");
     state.transcript.push(TranscriptItem::Assistant(format!(
-        "Orbit 示例项目\n\n| 项 | 值 |\n| --- | --- |\n| 项目 | Orbit |\n| 仓库 | {url} |\n| 提交署名 | Orbit 测试身份（虚构） |\n| Windows 用户名 | orbit（示例路径 C:\\Users\\orbit\\） |\n| 会话 ID | orbit-test-session |\n| 用途 | TUI 链接测试 |\n"
+        "Orbit 示例项目\n\n| 项 | 值 |\n| --- | --- |\n| 项目 | Orbit |\n| 仓库 | {url} |\n| 提交署名 | Orbit \
+            测试身份（虚构） |\n| Windows 用户名 | orbit（示例路径 C:\\Users\\orbit\\） |\n| 会话 ID | \
+            orbit-test-session |\n| 用途 | TUI 链接测试 |\n"
     )));
     for width in [100, 64, 30] {
         let mut terminal = Terminal::new(TestBackend::new(width, 80)).unwrap();
-        terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+        terminal
+            .draw(|frame| draw(frame, &mut state))
+            .unwrap();
         let area = state.selection.viewport;
         let mut points = Vec::new();
         for y in area.y..area.bottom() {
@@ -2567,7 +3007,9 @@ fn repository_url_in_a_table_has_hover_feedback_after_wrapping_and_resize() {
             });
 
             handle_link_hover(&mut state, &hover);
-            terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+            terminal
+                .draw(|frame| draw(frame, &mut state))
+                .unwrap();
             let hint = state.link_tooltip_area;
             assert!(hint.width > 0, "width {width}, point ({x}, {y})");
             let mut text = String::new();
@@ -2578,7 +3020,11 @@ fn repository_url_in_a_table_has_hover_feedback_after_wrapping_and_resize() {
                 column += cell.cell_width().max(1);
             }
 
-            assert!(text.replace(' ', "").contains("Ctrl+Click跳转"), "{text}");
+            assert!(
+                text.replace(' ', "")
+                    .contains("Ctrl+Click跳转"),
+                "{text}"
+            );
         }
 
         state.link_hovered = None;
@@ -2599,13 +3045,19 @@ fn thinking_uses_markdown_with_a_subdued_continuous_rail() {
     let line = thinking_line("- **重点** 与 `code`", 0, &mut code);
 
     assert_eq!(line.spans[0].content, "  ┊ ");
+    assert!(line.spans.iter().any(|span| {
+        span.content == "重点"
+            && span
+                .style
+                .add_modifier
+                .contains(Modifier::BOLD)
+    }));
     assert!(
         line.spans
             .iter()
-            .any(|span| span.content == "重点" && span.style.add_modifier.contains(Modifier::BOLD))
+            .any(|span| span.content == "code"
+                && span.style.fg == Some(desaturate_for_thinking(Some(THEME.md_inline_code))))
     );
-    assert!(line.spans.iter().any(|span| span.content == "code"
-        && span.style.fg == Some(desaturate_for_thinking(Some(THEME.md_inline_code)))));
     assert_eq!(line.style.fg, None);
     assert_ne!(desaturate_for_thinking(Some(ACCENT)), ACCENT);
 }
@@ -2653,7 +3105,9 @@ fn scrolling_during_streaming_keeps_the_visible_anchor() {
 
     let mut state = UiState::new("mock");
     state.apply(AgentEvent::Model(StreamEvent::TextDelta(
-        (0..200).map(|i| format!("line {i:03}\n")).collect(),
+        (0..200)
+            .map(|i| format!("line {i:03}\n"))
+            .collect(),
     )));
     render(&mut state, 80, 24);
     state.scroll_up(30);
@@ -2680,10 +3134,12 @@ fn scrolling_during_streaming_keeps_the_visible_anchor() {
 #[test]
 fn follows_wrapped_answer_to_last_line() {
     let mut state = UiState::new("mock");
-    state.transcript.push(TranscriptItem::Assistant(format!(
-        "{}\nTHE END",
-        "中文长回答".repeat(200)
-    )));
+    state
+        .transcript
+        .push(TranscriptItem::Assistant(format!(
+            "{}\nTHE END",
+            "中文长回答".repeat(200)
+        )));
     let screen = render(&mut state, 40, 16);
 
     assert!(
@@ -2701,16 +3157,21 @@ fn follows_wrapped_answer_to_last_line() {
 #[test]
 fn resize_preserves_the_current_source_anchor() {
     let mut state = UiState::new("mock");
-    state.transcript.push(TranscriptItem::Assistant(
-        (0..80)
-            .map(|index| format!("段落 {index:02} {}\n", "中文内容 words ".repeat(8)))
-            .collect(),
-    ));
+    state
+        .transcript
+        .push(TranscriptItem::Assistant(
+            (0..80)
+                .map(|index| format!("段落 {index:02} {}\n", "中文内容 words ".repeat(8)))
+                .collect(),
+        ));
     render(&mut state, 90, 18);
     state.scroll_up(70);
     render(&mut state, 90, 18);
     let old_offset = state.max_scroll - state.scroll;
-    let anchor = state.transcript_layout.anchor_at(old_offset).unwrap();
+    let anchor = state
+        .transcript_layout
+        .anchor_at(old_offset)
+        .unwrap();
 
     render(&mut state, 48, 18);
     let expected = state
@@ -2729,7 +3190,11 @@ fn activity_stays_readable_and_in_place_while_colors_animate() {
     state.submit("work".into());
     state.started_at = None;
     let first = footer(&state, 100);
-    assert!(first.to_string().contains("等待模型响应"));
+    assert!(
+        first
+            .to_string()
+            .contains("等待模型响应")
+    );
     state.elapsed = std::time::Duration::from_millis(800);
     let second = footer(&state, 100);
     assert_eq!(first.to_string(), second.to_string());
@@ -2744,9 +3209,17 @@ fn activity_stays_readable_and_in_place_while_colors_animate() {
         assert!(footer(&state, width).width() <= width);
     }
     state.status = RunStatus::Cancelling;
-    assert!(footer(&state, 100).to_string().contains("正在取消"));
+    assert!(
+        footer(&state, 100)
+            .to_string()
+            .contains("正在取消")
+    );
     state.apply(orbit_agent::events::AgentEvent::Cancelled);
-    assert!(!footer(&state, 100).to_string().contains("正在"));
+    assert!(
+        !footer(&state, 100)
+            .to_string()
+            .contains("正在")
+    );
 }
 
 #[test]
@@ -2761,10 +3234,14 @@ fn activity_animates_only_in_footer_and_stops_when_completed() {
         "stable reasoning".into(),
     )));
     let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
-    terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+    terminal
+        .draw(|frame| draw(frame, &mut state))
+        .unwrap();
     let first = terminal.backend().buffer().clone();
     state.elapsed = std::time::Duration::from_millis(800);
-    terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+    terminal
+        .draw(|frame| draw(frame, &mut state))
+        .unwrap();
     let second = terminal.backend().buffer();
     let footer_start = usize::from(state.selection.footer.y) * 100;
     assert_eq!(
@@ -2775,7 +3252,11 @@ fn activity_animates_only_in_footer_and_stops_when_completed() {
         first.content[footer_start..],
         second.content[footer_start..]
     );
-    assert!(footer(&state, 100).to_string().contains("正在思考"));
+    assert!(
+        footer(&state, 100)
+            .to_string()
+            .contains("正在思考")
+    );
 
     let call = ToolCall {
         id: "command".into(),
@@ -2789,10 +3270,14 @@ fn activity_animates_only_in_footer_and_stops_when_completed() {
     state.apply(AgentEvent::ToolStarted { call: call.clone() });
     state.started_at = None;
     state.elapsed = std::time::Duration::ZERO;
-    terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+    terminal
+        .draw(|frame| draw(frame, &mut state))
+        .unwrap();
     let first = terminal.backend().buffer().clone();
     state.elapsed = std::time::Duration::from_millis(800);
-    terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+    terminal
+        .draw(|frame| draw(frame, &mut state))
+        .unwrap();
     let second = terminal.backend().buffer();
     let footer_start = usize::from(state.selection.footer.y) * 100;
     assert_eq!(
@@ -2803,7 +3288,11 @@ fn activity_animates_only_in_footer_and_stops_when_completed() {
         first.content[footer_start..],
         second.content[footer_start..]
     );
-    assert!(footer(&state, 100).to_string().contains("正在调用工具"));
+    assert!(
+        footer(&state, 100)
+            .to_string()
+            .contains("正在调用工具")
+    );
     state.apply(AgentEvent::ToolFinished {
         call,
         content: "stable output".into(),
@@ -2813,10 +3302,14 @@ fn activity_animates_only_in_footer_and_stops_when_completed() {
         turns: 1,
         tool_calls: 1,
     });
-    terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+    terminal
+        .draw(|frame| draw(frame, &mut state))
+        .unwrap();
     let first = terminal.backend().buffer().clone();
     state.elapsed += std::time::Duration::from_millis(800);
-    terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+    terminal
+        .draw(|frame| draw(frame, &mut state))
+        .unwrap();
     assert_eq!(&first, terminal.backend().buffer());
 }
 
@@ -2843,7 +3336,7 @@ fn execution_footer_shows_stable_status_labels_for_commands_and_tasks() {
             state.apply(event);
             let mut frames = std::collections::HashSet::new();
             let mut hint_offset = None;
-            for millis in (0..2000).step_by(130) {
+            for millis in (0..2_000).step_by(130) {
                 state.elapsed = std::time::Duration::from_millis(millis);
                 let line = footer(&state, 100).to_string();
                 assert!(line.contains(expected));
@@ -2859,9 +3352,21 @@ fn execution_footer_shows_stable_status_labels_for_commands_and_tasks() {
         }
 
         state.status = RunStatus::Cancelling;
-        assert!(footer(&state, 100).to_string().contains("正在取消"));
-        assert!(!footer(&state, 100).to_string().contains('█'));
+        assert!(
+            footer(&state, 100)
+                .to_string()
+                .contains("正在取消")
+        );
+        assert!(
+            !footer(&state, 100)
+                .to_string()
+                .contains('█')
+        );
         state.apply(AgentEvent::Cancelled);
-        assert!(!footer(&state, 100).to_string().contains('█'));
+        assert!(
+            !footer(&state, 100)
+                .to_string()
+                .contains('█')
+        );
     }
 }

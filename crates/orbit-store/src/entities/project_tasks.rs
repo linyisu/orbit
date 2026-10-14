@@ -14,6 +14,7 @@ pub struct Model {
     pub created_at: i64,
     pub updated_at: i64,
 }
+
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
 pub enum Relation {
     #[sea_orm(
@@ -29,6 +30,7 @@ pub enum Relation {
     )]
     Project,
 }
+
 impl ActiveModelBehavior for ActiveModel {}
 
 impl Related<super::projects::Entity> for Entity {

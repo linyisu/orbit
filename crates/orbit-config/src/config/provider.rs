@@ -17,15 +17,18 @@ pub enum ModelSelection {
     Explicit(Vec<String>),
     Automatic(Automatic),
 }
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Automatic {
     #[serde(rename = "auto")]
     Auto,
 }
+
 impl ModelSelection {
     pub fn auto() -> Self {
         Self::Automatic(Automatic::Auto)
     }
+
     pub fn is_auto(&self) -> bool {
         matches!(self, Self::Automatic(_))
     }
@@ -45,6 +48,7 @@ pub struct ModelOverrides {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning: Option<ReasoningOverride>,
 }
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ReasoningOverride {
@@ -53,6 +57,7 @@ pub struct ReasoningOverride {
     #[serde(default, skip_serializing_if = "toml::Table::is_empty")]
     pub extra: toml::Table,
 }
+
 impl ModelOverrides {
     pub fn from_profile(model: &ModelProfile) -> Self {
         Self {
@@ -60,13 +65,17 @@ impl ModelOverrides {
             context_tokens: model.context_tokens,
             input_context_tokens: model.input_context_tokens,
             supports_vision: model.supports_vision,
-            reasoning: model.reasoning.as_ref().map(|r| ReasoningOverride {
-                efforts: r.efforts.clone(),
-                default: r.default,
-                extra: r.extra.clone(),
-            }),
+            reasoning: model
+                .reasoning
+                .as_ref()
+                .map(|r| ReasoningOverride {
+                    efforts: r.efforts.clone(),
+                    default: r.default,
+                    extra: r.extra.clone(),
+                }),
         }
     }
+
     pub fn is_empty(&self) -> bool {
         self.max_output_tokens.is_none()
             && self.context_tokens.is_none()
@@ -74,11 +83,20 @@ impl ModelOverrides {
             && self.supports_vision.is_none()
             && self.reasoning.is_none()
     }
+
     pub fn apply(&self, model: &mut ModelProfile, format: ApiFormat) {
-        model.max_output_tokens = self.max_output_tokens.or(model.max_output_tokens);
-        model.context_tokens = self.context_tokens.or(model.context_tokens);
-        model.input_context_tokens = self.input_context_tokens.or(model.input_context_tokens);
-        model.supports_vision = self.supports_vision.or(model.supports_vision);
+        model.max_output_tokens = self
+            .max_output_tokens
+            .or(model.max_output_tokens);
+        model.context_tokens = self
+            .context_tokens
+            .or(model.context_tokens);
+        model.input_context_tokens = self
+            .input_context_tokens
+            .or(model.input_context_tokens);
+        model.supports_vision = self
+            .supports_vision
+            .or(model.supports_vision);
         if let Some(reasoning) = &self.reasoning {
             model.reasoning = Some(ReasoningProfile {
                 adapter: adapter(format),
@@ -89,6 +107,7 @@ impl ModelOverrides {
         }
     }
 }
+
 pub fn adapter(format: ApiFormat) -> ReasoningAdapter {
     match format {
         ApiFormat::OpenaiChatCompletions => ReasoningAdapter::OpenaiChat,
@@ -118,6 +137,7 @@ pub struct ProviderSpec {
     #[serde(default = "orbit_model::types::default_max_retries")]
     pub max_retries: u8,
 }
+
 impl std::fmt::Debug for ProviderSpec {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ProviderSpec")
@@ -128,6 +148,7 @@ impl std::fmt::Debug for ProviderSpec {
             .finish_non_exhaustive()
     }
 }
+
 impl ProviderSpec {
     pub fn new(format: ApiFormat, endpoint: impl Into<String>, models: ModelSelection) -> Self {
         Self {
@@ -142,14 +163,18 @@ impl ProviderSpec {
             max_retries: orbit_model::types::default_max_retries(),
         }
     }
+
     pub fn validate(&self) -> Result<()> {
         if let ModelSelection::Explicit(ids) = &self.models {
-            let unique = ids.iter().collect::<std::collections::BTreeSet<_>>();
+            let unique = ids
+                .iter()
+                .collect::<std::collections::BTreeSet<_>>();
             ensure!(unique.len() == ids.len(), "duplicate model ID in provider");
             ensure!(
-                ids.iter().all(|id| !id.trim().is_empty()
-                    && id.len() <= 256
-                    && !id.chars().any(char::is_control)),
+                ids.iter()
+                    .all(|id| !id.trim().is_empty()
+                        && id.len() <= 256
+                        && !id.chars().any(char::is_control)),
                 "models must contain nonempty IDs"
             );
             for id in self.model_overrides.keys() {
@@ -191,8 +216,14 @@ impl ProviderSpec {
         }
         Ok(())
     }
+
     pub fn set_models(&mut self, models: &[ModelProfile]) {
-        self.models = ModelSelection::Explicit(models.iter().map(|m| m.id.clone()).collect());
+        self.models = ModelSelection::Explicit(
+            models
+                .iter()
+                .map(|m| m.id.clone())
+                .collect(),
+        );
         self.model_overrides = models
             .iter()
             .filter_map(|m| {
@@ -211,17 +242,20 @@ pub struct ProviderConfig {
     pub models: Vec<ModelProfile>,
     pub(crate) discovered: Option<Vec<ModelProfile>>,
 }
+
 impl Deref for ProviderConfig {
     type Target = ProviderSpec;
     fn deref(&self) -> &ProviderSpec {
         &self.spec
     }
 }
+
 impl DerefMut for ProviderConfig {
     fn deref_mut(&mut self) -> &mut ProviderSpec {
         &mut self.spec
     }
 }
+
 impl From<ProviderSpec> for ProviderConfig {
     fn from(spec: ProviderSpec) -> Self {
         let mut result = Self {
@@ -233,9 +267,13 @@ impl From<ProviderSpec> for ProviderConfig {
         result
     }
 }
+
 impl ProviderConfig {
     pub fn resolve(&mut self) {
-        let base = self.discovered.clone().unwrap_or_else(|| self.bootstrap());
+        let base = self
+            .discovered
+            .clone()
+            .unwrap_or_else(|| self.bootstrap());
         self.models = match &self.spec.models {
             ModelSelection::Explicit(ids) => ids
                 .iter()
@@ -254,6 +292,7 @@ impl ProviderConfig {
             }
         }
     }
+
     pub(crate) fn bootstrap(&self) -> Vec<ModelProfile> {
         match (self.api_format, self.base_url.trim_end_matches('/')) {
             (ApiFormat::GoogleCodeAssist, "https://daily-cloudcode-pa.googleapis.com") => {
@@ -284,6 +323,7 @@ impl ProviderConfig {
         }
     }
 }
+
 impl ModelProfile {
     pub fn new(id: impl Into<String>) -> Self {
         Self {

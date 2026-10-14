@@ -14,6 +14,7 @@ pub struct Model {
     pub reasoning_effort: Option<String>,
     pub workspace_since_run: i64,
 }
+
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
 pub enum Relation {
     #[sea_orm(
@@ -23,6 +24,7 @@ pub enum Relation {
     )]
     Project,
 }
+
 impl ActiveModelBehavior for ActiveModel {}
 
 impl Related<super::projects::Entity> for Entity {

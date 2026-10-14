@@ -1,3 +1,6 @@
+//! Validated declarations, connection editing and refreshable model metadata.
+//! Persisted user choices remain separate from provider discovery caches.
+
 pub mod config;
 pub mod models;
 pub mod subagents;

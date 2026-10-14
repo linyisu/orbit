@@ -5,6 +5,7 @@ use ratatui::{Terminal, backend::TestBackend};
 fn key(code: KeyCode, modifiers: KeyModifiers) -> Event {
     Event::Key(KeyEvent::new(code, modifiers))
 }
+
 fn record(answer: &str, status: &str) -> orbit_protocol::SideQuestion {
     orbit_protocol::SideQuestion {
         thread_id: "thread".into(),
@@ -70,7 +71,11 @@ fn a_side_dialog_stays_above_pending_approval_and_freezes_text_while_selected() 
         .map(|cell| cell.symbol())
         .collect();
 
-    assert!(screen.replace(' ', "").contains("旁路提问"));
+    assert!(
+        screen
+            .replace(' ', "")
+            .contains("旁路提问")
+    );
     assert!(!screen.contains("approval-body-marker"));
     let area = state
         .btw
@@ -114,14 +119,38 @@ fn a_side_dialog_stays_above_pending_approval_and_freezes_text_while_selected() 
         false,
         None,
     );
-    assert!(
-        matches!(&state.btw.dialog.as_ref().unwrap().view.ui.transcript[1],TranscriptItem::Assistant(text) if text=="中文回答")
-    );
-    state.btw.dialog.as_mut().unwrap().view.ui.selection.clear();
+    assert!(matches!(
+        &state
+            .btw
+            .dialog
+            .as_ref()
+            .unwrap()
+            .view
+            .ui
+            .transcript[1],
+        TranscriptItem::Assistant(text) if text == "中文回答"
+    ));
+    state
+        .btw
+        .dialog
+        .as_mut()
+        .unwrap()
+        .view
+        .ui
+        .selection
+        .clear();
     state.btw.poll();
-    assert!(
-        matches!(&state.btw.dialog.as_ref().unwrap().view.ui.transcript[1],TranscriptItem::Assistant(text) if text=="中文回答追加内容")
-    );
+    assert!(matches!(
+        &state
+            .btw
+            .dialog
+            .as_ref()
+            .unwrap()
+            .view
+            .ui
+            .transcript[1],
+        TranscriptItem::Assistant(text) if text == "中文回答追加内容"
+    ));
     assert_eq!(state.status, RunStatus::Running);
     assert!(state.approval.is_some());
 }
@@ -137,9 +166,16 @@ fn incoming_threads_navigate_and_cancel_without_executing_a_local_model() {
         .handle(&key(KeyCode::Left, KeyModifiers::ALT))
         .unwrap();
     assert_eq!(questions.follow_up_index(), Some(0));
-    assert!(
-        matches!(&questions.dialog.as_ref().unwrap().view.ui.transcript[1], TranscriptItem::Assistant(text) if text == "first answer")
-    );
+    assert!(matches!(
+        &questions
+            .dialog
+            .as_ref()
+            .unwrap()
+            .view
+            .ui
+            .transcript[1],
+        TranscriptItem::Assistant(text) if text == "first answer"
+    ));
     questions
         .handle(&key(KeyCode::Right, KeyModifiers::ALT))
         .unwrap();

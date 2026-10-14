@@ -8,8 +8,8 @@ use url::Url;
 
 use crate::{AuthError, CallbackFlow, Result};
 
-const MAX_AUTHORIZATION_CODE_BYTES: usize = 4096;
-const MAX_CALLBACK_HEADER_BYTES: usize = 8 * 1024;
+const MAX_AUTHORIZATION_CODE_BYTES: usize = 4_096;
+const MAX_CALLBACK_HEADER_BYTES: usize = 8 * 1_024;
 const CALLBACK_IO_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Validate the redirect and state before accepting either a code or denial.
@@ -25,14 +25,23 @@ pub(crate) fn authorization_code(callback: &str, redirect: &Url, state: &str) ->
     }
 
     let pairs: Vec<_> = url.query_pairs().collect();
-    let states: Vec<_> = pairs.iter().filter(|(key, _)| key == "state").collect();
+    let states: Vec<_> = pairs
+        .iter()
+        .filter(|(key, _)| key == "state")
+        .collect();
     if states.len() != 1 || states[0].1 != state {
         return Err(AuthError::InvalidCallback);
     }
-    if pairs.iter().any(|(key, _)| key == "error") {
+    if pairs
+        .iter()
+        .any(|(key, _)| key == "error")
+    {
         return Err(AuthError::Denied);
     }
-    let codes: Vec<_> = pairs.iter().filter(|(key, _)| key == "code").collect();
+    let codes: Vec<_> = pairs
+        .iter()
+        .filter(|(key, _)| key == "code")
+        .collect();
     if codes.len() != 1 || codes[0].1.is_empty() || codes[0].1.len() > MAX_AUTHORIZATION_CODE_BYTES
     {
         return Err(AuthError::InvalidCallback);
@@ -66,7 +75,9 @@ impl CallbackListener {
             return Err(AuthError::InvalidCallback);
         }
 
-        let port = redirect.port().ok_or(AuthError::InvalidCallback)?;
+        let port = redirect
+            .port()
+            .ok_or(AuthError::InvalidCallback)?;
         let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, port)).await?;
         let port = listener.local_addr()?.port();
         redirect
@@ -113,7 +124,11 @@ impl CallbackListener {
                 continue;
             };
             let request = String::from_utf8_lossy(&bytes);
-            let mut line = request.lines().next().unwrap_or("").split_whitespace();
+            let mut line = request
+                .lines()
+                .next()
+                .unwrap_or("")
+                .split_whitespace();
             if line.next() != Some("GET") {
                 continue;
             }
@@ -121,19 +136,27 @@ impl CallbackListener {
             if !target.starts_with(&format!("{}?", self.redirect.path())) {
                 continue;
             }
-            let callback = format!("{}{}", self.redirect.origin().ascii_serialization(), target);
+            let callback = format!(
+                "{}{}",
+                self.redirect
+                    .origin()
+                    .ascii_serialization(),
+                target
+            );
             let result = login.callback_code(&callback);
             let accepted = result.is_ok();
             let (status, body) = if accepted {
                 (
                     "200 OK",
-                    "Authorization callback received. Login is not complete yet. Return to Orbit for token exchange and account setup.",
+                    "Authorization callback received. Login is not complete yet. Return to Orbit \
+                        for token exchange and account setup.",
                 )
             } else {
                 ("400 Bad Request", "Invalid authorization callback.")
             };
             let response = format!(
-                "HTTP/1.1 {status}\r\nContent-Type: text/plain; charset=utf-8\r\nCache-Control: no-store\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{body}",
+                "HTTP/1.1 {status}\r\nContent-Type: text/plain; charset=utf-8\r\nCache-Control: \
+                    no-store\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{body}",
                 body.len()
             );
             let _ =
@@ -171,9 +194,21 @@ mod tests {
                 let mut socket = tokio::net::TcpStream::connect(("127.0.0.1", port))
                     .await
                     .unwrap();
-                socket.write_all(format!("GET /callback?code=test&state={state} HTTP/1.1\r\nHost: localhost\r\n\r\n").as_bytes()).await.unwrap();
+                socket
+                    .write_all(
+                        format!(
+                            "GET /callback?code=test&state={state} HTTP/1.1\r\nHost: \
+                    localhost\r\n\r\n"
+                        )
+                        .as_bytes(),
+                    )
+                    .await
+                    .unwrap();
                 let mut response = String::new();
-                socket.read_to_string(&mut response).await.unwrap();
+                socket
+                    .read_to_string(&mut response)
+                    .await
+                    .unwrap();
                 assert!(
                     response.starts_with(&format!("HTTP/1.1 {expected}")),
                     "{response}"
@@ -183,7 +218,12 @@ mod tests {
 
         let (result, ()) = tokio::join!(listener.wait(&login, Duration::from_secs(5)), requests);
 
-        assert_eq!(login.callback_code(&result.unwrap()).unwrap(), "test");
+        assert_eq!(
+            login
+                .callback_code(&result.unwrap())
+                .unwrap(),
+            "test"
+        );
     }
 
     #[tokio::test]
@@ -191,7 +231,9 @@ mod tests {
         let listener = CallbackListener::bind(0).await.unwrap();
         let login = AnthropicLogin::new(listener.redirect_uri()).unwrap();
 
-        let result = listener.wait(&login, Duration::from_millis(10)).await;
+        let result = listener
+            .wait(&login, Duration::from_millis(10))
+            .await;
 
         assert!(matches!(result, Err(AuthError::Timeout)));
     }

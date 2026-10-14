@@ -78,6 +78,7 @@ struct MessageImage {
     data: Result<Option<Arc<Image>>, SharedString>,
     dimensions: Option<(u32, u32)>,
 }
+
 impl EventEmitter<Disclosure> for MessageRow {}
 impl EventEmitter<LayoutChanged> for MessageRow {}
 impl EventEmitter<ImageRequest> for MessageRow {}
@@ -101,12 +102,15 @@ impl Conversation {
             viewport_bounds: Rc::new(Cell::new(Bounds::default())),
         }
     }
+
     pub(crate) fn navigation_controls(&self) -> Entity<navigation::Controls> {
         self.navigation_controls.clone()
     }
+
     pub(crate) fn is_empty(&self) -> bool {
         self.rows.is_empty()
     }
+
     pub(crate) fn prompts(&self) -> Vec<String> {
         self.transcript
             .turns
@@ -115,6 +119,7 @@ impl Conversation {
             .filter(|text| !text.trim().is_empty())
             .collect()
     }
+
     pub(crate) fn first_prompt(&self) -> Option<&str> {
         self.transcript
             .turns
@@ -122,6 +127,7 @@ impl Conversation {
             .filter_map(|turn| turn.prompt.as_deref())
             .find(|prompt| !prompt.trim().is_empty())
     }
+
     pub(crate) fn apply(&mut self, update: Update, cx: &mut Context<Self>) {
         let Some(change) = self.transcript.apply(update) else {
             return;
@@ -145,11 +151,13 @@ impl Conversation {
             // Keep the prompt and its response in separate virtual rows. A
             // disclosure can then reveal its header without scrolling back
             // through a potentially very long user message.
-            self.scroll.update(cx, |scroll, cx| scroll.append(2, cx));
+            self.scroll
+                .update(cx, |scroll, cx| scroll.append(2, cx));
             if let Some(prompt) = &self.transcript.turns[index].prompt {
-                self.navigation.update(cx, |navigation, cx| {
-                    navigation.append(index * 2, prompt, cx)
-                });
+                self.navigation
+                    .update(cx, |navigation, cx| {
+                        navigation.append(index * 2, prompt, cx)
+                    });
             }
         }
         let turn = &self.transcript.turns[change.turn];
@@ -159,6 +167,7 @@ impl Conversation {
         });
         cx.notify();
     }
+
     pub(crate) fn image(
         &mut self,
         path: &str,
@@ -212,6 +221,7 @@ impl Conversation {
         }
     }
 }
+
 impl TurnView {
     fn measure_process_row(
         &mut self,
@@ -220,9 +230,16 @@ impl TurnView {
         size: Size<Pixels>,
         cx: &mut Context<Self>,
     ) {
-        let before = self.process_height.height(self.process_limit);
-        self.process_height.record(revision, index, size);
-        if before != self.process_height.height(self.process_limit) {
+        let before = self
+            .process_height
+            .height(self.process_limit);
+        self.process_height
+            .record(revision, index, size);
+        if before
+            != self
+                .process_height
+                .height(self.process_limit)
+        {
             self.scroll.update(cx, |scroll, cx| {
                 scroll.remeasure_items(self.index..self.index + 1, cx);
             });
@@ -255,6 +272,7 @@ impl TurnView {
             _subscriptions: vec![],
         }
     }
+
     fn sync(&mut self, turn: &Turn, changed: Option<usize>, cx: &mut Context<Self>) {
         self.reply = turn.reply().into();
         if self.user.is_none()
@@ -288,10 +306,15 @@ impl TurnView {
             self._subscriptions
                 .push(cx.subscribe(&row, |view, _, event: &LayoutChanged, cx| {
                     view.process_height.refresh();
-                    if let Some(index) = view.process.iter().position(|part| *part == event.index) {
-                        view.process_scroll.update(cx, |scroll, cx| {
-                            scroll.remeasure_items(index..index + 1, cx);
-                        });
+                    if let Some(index) = view
+                        .process
+                        .iter()
+                        .position(|part| *part == event.index)
+                    {
+                        view.process_scroll
+                            .update(cx, |scroll, cx| {
+                                scroll.remeasure_items(index..index + 1, cx);
+                            });
                     }
                     view.scroll.update(cx, |scroll, cx| {
                         scroll.remeasure_items(view.index..view.index + 1, cx);
@@ -301,13 +324,18 @@ impl TurnView {
             self._subscriptions
                 .push(cx.subscribe(&row, |view, _, event: &Disclosure, cx| {
                     view.process_height.refresh();
-                    if let Some(index) = view.process.iter().position(|part| *part == event.index) {
-                        view.process_scroll.update(cx, |scroll, cx| {
-                            scroll.remeasure_items(index..index + 1, cx);
-                            // Explicitly anchor after invalidation: a list whose
-                            // collapsed rows fit has resumed tail following.
-                            scroll.scroll_to_item(index, cx);
-                        });
+                    if let Some(index) = view
+                        .process
+                        .iter()
+                        .position(|part| *part == event.index)
+                    {
+                        view.process_scroll
+                            .update(cx, |scroll, cx| {
+                                scroll.remeasure_items(index..index + 1, cx);
+                                // Explicitly anchor after invalidation: a list whose
+                                // collapsed rows fit has resumed tail following.
+                                scroll.scroll_to_item(index, cx);
+                            });
                     }
                     view.scroll.update(cx, |scroll, cx| {
                         scroll.remeasure_items(view.index..view.index + 1, cx);
@@ -331,15 +359,20 @@ impl TurnView {
                     source.push_str(delta);
                 } else if !delta.is_empty() {
                     let content = markdown::prose(&part.content);
-                    row.text.update(cx, |text, cx| text.set_text(&content, cx));
+                    row.text
+                        .update(cx, |text, cx| text.set_text(&content, cx));
                 }
                 row.source_len = part.content.len();
                 cx.notify();
             });
-            if let Some(index) = process.iter().position(|part| *part == index) {
-                self.process_scroll.update(cx, |scroll, cx| {
-                    scroll.remeasure_items(index..index + 1, cx)
-                });
+            if let Some(index) = process
+                .iter()
+                .position(|part| *part == index)
+            {
+                self.process_scroll
+                    .update(cx, |scroll, cx| {
+                        scroll.remeasure_items(index..index + 1, cx)
+                    });
             }
         }
         let preserved = self
@@ -350,14 +383,16 @@ impl TurnView {
             .count();
         let count = turn.process_count();
         if count > self.process.len() {
-            self.process_scroll.update(cx, |scroll, cx| {
-                scroll.append(count - self.process.len(), cx)
-            });
+            self.process_scroll
+                .update(cx, |scroll, cx| {
+                    scroll.append(count - self.process.len(), cx)
+                });
         }
         if preserved < self.process.len() {
-            self.process_scroll.update(cx, |scroll, cx| {
-                scroll.remeasure_items(preserved..count, cx)
-            });
+            self.process_scroll
+                .update(cx, |scroll, cx| {
+                    scroll.remeasure_items(preserved..count, cx)
+                });
         }
         if self.process != process {
             self.process_height.invalidate(count);
@@ -365,12 +400,14 @@ impl TurnView {
             self.process_height.refresh();
         }
         self.process = process;
-        self.disclosure.sync(turn.completed && conclusion.is_some());
+        self.disclosure
+            .sync(turn.completed && conclusion.is_some());
         self.conclusion = conclusion;
         self.label = turn.label().into();
         cx.notify();
     }
 }
+
 impl Render for TurnView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let weak = cx.weak_entity();
@@ -388,7 +425,9 @@ impl Render for TurnView {
         } else {
             available * 0.5
         };
-        let process_height = self.process_height.height(self.process_limit);
+        let process_height = self
+            .process_height
+            .height(self.process_limit);
         let revision = self.process_height.revision();
         v_flex()
             .w_full()
@@ -495,7 +534,8 @@ impl Render for TurnView {
                 },
             )
             .when_some(
-                self.conclusion.and_then(|i| self.parts.get(i).cloned()),
+                self.conclusion
+                    .and_then(|i| self.parts.get(i).cloned()),
                 |view, reply| view.child(reply),
             )
             .when(!self.reply.is_empty(), |view| {
@@ -511,6 +551,7 @@ impl Render for TurnView {
             })
     }
 }
+
 impl Render for Conversation {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if self.rows.is_empty() {
@@ -539,7 +580,12 @@ impl Render for Conversation {
         let scroller =
             MessageScroller::new("conversation", self.scroll.clone(), move |index, _, cx| {
                 weak.upgrade()
-                    .and_then(|view| view.read(cx).rows.get(index / 2).cloned())
+                    .and_then(|view| {
+                        view.read(cx)
+                            .rows
+                            .get(index / 2)
+                            .cloned()
+                    })
                     .map(|turn| {
                         let row = if index % 2 == 0 {
                             div()
@@ -557,7 +603,9 @@ impl Render for Conversation {
                             .child(
                                 canvas(
                                     move |bounds, _, _| {
-                                        row_bounds.borrow_mut().push((index, bounds));
+                                        row_bounds
+                                            .borrow_mut()
+                                            .push((index, bounds));
                                     },
                                     |_, _, _, _| {},
                                 )
@@ -623,9 +671,10 @@ impl Render for Conversation {
                                                 .update(cx, |scroll, cx| scroll.remeasure(cx));
                                             // Resizing can hide the current dot even
                                             // when the active round has not changed.
-                                            view.navigation.update(cx, |navigation, cx| {
-                                                navigation.reveal_active(cx)
-                                            });
+                                            view.navigation
+                                                .update(cx, |navigation, cx| {
+                                                    navigation.reveal_active(cx)
+                                                });
                                             cx.notify();
                                         });
                                     });
@@ -696,10 +745,11 @@ impl MessageRow {
         }
     }
 }
+
 impl Render for MessageRow {
+    /// The title icon owns a column; expanded content starts at the title text, using the same
+    /// inset rather than Button's internal padding.
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // The title icon owns a column; expanded content starts at the title
-        // text, using the same inset rather than Button's internal padding.
         let disclosure_inset = rems(1.5);
         let message_group: SharedString = format!("user-message-{}", cx.entity_id()).into();
         let body = v_flex()
@@ -719,16 +769,24 @@ impl Render for MessageRow {
                             h_flex()
                                 .min_w_0()
                                 .child(
-                                    div().w(disclosure_inset).flex_none().child(
-                                        Icon::new(if self.expanded {
-                                            IconName::ChevronDown
-                                        } else {
-                                            IconName::ChevronRight
-                                        })
-                                        .small(),
-                                    ),
+                                    div()
+                                        .w(disclosure_inset)
+                                        .flex_none()
+                                        .child(
+                                            Icon::new(if self.expanded {
+                                                IconName::ChevronDown
+                                            } else {
+                                                IconName::ChevronRight
+                                            })
+                                            .small(),
+                                        ),
                                 )
-                                .child(div().min_w_0().truncate().child(self.title.clone())),
+                                .child(
+                                    div()
+                                        .min_w_0()
+                                        .truncate()
+                                        .child(self.title.clone()),
+                                ),
                         )
                         .on_click(cx.listener(|view, _, _, cx| {
                             view.expanded = !view.expanded;
@@ -745,47 +803,65 @@ impl Render for MessageRow {
                 )
             })
             .when(!self.images.is_empty(), |view| {
-                view.child(h_flex().gap_2().flex_wrap().children(
-                    self.images.iter().enumerate().map(|(index, attachment)| {
-                        let data = attachment.data.clone();
-                        let dimensions = attachment.dimensions.unwrap_or((800, 600));
-                        Button::new(("message-image", index))
-                            .ghost()
-                            .w_32()
-                            .h_24()
-                            .p_0()
-                            .child(match &data {
-                                Ok(Some(image)) => img(image.clone())
-                                    .size_full()
-                                    .object_fit(ObjectFit::Contain)
-                                    .into_any_element(),
-                                Ok(None) => div().child("加载图片…").into_any_element(),
-                                Err(_) => div().child("图片加载失败").into_any_element(),
-                            })
-                            .on_click(move |_, window, cx| {
-                                crate::image_preview::open(
-                                    data.clone(),
-                                    Some(dimensions),
-                                    window,
-                                    cx,
-                                );
-                            })
-                    }),
-                ))
+                view.child(
+                    h_flex()
+                        .gap_2()
+                        .flex_wrap()
+                        .children(
+                            self.images
+                                .iter()
+                                .enumerate()
+                                .map(|(index, attachment)| {
+                                    let data = attachment.data.clone();
+                                    let dimensions = attachment
+                                        .dimensions
+                                        .unwrap_or((800, 600));
+                                    Button::new(("message-image", index))
+                                        .ghost()
+                                        .w_32()
+                                        .h_24()
+                                        .p_0()
+                                        .child(match &data {
+                                            Ok(Some(image)) => img(image.clone())
+                                                .size_full()
+                                                .object_fit(ObjectFit::Contain)
+                                                .into_any_element(),
+                                            Ok(None) => div()
+                                                .child("加载图片…")
+                                                .into_any_element(),
+                                            Err(_) => div()
+                                                .child("图片加载失败")
+                                                .into_any_element(),
+                                        })
+                                        .on_click(move |_, window, cx| {
+                                            crate::image_preview::open(
+                                                data.clone(),
+                                                Some(dimensions),
+                                                window,
+                                                cx,
+                                            );
+                                        })
+                                }),
+                        ),
+                )
             })
             .when(self.expanded, |view| {
                 if let Some(source) = &self.literal {
-                    return view.child(div().min_w_0().whitespace_normal().child(
-                        gpui_kit::base::SelectableText::new("user-source", source.clone()).map(
-                            |text| {
-                                if let Some(viewport) = &self.viewport {
-                                    text.scroll_viewport(viewport.get())
-                                } else {
-                                    text
-                                }
-                            },
-                        ),
-                    ));
+                    return view.child(
+                        div()
+                            .min_w_0()
+                            .whitespace_normal()
+                            .child(
+                                gpui_kit::base::SelectableText::new("user-source", source.clone())
+                                    .map(|text| {
+                                        if let Some(viewport) = &self.viewport {
+                                            text.scroll_viewport(viewport.get())
+                                        } else {
+                                            text
+                                        }
+                                    }),
+                            ),
+                    );
                 }
                 let text = TextView::new(&self.text)
                     .when(!self.user, |view| view.w_full())
@@ -810,7 +886,13 @@ impl Render for MessageRow {
                         view.text_color(cx.theme().muted_foreground)
                     });
                 if self.muted {
-                    view.child(div().w_full().min_w_0().pl(disclosure_inset).child(text))
+                    view.child(
+                        div()
+                            .w_full()
+                            .min_w_0()
+                            .pl(disclosure_inset)
+                            .child(text),
+                    )
                 } else {
                     view.child(text)
                 }
@@ -830,27 +912,31 @@ impl Render for MessageRow {
                             ),
                         )
                         .when_some(
-                            self.literal.clone().filter(|text| !text.is_empty()),
+                            self.literal
+                                .clone()
+                                .filter(|text| !text.is_empty()),
                             |message, source| {
                                 message.footer(
-                                    MessageFooter::new().content_inset(false).child(
-                                        div()
-                                            .id("user-copy-action")
-                                            .opacity(0.)
-                                            .group_hover(message_group.clone(), |style| {
-                                                style.opacity(1.)
-                                            })
-                                            .in_focus(|style| style.opacity(1.))
-                                            .child(
-                                                gpui_kit::component::clipboard::Clipboard::new(
-                                                    "copy-user-question",
-                                                )
-                                                .value(source)
-                                                .small()
-                                                .tooltip("复制问题")
-                                                .accessibility_label("复制用户问题"),
-                                            ),
-                                    ),
+                                    MessageFooter::new()
+                                        .content_inset(false)
+                                        .child(
+                                            div()
+                                                .id("user-copy-action")
+                                                .opacity(0.)
+                                                .group_hover(message_group.clone(), |style| {
+                                                    style.opacity(1.)
+                                                })
+                                                .in_focus(|style| style.opacity(1.))
+                                                .child(
+                                                    gpui_kit::component::clipboard::Clipboard::new(
+                                                        "copy-user-question",
+                                                    )
+                                                    .value(source)
+                                                    .small()
+                                                    .tooltip("复制问题")
+                                                    .accessibility_label("复制用户问题"),
+                                                ),
+                                        ),
                                 )
                             },
                         ),
@@ -859,7 +945,11 @@ impl Render for MessageRow {
         } else {
             Message::new()
                 .alignment(MessageAlignment::Start)
-                .content(MessageContent::new().w_full().child(body))
+                .content(
+                    MessageContent::new()
+                        .w_full()
+                        .child(body),
+                )
                 .into_any_element()
         }
     }

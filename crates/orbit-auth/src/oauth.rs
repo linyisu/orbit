@@ -98,13 +98,19 @@ impl OAuthLogin {
             OAuthProvider::Antigravity => (
                 "https://accounts.google.com/o/oauth2/v2/auth",
                 crate::antigravity::CLIENT_ID,
-                "https://www.googleapis.com/auth/cloud-platform https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/cclog https://www.googleapis.com/auth/experimentsandconfigs",
+                "https://www.googleapis.com/auth/cloud-platform \
+                    https://www.googleapis.com/auth/userinfo.email \
+                    https://www.googleapis.com/auth/userinfo.profile \
+                    https://www.googleapis.com/auth/cclog https://www.googleapis.com/auth/experime\
+                    ntsandconfigs",
             ),
 
             OAuthProvider::Google => (
                 "https://accounts.google.com/o/oauth2/v2/auth",
                 crate::google::CLIENT_ID,
-                "https://www.googleapis.com/auth/cloud-platform https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile",
+                "https://www.googleapis.com/auth/cloud-platform \
+                    https://www.googleapis.com/auth/userinfo.email \
+                    https://www.googleapis.com/auth/userinfo.profile",
             ),
 
             OAuthProvider::Chatgpt => (
@@ -147,7 +153,10 @@ impl OAuthLogin {
     }
 
     pub async fn finish(self, callback: &str, store: &AuthStore, name: &str) -> Result<()> {
-        match self.finish_interactive(callback, store, name).await? {
+        match self
+            .finish_interactive(callback, store, name)
+            .await?
+        {
             LoginOutcome::Connected => Ok(()),
             LoginOutcome::GoogleProjectRequired(_) => Err(AuthError::GoogleProjectRequired),
         }
@@ -164,7 +173,9 @@ impl OAuthLogin {
         let code = self.callback_code(callback)?;
 
         if let Some(login) = self.anthropic {
-            login.finish(callback, store, name).await?;
+            login
+                .finish(callback, store, name)
+                .await?;
             return Ok(LoginOutcome::Connected);
         }
 
@@ -258,7 +269,11 @@ mod tests {
         );
         assert_eq!(
             pairs["scope"],
-            "https://www.googleapis.com/auth/cloud-platform https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/cclog https://www.googleapis.com/auth/experimentsandconfigs"
+            "https://www.googleapis.com/auth/cloud-platform \
+                https://www.googleapis.com/auth/userinfo.email \
+                https://www.googleapis.com/auth/userinfo.profile \
+                https://www.googleapis.com/auth/cclog https://www.googleapis.com/auth/experimentsa\
+                ndconfigs"
         );
         assert_eq!(pairs["access_type"], "offline");
         assert_eq!(pairs["prompt"], "consent");
@@ -337,7 +352,9 @@ mod tests {
             },
         };
 
-        let result = pending.finish("../invalid", &store, "google").await;
+        let result = pending
+            .finish("../invalid", &store, "google")
+            .await;
 
         assert!(matches!(result, Err(AuthError::Configuration(_))));
         assert_eq!(pending.credential.access.0, "test-access");

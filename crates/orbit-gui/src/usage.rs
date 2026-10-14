@@ -21,12 +21,18 @@ struct Quota {
     reset: Option<i64>,
     shared: bool,
 }
+
 impl Usage {
     pub(crate) fn new(cx: &mut Context<Self>) -> Self {
         let clock = cx.spawn(async move |weak, cx| {
             loop {
-                cx.background_executor().timer(Duration::from_secs(1)).await;
-                if weak.update(cx, |_, cx| cx.notify()).is_err() {
+                cx.background_executor()
+                    .timer(Duration::from_secs(1))
+                    .await;
+                if weak
+                    .update(cx, |_, cx| cx.notify())
+                    .is_err()
+                {
                     break;
                 }
             }
@@ -46,7 +52,10 @@ impl Usage {
         let account = snapshot.account;
         self.account = format!("{} · {}", account.provider, account.name).into();
         self.fetched_at = account.fetched_at;
-        self.note = account.error.or(account.note).map(Into::into);
+        self.note = account
+            .error
+            .or(account.note)
+            .map(Into::into);
         self.totals = format!(
             "会话输入 {} · 输出 {}",
             snapshot
@@ -87,14 +96,17 @@ impl Usage {
                     .child(row.short.clone())
                     .when_some(row.percent, |view, percent| {
                         view.child(
-                            div()
-                                .w_16()
-                                .child(Progress::new(row.id.clone()).small().value(percent)),
+                            div().w_16().child(
+                                Progress::new(row.id.clone())
+                                    .small()
+                                    .value(percent),
+                            ),
                         )
                         .child(format!("{percent:.0}%"))
                     })
                     .when_some(
-                        row.reset.and_then(|at| remaining(at, now())),
+                        row.reset
+                            .and_then(|at| remaining(at, now())),
                         |view, text| {
                             view.child(
                                 div()
@@ -107,6 +119,7 @@ impl Usage {
             .into_any_element()
     }
 }
+
 impl Render for Usage {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         v_flex()
@@ -172,7 +185,8 @@ impl Render for Usage {
                         )
                     })
                     .when_some(
-                        row.reset.and_then(|at| remaining(at, now())),
+                        row.reset
+                            .and_then(|at| remaining(at, now())),
                         |view, text| {
                             view.child(
                                 div()
@@ -195,17 +209,27 @@ impl Render for Usage {
             )
     }
 }
+
 fn quota_rows(snapshot: &Snapshot) -> Vec<Quota> {
-    let selected = snapshot.summary_limits().collect::<Vec<_>>();
+    let selected = snapshot
+        .summary_limits()
+        .collect::<Vec<_>>();
     snapshot
         .account
         .limits
         .iter()
         .filter(|limit| limit.scope == Scope::Account)
         .map(|limit| {
-            let short = if limit.label.to_ascii_lowercase().contains("week") {
+            let short = if limit
+                .label
+                .to_ascii_lowercase()
+                .contains("week")
+            {
                 "周"
-            } else if limit.label.to_ascii_lowercase().contains("five")
+            } else if limit
+                .label
+                .to_ascii_lowercase()
+                .contains("five")
                 || limit.label.contains("5h")
             {
                 "5h"
@@ -221,8 +245,15 @@ fn quota_rows(snapshot: &Snapshot) -> Vec<Quota> {
                     .remaining_fraction
                     .filter(|v| v.is_finite())
                     .map(|v| (v.clamp(0., 1.) * 100.) as f32),
-                amount: limit.remaining.clone().unwrap_or_else(|| "—".into()).into(),
-                reset: limit.resets_at.as_deref().and_then(reset_timestamp),
+                amount: limit
+                    .remaining
+                    .clone()
+                    .unwrap_or_else(|| "—".into())
+                    .into(),
+                reset: limit
+                    .resets_at
+                    .as_deref()
+                    .and_then(reset_timestamp),
                 shared: selected
                     .iter()
                     .any(|selected| std::ptr::eq(*selected, limit)),
@@ -230,27 +261,36 @@ fn quota_rows(snapshot: &Snapshot) -> Vec<Quota> {
         })
         .collect()
 }
+
 fn quota_label(label: &str) -> String {
     let mut parts = label
         .split('·')
-        .map(|part| match part.trim().to_ascii_lowercase().as_str() {
-            "weekly limit remaining" | "weekly" | "week" => "周".to_owned(),
-            "five hour limit remaining" | "five_hour" | "5h" => "5h".to_owned(),
-            _ => part
+        .map(|part| {
+            match part
                 .trim()
-                .replace("Gemini Models", "Gemini")
-                .replace("Claude and GPT models", "Claude / GPT"),
+                .to_ascii_lowercase()
+                .as_str()
+            {
+                "weekly limit remaining" | "weekly" | "week" => "周".to_owned(),
+                "five hour limit remaining" | "five_hour" | "5h" => "5h".to_owned(),
+                _ => part
+                    .trim()
+                    .replace("Gemini Models", "Gemini")
+                    .replace("Claude and GPT models", "Claude / GPT"),
+            }
         })
         .collect::<Vec<_>>();
     parts.dedup();
     parts.join(" · ")
 }
+
 fn now() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs() as i64
 }
+
 fn reset_timestamp(value: &str) -> Option<i64> {
     value.parse().ok().or_else(|| {
         chrono::DateTime::parse_from_rfc3339(value)
@@ -258,20 +298,22 @@ fn reset_timestamp(value: &str) -> Option<i64> {
             .map(|date| date.timestamp())
     })
 }
+
 fn remaining(at: i64, now: i64) -> Option<String> {
     let seconds = at.checked_sub(now)?;
     if seconds <= 0 {
         return None;
     }
     let minutes = (seconds + 59) / 60;
-    Some(if minutes >= 1440 {
-        format!("{}天{}时", minutes / 1440, minutes % 1440 / 60)
+    Some(if minutes >= 1_440 {
+        format!("{}天{}时", minutes / 1_440, minutes % 1_440 / 60)
     } else if minutes >= 60 {
         format!("{}时{}分", minutes / 60, minutes % 60)
     } else {
         format!("{minutes}分")
     })
 }
+
 #[cfg(test)]
 mod tests {
     use super::{quota_label, quota_rows, remaining, reset_timestamp};
@@ -353,11 +395,12 @@ mod tests {
             "model counters must never substitute for shared quota"
         );
     }
+
     #[test]
     fn resets_use_server_time_and_omit_absent_or_elapsed_windows() {
-        assert_eq!(reset_timestamp("2026-10-11T00:00:00Z"), Some(1791676800));
+        assert_eq!(reset_timestamp("2026-10-11T00:00:00Z"), Some(1_791_676_800));
         assert_eq!(reset_timestamp("unknown"), None);
-        assert_eq!(remaining(3601, 0).as_deref(), Some("1时1分"));
+        assert_eq!(remaining(3_601, 0).as_deref(), Some("1时1分"));
         assert_eq!(remaining(42, 42), None);
         assert_eq!(remaining(1, 42), None);
     }

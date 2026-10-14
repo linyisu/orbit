@@ -5,7 +5,7 @@ use orbit_model::types::Attachment;
 use orbit_runtime::assets::AssetDirectory;
 
 pub const MAX_IMAGE_BYTES: usize = Attachment::MAX_IMAGE_BYTES;
-const MAX_ATTACHMENT_EDGE_PIXELS: u32 = 2048;
+const MAX_ATTACHMENT_EDGE_PIXELS: u32 = 2_048;
 
 #[derive(Clone)]
 pub struct ImageAssets {
@@ -38,7 +38,8 @@ impl ImageAssets {
 
     /// Read an immutable asset after the caller has checked session ownership.
     pub fn read(&self, path: &Path) -> Result<Vec<u8>> {
-        self.directory.read(path, MAX_IMAGE_BYTES)
+        self.directory
+            .read(path, MAX_IMAGE_BYTES)
     }
 
     pub fn import_path(&self, source: &Path) -> Result<Attachment> {
@@ -58,7 +59,9 @@ impl ImageAssets {
         ensure!(bytes.len() <= MAX_IMAGE_BYTES, "图片不能超过 20 MiB");
 
         let (bytes, mime_type, extension) = normalize_image(bytes)?;
-        let (destination, lease) = self.directory.import(&bytes, extension)?;
+        let (destination, lease) = self
+            .directory
+            .import(&bytes, extension)?;
 
         if let Some(temporary) = &self.temporary {
             return Ok(Attachment::temporary_image(
@@ -159,7 +162,9 @@ mod tests {
             .unwrap();
         let path = attachment.path().to_owned();
         let bytes = assets.read(&path).unwrap();
-        let external = root.path().join(path.file_name().unwrap());
+        let external = root
+            .path()
+            .join(path.file_name().unwrap());
         std::fs::write(&external, &bytes).unwrap();
         assert!(assets.read(&external).is_err());
         std::fs::write(&path, b"modified").unwrap();

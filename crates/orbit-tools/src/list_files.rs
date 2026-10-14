@@ -13,7 +13,7 @@ use tokio_util::sync::CancellationToken;
 use crate::limits::{MAX_DIRECTORY_ENTRIES, MAX_TEXT_OUTPUT_BYTES, OUTPUT_METADATA_RESERVE_BYTES};
 
 const DEFAULT_PAGE_ENTRIES: usize = 200;
-const MAX_PAGE_ENTRIES: usize = 1000;
+const MAX_PAGE_ENTRIES: usize = 1_000;
 const MAX_DEPTH: usize = 8;
 
 #[derive(Deserialize)]
@@ -56,19 +56,47 @@ impl Tool for ListFiles {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition::function(
             "list_files",
-            "Browse files and directories in the workspace (or outside paths granted via request_capability) without running a shell. Paths are relative to the workspace root, or absolute paths granted via request_capability. Defaults to one directory level; depth 1–8, deterministic breadth-first ordering, paginated with offset/next_offset. Hidden entries are omitted by default; include_hidden includes hidden entries but never protected paths. Generated directories are listed but not recursively traversed; select their path explicitly to browse them. Does not apply .gitignore. Symlinks and special files are omitted. Results are bounded to 32 KiB and 20000 examined entries; narrow path if scan_truncated is true.",
+            "Browse files and directories in the workspace (or outside paths granted via \
+                request_capability) without running a shell. Paths are relative to the workspace \
+                root, or absolute paths granted via request_capability. Defaults to one directory \
+                level; depth 1–8, deterministic breadth-first ordering, paginated with \
+                offset/next_offset. Hidden entries are omitted by default; include_hidden \
+                includes hidden entries but never protected paths. Generated directories are \
+                listed but not recursively traversed; select their path explicitly to browse \
+                them. Does not apply .gitignore. Symlinks and special files are omitted. Results \
+                are bounded to 32 KiB and 20000 examined entries; narrow path if scan_truncated \
+                is true.",
             json!({
                 "type": "object",
                 "properties": {
                     "path": {
                         "type": "string",
                         "default": ".",
-                        "description": "Directory path (workspace-relative, or outside path granted via request_capability)"
+                        "description": "Directory path (workspace-relative, or outside path \
+                            granted via request_capability)"
                     },
-                    "depth": { "type": "integer", "minimum": 1, "maximum": MAX_DEPTH, "default": 1 },
-                    "offset": { "type": "integer", "minimum": 0, "maximum": MAX_DIRECTORY_ENTRIES, "default": 0 },
-                    "limit": { "type": "integer", "minimum": 1, "maximum": MAX_PAGE_ENTRIES, "default": DEFAULT_PAGE_ENTRIES },
-                    "include_hidden": { "type": "boolean", "default": false }
+                    "depth": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": MAX_DEPTH,
+                        "default": 1
+                    },
+                    "offset": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": MAX_DIRECTORY_ENTRIES,
+                        "default": 0
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": MAX_PAGE_ENTRIES,
+                        "default": DEFAULT_PAGE_ENTRIES
+                    },
+                    "include_hidden": {
+                        "type": "boolean",
+                        "default": false
+                    }
                 },
                 "required": [],
                 "additionalProperties": false
@@ -138,12 +166,16 @@ fn list(
         .all(|part| part == std::path::Component::CurDir);
 
     let (root, is_external) = if is_curdir {
-        workspace.open_directory(Path::new("")).map_err(failed)?;
+        workspace
+            .open_directory(Path::new(""))
+            .map_err(failed)?;
         (PathBuf::new(), false)
     } else {
         match workspace.checked_relative(target_path) {
             Ok(rel) => {
-                workspace.open_directory(&rel).map_err(failed)?;
+                workspace
+                    .open_directory(&rel)
+                    .map_err(failed)?;
                 (rel, false)
             }
 
@@ -151,8 +183,12 @@ fn list(
                 return Err(failed(WorkspaceError::ProtectedPath));
             }
             Err(_) => {
-                let canonical = target_path.canonicalize().map_err(failed)?;
-                workspace.authorize_directory(&canonical).map_err(failed)?;
+                let canonical = target_path
+                    .canonicalize()
+                    .map_err(failed)?;
+                workspace
+                    .authorize_directory(&canonical)
+                    .map_err(failed)?;
                 (canonical, true)
             }
         }
@@ -177,7 +213,9 @@ fn list(
                 .authorize_directory_entries(&directory)
                 .map_err(failed)?
         } else {
-            workspace.directory_entries(&directory).map_err(failed)?
+            workspace
+                .directory_entries(&directory)
+                .map_err(failed)?
         };
 
         for name in names {
@@ -268,7 +306,10 @@ fn list(
                 continue;
             };
 
-            let entry = json!({ "path": path, "kind": kind });
+            let entry = json!({
+                "path": path,
+                "kind": kind
+            });
             let size = entry.to_string().len() + 1;
 
             if entries.len() == args.limit

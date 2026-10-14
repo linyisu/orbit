@@ -37,8 +37,16 @@ impl ModelBackend for StreamingModel {
     }
 
     fn stream<'a>(&'a self, request: ChatRequest, _: CancellationToken) -> StreamFuture<'a> {
-        self.requests.lock().unwrap().push(request);
-        let receiver = self.receiver.lock().unwrap().take().unwrap();
+        self.requests
+            .lock()
+            .unwrap()
+            .push(request);
+        let receiver = self
+            .receiver
+            .lock()
+            .unwrap()
+            .take()
+            .unwrap();
         Box::pin(async move {
             Ok(
                 Box::pin(futures_util::stream::unfold(receiver, |mut rx| async {
@@ -99,7 +107,7 @@ async fn streaming_applies_model_options_and_keeps_answer_until_cleared() {
         let sent = backend.requests.lock().unwrap();
         assert_eq!(sent.len(), 1);
         assert!(sent[0].tools.is_empty());
-        assert_eq!(sent[0].max_tokens, Some(8192));
+        assert_eq!(sent[0].max_tokens, Some(8_192));
         assert_eq!(sent[0].reasoning_effort, Some(ReasoningEffort::High));
         assert!(
             sent[0]
@@ -109,7 +117,11 @@ async fn streaming_applies_model_options_and_keeps_answer_until_cleared() {
     }
     questions.clear();
     assert!(questions.records().is_empty());
-    assert!(SideQuestions::default().records().is_empty());
+    assert!(
+        SideQuestions::default()
+            .records()
+            .is_empty()
+    );
 }
 
 #[tokio::test]
@@ -121,7 +133,7 @@ async fn cancelling_and_tool_attempts_are_isolated_to_the_side_question() {
     });
     let mut questions = SideQuestions::default();
     questions
-        .start(&client(), &[], "取消问题", 4096, backend, None)
+        .start(&client(), &[], "取消问题", 4_096, backend, None)
         .unwrap();
     assert!(questions.cancel(0));
     settle(&mut questions).await;
@@ -131,7 +143,10 @@ async fn cancelling_and_tool_attempts_are_isolated_to_the_side_question() {
         message: ChatMessage::assistant_tool_calls(vec![ToolCall::function(
             "orbit-call",
             "write_file",
-            serde_json::json!({"path":"orbit.rs","content":"bad"}),
+            serde_json::json!({
+                "path": "orbit.rs",
+                "content": "bad"
+            }),
         )]),
         ..completion("")
     }]);
@@ -141,7 +156,7 @@ async fn cancelling_and_tool_attempts_are_isolated_to_the_side_question() {
             &client(),
             &[],
             "需要工具",
-            4096,
+            4_096,
             Arc::new(calls.clone()),
             None,
         )
@@ -164,7 +179,7 @@ async fn independent_questions_do_not_import_other_side_answers() {
     let mut questions = SideQuestions::default();
     for text in ["第一个问题", "第二个问题"] {
         questions
-            .start(&client(), &[], text, 4096, Arc::new(backend.clone()), None)
+            .start(&client(), &[], text, 4_096, Arc::new(backend.clone()), None)
             .unwrap();
         settle(&mut questions).await;
     }
@@ -190,7 +205,7 @@ async fn follow_ups_keep_their_live_thread_and_leave_other_questions_independent
                 &client(),
                 &[],
                 prompt,
-                4096,
+                4_096,
                 Arc::new(backend.clone()),
                 None,
             )
@@ -203,7 +218,7 @@ async fn follow_ups_keep_their_live_thread_and_leave_other_questions_independent
             &client(),
             &[],
             "再解释 Orbit",
-            4096,
+            4_096,
             Arc::new(backend.clone()),
             Some(0),
         )
@@ -226,7 +241,7 @@ async fn follow_ups_keep_their_live_thread_and_leave_other_questions_independent
     assert!(questions.records().is_empty());
     assert!(
         questions
-            .start(&client(), &[], "", 4096, Arc::new(backend), None)
+            .start(&client(), &[], "", 4_096, Arc::new(backend), None)
             .is_err()
     );
 }
@@ -240,7 +255,7 @@ async fn interrupted_or_empty_streams_preserve_partial_answers_and_fail_locally(
     });
     let mut questions = SideQuestions::default();
     questions
-        .start(&client(), &[], "问题", 4096, backend, None)
+        .start(&client(), &[], "问题", 4_096, backend, None)
         .unwrap();
     sender
         .send(Ok(StreamEvent::TextDelta("已生成部分".into())))
@@ -252,7 +267,7 @@ async fn interrupted_or_empty_streams_preserve_partial_answers_and_fail_locally(
     assert_eq!(questions.records()[0].status, "failed");
     let backend = MockModel::new([completion("")]);
     questions
-        .start(&client(), &[], "空回答", 4096, Arc::new(backend), None)
+        .start(&client(), &[], "空回答", 4_096, Arc::new(backend), None)
         .unwrap();
     settle(&mut questions).await;
     assert!(
@@ -273,10 +288,15 @@ async fn clearing_a_running_question_closes_the_stream_and_drops_all_records() {
     });
     let mut questions = SideQuestions::default();
     questions
-        .start(&client(), &[], "question", 4096, backend.clone(), None)
+        .start(&client(), &[], "question", 4_096, backend.clone(), None)
         .unwrap();
     tokio::time::timeout(Duration::from_secs(5), async {
-        while backend.requests.lock().unwrap().is_empty() {
+        while backend
+            .requests
+            .lock()
+            .unwrap()
+            .is_empty()
+        {
             tokio::task::yield_now().await;
         }
     })

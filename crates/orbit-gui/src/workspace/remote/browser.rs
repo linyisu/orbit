@@ -62,26 +62,46 @@ impl DirectoryBrowser {
             loop {
                 tokio::select! {
                     changed = updates.stage.changed() => {
-                        if changed.is_err() { break; }
-                        let stage = updates.stage.borrow_and_update().clone();
-                        if owner.update(cx, |view, cx| {
-                            view.stage = stage.into();
-                            cx.notify();
-                        }).is_err() { break; }
+                        if changed.is_err() {
+                            break;
+                        }
+                        let stage = updates
+                            .stage
+                            .borrow_and_update()
+                            .clone();
+                        if owner
+                            .update(cx, |view, cx| {
+                                view.stage = stage.into();
+                                cx.notify();
+                            })
+                            .is_err()
+                        {
+                            break;
+                        }
                     }
                     challenge = updates.prompts.recv() => {
                         let Some(challenge) = challenge else { break };
-                        if owner.update_in(cx, |view, window, cx| {
-                            let first = view.challenges.is_empty();
-                            view.challenges.push_back(challenge);
-                            if first && !view.challenges.front().is_some_and(|item| item.confirm) {
-                                view.password.update(cx, |input, cx| {
-                                    input.set_value("", window, cx);
-                                    input.focus(window, cx);
-                                });
-                            }
-                            cx.notify();
-                        }).is_err() { break; }
+                        if owner
+                            .update_in(cx, |view, window, cx| {
+                                let first = view.challenges.is_empty();
+                                view.challenges.push_back(challenge);
+                                if first
+                                    && !view
+                                        .challenges
+                                        .front()
+                                        .is_some_and(|item| item.confirm)
+                                {
+                                    view.password.update(cx, |input, cx| {
+                                        input.set_value("", window, cx);
+                                        input.focus(window, cx);
+                                    });
+                                }
+                                cx.notify();
+                            })
+                            .is_err()
+                        {
+                            break;
+                        }
                     }
                 }
             }
@@ -171,7 +191,8 @@ impl DirectoryBrowser {
                             .iter()
                             .map(|name| TreeItem::new(join_path(&listing.path, name), name.clone()))
                             .collect::<Vec<_>>();
-                        view.tree.update(cx, |tree, cx| tree.set_items(items, cx));
+                        view.tree
+                            .update(cx, |tree, cx| tree.set_items(items, cx));
                         view.listing = Some(listing);
                     }
                     Err(error) => view.error = Some(error.into()),
@@ -190,11 +211,17 @@ impl DirectoryBrowser {
             if challenge.confirm {
                 "yes".to_owned()
             } else {
-                self.password.read(cx).value().to_string()
+                self.password
+                    .read(cx)
+                    .value()
+                    .to_string()
             }
         });
         let _ = challenge.reply.send(value);
-        let needs_password = self.challenges.front().is_some_and(|item| !item.confirm);
+        let needs_password = self
+            .challenges
+            .front()
+            .is_some_and(|item| !item.confirm);
         self.password.update(cx, |input, cx| {
             input.set_value("", window, cx);
             if needs_password {
@@ -231,8 +258,14 @@ impl Render for DirectoryBrowser {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let owner = cx.weak_entity();
         let busy = self.busy;
-        let current = self.listing.as_ref().map(|listing| listing.path.clone());
-        let parent = current.as_deref().map(parent_path).map(str::to_owned);
+        let current = self
+            .listing
+            .as_ref()
+            .map(|listing| listing.path.clone());
+        let parent = current
+            .as_deref()
+            .map(parent_path)
+            .map(str::to_owned);
         v_flex()
             .track_focus(&self.focus)
             .flex_shrink_0()
@@ -253,7 +286,12 @@ impl Render for DirectoryBrowser {
                             .label("前往")
                             .disabled(busy)
                             .on_click(cx.listener(|view, _, _, cx| {
-                                let path = view.path.read(cx).value().trim().to_owned();
+                                let path = view
+                                    .path
+                                    .read(cx)
+                                    .value()
+                                    .trim()
+                                    .to_owned();
                                 view.load(path, cx);
                             })),
                     ),
@@ -298,12 +336,15 @@ impl Render for DirectoryBrowser {
             )
             .when(busy, |view| {
                 view.child(
-                    h_flex().gap_2().child(Spinner::new().small()).child(
-                        div()
-                            .text_sm()
-                            .text_color(cx.theme().muted_foreground)
-                            .child(self.stage.clone()),
-                    ),
+                    h_flex()
+                        .gap_2()
+                        .child(Spinner::new().small())
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(self.stage.clone()),
+                        ),
                 )
             })
             .when_some(self.challenges.front(), |view, challenge| {
@@ -311,9 +352,17 @@ impl Render for DirectoryBrowser {
                 view.child(
                     v_flex()
                         .gap_2()
-                        .child(div().text_sm().child(challenge.prompt.clone()))
+                        .child(
+                            div()
+                                .text_sm()
+                                .child(challenge.prompt.clone()),
+                        )
                         .when(!confirm, |view| {
-                            view.child(Input::new(&self.password).aria_label("SSH 验证").w_full())
+                            view.child(
+                                Input::new(&self.password)
+                                    .aria_label("SSH 验证")
+                                    .w_full(),
+                            )
                         })
                         .child(
                             h_flex()
@@ -338,7 +387,12 @@ impl Render for DirectoryBrowser {
                 )
             })
             .when_some(self.error.clone(), |view, error| {
-                view.child(div().text_sm().text_color(cx.theme().danger).child(error))
+                view.child(
+                    div()
+                        .text_sm()
+                        .text_color(cx.theme().danger)
+                        .child(error),
+                )
             })
             .when_some(self.listing.as_ref(), |view, listing| {
                 view.child(

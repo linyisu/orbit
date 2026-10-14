@@ -49,8 +49,14 @@ impl FixtureUserInputs {
     }
 
     fn save(&mut self, session: &str, record: Record) {
-        let records = self.records.entry(session.into()).or_default();
-        if let Some((_, existing)) = records.iter_mut().find(|(_, item)| item.id == record.id) {
+        let records = self
+            .records
+            .entry(session.into())
+            .or_default();
+        if let Some((_, existing)) = records
+            .iter_mut()
+            .find(|(_, item)| item.id == record.id)
+        {
             *existing = record;
         } else {
             // Deliberate gaps ensure consumers use the cursor, not a count or
@@ -63,7 +69,8 @@ impl FixtureUserInputs {
     pub fn start(&mut self, workspace: &str, session: &str, multiple: bool) {
         self.prepare(workspace, session);
         let record = question(multiple);
-        self.live.insert(session.into(), record.id.clone());
+        self.live
+            .insert(session.into(), record.id.clone());
         self.save(session, record);
     }
 
@@ -78,8 +85,12 @@ impl FixtureUserInputs {
     }
 
     pub fn answer(&mut self, request: &Value) -> Value {
-        let session = request["session"].as_str().unwrap_or_default();
-        let id = request["request"].as_str().unwrap_or_default();
+        let session = request["session"]
+            .as_str()
+            .unwrap_or_default();
+        let id = request["request"]
+            .as_str()
+            .unwrap_or_default();
         let Some((_, record)) = self
             .records
             .get_mut(session)
@@ -87,10 +98,16 @@ impl FixtureUserInputs {
             .flatten()
             .find(|(_, record)| record.id == id)
         else {
-            return json!({"type":"error","value":"Agent 问题不存在"});
+            return json!({
+                "type": "error",
+                "value": "Agent 问题不存在"
+            });
         };
         if record.status != Status::Pending {
-            return json!({"type":"error","value":"Agent 问题已结束"});
+            return json!({
+                "type": "error",
+                "value": "Agent 问题已结束"
+            });
         }
         if request["answers"].is_null() {
             record.status = Status::Declined;
@@ -98,15 +115,25 @@ impl FixtureUserInputs {
         } else {
             let answers: Vec<Answer> = match serde_json::from_value(request["answers"].clone()) {
                 Ok(answers) => answers,
-                Err(error) => return json!({"type":"error","value":error.to_string()}),
+                Err(error) => {
+                    return json!({
+                        "type": "error",
+                        "value": error.to_string()
+                    });
+                }
             };
             if let Err(error) = record.form.validate_answers(&answers) {
-                return json!({"type":"error","value":error});
+                return json!({
+                    "type": "error",
+                    "value": error
+                });
             }
             record.status = Status::Answered;
             record.answers = answers;
         }
-        json!({"type":"ok"})
+        json!({
+            "type": "ok"
+        })
     }
 
     pub fn history(&mut self, workspace: &str, session: &str, before: Option<i64>) -> Value {
@@ -117,7 +144,10 @@ impl FixtureUserInputs {
             )
             .is_ok()
         {
-            return json!({"type":"error","value":"测试历史页暂时不可用，请重试。"});
+            return json!({
+                "type": "error",
+                "value": "测试历史页暂时不可用，请重试。"
+            });
         }
         let mut records: Vec<_> = self
             .records
@@ -131,8 +161,18 @@ impl FixtureUserInputs {
         let more = records.len() > 20;
         records.truncate(20);
         let next = more.then(|| records.last().unwrap().0);
-        let records: Vec<_> = records.into_iter().map(|(_, record)| record).collect();
-        json!({"type":"user_inputs","value":{"before":before,"records":records,"next":next}})
+        let records: Vec<_> = records
+            .into_iter()
+            .map(|(_, record)| record)
+            .collect();
+        json!({
+            "type": "user_inputs",
+            "value": {
+                "before": before,
+                "records": records,
+                "next": next
+            }
+        })
     }
 }
 

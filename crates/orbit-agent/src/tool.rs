@@ -135,6 +135,7 @@ pub trait ToolPolicy: Send + Sync {
     fn context(&self) -> Option<String> {
         None
     }
+
     fn visible(&self, capabilities: ToolCapabilities) -> bool;
     fn acquire(
         &self,
@@ -157,12 +158,15 @@ impl ToolRegistry {
     }
 
     pub fn policy_context(&self) -> Option<String> {
-        self.policy.as_ref().and_then(|p| p.context())
+        self.policy
+            .as_ref()
+            .and_then(|p| p.context())
     }
 
     pub fn set_policy(&mut self, policy: Arc<dyn ToolPolicy>) {
         self.policy = Some(policy);
     }
+
     pub fn names(&self) -> impl Iterator<Item = &str> {
         self.tools.keys().map(String::as_str)
     }
@@ -255,7 +259,11 @@ impl ToolRegistry {
             .map(|tool| tool.definition())
             .collect::<Vec<_>>();
 
-        definitions.sort_by(|left, right| left.function.name.cmp(&right.function.name));
+        definitions.sort_by(|left, right| {
+            left.function
+                .name
+                .cmp(&right.function.name)
+        });
 
         definitions
     }
@@ -301,7 +309,11 @@ impl ToolRegistry {
             }
         };
 
-        let Some(tool) = self.tools.get(&call.function.name).cloned() else {
+        let Some(tool) = self
+            .tools
+            .get(&call.function.name)
+            .cloned()
+        else {
             let name = call.function.name.clone();
             return Box::pin(async move { Err(ToolError::UnknownTool(name)) });
         };
@@ -325,7 +337,8 @@ impl ToolRegistry {
                 .as_ref()
                 .map(|p| p.acquire(&call, capabilities))
                 .transpose()?;
-            tool.execute_with_context(call, cancellation, context).await
+            tool.execute_with_context(call, cancellation, context)
+                .await
         })
     }
 }
@@ -410,7 +423,9 @@ mod tests {
         registry.register(ClosureTool::new(
             "echo",
             "Echo a value",
-            json!({ "type": "object" }),
+            json!({
+                "type": "object"
+            }),
             |arguments, _cancellation| async move { Ok(arguments.to_string()) },
         ));
 
@@ -474,7 +489,10 @@ mod tests {
             .await
             .expect_err("invalid arguments must fail");
 
-        assert!(matches!(error, ToolError::InvalidArguments { tool, .. } if tool == "echo"));
+        assert!(matches!(
+            error,
+            ToolError::InvalidArguments { tool, .. } if tool == "echo"
+        ));
     }
 
     #[tokio::test]

@@ -2,17 +2,47 @@ use super::*;
 
 fn fixture() -> Catalog {
     normalize(json!({
-        "openai": {"models": {
-            "fixture": {"limit": {"context": 200000, "input": 180000, "output": 64000},
-                "modalities": {"input": ["text", "image"]},
-                "reasoning_options": [{"type": "effort", "values": ["low", "high", "future"]}]},
-            "unavailable": {"limit": {"context": 1000000}}
-        }},
-        "other": {"api": "https://other.example/v1", "models": {
-            "fixture": {"limit": {"context": 120000, "output": 16000},
-                "modalities": {"input": ["text"]},
-                "reasoning_options": [{"type": "effort", "values": ["high"]}]}
-        }}
+        "openai": {
+            "models": {
+                "fixture": {
+                    "limit": {
+                        "context": 200_000,
+                        "input": 180_000,
+                        "output": 64_000
+                    },
+                    "modalities": {
+                        "input": ["text", "image"]
+                    },
+                    "reasoning_options": [{
+                        "type": "effort",
+                        "values": ["low", "high", "future"]
+                    }]
+                },
+                "unavailable": {
+                    "limit": {
+                        "context": 1_000_000
+                    }
+                }
+            }
+        },
+        "other": {
+            "api": "https://other.example/v1",
+            "models": {
+                "fixture": {
+                    "limit": {
+                        "context": 120_000,
+                        "output": 16_000
+                    },
+                    "modalities": {
+                        "input": ["text"]
+                    },
+                    "reasoning_options": [{
+                        "type": "effort",
+                        "values": ["high"]
+                    }]
+                }
+            }
+        }
     }))
     .unwrap()
 }
@@ -31,7 +61,9 @@ async fn repeated_refresh_replaces_inherited_specs_without_rewriting_declaration
         .build()
         .unwrap();
     let declared = toml::to_string(&config).unwrap();
-    let path = directory.path().join("model-metadata/catalog.json");
+    let path = directory
+        .path()
+        .join("model-metadata/catalog.json");
     let mut catalog = fixture();
     save(&path, &catalog).unwrap();
     assert!(
@@ -42,7 +74,7 @@ async fn repeated_refresh_replaces_inherited_specs_without_rewriting_declaration
     );
     assert_eq!(
         config.providers["test"].models[0].context_tokens,
-        Some(200000)
+        Some(200_000)
     );
     let spec = catalog
         .providers
@@ -51,7 +83,7 @@ async fn repeated_refresh_replaces_inherited_specs_without_rewriting_declaration
         .models
         .get_mut("fixture")
         .unwrap();
-    spec.limit.context = Some(300000);
+    spec.limit.context = Some(300_000);
     spec.limit.input = None;
     save(&path, &catalog).unwrap();
     assert!(
@@ -61,7 +93,7 @@ async fn repeated_refresh_replaces_inherited_specs_without_rewriting_declaration
             .is_empty()
     );
     let model = &config.providers["test"].models[0];
-    assert_eq!(model.context_tokens, Some(300000));
+    assert_eq!(model.context_tokens, Some(300_000));
     assert!(model.input_context_tokens.is_none());
     assert_eq!(model.supports_vision, Some(false));
     assert_eq!(toml::to_string(&config).unwrap(), declared);
@@ -81,9 +113,9 @@ fn exact_endpoint_and_model_metadata_fills_missing_fields_without_adding_models(
     fixture().supplement(&mut provider);
     assert_eq!(provider.models.len(), 2);
     let model = &provider.models[0];
-    assert_eq!(model.context_tokens, Some(200000));
-    assert_eq!(model.input_context_tokens, Some(180000));
-    assert_eq!(model.max_output_tokens, Some(64000));
+    assert_eq!(model.context_tokens, Some(200_000));
+    assert_eq!(model.input_context_tokens, Some(180_000));
+    assert_eq!(model.max_output_tokens, Some(64_000));
     assert_eq!(model.supports_vision, Some(true));
     let reasoning = model.reasoning.as_ref().unwrap();
     assert_eq!(reasoning.adapter, ReasoningAdapter::OpenaiResponses);
@@ -92,7 +124,11 @@ fn exact_endpoint_and_model_metadata_fills_missing_fields_without_adding_models(
         [ReasoningEffort::Low, ReasoningEffort::High]
     );
     assert_eq!(reasoning.default, ReasoningEffort::High);
-    assert!(provider.models[1].context_tokens.is_none());
+    assert!(
+        provider.models[1]
+            .context_tokens
+            .is_none()
+    );
     assert!(provider.spec.model_overrides.is_empty());
 
     for base in [
@@ -102,7 +138,12 @@ fn exact_endpoint_and_model_metadata_fills_missing_fields_without_adding_models(
     ] {
         let mut unknown = self::provider(base, ApiFormat::OpenaiResponses);
         fixture().supplement(&mut unknown);
-        assert!(unknown.models[0].context_tokens.is_none(), "{base}");
+        assert!(
+            unknown.models[0]
+                .context_tokens
+                .is_none(),
+            "{base}"
+        );
     }
 }
 
@@ -110,9 +151,9 @@ fn exact_endpoint_and_model_metadata_fills_missing_fields_without_adding_models(
 fn explicit_and_discovered_fields_take_precedence_and_unknown_protocols_are_not_inferred() {
     let mut provider = provider("https://api.openai.com", ApiFormat::OpenaiResponses);
     let profile = &mut provider.models[0];
-    profile.context_tokens = Some(100000);
-    profile.input_context_tokens = Some(80000);
-    profile.max_output_tokens = Some(8000);
+    profile.context_tokens = Some(100_000);
+    profile.input_context_tokens = Some(80_000);
+    profile.max_output_tokens = Some(8_000);
     profile.supports_vision = Some(false);
     profile.reasoning = Some(ReasoningProfile {
         adapter: ReasoningAdapter::OpenaiResponses,
@@ -126,31 +167,54 @@ fn explicit_and_discovered_fields_take_precedence_and_unknown_protocols_are_not_
 
     let mut other = self::provider("https://other.example/v1", ApiFormat::OpenaiChatCompletions);
     fixture().supplement(&mut other);
-    assert_eq!(other.models[0].context_tokens, Some(120000));
+    assert_eq!(other.models[0].context_tokens, Some(120_000));
     assert_eq!(other.models[0].supports_vision, Some(false));
     assert!(other.models[0].reasoning.is_none());
 
     let mut account = self::provider("https://api.openai.com/v1", ApiFormat::ChatgptCodex);
     fixture().supplement(&mut account);
-    assert!(account.models[0].context_tokens.is_none());
+    assert!(
+        account.models[0]
+            .context_tokens
+            .is_none()
+    );
 }
 
 #[test]
 fn shared_endpoint_conflicts_and_invalid_limits_do_not_supply_ambiguous_specs() {
     let mut catalog = fixture();
     let mut conflicting = catalog.providers["other"].clone();
-    conflicting.models.get_mut("fixture").unwrap().limit.context = Some(300000);
-    catalog.providers.insert("other-plan".into(), conflicting);
+    conflicting
+        .models
+        .get_mut("fixture")
+        .unwrap()
+        .limit
+        .context = Some(300_000);
+    catalog
+        .providers
+        .insert("other-plan".into(), conflicting);
     let mut provider = provider("https://other.example/v1", ApiFormat::AnthropicMessages);
     catalog.supplement(&mut provider);
-    assert!(provider.models[0].context_tokens.is_none());
+    assert!(
+        provider.models[0]
+            .context_tokens
+            .is_none()
+    );
 
-    let mut model: ModelProfile = serde_json::from_value(json!({"id": "fixture"})).unwrap();
-    let spec: Spec =
-        serde_json::from_value(json!({"limit": {"context": 10000, "input": 20000, "output": 0}}))
-            .unwrap();
+    let mut model: ModelProfile = serde_json::from_value(json!({
+        "id": "fixture"
+    }))
+    .unwrap();
+    let spec: Spec = serde_json::from_value(json!({
+        "limit": {
+            "context": 10_000,
+            "input": 20_000,
+            "output": 0
+        }
+    }))
+    .unwrap();
     spec.supplement(&mut model, "other", ApiFormat::AnthropicMessages);
-    assert_eq!(model.context_tokens, Some(10000));
+    assert_eq!(model.context_tokens, Some(10_000));
     assert!(model.input_context_tokens.is_none());
     assert!(model.max_output_tokens.is_none());
 }
@@ -170,12 +234,19 @@ proxy = "http://invalid.invalid:1"
         directory.path(),
     )
     .unwrap();
-    let path = directory.path().join("model-metadata/catalog.json");
+    let path = directory
+        .path()
+        .join("model-metadata/catalog.json");
     save(&path, &fixture()).unwrap();
-    assert!(update(&mut config, false, true).await.error.is_none());
+    assert!(
+        update(&mut config, false, true)
+            .await
+            .error
+            .is_none()
+    );
     assert_eq!(
         config.providers["test"].models[0].context_tokens,
-        Some(200000)
+        Some(200_000)
     );
 }
 
@@ -189,14 +260,27 @@ fn snapshots_round_trip_and_invalid_cache_sources_are_rejected() {
             .values()
             .map(|p| p.models.len())
             .sum::<usize>()
-            > 1000
+            > 1_000
     );
     assert!(
-        normalize(json!({"broken": {"models": {"": {}, "bad": {"limit": {"output": -1}}}}}))
-            .is_err()
+        normalize(json!({
+            "broken": {
+                "models": {
+                    "": {},
+                    "bad": {
+                        "limit": {
+                            "output": -1
+                        }
+                    }
+                }
+            }
+        }))
+        .is_err()
     );
     let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join("nested/catalog.json");
+    let path = directory
+        .path()
+        .join("nested/catalog.json");
     save(&path, &fixture()).unwrap();
     let cached = read_cache(&path).unwrap();
     assert_eq!(
@@ -210,6 +294,7 @@ fn snapshots_round_trip_and_invalid_cache_sources_are_rejected() {
     fs::write(&path, "broken JSON").unwrap();
     assert!(read_cache(&path).is_none());
     let file = fs::File::create(&path).unwrap();
-    file.set_len(MAX_CATALOG_BYTES as u64 + 1).unwrap();
+    file.set_len(MAX_CATALOG_BYTES as u64 + 1)
+        .unwrap();
     assert!(read_cache(&path).is_none());
 }

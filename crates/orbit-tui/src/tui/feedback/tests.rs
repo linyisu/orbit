@@ -33,7 +33,11 @@ fn notifications_expire_without_dismissing_details_or_reusing_pointer_targets() 
     state.input.set("draft".into());
     state.feedback.error("first");
     let deadline = state.feedback.notices[0].expires_at;
-    assert!(!state.feedback.expire(deadline - Duration::from_millis(1)));
+    assert!(
+        !state
+            .feedback
+            .expire(deadline - Duration::from_millis(1))
+    );
     draw(&mut state, 100, 30);
     let area = state.feedback.area;
     state.handle_feedback(&mouse(
@@ -78,7 +82,11 @@ fn short_command_feedback_is_nonblocking_and_opens_its_full_details() {
         let text = format!("没有发现 Skill。{}", "安装路径说明".repeat(30));
         state.show_output("Skills", text.clone());
         let screen = draw(&mut state, 100, 30);
-        assert!(screen.replace(' ', "").contains("没有发现Skill"));
+        assert!(
+            screen
+                .replace(' ', "")
+                .contains("没有发现Skill")
+        );
         assert!(state.feedback.area.height < 6);
         assert!(state.info_dialog.is_none());
         assert!(state.ime_cursor.is_some());
@@ -181,7 +189,9 @@ fn errors_stay_visible_without_moving_history_or_interrupting_the_draft() {
                 .unwrap();
             assert!(state.selection.active());
             assert!(draw(&mut state, 100, 30).contains("Cannot open link"));
-            state.feedback.error("New error while selecting");
+            state
+                .feedback
+                .error("New error while selecting");
             assert!(draw(&mut state, 100, 30).contains("New error while selecting"));
             let close = state.feedback.close;
             state.handle_feedback(&mouse(
@@ -207,16 +217,26 @@ fn errors_stay_visible_without_moving_history_or_interrupting_the_draft() {
 fn notices_are_bounded_sanitized_and_dismiss_only_on_a_matching_release() {
     let mut state = UiState::new("model");
     for n in 0..12 {
-        state.feedback.error(format!("Error {n}"));
+        state
+            .feedback
+            .error(format!("Error {n}"));
     }
     assert_eq!(state.feedback.notices.len(), 8);
     state.feedback.error("Error 8");
     assert_eq!(state.feedback.notices[0].count, 2);
     state
         .feedback
-        .error(format!("\u{1b}[31m{}", "文".repeat(9000)));
-    assert!(!state.feedback.notices[0].text.contains('\u{1b}'));
-    assert!(state.feedback.notices[0].text.ends_with("已截断"));
+        .error(format!("\u{1b}[31m{}", "文".repeat(9_000)));
+    assert!(
+        !state.feedback.notices[0]
+            .text
+            .contains('\u{1b}')
+    );
+    assert!(
+        state.feedback.notices[0]
+            .text
+            .ends_with("已截断")
+    );
     for (width, height) in [(141, 41), (28, 18), (10, 3), (1, 1)] {
         draw(&mut state, width, height);
         let area = state.feedback.area;
@@ -305,7 +325,9 @@ fn details_use_the_existing_scrollable_dialog_above_other_surfaces() {
         Event::Key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE)),
     );
     assert!(draw(&mut state, 100, 30).contains("End of details"));
-    state.feedback.error("New error above details");
+    state
+        .feedback
+        .error("New error above details");
     assert!(draw(&mut state, 100, 30).contains("New error above details"));
     let close = state.feedback.close;
     state.handle_feedback(&mouse(
@@ -348,7 +370,11 @@ fn model_and_compaction_failures_open_details_without_dumping_errors_in_history(
         state.apply(event);
         assert_eq!(state.transcript.len(), history);
         assert_eq!(state.feedback.notices.len(), 1);
-        assert!(state.feedback.notices[0].text.contains(details));
+        assert!(
+            state.feedback.notices[0]
+                .text
+                .contains(details)
+        );
         let screen = draw(&mut state, 100, 30);
         assert!(!screen.contains("RESOURCE_EXHAUSTED"));
         let area = state.feedback.area;

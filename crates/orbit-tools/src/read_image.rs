@@ -44,11 +44,20 @@ impl Tool for ReadImage {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition::function(
             "read_image",
-            "Load a PNG, JPEG, GIF or WebP image inside the workspace (or outside path granted via request_capability) into the model's native vision input. Use this whenever the user asks about an image file; filesystem listing or shell pixel inspection does not show the image to the model. Use a relative path or granted outside path. The image is validated locally, copied to Orbit's global attachment store, and no project file is created.",
+            "Load a PNG, JPEG, GIF or WebP image inside the workspace (or outside path granted via \
+                request_capability) into the model's native vision input. Use this whenever the \
+                user asks about an image file; filesystem listing or shell pixel inspection does \
+                not show the image to the model. Use a relative path or granted outside path. The \
+                image is validated locally, copied to Orbit's global attachment store, and no \
+                project file is created.",
             json!({
                 "type": "object",
                 "properties": {
-                    "path": { "type": "string", "description": "Path relative to the workspace root, or an outside path granted via request_capability" }
+                    "path": {
+                        "type": "string",
+                        "description": "Path relative to the workspace root, or an outside path \
+                            granted via request_capability"
+                    }
                 },
                 "required": ["path"],
                 "additionalProperties": false
@@ -105,8 +114,12 @@ impl Tool for ReadImage {
                 .map_err(|error| ToolError::ExecutionFailed(error.to_string()))?;
 
             Ok(ToolOutput::with_attachments(
-                json!({ "path": arguments.path, "loaded": true, "source_kind": "local_image" })
-                    .to_string(),
+                json!({
+                    "path": arguments.path,
+                    "loaded": true,
+                    "source_kind": "local_image"
+                })
+                .to_string(),
                 vec![attachment],
             ))
         })
@@ -140,7 +153,13 @@ mod tests {
         );
         let output = tool
             .execute(
-                ToolCall::function("image-1", "read_image", json!({ "path": "scene.png" })),
+                ToolCall::function(
+                    "image-1",
+                    "read_image",
+                    json!({
+                        "path": "scene.png"
+                    }),
+                ),
                 CancellationToken::new(),
             )
             .await
@@ -151,7 +170,12 @@ mod tests {
         let path = output.attachments[0].path();
 
         assert!(path.starts_with(data.path().join("orbit.attachments")));
-        assert_eq!(std::fs::read_dir(workspace.path()).unwrap().count(), 1);
+        assert_eq!(
+            std::fs::read_dir(workspace.path())
+                .unwrap()
+                .count(),
+            1
+        );
     }
 
     #[tokio::test]
@@ -165,14 +189,22 @@ mod tests {
         .with_enabled(false);
         let err = tool
             .execute(
-                ToolCall::function("image-1", "read_image", json!({ "path": "scene.png" })),
+                ToolCall::function(
+                    "image-1",
+                    "read_image",
+                    json!({
+                        "path": "scene.png"
+                    }),
+                ),
                 CancellationToken::new(),
             )
             .await
             .unwrap_err();
 
-        assert!(
-            matches!(err, ToolError::ExecutionFailed(msg) if msg.contains("does not support image input"))
-        );
+        assert!(matches!(
+            err,
+            ToolError::ExecutionFailed(msg)
+                if msg.contains("does not support image input")
+        ));
     }
 }

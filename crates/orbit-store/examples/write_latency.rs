@@ -14,6 +14,7 @@ mod sample {
         pub id: i32,
         pub payload: String,
     }
+
     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
     pub enum Relation {}
     impl ActiveModelBehavior for ActiveModel {}
@@ -47,7 +48,9 @@ async fn main() -> Result<()> {
         };
         for mode in modes {
             for batch in [1, 16, 64] {
-                let path = directory.path().join(format!("{mode}-{batch}-{round}.db"));
+                let path = directory
+                    .path()
+                    .join(format!("{mode}-{batch}-{round}.db"));
                 let mut options = ConnectOptions::new("sqlite::memory:");
                 options
                     .max_connections(1)
@@ -66,10 +69,10 @@ async fn main() -> Result<()> {
                     backend.build(&Schema::new(backend).create_table_from_entity(sample::Entity)),
                 )
                 .await?;
-                let payload = "x".repeat(1024);
+                let payload = "x".repeat(1_024);
                 let started = Instant::now();
                 let mut timings = Vec::new();
-                for start in (0..1024).step_by(batch) {
+                for start in (0..1_024).step_by(batch) {
                     let commit_started = Instant::now();
                     let tx = db.begin().await?;
                     sample::Entity::insert_many((start..start + batch).map(|n| {

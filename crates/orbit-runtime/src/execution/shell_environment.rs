@@ -5,12 +5,15 @@ use tokio::{io::AsyncReadExt, process::Command};
 use super::environment::is_sensitive_key;
 
 const MARKER: &[u8] = b"\0ORBIT-ENVIRONMENT\0";
-const MAX_BYTES: u64 = 1024 * 1024;
+const MAX_BYTES: u64 = 1_024 * 1_024;
 static ENVIRONMENT: OnceLock<BTreeMap<String, String>> = OnceLock::new();
 static INITIALIZED: tokio::sync::OnceCell<()> = tokio::sync::OnceCell::const_new();
 
 pub fn snapshot() -> BTreeMap<String, String> {
-    ENVIRONMENT.get().cloned().unwrap_or_else(inherited)
+    ENVIRONMENT
+        .get()
+        .cloned()
+        .unwrap_or_else(inherited)
 }
 
 fn inherited() -> BTreeMap<String, String> {
@@ -63,7 +66,11 @@ async fn discover(
         .kill_on_drop(true)
         .spawn()?;
     let _group = ProcessGroup(child.id());
-    let mut stdout = child.stdout.take().unwrap().take(MAX_BYTES + 1);
+    let mut stdout = child
+        .stdout
+        .take()
+        .unwrap()
+        .take(MAX_BYTES + 1);
     let result = tokio::time::timeout(Duration::from_secs(5), async {
         let mut bytes = Vec::new();
         stdout.read_to_end(&mut bytes).await?;
@@ -112,7 +119,11 @@ mod tests {
 
     #[test]
     fn login_output_preserves_values_and_filters_credentials() {
-        let environment = parse(b"startup banner\n\0ORBIT-ENVIRONMENT\0PATH=/tools:/usr/bin\0CUSTOM=a=b\nnext\0MODEL_API_KEY=hidden\0ORBIT_INTERNAL=hidden\0SSH_AUTH_SOCK=/agent\0").unwrap();
+        let environment = parse(
+            b"startup banner\n\0ORBIT-ENVIRONMENT\0PATH=/tools:/usr/bin\0CUSTOM\
+            =a=b\nnext\0MODEL_API_KEY=hidden\0ORBIT_INTERNAL=hidden\0SSH_AUTH_SOCK=/agent\0",
+        )
+        .unwrap();
         assert_eq!(environment["PATH"], "/tools:/usr/bin");
         assert_eq!(environment["CUSTOM"], "a=b\nnext");
         assert_eq!(environment["SSH_AUTH_SOCK"], "/agent");

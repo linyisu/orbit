@@ -195,8 +195,17 @@ fn html_table_cells_break_into_rows_and_keep_links_on_narrow_and_wide_layouts() 
             .collect();
 
         assert_eq!(labels, "第一第二");
-        assert!(rows.iter().filter(|row| !row.links.is_empty()).count() >= 2);
-        assert!(!rows.iter().any(|row| row.line.to_string().contains("<br>")));
+        assert!(
+            rows.iter()
+                .filter(|row| !row.links.is_empty())
+                .count()
+                >= 2
+        );
+        assert!(
+            !rows
+                .iter()
+                .any(|row| row.line.to_string().contains("<br>"))
+        );
     }
 }
 
@@ -306,7 +315,12 @@ fn code_badges_share_alias_colors_and_keep_unsupported_code_unchanged() {
         assert_eq!(badge.style.bg, alias_header.spans[1].style.bg);
         assert_eq!(header.spans[0].style.fg, badge.style.bg);
         assert_eq!(badge.style.fg, Some(THEME.on_accent));
-        assert!(badge.style.add_modifier.contains(Modifier::BOLD));
+        assert!(
+            badge
+                .style
+                .add_modifier
+                .contains(Modifier::BOLD)
+        );
         assert!(!colors.contains(&badge.style.bg), "{label}");
         colors.push(badge.style.bg);
     }
@@ -344,11 +358,19 @@ fn tables_align_unicode_wrap_cells_and_preserve_inline_content() {
     assert!(rendered.contains("a|b"), "{rendered}");
     assert!(!rendered.contains("**") && !rendered.contains('`'));
     assert!(source[end..].contains("后文"));
-    assert!(lines.iter().all(|line| line.line.width() <= 28));
+    assert!(
+        lines
+            .iter()
+            .all(|line| line.line.width() <= 28)
+    );
 
     let (_, narrow) = table(source, 10).unwrap();
 
-    assert!(narrow.iter().any(|l| l.line.to_string().contains("名称:")));
+    assert!(
+        narrow
+            .iter()
+            .any(|l| l.line.to_string().contains("名称:"))
+    );
     assert!(table("normal | text\nnot a separator", 80).is_none());
 }
 
@@ -364,11 +386,11 @@ fn narrow_table_tolerates_a_body_wider_than_its_header() {
 
     let lines = labelled_table_rows(&rows);
 
-    assert!(
-        lines
-            .iter()
-            .any(|line| line.line.to_string().contains("第 2 列: 二"))
-    );
+    assert!(lines.iter().any(|line| {
+        line.line
+            .to_string()
+            .contains("第 2 列: 二")
+    }));
 }
 
 #[test]
@@ -409,21 +431,24 @@ fn formats_inline_styles_without_modifying_code_or_urls() {
     let value = render("**重点**，*斜体*，~~删除~~，`**原样**` [文档](https://example.com)");
 
     assert_eq!(value.to_string(), "  重点，斜体，删除，**原样** 文档");
-    assert!(
-        value
-            .spans
-            .iter()
-            .any(|s| s.content == "重点" && s.style.add_modifier.contains(Modifier::BOLD))
-    );
-    assert!(
-        value
-            .spans
-            .iter()
-            .any(|s| s.content == "斜体" && s.style.add_modifier.contains(Modifier::ITALIC))
-    );
+    assert!(value.spans.iter().any(|s| {
+        s.content == "重点"
+            && s.style
+                .add_modifier
+                .contains(Modifier::BOLD)
+    }));
+    assert!(value.spans.iter().any(|s| {
+        s.content == "斜体"
+            && s.style
+                .add_modifier
+                .contains(Modifier::ITALIC)
+    }));
     assert!(value.spans.iter().any(|span| {
         span.content == "删除"
-            && span.style.add_modifier.contains(Modifier::CROSSED_OUT)
+            && span
+                .style
+                .add_modifier
+                .contains(Modifier::CROSSED_OUT)
             && span.style.fg == Some(THEME.md_strikethrough)
     }));
     assert_eq!(
@@ -445,19 +470,26 @@ fn renders_mark_extension_without_touching_code_or_escaped_source() {
     assert!(value.spans.iter().any(|span| {
         span.content == "重点"
             && span.style.fg == Some(THEME.md_mark)
-            && span.style.add_modifier.contains(Modifier::UNDERLINED)
+            && span
+                .style
+                .add_modifier
+                .contains(Modifier::UNDERLINED)
     }));
     assert!(value.spans.iter().any(|span| {
         span.content == "==代码=="
             && span.style.fg == Some(THEME.md_inline_code)
-            && span.style.add_modifier.contains(Modifier::BOLD)
+            && span
+                .style
+                .add_modifier
+                .contains(Modifier::BOLD)
     }));
     assert_eq!(render(r"保留 \==字面量==").to_string(), "  保留 ==字面量==");
 }
 
 #[test]
 fn recognizes_and_styles_bare_safe_web_links() {
-    let source = "访问 https://example.com/docs?from=orbit，或 www.rust-lang.org/learn。`https://code.invalid`";
+    let source = "访问 https://example.com/docs?from=orbit，或 \
+        www.rust-lang.org/learn。`https://code.invalid`";
     let rendered = render(source);
 
     assert_eq!(
@@ -483,7 +515,8 @@ fn recognizes_and_styles_bare_safe_web_links() {
 
 #[test]
 fn repeated_prose_does_not_steal_link_label_hits_when_destinations_are_hidden() {
-    let source = "文档之前的文档 [文档](https://orbit.example/first) 与 [**文档**](https://orbit.example/second)";
+    let source = "文档之前的文档 [文档](https://orbit.example/first) 与 \
+        [**文档**](https://orbit.example/second)";
     let rendered = render(source);
     let text = rendered.to_string();
     let targets = links(source, &rendered);
@@ -498,7 +531,9 @@ fn repeated_prose_does_not_steal_link_label_hits_when_destinations_are_hidden() 
 
 #[test]
 fn reference_links_and_remote_images_keep_targets_and_sources() {
-    let source = "[Orbit 文档][docs] 与 ![Orbit 图片](https://orbit.example/image)\n\n| 项 | 地址 |\n|---|---|\n| 文档 | [Orbit][DOCS] |\n\n[docs]: https://orbit.example/docs/ \"Orbit Guide\"\n";
+    let source = "[Orbit 文档][docs] 与 ![Orbit 图片](https://orbit.example/image)\n\n| 项 | 地址 \
+        |\n|---|---|\n| 文档 | [Orbit][DOCS] |\n\n[docs]: https://orbit.example/docs/ \"Orbit \
+        Guide\"\n";
     let lines = document(source, 80);
     assert_eq!(lines[0].line.to_string(), "  Orbit 文档 与 Orbit 图片");
     let targets: Vec<_> = lines
@@ -526,7 +561,11 @@ fn reference_links_and_remote_images_keep_targets_and_sources() {
     );
     let definition = lines
         .iter()
-        .find(|line| line.line.to_string().contains("[docs]:"))
+        .find(|line| {
+            line.line
+                .to_string()
+                .contains("[docs]:")
+        })
         .unwrap();
     assert!(
         definition
@@ -550,18 +589,22 @@ fn recovers_model_style_strong_markers_next_to_cjk_text() {
 
     assert!(!value.to_string().contains("**"), "{value:?}");
     assert!(value.spans.iter().any(|span| {
-        span.content == "\"虚构的示例\"" && span.style.add_modifier.contains(Modifier::BOLD)
+        span.content == "\"虚构的示例\""
+            && span
+                .style
+                .add_modifier
+                .contains(Modifier::BOLD)
     }));
 
     let escaped = render(r"保留 \*\*字面量\*\*");
 
     assert_eq!(escaped.to_string(), "  保留 **字面量**");
-    assert!(
-        escaped
-            .spans
-            .iter()
-            .all(|span| !span.style.add_modifier.contains(Modifier::BOLD))
-    );
+    assert!(escaped.spans.iter().all(|span| {
+        !span
+            .style
+            .add_modifier
+            .contains(Modifier::BOLD)
+    }));
 }
 
 #[test]
@@ -571,8 +614,16 @@ fn formats_blocks_and_preserves_indentation() {
     assert_eq!(render("  - **项目**").to_string(), "    • 项目");
     assert_eq!(render("3. 第三项").to_string(), "  3. 第三项");
     assert_eq!(render("> 引用").to_string(), "  ▎ 引用");
-    assert!(render("- [x] 完成").to_string().contains("󰄵 完成"));
-    assert!(render("#hashtag").to_string().contains("#hashtag"));
+    assert!(
+        render("- [x] 完成")
+            .to_string()
+            .contains("󰄵 完成")
+    );
+    assert!(
+        render("#hashtag")
+            .to_string()
+            .contains("#hashtag")
+    );
 }
 
 #[test]
@@ -590,7 +641,9 @@ fn code_fences_require_matching_delimiter_and_length() {
     line("~~~python", 4, &mut fence);
 
     assert_eq!(
-        fence.as_ref().map(|f| (f.delimiter, f.length)),
+        fence
+            .as_ref()
+            .map(|f| (f.delimiter, f.length)),
         Some(('~', 3))
     );
 
@@ -656,18 +709,24 @@ fn document_fragment_links_are_plain_text_in_markdown_html_and_tables() {
         "| 标题 |\n| --- |\n| [跳转至第一节标题测试](#section-one) |",
     ] {
         let lines = document(source, 80);
+        assert!(lines.iter().any(|line| {
+            line.text()
+                .contains("跳转至第一节标题测试")
+        }));
         assert!(
             lines
                 .iter()
-                .any(|line| line.text().contains("跳转至第一节标题测试"))
+                .all(|line| line.links.is_empty())
         );
-        assert!(lines.iter().all(|line| line.links.is_empty()));
         assert!(
             lines
                 .iter()
                 .flat_map(|line| &line.line.spans)
                 .filter(|span| span.content.contains("跳转"))
-                .all(|span| !span.style.add_modifier.contains(Modifier::UNDERLINED))
+                .all(|span| !span
+                    .style
+                    .add_modifier
+                    .contains(Modifier::UNDERLINED))
         );
     }
 }
@@ -678,13 +737,24 @@ fn unpaired_word_asterisks_preserve_text_and_surrounding_emphasis() {
         let rendered = document(source, 100);
         assert_eq!(
             rendered[0].line.to_string().trim(),
-            source.trim_start_matches("**").replace("**：", "：")
+            source
+                .trim_start_matches("**")
+                .replace("**：", "：")
         );
         for span in &rendered[0].line.spans {
             if span.content.contains("Label") || span.content.contains("b)") {
-                assert!(span.style.add_modifier.contains(Modifier::BOLD));
+                assert!(
+                    span.style
+                        .add_modifier
+                        .contains(Modifier::BOLD)
+                );
             }
-            assert!(!span.style.add_modifier.contains(Modifier::ITALIC));
+            assert!(
+                !span
+                    .style
+                    .add_modifier
+                    .contains(Modifier::ITALIC)
+            );
         }
     }
     let paired = render("a***bold italic***b");

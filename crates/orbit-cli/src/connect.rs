@@ -22,12 +22,17 @@ pub async fn connect(
         workspace::prepare_connection(&args.options(), config, database, auth_dir, None).await?;
     let mut client = connection.connect().await?;
     if args.stop {
-        client.request(Request::Shutdown).await?;
+        client
+            .request(Request::Shutdown)
+            .await?;
         println!("工作区服务已停止。");
         return Ok(());
     }
     if args.list {
-        let Response::Sessions(sessions) = client.request(Request::Sessions).await? else {
+        let Response::Sessions(sessions) = client
+            .request(Request::Sessions)
+            .await?
+        else {
             bail!("unexpected session list response");
         };
         for session in sessions {

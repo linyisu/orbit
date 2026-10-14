@@ -8,6 +8,7 @@ pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
     pub path: String,
 }
+
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
 pub enum Relation {
     #[sea_orm(
@@ -17,6 +18,7 @@ pub enum Relation {
     )]
     Session,
 }
+
 impl ActiveModelBehavior for ActiveModel {}
 
 impl Related<super::sessions::Entity> for Entity {

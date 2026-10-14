@@ -14,7 +14,7 @@ use std::{
 use symbols::AstSymbol;
 
 const MAX_CACHED_FILES: usize = 256;
-const MAX_CACHE_BYTES: usize = 8 * 1024 * 1024;
+const MAX_CACHE_BYTES: usize = 8 * 1_024 * 1_024;
 
 #[derive(Debug)]
 pub(crate) struct Identifier {
@@ -67,7 +67,10 @@ impl RepositoryIndex {
     pub(crate) fn analyze(&self, path: &Path, content: &str) -> Arc<Source> {
         let hash: [u8; 32] = Sha256::digest(content.as_bytes()).into();
         {
-            let mut cache = self.0.lock().expect("repository cache poisoned");
+            let mut cache = self
+                .0
+                .lock()
+                .expect("repository cache poisoned");
             cache.clock = cache.clock.wrapping_add(1);
             let clock = cache.clock;
             if let Some(entry) = cache
@@ -83,7 +86,10 @@ impl RepositoryIndex {
         // never block another file's analysis or exceed the retained budget.
         let source = Arc::new(symbols::analyze(path, content));
         let bytes = source.bytes() + path.as_os_str().len() + std::mem::size_of::<Entry>();
-        let mut cache = self.0.lock().expect("repository cache poisoned");
+        let mut cache = self
+            .0
+            .lock()
+            .expect("repository cache poisoned");
         if let Some(old) = cache.entries.remove(path) {
             cache.bytes -= old.bytes;
         }
@@ -97,7 +103,10 @@ impl RepositoryIndex {
                 else {
                     break;
                 };
-                let old = cache.entries.remove(&oldest).expect("entry exists");
+                let old = cache
+                    .entries
+                    .remove(&oldest)
+                    .expect("entry exists");
                 cache.bytes -= old.bytes;
             }
             let used = cache.clock;
@@ -126,13 +135,13 @@ mod tests {
             Path::new("large.java"),
             &format!(
                 "class Engine {{\n{}\n}}",
-                "local local 123 \"text\";\n".repeat(4000)
+                "local local 123 \"text\";\n".repeat(4_000)
             ),
         );
         assert!(!source.parsed);
         assert_eq!(source.symbols[0].name, "Engine");
         assert!(source.identifiers.is_empty());
-        assert!(source.bytes() < 2048);
+        assert!(source.bytes() < 2_048);
     }
 
     #[test]
@@ -162,12 +171,16 @@ mod tests {
         for (path, text, expected) in [
             (
                 "engine.c",
-                "typedef int Count;\nstruct Engine { int value; };\nint resolve(int value) { return value; }\nint caller(void) { /* ignored */ return resolve(1); }\nconst char *text = \"resolve\";",
+                "typedef int Count;\nstruct Engine { int value; };\nint resolve(int value) { \
+                    return value; }\nint caller(void) { /* ignored */ return resolve(1); }\nconst \
+                    char *text = \"resolve\";",
                 vec!["Count", "Engine", "resolve", "caller"],
             ),
             (
                 "engine.cpp",
-                "namespace app {\nclass Engine { public: int resolve(int value); };\nint Engine::resolve(int value) { return value; }\nint caller(Engine &engine) { return engine.resolve(1); }\n}",
+                "namespace app {\nclass Engine { public: int resolve(int value); };\nint \
+                    Engine::resolve(int value) { return value; }\nint caller(Engine &engine) { \
+                    return engine.resolve(1); }\n}",
                 vec!["Engine", "resolve", "resolve", "caller"],
             ),
         ] {
@@ -198,7 +211,9 @@ mod tests {
         let first = index.analyze(path, "fn original() {}");
         assert!(Arc::ptr_eq(
             &first,
-            &index.clone().analyze(path, "fn original() {}")
+            &index
+                .clone()
+                .analyze(path, "fn original() {}")
         ));
         let edited = index.analyze(path, "fn updated() {}");
         assert_eq!(edited.symbols[0].name, "updated");

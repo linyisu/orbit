@@ -53,8 +53,9 @@ pub fn project_action(command: &str, argument: &str) -> Result<SessionAction> {
                         .map_err(|_| anyhow::anyhow!("请输入记忆编号"))?,
                 },
                 "add" => {
-                    let (category, content) =
-                        rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
+                    let (category, content) = rest
+                        .split_once(char::is_whitespace)
+                        .unwrap_or((rest, ""));
                     let category = MemoryCategory::parse(category).ok_or_else(|| {
                         anyhow::anyhow!(
                             "用法：/memory add constraint|decision|fact|preference <内容>"
@@ -85,7 +86,9 @@ pub fn arguments(input: &str, models: &[String], skills: &[(String, String)]) ->
                 continue;
             }
             if let Some((provider, _)) = model.split_once("::") {
-                *groups.entry(provider.into()).or_default() += 1;
+                *groups
+                    .entry(provider.into())
+                    .or_default() += 1;
             } else {
                 entries.push(Candidate {
                     name: format!("/model {model}"),
@@ -95,12 +98,16 @@ pub fn arguments(input: &str, models: &[String], skills: &[(String, String)]) ->
                 });
             }
         }
-        entries.extend(groups.into_iter().map(|(provider, count)| Candidate {
-            name: format!("/model {provider}::"),
-            display: Some(provider),
-            description: format!("{count} 个匹配模型"),
-            continue_input: true,
-        }));
+        entries.extend(
+            groups
+                .into_iter()
+                .map(|(provider, count)| Candidate {
+                    name: format!("/model {provider}::"),
+                    display: Some(provider),
+                    description: format!("{count} 个匹配模型"),
+                    continue_input: true,
+                }),
+        );
         if orbit_protocol::search::rank("refresh", argument).is_some() {
             entries.push(Candidate {
                 name: "/model refresh".into(),
@@ -215,7 +222,10 @@ mod tests {
         ];
         let entries = arguments("/model ", &models, &[]);
         assert_eq!(
-            entries.iter().map(|e| e.name.as_str()).collect::<Vec<_>>(),
+            entries
+                .iter()
+                .map(|e| e.name.as_str())
+                .collect::<Vec<_>>(),
             ["/model alpha::", "/model beta::", "/model refresh"]
         );
         assert!(entries[0].continue_input);
@@ -231,7 +241,11 @@ mod tests {
         assert!(arguments("/tasks add write docs", &[], &[]).is_empty());
         let entries = arguments("/memory add ", &[], &[]);
         assert_eq!(entries.len(), 4);
-        assert!(entries.iter().all(|entry| entry.continue_input));
+        assert!(
+            entries
+                .iter()
+                .all(|entry| entry.continue_input)
+        );
         assert!(matches!(
             project_action("/tasks", "done 42").unwrap(),
             SessionAction::Task {
@@ -247,9 +261,16 @@ mod tests {
                 memory: MemoryAction::Forget { id: 7 }
             }
         ));
-        assert!(
-            matches!(project_action("/memory", "add preference 中文 偏好").unwrap(), SessionAction::Memory { memory: MemoryAction::Add { category: MemoryCategory::Preference, content } } if content == "中文 偏好")
-        );
+        assert!(matches!(
+            project_action("/memory", "add preference 中文 偏好").unwrap(),
+            SessionAction::Memory {
+                memory:
+                    MemoryAction::Add {
+                        category: MemoryCategory::Preference,
+                        content,
+                    },
+            } if content == "中文 偏好"
+        ));
         assert!(project_action("/tasks", "done invalid").is_err());
     }
 }

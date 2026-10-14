@@ -41,7 +41,8 @@ pub struct GitCommandAnalysis {
 }
 
 impl GitCommandAnalysis {
-    /// Classify a command string into a structured Git analysis, or return None if not a git command.
+    /// Classify a command string into a structured Git analysis, or return None if not a git
+    /// command.
     pub fn parse(command: &str) -> Option<Self> {
         let trimmed = command.trim();
         if trimmed.is_empty() {
@@ -217,7 +218,7 @@ fn contains_compound_shell_syntax(text: &str) -> bool {
             '\'' if !in_double_quote => in_single_quote = !in_single_quote,
             '"' if !in_single_quote => in_double_quote = !in_double_quote,
             '\\' => {
-                chars.next(); // skip escaped char
+                chars.next();
             }
             '`' if !in_single_quote => return true,
             '$' if !in_single_quote && chars.peek() == Some(&'(') => return true,
@@ -252,8 +253,12 @@ fn classify_subcommand(subcmd: &str, args: &[String]) -> GitOperationKind {
 
         "remote" => {
             if args.is_empty()
-                || args.iter().all(|a| a == "-v" || a == "--verbose")
-                || args.first().is_some_and(|a| a == "show" || a == "get-url")
+                || args
+                    .iter()
+                    .all(|a| a == "-v" || a == "--verbose")
+                || args
+                    .first()
+                    .is_some_and(|a| a == "show" || a == "get-url")
             {
                 GitOperationKind::ReadOnlyQuery {
                     subcommand: subcmd.to_string(),
@@ -277,7 +282,10 @@ fn classify_subcommand(subcmd: &str, args: &[String]) -> GitOperationKind {
                 };
             }
 
-            if args.iter().any(|a| a == "-m" || a == "-M" || a == "--move") {
+            if args
+                .iter()
+                .any(|a| a == "-m" || a == "-M" || a == "--move")
+            {
                 return GitOperationKind::LocalWrite {
                     subcommand: "branch".into(),
                     description: "重命名分支".into(),
@@ -310,14 +318,21 @@ fn classify_subcommand(subcmd: &str, args: &[String]) -> GitOperationKind {
         }
 
         "tag" => {
-            if args.iter().any(|a| a == "-d" || a == "--delete") {
+            if args
+                .iter()
+                .any(|a| a == "-d" || a == "--delete")
+            {
                 return GitOperationKind::Dangerous {
                     subcommand: "tag".into(),
                     reason: "删除标签".into(),
                 };
             }
 
-            if args.is_empty() || args.iter().any(|a| a == "-l" || a == "--list") {
+            if args.is_empty()
+                || args
+                    .iter()
+                    .any(|a| a == "-l" || a == "--list")
+            {
                 GitOperationKind::ReadOnlyQuery {
                     subcommand: "tag".into(),
                 }
@@ -350,7 +365,10 @@ fn classify_subcommand(subcmd: &str, args: &[String]) -> GitOperationKind {
         },
 
         "stash" => {
-            if args.iter().any(|a| a == "drop" || a == "clear") {
+            if args
+                .iter()
+                .any(|a| a == "drop" || a == "clear")
+            {
                 GitOperationKind::Dangerous {
                     subcommand: "stash".into(),
                     reason: "丢弃或清空暂存区 (stash drop/clear)".into(),
@@ -513,7 +531,10 @@ fn classify_subcommand(subcmd: &str, args: &[String]) -> GitOperationKind {
                 };
             }
 
-            let non_flag_args: Vec<&String> = args.iter().filter(|a| !a.starts_with('-')).collect();
+            let non_flag_args: Vec<&String> = args
+                .iter()
+                .filter(|a| !a.starts_with('-'))
+                .collect();
             let remote = non_flag_args
                 .first()
                 .map(|s| s.to_string())
@@ -552,7 +573,10 @@ fn classify_subcommand(subcmd: &str, args: &[String]) -> GitOperationKind {
         }
 
         "clean" => {
-            if args.iter().any(|a| a.contains('f') || a == "--force") {
+            if args
+                .iter()
+                .any(|a| a.contains('f') || a == "--force")
+            {
                 GitOperationKind::Dangerous {
                     subcommand: "clean".into(),
                     reason: "强制清理未跟踪文件 (git clean -f)".into(),
@@ -565,8 +589,12 @@ fn classify_subcommand(subcmd: &str, args: &[String]) -> GitOperationKind {
         }
 
         "restore" => {
-            if args.iter().any(|a| a == "--worktree" || a == "-W")
-                || !args.iter().any(|a| a == "--staged" || a == "-S")
+            if args
+                .iter()
+                .any(|a| a == "--worktree" || a == "-W")
+                || !args
+                    .iter()
+                    .any(|a| a == "--staged" || a == "-S")
             {
                 GitOperationKind::Dangerous {
                     subcommand: "restore".into(),
@@ -594,7 +622,10 @@ fn classify_subcommand(subcmd: &str, args: &[String]) -> GitOperationKind {
                     subcommand: "config".into(),
                 }
             } else {
-                let key = args.iter().find(|a| !a.starts_with('-')).cloned();
+                let key = args
+                    .iter()
+                    .find(|a| !a.starts_with('-'))
+                    .cloned();
                 GitOperationKind::ConfigMutation { key, value: None }
             }
         }
@@ -628,7 +659,9 @@ mod tests {
         ] {
             assert!(
                 !matches!(
-                    GitCommandAnalysis::parse(command).unwrap().kind,
+                    GitCommandAnalysis::parse(command)
+                        .unwrap()
+                        .kind,
                     GitOperationKind::ReadOnlyQuery { .. }
                 ),
                 "{command}"
@@ -671,14 +704,17 @@ mod tests {
     #[test]
     fn parses_local_writes() {
         let add = GitCommandAnalysis::parse("git add src/main.rs").unwrap();
-        assert!(
-            matches!(add.kind, GitOperationKind::LocalWrite { ref subcommand, .. } if subcommand == "add")
-        );
+        assert!(matches!(
+            add.kind,
+            GitOperationKind::LocalWrite { ref subcommand, .. } if subcommand == "add"
+        ));
 
         let commit = GitCommandAnalysis::parse("git commit -m 'feat: test'").unwrap();
-        assert!(
-            matches!(commit.kind, GitOperationKind::LocalWrite { ref subcommand, .. } if subcommand == "commit")
-        );
+        assert!(matches!(
+            commit.kind,
+            GitOperationKind::LocalWrite { ref subcommand, .. }
+                if subcommand == "commit"
+        ));
 
         let new_branch = GitCommandAnalysis::parse("git checkout -b feature/xyz").unwrap();
         assert!(matches!(
@@ -742,7 +778,11 @@ mod tests {
         ] {
             let analysis = GitCommandAnalysis::parse(cmd).expect(cmd);
             assert!(
-                matches!(analysis.kind, GitOperationKind::Dangerous { ref subcommand, .. } if subcommand == expected_sub),
+                matches!(
+                    analysis.kind,
+                    GitOperationKind::Dangerous { ref subcommand, .. }
+                        if subcommand == expected_sub
+                ),
                 "Expected Dangerous for '{cmd}', got {:?}",
                 analysis.kind
             );
@@ -803,7 +843,9 @@ mod tests {
             "git status \"`touch file`\"",
         ] {
             assert!(matches!(
-                GitCommandAnalysis::parse(command).unwrap().kind,
+                GitCommandAnalysis::parse(command)
+                    .unwrap()
+                    .kind,
                 GitOperationKind::CompoundOrShell { .. }
             ));
         }
@@ -817,7 +859,9 @@ mod tests {
         ] {
             assert!(
                 matches!(
-                    GitCommandAnalysis::parse(command).unwrap().kind,
+                    GitCommandAnalysis::parse(command)
+                        .unwrap()
+                        .kind,
                     GitOperationKind::Dangerous { .. }
                 ),
                 "{command}"

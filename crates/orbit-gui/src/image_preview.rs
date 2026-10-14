@@ -65,6 +65,7 @@ struct PreviewHost {
     focus: FocusHandle,
     previous_focus: Option<FocusHandle>,
 }
+
 impl gpui_kit::base::RootPlugin for PreviewHost {}
 impl PreviewHost {
     fn close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -75,6 +76,7 @@ impl PreviewHost {
         cx.notify();
     }
 }
+
 impl Render for PreviewHost {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let Some(preview) = self.preview.clone() else {
@@ -88,6 +90,7 @@ impl Render for PreviewHost {
             .into_any_element()
     }
 }
+
 fn show(preview: Entity<ImagePreview>, window: &mut Window, cx: &mut App) {
     if let Some(host) = gpui_kit::base::Root::read(window, cx).plugin::<PreviewHost>() {
         host.update(cx, |host, cx| {
@@ -100,6 +103,7 @@ fn show(preview: Entity<ImagePreview>, window: &mut Window, cx: &mut App) {
         });
     }
 }
+
 fn close(window: &mut Window, cx: &mut App) {
     if let Some(host) = gpui_kit::base::Root::read(window, cx).plugin::<PreviewHost>() {
         host.update(cx, |host, cx| host.close(window, cx));
@@ -132,10 +136,12 @@ pub(crate) fn decode_image(bytes: Vec<u8>) -> Result<(Arc<Image>, (u32, u32)), S
     Ok((Arc::new(Image::from_bytes(format, bytes)), dimensions))
 }
 
+/// Document images cannot read sibling files or absolute hrefs on the desktop.
 fn decode_svg(bytes: &[u8]) -> Result<(Arc<Image>, (u32, u32)), SharedString> {
-    // Document images cannot read sibling files or absolute hrefs on the desktop.
     let mut options = resvg::usvg::Options::default();
-    options.image_href_resolver.resolve_string = Box::new(|_, _| None);
+    options
+        .image_href_resolver
+        .resolve_string = Box::new(|_, _| None);
     static FONTS: std::sync::LazyLock<Arc<resvg::usvg::fontdb::Database>> =
         std::sync::LazyLock::new(|| {
             let mut fonts = resvg::usvg::fontdb::Database::new();
@@ -233,8 +239,12 @@ impl Render for ImagePreview {
                             .object_fit(ObjectFit::Contain),
                     )
                     .into_any_element(),
-                Ok(None) => div().child("加载图片…").into_any_element(),
-                Err(error) => div().child(error.clone()).into_any_element(),
+                Ok(None) => div()
+                    .child("加载图片…")
+                    .into_any_element(),
+                Err(error) => div()
+                    .child(error.clone())
+                    .into_any_element(),
             })
             .child(
                 div()
@@ -263,7 +273,7 @@ mod tests {
     fn wide_and_tall_images_fit_the_same_viewer_at_normal_and_large_ui_scales() {
         for rem in [14., 20.] {
             for (viewport_width, viewport_height) in [(800., 560.), (1180., 800.)] {
-                for (width, height) in [(2195, 470), (470, 2195), (80, 60)] {
+                for (width, height) in [(2_195, 470), (470, 2_195), (80, 60)] {
                     let (stage_width, image_width, image_height) =
                         fit(width, height, viewport_width, viewport_height, rem);
                     assert!(stage_width <= viewport_width - rem * 6.);
@@ -295,12 +305,20 @@ mod tests {
         );
         let (image, dimensions) = super::decode_image(source.into_bytes()).unwrap();
         assert_eq!(dimensions, (12, 8));
-        let raster = image::load_from_memory(image.bytes()).unwrap().into_rgba8();
-        assert!(raster.pixels().all(|pixel| pixel[3] == 0));
+        let raster = image::load_from_memory(image.bytes())
+            .unwrap()
+            .into_rgba8();
+        assert!(
+            raster
+                .pixels()
+                .all(|pixel| pixel[3] == 0)
+        );
         let (image, dimensions) = super::decode_image(br##"<svg xmlns="http://www.w3.org/2000/svg" width="8192" height="2048"><rect width="8192" height="2048" fill="#123456"/></svg>"##.to_vec()).unwrap();
-        assert_eq!(dimensions, (8192, 2048));
-        let raster = image::load_from_memory(image.bytes()).unwrap().into_rgba8();
-        assert_eq!(raster.dimensions(), (4096, 1024));
+        assert_eq!(dimensions, (8_192, 2_048));
+        let raster = image::load_from_memory(image.bytes())
+            .unwrap()
+            .into_rgba8();
+        assert_eq!(raster.dimensions(), (4_096, 1_024));
         assert_eq!(raster.get_pixel(0, 0).0, [0x12, 0x34, 0x56, 255]);
     }
 
@@ -318,7 +336,9 @@ mod tests {
     fn local_draft_preview_uses_actual_raster_dimensions() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("wide.png");
-        image::RgbaImage::new(320, 80).save(&path).unwrap();
+        image::RgbaImage::new(320, 80)
+            .save(&path)
+            .unwrap();
         let (_, dimensions) = load_image(path).unwrap();
         assert_eq!(dimensions, (320, 80));
     }

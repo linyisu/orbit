@@ -43,7 +43,9 @@ impl ApiKeyProvider {
 }
 
 pub async fn verify_deepseek(key: &str) -> Result<Vec<String>> {
-    ApiKeyProvider::Deepseek.verify(key).await
+    ApiKeyProvider::Deepseek
+        .verify(key)
+        .await
 }
 
 async fn verify_at(provider: ApiKeyProvider, key: &str, base: &str) -> Result<Vec<String>> {
@@ -59,7 +61,10 @@ async fn verify_at(provider: ApiKeyProvider, key: &str, base: &str) -> Result<Ve
             .bearer_auth(key)
             .json(&json!({
                 "model": "glm-5.1",
-                "messages": [{ "role": "user", "content": "ping" }],
+                "messages": [{
+                    "role": "user",
+                    "content": "ping"
+                }],
                 "max_tokens": 1,
                 "temperature": 0,
                 "stream": false
@@ -83,14 +88,21 @@ async fn verify_at(provider: ApiKeyProvider, key: &str, base: &str) -> Result<Ve
 }
 
 fn model_ids(payload: &Value) -> Result<Vec<String>> {
-    let rows = payload["data"].as_array().ok_or(AuthError::InvalidToken)?;
+    let rows = payload["data"]
+        .as_array()
+        .ok_or(AuthError::InvalidToken)?;
     let mut ids = Vec::new();
     for row in rows {
-        let id = row["id"].as_str().ok_or(AuthError::InvalidToken)?;
+        let id = row["id"]
+            .as_str()
+            .ok_or(AuthError::InvalidToken)?;
         if id.trim().is_empty() || id.chars().any(char::is_control) {
             return Err(AuthError::InvalidToken);
         }
-        if !ids.iter().any(|existing| existing == id) {
+        if !ids
+            .iter()
+            .any(|existing| existing == id)
+        {
             ids.push(id.to_owned());
         }
     }
@@ -112,15 +124,33 @@ mod tests {
 
     #[test]
     fn model_list_uses_server_ids_and_rejects_invalid_responses() {
-        let payload = json!({ "data": [{ "id": "new-model" }, { "id": "new-model" }, { "id": "other-model" }] });
+        let payload = json!({
+            "data": [
+                {
+                    "id": "new-model"
+                },
+                {
+                    "id": "new-model"
+                },
+                {
+                    "id": "other-model"
+                }
+            ]
+        });
 
         let ids = model_ids(&payload).unwrap();
 
         assert_eq!(ids, ["new-model", "other-model"]);
         for invalid in [
             json!({}),
-            json!({ "data": [] }),
-            json!({ "data": [{ "id": "bad\nmodel" }] }),
+            json!({
+                "data": []
+            }),
+            json!({
+                "data": [{
+                    "id": "bad\nmodel"
+                }]
+            }),
         ] {
             assert!(model_ids(&invalid).is_err());
         }
@@ -139,13 +169,18 @@ mod tests {
             while !bytes.ends_with(b"\r\n\r\n") {
                 bytes.push(socket.read_u8().await.unwrap());
             }
-            let headers = String::from_utf8(bytes).unwrap().to_ascii_lowercase();
+            let headers = String::from_utf8(bytes)
+                .unwrap()
+                .to_ascii_lowercase();
             let length = headers
                 .lines()
                 .find_map(|line| line.strip_prefix("content-length: "))
                 .map_or(0, |length| length.parse::<usize>().unwrap());
             let mut request_body = vec![0; length];
-            socket.read_exact(&mut request_body).await.unwrap();
+            socket
+                .read_exact(&mut request_body)
+                .await
+                .unwrap();
             requests.push((
                 headers,
                 serde_json::from_slice(&request_body).unwrap_or(Value::Null),
@@ -154,7 +189,10 @@ mod tests {
                 "HTTP/1.1 {status} Test\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                 body.len()
             );
-            socket.write_all(response.as_bytes()).await.unwrap();
+            socket
+                .write_all(response.as_bytes())
+                .await
+                .unwrap();
         }
 
         requests
@@ -190,7 +228,11 @@ mod tests {
         );
         assert_eq!(requests[0].1["model"], "glm-5.1");
         assert_eq!(requests[0].1["max_tokens"], 1);
-        assert!(requests[1].0.starts_with("get /api/coding/paas/v4/models "));
+        assert!(
+            requests[1]
+                .0
+                .starts_with("get /api/coding/paas/v4/models ")
+        );
         assert!(
             requests
                 .iter()

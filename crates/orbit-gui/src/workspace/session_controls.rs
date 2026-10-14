@@ -44,7 +44,10 @@ impl Workspace {
         self.navigation_tasks
             .iter()
             .any(|task| task.session.as_deref() == Some(id) && task.busy)
-            || (self.info.as_ref().is_some_and(|info| info.id == id)
+            || (self
+                .info
+                .as_ref()
+                .is_some_and(|info| info.id == id)
                 && (self.busy || self.pending.is_some()))
     }
 
@@ -172,7 +175,12 @@ impl SessionControls {
         if self.pending {
             return;
         }
-        let title = self.input.read(cx).value().trim().to_owned();
+        let title = self
+            .input
+            .read(cx)
+            .value()
+            .trim()
+            .to_owned();
         if self.operation == Operation::Rename && (title.is_empty() || title.chars().count() > 120)
         {
             self.error = Some("会话名称应为 1–120 个字符。".into());
@@ -192,19 +200,21 @@ impl SessionControls {
             },
         };
         let (result, response) = tokio::sync::oneshot::channel();
-        let sent = self.owner.update(cx, |view, _| -> Result<(), String> {
-            if !view.options.same_host(&self.options) || !view.connected {
-                return Err("连接已改变，请重新打开会话操作。".into());
-            }
-            if self.operation == Operation::Delete && view.session_busy(&self.id) {
-                return Err("会话正在运行，请等待任务结束后再删除。".into());
-            }
-            view.backend
-                .as_ref()
-                .ok_or_else(|| "连接已断开，请重新连接后再试。".to_owned())?
-                .send(Command::Settings { request, result })
-                .map_err(|error| error.to_string())
-        });
+        let sent = self
+            .owner
+            .update(cx, |view, _| -> Result<(), String> {
+                if !view.options.same_host(&self.options) || !view.connected {
+                    return Err("连接已改变，请重新打开会话操作。".into());
+                }
+                if self.operation == Operation::Delete && view.session_busy(&self.id) {
+                    return Err("会话正在运行，请等待任务结束后再删除。".into());
+                }
+                view.backend
+                    .as_ref()
+                    .ok_or_else(|| "连接已断开，请重新连接后再试。".to_owned())?
+                    .send(Command::Settings { request, result })
+                    .map_err(|error| error.to_string())
+            });
         let sent = sent.unwrap_or_else(|_| Err("工作区已关闭。".into()));
         if let Err(error) = sent {
             self.error = Some(error.into());
@@ -238,7 +248,11 @@ impl SessionControls {
                         return;
                     }
                     if operation == Operation::Rename {
-                        if let Some(entry) = view.sessions.iter_mut().find(|entry| entry.id == id) {
+                        if let Some(entry) = view
+                            .sessions
+                            .iter_mut()
+                            .find(|entry| entry.id == id)
+                        {
                             entry.title = title.clone().into();
                         }
                         if let Some(info) = &mut view.info
@@ -247,7 +261,8 @@ impl SessionControls {
                             info.title = title.clone();
                         }
                     } else {
-                        view.sessions.retain(|entry| entry.id != id);
+                        view.sessions
+                            .retain(|entry| entry.id != id);
                     }
                     view.refresh_title(cx);
                     cx.emit(WorkspaceEvent::Catalog(view.sessions.clone()));
@@ -309,7 +324,12 @@ impl Render for SessionControls {
                 )
             })
             .when_some(self.error.clone(), |view, error| {
-                view.child(div().text_sm().text_color(cx.theme().danger).child(error))
+                view.child(
+                    div()
+                        .text_sm()
+                        .text_color(cx.theme().danger)
+                        .child(error),
+                )
             })
             .child(
                 h_flex()

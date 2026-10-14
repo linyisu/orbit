@@ -3,7 +3,9 @@ use orbit_protocol::input_queue::{Action, Snapshot, State};
 
 #[tokio::test]
 async fn actual_dispatch_mutates_waiting_inputs_and_preserves_them_after_cancellation() {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .unwrap();
     let fixture = Fixture::new(&format!("http://{}/v1", listener.local_addr().unwrap())).await;
     let session = fixture.handle.info.id.clone();
     let workspace = fixture.handle.info.workspace.clone();
@@ -51,7 +53,10 @@ async fn actual_dispatch_mutates_waiting_inputs_and_preserves_them_after_cancell
     };
     assert!(run.is_some());
     assert_eq!(
-        entries.iter().map(|entry| entry.id).collect::<Vec<_>>(),
+        entries
+            .iter()
+            .map(|entry| entry.id)
+            .collect::<Vec<_>>(),
         ids
     );
     assert!(
@@ -178,13 +183,19 @@ async fn actor_rechecks_workspace_even_when_dispatch_is_bypassed() {
         .input_queue(Action::List { after: None }, "/old-workspace".into())
         .await
         .unwrap_err();
-    assert!(error.to_string().contains("工作区已切换"));
+    assert!(
+        error
+            .to_string()
+            .contains("工作区已切换")
+    );
 }
 
 #[tokio::test]
 async fn image_input_is_uploaded_queued_and_authorized_for_withdrawal() {
     use base64::Engine;
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .unwrap();
     let fixture = Fixture::with_vision(
         &format!("http://{}/v1", listener.local_addr().unwrap()),
         true,
@@ -274,5 +285,8 @@ async fn image_input_is_uploaded_queued_and_authorized_for_withdrawal() {
         panic!("queue expected")
     };
     assert!(entries.is_empty());
-    fixture.request(Request::Cancel { session }).await.unwrap();
+    fixture
+        .request(Request::Cancel { session })
+        .await
+        .unwrap();
 }

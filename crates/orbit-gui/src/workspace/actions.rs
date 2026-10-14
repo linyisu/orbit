@@ -64,6 +64,7 @@ pub(crate) enum WorkspaceCommand {
     StopTask,
     Sessions,
 }
+
 impl WorkspaceCommand {
     pub(super) const ALL: &'static [(Self, &'static str)] = &[
         (Self::OpenProject, "打开项目…"),
@@ -118,6 +119,7 @@ impl WorkspaceCommand {
         (Self::Sessions, "查找会话…"),
     ];
 }
+
 impl Workspace {
     pub(super) fn execute(
         &mut self,
@@ -323,7 +325,9 @@ impl Workspace {
                         session: session.clone(),
                         action: SessionAction::Memory {
                             memory: MemoryAction::Forget {
-                                id: value.parse().map_err(|_| "记忆 ID 应为数字")?,
+                                id: value
+                                    .parse()
+                                    .map_err(|_| "记忆 ID 应为数字")?,
                             },
                         },
                     })
@@ -465,7 +469,10 @@ impl Workspace {
         let first = std::cell::Cell::new(true);
         crate::dialog::open(window, cx, move |dialog, window, cx| {
             if first.replace(false) {
-                input.read(cx).focus_handle(cx).focus(window, cx);
+                input
+                    .read(cx)
+                    .focus_handle(cx)
+                    .focus(window, cx);
             }
             let input2 = input.clone();
             let owner = owner.clone();
@@ -487,30 +494,40 @@ impl Workspace {
                                 .label("取消")
                                 .on_click(|_, window, cx| window.close_dialog(cx)),
                         )
-                        .child(Button::new("submit-form").primary().label(commit).on_click(
-                            move |_, window, cx| {
-                                let value = input2.read(cx).value().trim().to_string();
-                                if value.is_empty() {
-                                    window.push_notification(Notification::error("请填写内容"), cx);
-                                    return;
-                                }
-                                match request(value) {
-                                    Ok(request) => {
-                                        if owner
-                                            .update(cx, |view, cx| {
-                                                view.command(Command::Request(request), cx)
-                                            })
-                                            .unwrap_or(false)
-                                        {
-                                            window.close_dialog(cx);
+                        .child(
+                            Button::new("submit-form")
+                                .primary()
+                                .label(commit)
+                                .on_click(move |_, window, cx| {
+                                    let value = input2
+                                        .read(cx)
+                                        .value()
+                                        .trim()
+                                        .to_string();
+                                    if value.is_empty() {
+                                        window.push_notification(
+                                            Notification::error("请填写内容"),
+                                            cx,
+                                        );
+                                        return;
+                                    }
+                                    match request(value) {
+                                        Ok(request) => {
+                                            if owner
+                                                .update(cx, |view, cx| {
+                                                    view.command(Command::Request(request), cx)
+                                                })
+                                                .unwrap_or(false)
+                                            {
+                                                window.close_dialog(cx);
+                                            }
+                                        }
+                                        Err(error) => {
+                                            window.push_notification(Notification::error(error), cx)
                                         }
                                     }
-                                    Err(error) => {
-                                        window.push_notification(Notification::error(error), cx)
-                                    }
-                                }
-                            },
-                        )),
+                                }),
+                        ),
                 )
         });
     }
@@ -541,11 +558,15 @@ impl Workspace {
                             .text_color(cx.theme().muted_foreground)
                             .child("↑↓ 选择　Enter 打开　Esc 关闭")
                     })
-                    .items(WorkspaceCommand::ALL.iter().map(|(command, label)| {
-                        CommandItem::new()
-                            .label(*label)
-                            .keywords([format!("{command:?}")])
-                    }))
+                    .items(
+                        WorkspaceCommand::ALL
+                            .iter()
+                            .map(|(command, label)| {
+                                CommandItem::new()
+                                    .label(*label)
+                                    .keywords([format!("{command:?}")])
+                            }),
+                    )
                     .on_confirm(move |index, window, cx| {
                         if let Some((command, _)) = WorkspaceCommand::ALL.get(index.row) {
                             window.close_dialog(cx);
@@ -567,6 +588,7 @@ impl Workspace {
             );
         }
     }
+
     pub(super) fn show_plan(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let owner = cx.weak_entity();
         let generation = self.planning.generation;
@@ -576,13 +598,16 @@ impl Workspace {
                 dialog
                     .title("计划")
                     .child("进入计划模式后，Agent 会先分析并提交方案，批准后再执行。")
-                    .footer(Button::new("enter-plan").label("进入计划模式").on_click(
-                        move |_, window, cx| {
-                            let _ = owner
-                                .update(cx, |view, cx| view.plan_action(plan::Action::Enter, cx));
-                            window.close_dialog(cx);
-                        },
-                    ))
+                    .footer(
+                        Button::new("enter-plan")
+                            .label("进入计划模式")
+                            .on_click(move |_, window, cx| {
+                                let _ = owner.update(cx, |view, cx| {
+                                    view.plan_action(plan::Action::Enter, cx)
+                                });
+                                window.close_dialog(cx);
+                            }),
+                    )
             });
             return;
         };
@@ -623,35 +648,37 @@ impl Workspace {
                     h_flex()
                         .gap_2()
                         .justify_end()
-                        .child(Button::new("plan-feedback").label("修改意见…").on_click(
-                            move |_, window, cx| {
-                                window.close_dialog(cx);
-                                let _ = feedback.update(cx, |view, cx| {
-                                    if let Some(key) = view.plan_decision() {
-                                        view.attention.dismiss(&key);
-                                    }
-                                    if let Some(info) = &view.info {
-                                        let session = info.id.clone();
-                                        view.prompt(
-                                            ("修改计划", "修改意见"),
-                                            "",
-                                            "提交意见",
-                                            move |text| {
-                                                Ok(Request::Plan {
-                                                    session: session.clone(),
-                                                    action: plan::Action::Feedback {
-                                                        generation,
-                                                        text,
-                                                    },
-                                                })
-                                            },
-                                            window,
-                                            cx,
-                                        );
-                                    }
-                                });
-                            },
-                        ))
+                        .child(
+                            Button::new("plan-feedback")
+                                .label("修改意见…")
+                                .on_click(move |_, window, cx| {
+                                    window.close_dialog(cx);
+                                    let _ = feedback.update(cx, |view, cx| {
+                                        if let Some(key) = view.plan_decision() {
+                                            view.attention.dismiss(&key);
+                                        }
+                                        if let Some(info) = &view.info {
+                                            let session = info.id.clone();
+                                            view.prompt(
+                                                ("修改计划", "修改意见"),
+                                                "",
+                                                "提交意见",
+                                                move |text| {
+                                                    Ok(Request::Plan {
+                                                        session: session.clone(),
+                                                        action: plan::Action::Feedback {
+                                                            generation,
+                                                            text,
+                                                        },
+                                                    })
+                                                },
+                                                window,
+                                                cx,
+                                            );
+                                        }
+                                    });
+                                }),
+                        )
                         .child(
                             Button::new("approve-plan")
                                 .primary()

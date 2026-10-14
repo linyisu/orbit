@@ -6,6 +6,7 @@ impl MigrationName for Migration {
         "00000000000030_attachments"
     }
 }
+
 #[async_trait::async_trait]
 impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
@@ -13,8 +14,16 @@ impl MigrationTrait for Migration {
             .create_table(
                 Table::create()
                     .table(Alias::new("session_attachments"))
-                    .col(ColumnDef::new(Alias::new("session_id")).text().not_null())
-                    .col(ColumnDef::new(Alias::new("file_name")).text().not_null())
+                    .col(
+                        ColumnDef::new(Alias::new("session_id"))
+                            .text()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(Alias::new("file_name"))
+                            .text()
+                            .not_null(),
+                    )
                     .col(
                         ColumnDef::new(Alias::new("content_hash"))
                             .string_len(64)
@@ -76,6 +85,7 @@ impl MigrationTrait for Migration {
             .await?;
         Ok(())
     }
+
     async fn down(&self, _: &SchemaManager) -> Result<(), DbErr> {
         super::forward_only()
     }

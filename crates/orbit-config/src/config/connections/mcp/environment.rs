@@ -12,7 +12,9 @@ pub fn parse(source: &str) -> Result<BTreeMap<String, String>> {
             continue;
         }
         let value = (|| -> Result<(String, String)> {
-            let (key, value) = line.split_once('=').context("环境变量格式应为 KEY=value")?;
+            let (key, value) = line
+                .split_once('=')
+                .context("环境变量格式应为 KEY=value")?;
             let key = key.trim();
             ensure!(!key.is_empty(), "环境变量名称不能为空");
             let value = value.trim();
@@ -34,7 +36,10 @@ pub fn parse(source: &str) -> Result<BTreeMap<String, String>> {
             Ok((key.to_owned(), value))
         })()
         .with_context(|| format!("环境变量第 {} 行", index + 1))?;
-        if values.insert(value.0, value.1).is_some() {
+        if values
+            .insert(value.0, value.1)
+            .is_some()
+        {
             bail!("环境变量第 {} 行：名称重复", index + 1);
         }
     }
@@ -74,7 +79,11 @@ mod tests {
         ] {
             assert_eq!(parse(input).unwrap()["DEMO_TOOL_HOME"], "/opt/sample-tool");
         }
-        let values = parse("TOKEN=a=b=c\nEMPTY=\nLITERAL=$HOME/$(command)\nSPACES=' a b '\nWINDOWS=C:\\Tools\\SampleTool").unwrap();
+        let values = parse(
+            "TOKEN=a=b=c\nEMPTY=\nLITERAL=$HOME/$(command)\nSPACES=' a b \
+            '\nWINDOWS=C:\\Tools\\SampleTool",
+        )
+        .unwrap();
         assert_eq!(values["TOKEN"], "a=b=c");
         assert_eq!(values["EMPTY"], "");
         assert_eq!(values["LITERAL"], "$HOME/$(command)");

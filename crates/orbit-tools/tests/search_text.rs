@@ -53,33 +53,71 @@ async fn searches_literal_and_regex_with_context_globs_and_pagination() {
     assert_eq!(first["matches"][0]["column"], 1);
     assert_eq!(
         first["matches"][0]["context"][0],
-        json!({ "line": 1, "text": "first line" })
+        json!({
+            "line": 1,
+            "text": "first line"
+        })
     );
     assert_eq!(first["has_more"], true);
     assert_eq!(first["next_offset"], 1);
 
     let second = run(
         &tool,
-        json!({ "query": "needle", "path": "src", "glob": "**/*.rs", "offset": 1 }),
+        json!({
+            "query": "needle",
+            "path": "src",
+            "glob": "**/*.rs",
+            "offset": 1
+        }),
     )
     .await;
 
-    assert_eq!(second["matches"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        second["matches"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
     assert_eq!(second["matches"][0]["line"], 3);
     assert_eq!(second["has_more"], false);
 
     let regex = run(
         &tool,
-        json!({ "query": "Needle\\s+here", "regex": true, "case_sensitive": true, "glob": "**/*.rs" }),
+        json!({
+            "query": "Needle\\s+here",
+            "regex": true,
+            "case_sensitive": true,
+            "glob": "**/*.rs"
+        }),
     )
     .await;
 
-    assert_eq!(regex["matches"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        regex["matches"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
     assert_eq!(regex["matches"][0]["line"], 2);
 
-    let case_sensitive = run(&tool, json!({ "query": "needle", "case_sensitive": true })).await;
+    let case_sensitive = run(
+        &tool,
+        json!({
+            "query": "needle",
+            "case_sensitive": true
+        }),
+    )
+    .await;
 
-    assert_eq!(case_sensitive["matches"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        case_sensitive["matches"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
 }
 
 #[tokio::test]
@@ -93,7 +131,13 @@ async fn respects_ignore_rules_and_workspace_protection() {
     fs::write(directory.path().join(".git/config"), "needle secret").unwrap();
     fs::write(directory.path().join(".env"), "needle secret").unwrap();
     fs::write(directory.path().join("ignored.txt"), "needle ignored").unwrap();
-    fs::write(directory.path().join("ignored-dir/file"), "needle ignored").unwrap();
+    fs::write(
+        directory
+            .path()
+            .join("ignored-dir/file"),
+        "needle ignored",
+    )
+    .unwrap();
     fs::write(directory.path().join("visible.txt"), "needle visible").unwrap();
     fs::write(
         directory.path().join(".gitignore"),
@@ -108,12 +152,23 @@ async fn respects_ignore_rules_and_workspace_protection() {
     .unwrap();
     let tool = SearchText::new(Workspace::new(directory.path()).unwrap());
 
-    let result = run(&tool, json!({ "query": "needle", "include_hidden": true })).await;
+    let result = run(
+        &tool,
+        json!({
+            "query": "needle",
+            "include_hidden": true
+        }),
+    )
+    .await;
 
     assert_eq!(
         result["matches"],
         json!([{
-            "path":"visible.txt", "line":1, "column":1, "text":"needle visible", "context":[]
+            "path": "visible.txt",
+            "line": 1,
+            "column": 1,
+            "text": "needle visible",
+            "context": []
         }])
     );
 }
@@ -125,13 +180,33 @@ async fn rejects_invalid_patterns_paths_and_cancelled_searches() {
     let tool = SearchText::new(Workspace::new(directory.path()).unwrap());
 
     for arguments in [
-        json!({ "query": "" }),
-        json!({ "query": ".*", "regex": true }),
-        json!({ "query": "text", "glob": "[" }),
-        json!({ "query": "text", "path": ".." }),
-        json!({ "query": "text", "context_lines": 11 }),
-        json!({ "query": "text", "limit": 0 }),
-        json!({ "query": "text", "unknown": true }),
+        json!({
+            "query": ""
+        }),
+        json!({
+            "query": ".*",
+            "regex": true
+        }),
+        json!({
+            "query": "text",
+            "glob": "["
+        }),
+        json!({
+            "query": "text",
+            "path": ".."
+        }),
+        json!({
+            "query": "text",
+            "context_lines": 11
+        }),
+        json!({
+            "query": "text",
+            "limit": 0
+        }),
+        json!({
+            "query": "text",
+            "unknown": true
+        }),
     ] {
         assert!(
             matches!(
@@ -151,7 +226,13 @@ async fn rejects_invalid_patterns_paths_and_cancelled_searches() {
 
     assert!(matches!(
         tool.execute(
-            ToolCall::function("search", "search_text", json!({ "query": "text" })),
+            ToolCall::function(
+                "search",
+                "search_text",
+                json!({
+                    "query": "text"
+                })
+            ),
             token,
         )
         .await,
@@ -165,16 +246,25 @@ async fn bounds_serialized_results_and_reports_truncation() {
 
     for index in 0..800 {
         fs::write(
-            directory.path().join(format!("{index:04}.txt")),
+            directory
+                .path()
+                .join(format!("{index:04}.txt")),
             format!("needle {}\n", "长".repeat(300)),
         )
         .unwrap();
     }
 
     let tool = SearchText::new(Workspace::new(directory.path()).unwrap());
-    let result = run(&tool, json!({ "query": "needle", "limit": 500 })).await;
+    let result = run(
+        &tool,
+        json!({
+            "query": "needle",
+            "limit": 500
+        }),
+    )
+    .await;
 
-    assert!(result.to_string().len() <= 32 * 1024);
+    assert!(result.to_string().len() <= 32 * 1_024);
     assert_eq!(result["has_more"], true);
     assert!(result["next_offset"].as_u64().unwrap() > 0);
 }
@@ -198,7 +288,10 @@ async fn search_text_external_single_file() {
     let tool = SearchText::new(workspace);
     let result = run(
         &tool,
-        json!({ "path": outside_file.to_str().unwrap(), "query": "found_unique_needle" }),
+        json!({
+            "path": outside_file.to_str().unwrap(),
+            "query": "found_unique_needle"
+        }),
     )
     .await;
 
@@ -219,8 +312,10 @@ async fn oversized_file_is_skipped_without_truncating_subsequent_files() {
     let directory = tempfile::tempdir().unwrap();
 
     fs::write(
-        directory.path().join("01_oversized.txt"),
-        "x".repeat(3 * 1024 * 1024),
+        directory
+            .path()
+            .join("01_oversized.txt"),
+        "x".repeat(3 * 1_024 * 1_024),
     )
     .unwrap();
 
@@ -231,7 +326,13 @@ async fn oversized_file_is_skipped_without_truncating_subsequent_files() {
     .unwrap();
 
     let tool = SearchText::new(Workspace::new(directory.path()).unwrap());
-    let result = run(&tool, json!({ "query": "needle_after_oversized" })).await;
+    let result = run(
+        &tool,
+        json!({
+            "query": "needle_after_oversized"
+        }),
+    )
+    .await;
 
     let matches = result["matches"].as_array().unwrap();
     assert_eq!(matches.len(), 1);

@@ -25,13 +25,45 @@ fn directory_preview_preserves_nested_paths_and_separates_paging_from_expansion(
     let mut row = tool(
         "list_files",
         json!({
-            "entries": [{ "kind": "directory", "path": "src/中文" }, { "kind": "file", "path": "src/a/mod.rs" }, { "kind": "file", "path": "src/b/mod.rs" }, { "kind": "file", "path": "src/c.rs" }, { "kind": "file", "path": "src/d.rs" }, { "kind": "file", "path": "src/e.rs" }, { "kind": "file", "path": "src/f.rs" }],
+            "entries": [
+                {
+                    "kind": "directory",
+                    "path": "src/中文"
+                },
+                {
+                    "kind": "file",
+                    "path": "src/a/mod.rs"
+                },
+                {
+                    "kind": "file",
+                    "path": "src/b/mod.rs"
+                },
+                {
+                    "kind": "file",
+                    "path": "src/c.rs"
+                },
+                {
+                    "kind": "file",
+                    "path": "src/d.rs"
+                },
+                {
+                    "kind": "file",
+                    "path": "src/e.rs"
+                },
+                {
+                    "kind": "file",
+                    "path": "src/f.rs"
+                }
+            ],
             "has_more": true,
             "next_offset": 7
         }),
     );
 
-    row.arguments = json!({ "path": "src" }).to_string();
+    row.arguments = json!({
+        "path": "src"
+    })
+    .to_string();
     let original = row.output.clone();
     let preview = text(&files(&row, false, 80).unwrap());
 
@@ -97,7 +129,18 @@ fn git_views_show_evidence_instead_of_json_and_do_not_invent_repairs() {
                 "ahead": 1,
                 "behind": 0
             },
-            "entries": [{ "kind": "renamed_or_copied", "xy": "R.", "original_path": "旧.rs", "path": "新.rs" }, { "kind": "untracked", "path": "new.rs" }]
+            "entries": [
+                {
+                    "kind": "renamed_or_copied",
+                    "xy": "R.",
+                    "original_path": "旧.rs",
+                    "path": "新.rs"
+                },
+                {
+                    "kind": "untracked",
+                    "path": "new.rs"
+                }
+            ]
         }),
     );
     let status = text(&git(&status, false, 90).unwrap());
@@ -106,7 +149,10 @@ fn git_views_show_evidence_instead_of_json_and_do_not_invent_repairs() {
 
     let diff = tool(
         "git_inspect",
-        json!({ "staged": true, "lines": ["--- a/file", "+++ b/file", "@@ -1 +1 @@", "-old", "+new"] }),
+        json!({
+            "staged": true,
+            "lines": ["--- a/file", "+++ b/file", "@@ -1 +1 @@", "-old", "+new"]
+        }),
     );
     let lines = git(&diff, true, 80).unwrap();
 
@@ -114,8 +160,10 @@ fn git_views_show_evidence_instead_of_json_and_do_not_invent_repairs() {
         |l| l.to_string().ends_with("+new") && l.spans.last().unwrap().style.fg == Some(ADDED)
     ));
     assert!(
-        lines.iter().any(|l| l.to_string().ends_with("-old")
-            && l.spans.last().unwrap().style.fg == Some(REMOVED))
+        lines
+            .iter()
+            .any(|l| l.to_string().ends_with("-old")
+                && l.spans.last().unwrap().style.fg == Some(REMOVED))
     );
 }
 
@@ -125,9 +173,20 @@ fn structured_results_fit_narrow_screens_escape_controls_and_keep_model_payload(
     let rows = [
         tool(
             "list_files",
-            json!({ "entries": [{ "path": long, "kind": "file" }] }),
+            json!({
+                "entries": [{
+                    "path": long,
+                    "kind": "file"
+                }]
+            }),
         ),
-        tool("git_inspect", json!({ "lines": [long], "staged": false })),
+        tool(
+            "git_inspect",
+            json!({
+                "lines": [long],
+                "staged": false
+            }),
+        ),
         tool(
             "read_command_output",
             json!({
@@ -145,7 +204,11 @@ fn structured_results_fit_narrow_screens_escape_controls_and_keep_model_payload(
             json!({
                 "query": "test",
                 "provider": "Parallel",
-                "results": [{ "title": long, "url": "https://example.com", "snippet": long }],
+                "results": [{
+                    "title": long,
+                    "url": "https://example.com",
+                    "snippet": long
+                }],
                 "results_returned": 1
             }),
         ),
@@ -164,14 +227,25 @@ fn structured_results_fit_narrow_screens_escape_controls_and_keep_model_payload(
             "request_capability",
             json!({
                 "status": "granted",
-                "capability": { "path": long, "access": "read_write" }
+                "capability": {
+                    "path": long,
+                    "access": "read_write"
+                }
             }),
         ),
-        tool("read_image", json!({ "path": long, "loaded": true })),
+        tool(
+            "read_image",
+            json!({
+                "path": long,
+                "loaded": true
+            }),
+        ),
         tool(
             "extension_tool",
             json!({
-                "nested": { "list": [long, "second"] }
+                "nested": {
+                    "list": [long, "second"]
+                }
             }),
         ),
     ];
@@ -184,7 +258,9 @@ fn structured_results_fit_narrow_screens_escape_controls_and_keep_model_payload(
                 let lines = super::super::lines(&row, expanded, width).unwrap();
 
                 assert!(
-                    lines.iter().all(|l| l.width() <= usize::from(width)),
+                    lines
+                        .iter()
+                        .all(|l| l.width() <= usize::from(width)),
                     "{} {width}",
                     row.name
                 );
@@ -204,7 +280,12 @@ fn expansion_wraps_with_a_stable_gutter_and_preserves_text() {
     let lines = view.finish();
     let joined = lines[..lines.len() - 1]
         .iter()
-        .map(|l| l.to_string().strip_prefix("    ").unwrap().to_owned())
+        .map(|l| {
+            l.to_string()
+                .strip_prefix("    ")
+                .unwrap()
+                .to_owned()
+        })
         .collect::<String>();
 
     assert_eq!(joined, original);
@@ -218,8 +299,8 @@ fn command_output_view_formats_stream_range_and_truncation() {
             "output_id": "proc-0",
             "stream": "stdout",
             "offset": 0,
-            "next_offset": 1024,
-            "total_retained_bytes": 4096,
+            "next_offset": 1_024,
+            "total_retained_bytes": 4_096,
             "truncated": true,
             "content": "line 1\nline 2\n"
         }),
@@ -239,13 +320,11 @@ fn web_search_view_formats_results_and_links() {
         json!({
             "query": "rust lang",
             "provider": "DuckDuckGo",
-            "results": [
-                {
-                    "title": "Rust Programming Language",
-                    "url": "https://www.rust-lang.org",
-                    "snippet": "Empowering everyone to build reliable software."
-                }
-            ],
+            "results": [{
+                "title": "Rust Programming Language",
+                "url": "https://www.rust-lang.org",
+                "snippet": "Empowering everyone to build reliable software."
+            }],
             "results_returned": 1,
             "requested_max_results": 5,
             "fewer_results": false
@@ -267,11 +346,19 @@ fn web_search_warns_before_suspect_results_and_expands_diagnostics() {
             "query_match_unconfirmed": true,
             "warnings": ["Relevance is unconfirmed"],
             "response_url": "https://search.parallel.ai/mcp",
-            "results": [{"title": "Unrelated page", "url": "https://example.org/"}]
+            "results": [{
+                "title": "Unrelated page",
+                "url": "https://example.org/"
+            }]
         }),
     );
     let collapsed = text(&super::web_search(&row, false, 120).unwrap());
-    assert!(collapsed.find("相关性未确认").unwrap() < collapsed.find("Unrelated page").unwrap());
+    assert!(
+        collapsed.find("相关性未确认").unwrap()
+            < collapsed
+                .find("Unrelated page")
+                .unwrap()
+    );
     assert!(!collapsed.contains("搜索页面:"));
     let expanded = text(&super::web_search(&row, true, 120).unwrap());
     assert!(expanded.contains("Relevance is unconfirmed"));
@@ -283,12 +370,34 @@ fn document_view_shows_pdf_page_range_and_encoding_warning() {
     let row = tool(
         "read_document",
         json!({
-            "path":"book.pdf", "format":"pdf", "content":"partial text",
-            "pdf":{"start_page":21,"end_page":40,"total_pages":100,
-                "has_encoding_issues":true,"pages_needing_ocr":[25], "partial":true,
-                "pages":[{"page":25,"status":"partial"},{"page":26,"status":"text"}],
-                "vision":{"status":"attached","attached_pages":[25,26],"next_image_start_page":28,"failures":[]}},
-            "next_start_page":41
+            "path": "book.pdf",
+            "format": "pdf",
+            "content": "partial text",
+            "pdf": {
+                "start_page": 21,
+                "end_page": 40,
+                "total_pages": 100,
+                "has_encoding_issues": true,
+                "pages_needing_ocr": [25],
+                "partial": true,
+                "pages": [
+                    {
+                        "page": 25,
+                        "status": "partial"
+                    },
+                    {
+                        "page": 26,
+                        "status": "text"
+                    }
+                ],
+                "vision": {
+                    "status": "attached",
+                    "attached_pages": [25, 26],
+                    "next_image_start_page": 28,
+                    "failures": []
+                }
+            },
+            "next_start_page": 41
         }),
     );
     let rendered = text(&super::document(&row, true, 100).unwrap());

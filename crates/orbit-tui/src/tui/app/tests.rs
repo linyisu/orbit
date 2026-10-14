@@ -52,12 +52,14 @@ fn resuming_after_command_wait_starts_a_separate_assistant_message() {
     state.apply(AgentEvent::Model(StreamEvent::TextDelta(
         "Orbit build passed.".into(),
     )));
-    assert!(
-        matches!(&state.transcript[0], TranscriptItem::Assistant(text) if text == "Orbit is building.")
-    );
-    assert!(
-        matches!(&state.transcript[1], TranscriptItem::Assistant(text) if text == "Orbit build passed.")
-    );
+    assert!(matches!(
+        &state.transcript[0],
+        TranscriptItem::Assistant(text) if text == "Orbit is building."
+    ));
+    assert!(matches!(
+        &state.transcript[1],
+        TranscriptItem::Assistant(text) if text == "Orbit build passed."
+    ));
 }
 
 #[test]
@@ -109,7 +111,7 @@ fn reasoning_finishes_before_text_tools_and_terminal_events() {
             panic!("missing reasoning");
         };
         assert!(!row.finished);
-        row.started_at = Some(Instant::now() - std::time::Duration::from_millis(7500));
+        row.started_at = Some(Instant::now() - std::time::Duration::from_millis(7_500));
 
         state.apply(ending);
 
@@ -118,7 +120,7 @@ fn reasoning_finishes_before_text_tools_and_terminal_events() {
         };
         assert!(row.finished);
         assert_eq!(row.content, "first second");
-        assert!(row.elapsed.unwrap() >= std::time::Duration::from_millis(7500));
+        assert!(row.elapsed.unwrap() >= std::time::Duration::from_millis(7_500));
         let elapsed = row.elapsed;
         state.finish_clock();
         let TranscriptItem::Thinking(row) = &state.transcript[0] else {
@@ -215,12 +217,28 @@ fn running_menu_keeps_only_safe_local_commands() {
     state.input.insert("/");
     let commands = state.menu();
 
-    assert!(commands.iter().any(|command| command.name == "/model"));
-    assert!(commands.iter().any(|command| command.name == "/status"));
+    assert!(
+        commands
+            .iter()
+            .any(|command| command.name == "/model")
+    );
+    assert!(
+        commands
+            .iter()
+            .any(|command| command.name == "/status")
+    );
     for name in ["/new", "/ssh", "/wsl", "/local", "/close"] {
-        assert!(commands.iter().any(|command| command.name == name));
+        assert!(
+            commands
+                .iter()
+                .any(|command| command.name == name)
+        );
     }
-    assert!(!commands.iter().any(|command| command.name == "/compact"));
+    assert!(
+        !commands
+            .iter()
+            .any(|command| command.name == "/compact")
+    );
 }
 
 #[test]

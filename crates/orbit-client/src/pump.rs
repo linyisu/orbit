@@ -72,7 +72,11 @@ pub async fn pump(
             }
             _ => {}
         }
-        if responses.send(Ok(response)).await.is_err() {
+        if responses
+            .send(Ok(response))
+            .await
+            .is_err()
+        {
             break;
         }
     }
@@ -87,7 +91,13 @@ async fn next_call(
     tokio::select! {
         biased;
         command = commands.recv() => command,
-        _ = interval.tick() => Some(Call { request: Request::Poll { session: session.into(), after: cursor }, reply: None }),
+        _ = interval.tick() => Some(Call {
+            request: Request::Poll {
+                session: session.into(),
+                after: cursor,
+            },
+            reply: None,
+        }),
     }
 }
 
@@ -133,9 +143,13 @@ mod tests {
                 .request;
             assert_eq!(serde_json::to_value(actual).unwrap(), expected);
         }
-        assert!(
-            matches!(next_call(&mut rx, &mut interval, "active", 42).await.unwrap().request, Request::Poll { session, after: 42 } if session == "active")
-        );
+        assert!(matches!(
+            next_call(&mut rx, &mut interval, "active", 42)
+                .await
+                .unwrap()
+                .request,
+            Request::Poll { session, after: 42 } if session == "active"
+        ));
         drop(tx);
         assert!(
             next_call(&mut rx, &mut interval, "active", 42)

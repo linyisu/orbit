@@ -33,7 +33,9 @@ impl SearchableListItem for FontChoice {
     }
 
     fn render(&self, _: &mut Window, _: &mut App) -> impl IntoElement {
-        div().font_family(self.family.clone()).child(self.title())
+        div()
+            .font_family(self.family.clone())
+            .child(self.title())
     }
 }
 

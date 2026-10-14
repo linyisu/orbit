@@ -11,6 +11,7 @@ fn number(value: &Value) -> Option<f64> {
         .or_else(|| value.as_str()?.parse().ok())
         .filter(|n| n.is_finite() && *n >= 0.0)
 }
+
 fn text(value: &Value) -> Option<String> {
     match value {
         Value::String(s) if !s.is_empty() => Some(s.clone()),
@@ -18,19 +19,22 @@ fn text(value: &Value) -> Option<String> {
         _ => None,
     }
 }
+
 fn fraction(value: &Value) -> Option<f64> {
     number(value).map(|n| n.clamp(0.0, 1.0))
 }
+
 fn remaining_percent(value: &Value) -> Option<f64> {
     number(value).map(|n| (1.0 - n / 100.0).clamp(0.0, 1.0))
 }
+
 fn duration(seconds: u64) -> String {
-    if seconds > 0 && seconds.is_multiple_of(604800) {
-        format!("{}周", seconds / 604800)
-    } else if seconds > 0 && seconds.is_multiple_of(86400) {
-        format!("{}天", seconds / 86400)
-    } else if seconds > 0 && seconds.is_multiple_of(3600) {
-        format!("{}小时", seconds / 3600)
+    if seconds > 0 && seconds.is_multiple_of(604_800) {
+        format!("{}周", seconds / 604_800)
+    } else if seconds > 0 && seconds.is_multiple_of(86_400) {
+        format!("{}天", seconds / 86_400)
+    } else if seconds > 0 && seconds.is_multiple_of(3_600) {
+        format!("{}小时", seconds / 3_600)
     } else {
         format!("{}分钟", seconds / 60)
     }
@@ -159,7 +163,9 @@ pub(super) fn parse(provider: UsageProvider, payload: &Value, account: &mut Acco
             }
         }
         UsageProvider::Antigravity => {
-            let summary = payload.get("summary").unwrap_or(payload);
+            let summary = payload
+                .get("summary")
+                .unwrap_or(payload);
             antigravity_buckets(summary, "", &mut account.limits);
             if let Some(groups) = summary["groups"].as_array() {
                 for group in groups {
@@ -247,7 +253,9 @@ pub(super) fn parse(provider: UsageProvider, payload: &Value, account: &mut Acco
                         }
                     });
                     account.limits.push(Limit {
-                        label: format!("{label} {window}").trim().into(),
+                        label: format!("{label} {window}")
+                            .trim()
+                            .into(),
                         remaining_fraction,
                         remaining: text(&limit["remaining"]),
                         used: text(&limit["currentValue"]),
@@ -319,22 +327,55 @@ mod tests {
         parse(provider, &value, &mut account).unwrap();
         account
     }
+
     #[test]
     fn chatgpt_keeps_windows_and_money_separate() {
         let account = parse_fixture(
             UsageProvider::Chatgpt,
-            json!({"plan_type":"plus", "rate_limit":{"primary_window":{"used_percent":32,"limit_window_seconds":18000,"reset_at":1800000000},"secondary_window":{"used_percent":100,"limit_window_seconds":604800}},"credits":{"balance":"3.50"}}),
+            json!({
+                "plan_type": "plus",
+                "rate_limit": {
+                    "primary_window": {
+                        "used_percent": 32,
+                        "limit_window_seconds": 18_000,
+                        "reset_at": 1_800_000_000
+                    },
+                    "secondary_window": {
+                        "used_percent": 100,
+                        "limit_window_seconds": 604_800
+                    }
+                },
+                "credits": {
+                    "balance": "3.50"
+                }
+            }),
         );
         assert_eq!(account.plan.as_deref(), Some("plus"));
         assert_eq!(account.limits[0].label, "5小时");
         assert_eq!(account.limits[1].remaining_fraction, Some(0.0));
-        assert!(account.limits[2].remaining_fraction.is_none());
+        assert!(
+            account.limits[2]
+                .remaining_fraction
+                .is_none()
+        );
     }
+
     #[test]
     fn google_missing_is_not_exhausted_and_models_are_not_combined() {
         let account = parse_fixture(
             UsageProvider::Gemini,
-            json!({"buckets":[{"modelId":"gemini-pro","remainingFraction":0.0},{"modelId":"gemini-flash","remainingAmount":"300"}]}),
+            json!({
+                "buckets": [
+                    {
+                        "modelId": "gemini-pro",
+                        "remainingFraction": 0.0
+                    },
+                    {
+                        "modelId": "gemini-flash",
+                        "remainingAmount": "300"
+                    }
+                ]
+            }),
         );
         assert_eq!(account.limits[0].remaining_fraction, Some(0.0));
         assert_eq!(account.limits[1].remaining_fraction, None);
@@ -347,18 +388,44 @@ mod tests {
         );
         let account = parse_fixture(
             UsageProvider::Antigravity,
-            json!({"groups":[{"displayName":"Claude","buckets":[{"bucketId":"weekly","remainingFraction":0.6,"resetTime":"2026-10-11T00:00:00Z"}]}]}),
+            json!({
+                "groups": [{
+                    "displayName": "Claude",
+                    "buckets": [{
+                        "bucketId": "weekly",
+                        "remainingFraction": 0.6,
+                        "resetTime": "2026-10-11T00:00:00Z"
+                    }]
+                }]
+            }),
         );
         assert_eq!(account.limits[0].label, "Claude · weekly");
     }
+
     #[test]
     fn antigravity_shared_quota_takes_precedence_over_model_catalog() {
-        let models = json!({"gemini-pro":{"displayName":"Gemini Pro","quotaInfo":{"remainingFraction":0.6}}});
+        let models = json!({
+            "gemini-pro": {
+                "displayName": "Gemini Pro",
+                "quotaInfo": {
+                    "remainingFraction": 0.6
+                }
+            }
+        });
         let shared = parse_fixture(
             UsageProvider::Antigravity,
             json!({
-                "summary":{"groups":[{"displayName":"Gemini Models","buckets":[{"displayName":"Weekly Limit Remaining","window":"weekly","remainingFraction":0.59}]}]},
-                "models":models
+                "summary": {
+                    "groups": [{
+                        "displayName": "Gemini Models",
+                        "buckets": [{
+                            "displayName": "Weekly Limit Remaining",
+                            "window": "weekly",
+                            "remainingFraction": 0.59
+                        }]
+                    }]
+                },
+                "models": models
             }),
         );
         assert_eq!(shared.limits.len(), 1);
@@ -366,39 +433,93 @@ mod tests {
         assert_eq!(shared.limits[0].remaining_fraction, Some(0.59));
         let fallback = parse_fixture(
             UsageProvider::Antigravity,
-            json!({"summary":null,"models":models}),
+            json!({
+                "summary": null,
+                "models": models
+            }),
         );
         assert_eq!(fallback.limits.len(), 1);
         assert_eq!(fallback.limits[0].scope, Scope::Model);
         assert_eq!(fallback.limits[0].remaining_fraction, Some(0.6));
     }
+
     #[test]
     fn money_preserves_precision_and_currency() {
         let account = parse_fixture(
             UsageProvider::Deepseek,
-            json!({"balance_infos":[{"currency":"CNY","total_balance":"0.000123","granted_balance":"0","topped_up_balance":"0.000123"}]}),
+            json!({
+                "balance_infos": [{
+                    "currency": "CNY",
+                    "total_balance": "0.000123",
+                    "granted_balance": "0",
+                    "topped_up_balance": "0.000123"
+                }]
+            }),
         );
         assert_eq!(account.limits[0].remaining.as_deref(), Some("0.000123"));
         assert_eq!(account.limits[0].unit.as_deref(), Some("CNY"));
-        assert!(account.limits[0].remaining_fraction.is_none());
+        assert!(
+            account.limits[0]
+                .remaining_fraction
+                .is_none()
+        );
     }
+
     #[test]
     fn zhipu_prefers_exact_ratio_and_preserves_units() {
         let account = parse_fixture(
             UsageProvider::Zhipu,
-            json!({"success":true,"data":{"limits":[{"type":"CREDIT_LIMIT","usage":12000,"currentValue":1438,"percentage":11,"unit":3,"number":5,"nextResetTime":1800000000000u64}]}}),
+            json!({
+                "success": true,
+                "data": {
+                    "limits": [{
+                        "type": "CREDIT_LIMIT",
+                        "usage": 12_000,
+                        "currentValue": 1_438,
+                        "percentage": 11,
+                        "unit": 3,
+                        "number": 5,
+                        "nextResetTime": 1_800_000_000_000u64
+                    }]
+                }
+            }),
         );
         assert_eq!(account.limits[0].label, "Credits 额度 5小时");
         assert!(
-            (account.limits[0].remaining_fraction.unwrap() - (1.0 - 1438.0 / 12000.0)).abs() < 1e-9
+            (account.limits[0]
+                .remaining_fraction
+                .unwrap()
+                - (1.0 - 1438.0 / 12000.0))
+                .abs()
+                < 1e-9
         );
         assert_eq!(account.limits[0].resets_at.as_deref(), Some("1800000000"));
     }
+
     #[test]
     fn claude_does_not_duplicate_shared_windows() {
         let account = parse_fixture(
             UsageProvider::Claude,
-            json!({"five_hour":{"utilization":20},"limits":[{"kind":"session","percent":20},{"kind":"weekly_model","percent":80,"scope":{"model":{"display_name":"Opus"}}}]}),
+            json!({
+                "five_hour": {
+                    "utilization": 20
+                },
+                "limits": [
+                    {
+                        "kind": "session",
+                        "percent": 20
+                    },
+                    {
+                        "kind": "weekly_model",
+                        "percent": 80,
+                        "scope": {
+                            "model": {
+                                "display_name": "Opus"
+                            }
+                        }
+                    }
+                ]
+            }),
         );
         assert_eq!(account.limits.len(), 2);
         assert_eq!(account.limits[1].label, "Opus · weekly_model");

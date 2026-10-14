@@ -55,6 +55,7 @@ pub(crate) struct Accounts {
     adding: bool,
     api_form: bool,
 }
+
 impl EventEmitter<AccountsEvent> for Accounts {}
 
 enum AccountEvent {
@@ -69,11 +70,14 @@ fn connections(config: &Path, auth: &Path) -> anyhow::Result<Vec<Connection>> {
         .into_iter()
         .map(|name| {
             let draft = ConnectionDraft::load(config, Some(&name))?;
-            let credential = draft.provider.as_ref().and_then(|provider| {
-                credentials
-                    .iter()
-                    .find(|entry| Some(&entry.name) == provider.credential.as_ref())
-            });
+            let credential = draft
+                .provider
+                .as_ref()
+                .and_then(|provider| {
+                    credentials
+                        .iter()
+                        .find(|entry| Some(&entry.name) == provider.credential.as_ref())
+                });
             let oauth = credential.and_then(|entry| match entry.kind {
                 CredentialKind::ApiKey => None,
                 CredentialKind::AnthropicOAuth => Some(OAuthProvider::Anthropic),
@@ -143,6 +147,7 @@ impl Accounts {
         view.load(cx);
         view
     }
+
     fn load(&mut self, cx: &mut Context<Self>) {
         if self.auth.as_os_str().is_empty() || self.busy || self.loading {
             return;
@@ -168,6 +173,7 @@ impl Accounts {
         });
         cx.notify();
     }
+
     fn receive(
         &mut self,
         mut receiver: tokio::sync::mpsc::Receiver<AccountEvent>,
@@ -220,6 +226,7 @@ impl Accounts {
         });
         cx.notify();
     }
+
     fn edit(&mut self, name: Option<String>, window: &mut Window, cx: &mut Context<Self>) {
         if self.busy || self.loading {
             return;
@@ -287,9 +294,11 @@ impl Accounts {
         });
         cx.notify();
     }
+
     fn login(&mut self, provider: OAuthProvider, cx: &mut Context<Self>) {
         self.start_login(provider, None, cx);
     }
+
     fn start_login(
         &mut self,
         provider: OAuthProvider,
@@ -301,7 +310,12 @@ impl Accounts {
         }
         let auth = self.auth.clone();
         let config = self.config.clone();
-        let project = self.project.read(cx).value().trim().to_string();
+        let project = self
+            .project
+            .read(cx)
+            .value()
+            .trim()
+            .to_string();
         let (sender, receiver) = tokio::sync::mpsc::channel(4);
         self.logging_in = true;
         self.operation = Some(self.runtime.spawn(async move {
@@ -312,12 +326,16 @@ impl Accounts {
                 sender
                     .send(AccountEvent::Browser(login.authorization_url().to_string()))
                     .await?;
-                let grant = callback.wait(&login, Duration::from_secs(300)).await?;
+                let grant = callback
+                    .wait(&login, Duration::from_secs(300))
+                    .await?;
                 login
                     .finish(
                         &grant,
                         &store,
-                        credential.as_deref().unwrap_or(provider.name()),
+                        credential
+                            .as_deref()
+                            .unwrap_or(provider.name()),
                     )
                     .await?;
                 if credential.is_some() {
@@ -342,10 +360,13 @@ impl Accounts {
             }
             .await
             .map_err(|error| format!("{error:#}"));
-            let _ = sender.send(AccountEvent::Finished(result)).await;
+            let _ = sender
+                .send(AccountEvent::Finished(result))
+                .await;
         }));
         self.receive(receiver, cx);
     }
+
     fn cancel_login(&mut self, cx: &mut Context<Self>) {
         if let Some(operation) = self.operation.take() {
             operation.abort();
@@ -355,6 +376,7 @@ impl Accounts {
         self.logging_in = false;
         self.load(cx);
     }
+
     fn parameters(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.busy || self.loading {
             return;
@@ -445,6 +467,7 @@ impl Accounts {
                 )
         });
     }
+
     fn save_key(&mut self, cx: &mut Context<Self>) {
         if self.busy || self.loading {
             return;
@@ -455,7 +478,13 @@ impl Accounts {
         let values = self
             .fields
             .iter()
-            .map(|input| input.read(cx).value().trim().to_string())
+            .map(|input| {
+                input
+                    .read(cx)
+                    .value()
+                    .trim()
+                    .to_string()
+            })
             .collect::<Vec<_>>();
         if values[0].is_empty() || values[1].is_empty() {
             self.error = Some("填写连接名称和 API 地址。".into());
@@ -492,10 +521,13 @@ impl Accounts {
             }
             .await
             .map_err(|error| format!("{error:#}"));
-            let _ = sender.send(AccountEvent::Finished(result)).await;
+            let _ = sender
+                .send(AccountEvent::Finished(result))
+                .await;
         }));
         self.receive(receiver, cx);
     }
+
     fn confirm_remove(
         &mut self,
         draft: ConnectionDraft,
@@ -508,10 +540,25 @@ impl Accounts {
             let draft = draft.clone();
             dialog.confirm().title(format!("移除“{}”？", draft.name))
                 .description("此连接将从可用模型中移除。仅由它使用的凭据会一并删除，使用它的压缩模型选择将恢复默认。")
-                .button_props(DialogButtonProps::default().ok_text("移除").ok_variant(ButtonVariant::Danger).cancel_text("取消"))
-                .on_ok(move |_, _, cx| { let _ = owner.update(cx, |view, cx| view.remove(draft.clone(), cx)); true })
+                .button_props(DialogButtonProps::default()
+                    .ok_text("移除")
+                    .ok_variant(ButtonVariant::Danger)
+                    .cancel_text("取消"))
+                .on_ok(move |_,
+                    _,
+                    cx| {
+                    let _ = owner
+                    .update(cx,
+                    |view,
+                    cx| view
+                    .remove(draft
+                    .clone(),
+                    cx));
+                    true
+                })
         });
     }
+
     fn remove(&mut self, draft: ConnectionDraft, cx: &mut Context<Self>) {
         if self.busy || self.loading {
             return;
@@ -525,11 +572,14 @@ impl Accounts {
                 .err()
                 .map(|error| format!("{error:#}"));
             let entries = connections(&config, &auth).map_err(|error| format!("{error:#}"));
-            let _ = sender.send(AccountEvent::Removed(entries, error)).await;
+            let _ = sender
+                .send(AccountEvent::Removed(entries, error))
+                .await;
         }));
         self.receive(receiver, cx);
     }
 }
+
 impl Drop for Accounts {
     fn drop(&mut self) {
         if let Some(task) = &self.operation {
@@ -554,18 +604,23 @@ impl Render for Accounts {
             .draft
             .as_ref()
             .is_some_and(|draft| draft.original_name.is_some());
-        let managed =
-            self.oauth.is_some() || self.draft.as_ref().is_some_and(ConnectionDraft::account);
+        let managed = self.oauth.is_some()
+            || self
+                .draft
+                .as_ref()
+                .is_some_and(ConnectionDraft::account);
         let owner = cx.weak_entity();
-        let mut content =
-            v_flex()
-                .w_full()
-                .gap_4()
-                .child(
-                    h_flex()
-                        .gap_2()
-                        .child(div().flex_1().font_weight(FontWeight::MEDIUM).child(
-                            if self.api_form {
+        let mut content = v_flex()
+            .w_full()
+            .gap_4()
+            .child(
+                h_flex()
+                    .gap_2()
+                    .child(
+                        div()
+                            .flex_1()
+                            .font_weight(FontWeight::MEDIUM)
+                            .child(if self.api_form {
                                 if editing {
                                     "编辑连接"
                                 } else {
@@ -575,45 +630,50 @@ impl Render for Accounts {
                                 "添加连接"
                             } else {
                                 "已保存的连接"
-                            },
-                        ))
-                        .when(!self.adding, |view| {
-                            view.child(
-                                Button::new("refresh-connections")
-                                    .ghost()
-                                    .small()
-                                    .icon(IconName::RefreshCw)
-                                    .label(if self.loading {
-                                        "刷新中…"
-                                    } else {
-                                        "刷新"
-                                    })
-                                    .disabled(self.busy || self.loading)
-                                    .on_click(cx.listener(|view, _, _, cx| view.load(cx))),
-                            )
-                        })
-                        .child(
-                            Button::new("add-connection")
+                            }),
+                    )
+                    .when(!self.adding, |view| {
+                        view.child(
+                            Button::new("refresh-connections")
+                                .ghost()
                                 .small()
-                                .label(if self.adding {
-                                    "返回列表"
+                                .icon(IconName::RefreshCw)
+                                .label(if self.loading {
+                                    "刷新中…"
                                 } else {
-                                    "添加连接…"
+                                    "刷新"
                                 })
                                 .disabled(self.busy || self.loading)
-                                .on_click(cx.listener(|view, _, _, cx| {
-                                    view.adding = !view.adding;
-                                    view.api_form = false;
-                                    view.draft = None;
-                                    view.oauth = None;
-                                    view.error = None;
-                                    cx.notify();
-                                })),
-                        ),
+                                .on_click(cx.listener(|view, _, _, cx| view.load(cx))),
+                        )
+                    })
+                    .child(
+                        Button::new("add-connection")
+                            .small()
+                            .label(if self.adding {
+                                "返回列表"
+                            } else {
+                                "添加连接…"
+                            })
+                            .disabled(self.busy || self.loading)
+                            .on_click(cx.listener(|view, _, _, cx| {
+                                view.adding = !view.adding;
+                                view.api_form = false;
+                                view.draft = None;
+                                view.oauth = None;
+                                view.error = None;
+                                cx.notify();
+                            })),
+                    ),
+            )
+            .when_some(self.error.clone(), |view, error| {
+                view.child(
+                    div()
+                        .text_sm()
+                        .text_color(cx.theme().danger)
+                        .child(error),
                 )
-                .when_some(self.error.clone(), |view, error| {
-                    view.child(div().text_sm().text_color(cx.theme().danger).child(error))
-                });
+            });
         if !self.adding {
             if self.entries.is_empty() {
                 content = content.child(
@@ -636,94 +696,97 @@ impl Render for Accounts {
                     .provider
                     .as_ref()
                     .and_then(|provider| provider.credential.clone());
-                content =
-                    content.child(
-                        h_flex()
-                            .gap_3()
-                            .py_3()
-                            .border_b_1()
-                            .border_color(cx.theme().border)
-                            .child(
-                                v_flex()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .gap_1()
-                                    .child(name.clone())
-                                    .child(
+                content = content.child(
+                    h_flex()
+                        .gap_3()
+                        .py_3()
+                        .border_b_1()
+                        .border_color(cx.theme().border)
+                        .child(
+                            v_flex()
+                                .flex_1()
+                                .min_w_0()
+                                .gap_1()
+                                .child(name.clone())
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child(format!(
+                                            "{} · {}",
+                                            format_label(entry.draft.format),
+                                            entry.draft.endpoint
+                                        )),
+                                )
+                                .when_some(entry.account.clone(), |view, account| {
+                                    view.child(
                                         div()
                                             .text_sm()
                                             .text_color(cx.theme().muted_foreground)
-                                            .child(format!(
-                                                "{} · {}",
-                                                format_label(entry.draft.format),
-                                                entry.draft.endpoint
-                                            )),
+                                            .child(account),
                                     )
-                                    .when_some(entry.account.clone(), |view, account| {
-                                        view.child(
-                                            div()
-                                                .text_sm()
-                                                .text_color(cx.theme().muted_foreground)
-                                                .child(account),
-                                        )
-                                    })
-                                    .child(
-                                        div()
-                                            .text_xs()
-                                            .text_color(cx.theme().muted_foreground)
-                                            .child(format!(
-                                                "{} 个模型{}",
-                                                entry.draft.models.len(),
-                                                if entry.draft.provider.as_ref().is_some_and(
-                                                    |provider| provider.spec.models.is_auto()
-                                                ) {
-                                                    " · 自动发现"
-                                                } else {
-                                                    ""
-                                                }
-                                            )),
-                                    ),
-                            )
-                            .child(
-                                Button::new(SharedString::from(format!("edit-connection:{name}")))
-                                    .small()
-                                    .label("编辑…")
-                                    .disabled(self.busy || self.loading)
-                                    .on_click(cx.listener(move |view, _, window, cx| {
-                                        view.edit(Some(name.clone()), window, cx)
-                                    })),
-                            )
-                            .when_some(oauth, |view, provider| {
-                                view.child(
-                                    Button::new(SharedString::from(format!(
-                                        "login-connection:{}",
-                                        entry.draft.name
-                                    )))
-                                    .ghost()
-                                    .small()
-                                    .label("重新登录")
-                                    .disabled(self.busy || self.loading)
-                                    .on_click(cx.listener(move |view, _, _, cx| {
-                                        view.start_login(provider, credential.clone(), cx)
-                                    })),
-                                )
-                            })
-                            .child(
+                                })
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child(format!(
+                                            "{} 个模型{}",
+                                            entry.draft.models.len(),
+                                            if entry
+                                                .draft
+                                                .provider
+                                                .as_ref()
+                                                .is_some_and(|provider| provider
+                                                    .spec
+                                                    .models
+                                                    .is_auto())
+                                            {
+                                                " · 自动发现"
+                                            } else {
+                                                ""
+                                            }
+                                        )),
+                                ),
+                        )
+                        .child(
+                            Button::new(SharedString::from(format!("edit-connection:{name}")))
+                                .small()
+                                .label("编辑…")
+                                .disabled(self.busy || self.loading)
+                                .on_click(cx.listener(move |view, _, window, cx| {
+                                    view.edit(Some(name.clone()), window, cx)
+                                })),
+                        )
+                        .when_some(oauth, |view, provider| {
+                            view.child(
                                 Button::new(SharedString::from(format!(
-                                    "remove-connection:{}",
+                                    "login-connection:{}",
                                     entry.draft.name
                                 )))
                                 .ghost()
                                 .small()
-                                .label("移除…")
+                                .label("重新登录")
                                 .disabled(self.busy || self.loading)
-                                .on_click(cx.listener(
-                                    move |view, _, window, cx| {
-                                        view.confirm_remove(remove.clone(), window, cx)
-                                    },
-                                )),
-                            ),
-                    );
+                                .on_click(cx.listener(move |view, _, _, cx| {
+                                    view.start_login(provider, credential.clone(), cx)
+                                })),
+                            )
+                        })
+                        .child(
+                            Button::new(SharedString::from(format!(
+                                "remove-connection:{}",
+                                entry.draft.name
+                            )))
+                            .ghost()
+                            .small()
+                            .label("移除…")
+                            .disabled(self.busy || self.loading)
+                            .on_click(cx.listener(move |view, _, window, cx| {
+                                view.confirm_remove(remove.clone(), window, cx)
+                            })),
+                        ),
+                );
             }
         } else if !self.api_form {
             content = content
@@ -796,9 +859,13 @@ impl Render for Accounts {
                 .zip(&self.fields)
                 .map(|((ix, label), input)| {
                     v_flex().gap_1().child(label).child(
-                        Input::new(input).aria_label(label).disabled(
-                            self.busy || (editing && ix == 0) || (managed && matches!(ix, 1 | 2)),
-                        ),
+                        Input::new(input)
+                            .aria_label(label)
+                            .disabled(
+                                self.busy
+                                    || (editing && ix == 0)
+                                    || (managed && matches!(ix, 1 | 2)),
+                            ),
                     )
                 });
             content = content
@@ -806,7 +873,11 @@ impl Render for Accounts {
                 .children(fields)
                 .when(editing, |view| view.child(
                     div().text_sm().text_color(cx.theme().muted_foreground)
-                        .child(if managed { "认证协议与服务地址由登录流程管理。已有模型的高级选项会保留。" } else { "密钥留空会保留现有认证。修改 API 地址时需填写该地址的新密钥。已有模型的高级选项会保留。" }),
+                        .child(if managed {
+                            "认证协议与服务地址由登录流程管理。已有模型的高级选项会保留。"
+                        } else {
+                            "密钥留空会保留现有认证。修改 API 地址时需填写该地址的新密钥。已有模型的高级选项会保留。"
+                        }),
                 ))
                 .child(h_flex().justify_end().gap_2().flex_wrap().child(
                     Button::new("model-parameters").label("模型参数…")

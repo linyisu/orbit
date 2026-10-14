@@ -21,7 +21,9 @@ impl FixtureSubagents {
         if self.parents.contains_key(parent) {
             return;
         }
-        let full = Path::new(workspace).join(".fixture-subagents").exists();
+        let full = Path::new(workspace)
+            .join(".fixture-subagents")
+            .exists();
         let agents = if full && parent == "demo" {
             (0..35)
                 .map(|index| {
@@ -46,7 +48,13 @@ impl FixtureSubagents {
                     };
                     Child {
                         agent,
-                        updates: vec![json!({"Agent":{"Model":{"TextDelta":"子任务初始回答"}}})],
+                        updates: vec![json!({
+                            "Agent": {
+                                "Model": {
+                                    "TextDelta": "子任务初始回答"
+                                }
+                            }
+                        })],
                         cancelling: 0,
                         finishing: 0,
                     }
@@ -78,18 +86,27 @@ impl FixtureSubagents {
                     status: "completed".into(),
                     run: 101,
                 },
-                updates: vec![json!({"Agent":{"Model":{"TextDelta":"子任务初始回答"}}})],
+                updates: vec![json!({
+                    "Agent": {
+                        "Model": {
+                            "TextDelta": "子任务初始回答"
+                        }
+                    }
+                })],
                 cancelling: 0,
                 finishing: 0,
             }]
         } else {
             vec![]
         };
-        self.parents.insert(parent.into(), agents);
+        self.parents
+            .insert(parent.into(), agents);
     }
 
     pub fn execute(&mut self, workspace: &str, request: &Value) -> Value {
-        let parent = request["session"].as_str().unwrap_or_default();
+        let parent = request["session"]
+            .as_str()
+            .unwrap_or_default();
         self.prepare(workspace, parent);
         if request["expected_workspace"] != workspace {
             return error("工作区已切换，请重新打开子 Agent 列表");
@@ -116,17 +133,21 @@ impl FixtureSubagents {
                         child.cancelling -= 1;
                         if child.cancelling == 0 {
                             child.agent.status = "cancelled".into();
-                            child
-                                .updates
-                                .push(json!({"Finished":{"status":"cancelled"}}));
+                            child.updates.push(json!({
+                                "Finished": {
+                                    "status": "cancelled"
+                                }
+                            }));
                         }
                     } else if child.finishing > 0 {
                         child.finishing -= 1;
                         if child.finishing == 0 {
                             child.agent.status = "completed".into();
-                            child
-                                .updates
-                                .push(json!({"Finished":{"status":"completed"}}));
+                            child.updates.push(json!({
+                                "Finished": {
+                                    "status": "completed"
+                                }
+                            }));
                         }
                     }
                 }
@@ -167,9 +188,13 @@ impl FixtureSubagents {
     }
 
     pub fn read(&mut self, workspace: &str, request: &Value) -> Value {
-        let parent = request["session"].as_str().unwrap_or_default();
+        let parent = request["session"]
+            .as_str()
+            .unwrap_or_default();
         self.prepare(workspace, parent);
-        let id = request["agent"].as_str().unwrap_or_default();
+        let id = request["agent"]
+            .as_str()
+            .unwrap_or_default();
         let Some(child) = self
             .parents
             .get(parent)
@@ -179,21 +204,39 @@ impl FixtureSubagents {
         else {
             return error("该记录不是当前会话的子代理。");
         };
-        let after = request["after"].as_u64().unwrap_or_default() as usize;
+        let after = request["after"]
+            .as_u64()
+            .unwrap_or_default() as usize;
         if after > child.updates.len() {
             return error("子 Agent 游标已失效，请重新打开对话");
         }
-        json!({"type":"subagent","value":{"next":child.updates.len(),"more":false,"busy":child.agent.status=="running","model":child.agent.model,"updates":&child.updates[after..],"approvals":[]}})
+        json!({
+            "type": "subagent",
+            "value": {
+                "next": child.updates.len(),
+                "more": false,
+                "busy": child.agent.status == "running",
+                "model": child.agent.model,
+                "updates": &child.updates[after..],
+                "approvals": []
+            }
+        })
     }
 
     pub fn send_legacy(&mut self, workspace: &str, request: &Value) -> Value {
-        let parent = request["session"].as_str().unwrap_or_default();
+        let parent = request["session"]
+            .as_str()
+            .unwrap_or_default();
         self.prepare(workspace, parent);
         self.send(
             workspace,
             parent,
-            request["agent"].as_str().unwrap_or_default(),
-            request["message"].as_str().unwrap_or_default(),
+            request["agent"]
+                .as_str()
+                .unwrap_or_default(),
+            request["message"]
+                .as_str()
+                .unwrap_or_default(),
             true,
         )
     }
@@ -230,15 +273,21 @@ impl FixtureSubagents {
         self.message += 1;
         let queued = child.agent.status == "running";
         if !queued {
-            child.agent.run += 1000;
+            child.agent.run += 1_000;
             child.agent.status = "running".into();
             child.finishing = 3;
         }
-        child
-            .updates
-            .push(json!({"Agent":{"Model":{"TextDelta":message}}}));
+        child.updates.push(json!({
+            "Agent": {
+                "Model": {
+                    "TextDelta": message
+                }
+            }
+        }));
         if legacy {
-            json!({"type":"ok"})
+            json!({
+                "type": "ok"
+            })
         } else {
             snapshot(Snapshot::Sent {
                 id: id.into(),
@@ -250,8 +299,15 @@ impl FixtureSubagents {
 }
 
 fn snapshot(value: Snapshot) -> Value {
-    json!({"type":"subagents","value":value})
+    json!({
+        "type": "subagents",
+        "value": value
+    })
 }
+
 fn error(message: &str) -> Value {
-    json!({"type":"error","value":message})
+    json!({
+        "type": "error",
+        "value": message
+    })
 }

@@ -107,7 +107,11 @@ impl Tab {
         self.connection
             .as_ref()
             .map(|connection| connection.target.clone())
-            .or_else(|| self.spec.as_ref().map(Spec::target_identity))
+            .or_else(|| {
+                self.spec
+                    .as_ref()
+                    .map(Spec::target_identity)
+            })
     }
 
     pub(super) fn display_title(&self, show_target: bool) -> String {
@@ -441,7 +445,9 @@ impl Tab {
         self.state.cursor_motion.enabled = info.cursor_trail;
         self.state.auto_compact = info.auto_compact;
         self.state.skill_completions = info.skills.clone();
-        self.state.permissions.apply(info.mode, info.mode_revision);
+        self.state
+            .permissions
+            .apply(info.mode, info.mode_revision);
         if let Some(connection) = &mut self.connection {
             Arc::make_mut(connection).workspace = info.workspace.clone();
         }
@@ -456,7 +462,10 @@ impl Tab {
         };
         self.title = format!(
             "{} · {title}",
-            self.state.connection_label.as_deref().unwrap_or_default(),
+            self.state
+                .connection_label
+                .as_deref()
+                .unwrap_or_default(),
         );
         self.state.model = info.model.clone();
         self.state.model_completions = info.models.clone();
@@ -479,7 +488,10 @@ impl Tab {
     pub async fn poll(&mut self) -> bool {
         let mut changed = self.poll_reconnection();
         changed |= self.poll_usage().await;
-        changed |= self.state.feedback.expire(std::time::Instant::now());
+        changed |= self
+            .state
+            .feedback
+            .expire(std::time::Instant::now());
         if self.commands.is_some()
             && self.model_refresh.is_none()
             && self.model_configuration.is_none()
@@ -518,7 +530,8 @@ impl Tab {
             match self.model_refresh.take().unwrap().await {
                 Ok(Ok((configuration, notices))) => {
                     for notice in notices {
-                        self.state.report_local(TranscriptItem::Notice(notice));
+                        self.state
+                            .report_local(TranscriptItem::Notice(notice));
                     }
                     if self
                         .model_watcher
@@ -547,9 +560,12 @@ impl Tab {
             self.invalidate_usage();
             changed |= self.send(Request::ConfigureModels {
                 session: self.id.clone().unwrap_or_default(),
-                configuration: if self.connection.as_ref().is_some_and(|connection| {
-                    matches!(connection.target, workspace::transport::Target::Local)
-                }) {
+                configuration: if self
+                    .connection
+                    .as_ref()
+                    .is_some_and(|connection| {
+                        matches!(connection.target, workspace::transport::Target::Local)
+                    }) {
                     None
                 } else {
                     Some(configuration)
@@ -562,7 +578,12 @@ impl Tab {
             .as_ref()
             .is_some_and(|task| task.is_finished())
         {
-            match self.attachment_task.take().unwrap().await {
+            match self
+                .attachment_task
+                .take()
+                .unwrap()
+                .await
+            {
                 Ok(Ok(images)) => {
                     for image in images {
                         super::attachments::queue_attachment(&mut self.state, image);
@@ -619,14 +640,19 @@ impl Tab {
                     || self.preparing.is_some()
                     || self.browsing.is_some())
             {
-                let stage = updates.stage.borrow_and_update().clone();
+                let stage = updates
+                    .stage
+                    .borrow_and_update()
+                    .clone();
                 let seconds = self.connected_at.elapsed().as_secs();
                 let status = format!("{stage} · {seconds}s · Esc / Ctrl+C 取消");
                 if let Some(TranscriptItem::Notice(current)) = self.state.transcript.first_mut()
                     && *current != status
                 {
                     *current = status;
-                    self.state.transcript_layout.invalidate_from(0);
+                    self.state
+                        .transcript_layout
+                        .invalidate_from(0);
                     changed = true;
                 }
             }
@@ -660,7 +686,9 @@ impl Tab {
                             self.state.transcript.first_mut()
                         {
                             *notice = "连接已就绪，请选择工作目录".into();
-                            self.state.transcript_layout.invalidate_from(0);
+                            self.state
+                                .transcript_layout
+                                .invalidate_from(0);
                         }
                     }
                 }
@@ -692,7 +720,11 @@ impl Tab {
             changed = true;
         }
         for _ in 0..CHANNEL_CAPACITY {
-            let response = match self.incoming.as_mut().map(|rx| rx.try_recv()) {
+            let response = match self
+                .incoming
+                .as_mut()
+                .map(|rx| rx.try_recv())
+            {
                 Some(Ok(response)) => response,
                 Some(Err(mpsc::error::TryRecvError::Disconnected)) if !self.offline => {
                     self.disconnected("工作区连接已结束".into());
@@ -716,7 +748,10 @@ impl Tab {
                 .media_preview
                 .as_ref()
                 .is_some_and(|preview| preview.tick());
-        let direction = self.state.selection.auto_scroll(std::time::Instant::now());
+        let direction = self
+            .state
+            .selection
+            .auto_scroll(std::time::Instant::now());
         if direction < 0 {
             self.state.scroll_up(2);
         }
@@ -751,7 +786,11 @@ impl Tab {
             }
             Response::Page(page) => {
                 self.state.planning.sync(page.planning);
-                if self.state.user_input.sync(page.user_inputs) {
+                if self
+                    .state
+                    .user_input
+                    .sync(page.user_inputs)
+                {
                     self.send(Request::UserInputHistory {
                         session: self.id.clone().unwrap_or_default(),
                         before: None,
@@ -765,9 +804,9 @@ impl Tab {
                 for update in page.updates {
                     match update {
                         Update::Profile(info) => self.profile(&info),
-                        Update::Report(report) => {
-                            self.state.show_output(&report.title, report.text)
-                        }
+                        Update::Report(report) => self
+                            .state
+                            .show_output(&report.title, report.text),
                         Update::Started {
                             prompt,
                             presentation,
@@ -778,21 +817,35 @@ impl Tab {
                             if self.session_title.is_empty() {
                                 self.title = format!(
                                     "{} · {}",
-                                    self.state.connection_label.as_deref().unwrap_or_default(),
-                                    prompt.lines().next().unwrap_or_default()
+                                    self.state
+                                        .connection_label
+                                        .as_deref()
+                                        .unwrap_or_default(),
+                                    prompt
+                                        .lines()
+                                        .next()
+                                        .unwrap_or_default()
                                 );
                             }
-                            self.state.start_remote(prompt, presentation);
+                            self.state
+                                .start_remote(prompt, presentation);
                         }
                         Update::Agent(event) => self.state.apply(*event),
                         Update::Finished { status, elapsed_ms } => {
-                            self.state.finish_remote(&status, elapsed_ms);
+                            self.state
+                                .finish_remote(&status, elapsed_ms);
                         }
                     }
                 }
                 let pending = page.approvals.into_iter().next();
-                if pending.as_ref().map(|approval| approval.id) != self.approval_id {
-                    self.approval_id = pending.as_ref().map(|approval| approval.id);
+                if pending
+                    .as_ref()
+                    .map(|approval| approval.id)
+                    != self.approval_id
+                {
+                    self.approval_id = pending
+                        .as_ref()
+                        .map(|approval| approval.id);
                     self.state.approval = pending.map(|approval| approval.preview);
                     self.state.approval_scroll = 0;
                     self.state.approval_shown = false;
@@ -804,7 +857,8 @@ impl Tab {
                     }
                 }
                 if !page.more {
-                    self.state.apply_tool_progress(page.tool_progress);
+                    self.state
+                        .apply_tool_progress(page.tool_progress);
                 }
                 if !page.more
                     && let Some(timing) = page.timing
@@ -823,13 +877,16 @@ impl Tab {
                     .btw
                     .receive(questions.records, questions.running, questions.selected);
             }
-            Response::Report(report) => self.state.show_output(&report.title, report.text),
+            Response::Report(report) => self
+                .state
+                .show_output(&report.title, report.text),
             Response::Sessions(sessions) => {
                 self.state.picker = Some(super::dialogs::SessionPicker::new(sessions));
             }
             Response::Error(error) => {
                 self.restore_submission();
-                self.state.report_local(TranscriptItem::Error(error));
+                self.state
+                    .report_local(TranscriptItem::Error(error));
             }
             _ => {}
         }
@@ -853,9 +910,9 @@ impl Tab {
         self.disconnect(error, true);
     }
 
+    /// A submitted request may have committed before its acknowledgement was lost. Keep that
+    /// identity; an untouched draft is discarded with its connection.
     fn disconnect(&mut self, error: String, retry: bool) {
-        // A submitted request may have committed before its acknowledgement was lost.
-        // Keep that identity; an untouched draft is discarded with its connection.
         if !self.persisted
             && self.state.management.is_empty()
             && self.starting.is_none()
@@ -903,9 +960,10 @@ impl Tab {
             } else {
                 "/reconnect 重试，/close 关闭标签。"
             };
-            self.state.report_local(TranscriptItem::Error(format!(
-                "{error}\n连接已断开，目标任务可能仍在运行。{recovery}"
-            )));
+            self.state
+                .report_local(TranscriptItem::Error(format!(
+                    "{error}\n连接已断开，目标任务可能仍在运行。{recovery}"
+                )));
         }
     }
 
@@ -936,7 +994,11 @@ impl Tab {
         self.progress = Some(progress.clone());
         self.updates = Some(updates);
         let remote = self.connection.as_ref().map_or_else(
-            || self.spec.as_ref().is_some_and(Spec::remote),
+            || {
+                self.spec
+                    .as_ref()
+                    .is_some_and(Spec::remote)
+            },
             |connection| !matches!(connection.target, workspace::transport::Target::Local),
         );
         self.state.workspace_wizard =
@@ -963,9 +1025,10 @@ impl Tab {
         self.disconnect("连接已取消".into(), false);
         self.reconnect_at = None;
         self.reconnect_attempts = 0;
-        self.state.report_local(TranscriptItem::Notice(
-            "已停止重连；/reconnect 可接回原会话。".into(),
-        ));
+        self.state
+            .report_local(TranscriptItem::Notice(
+                "已停止重连；/reconnect 可接回原会话。".into(),
+            ));
     }
 
     fn send(&mut self, request: Request) -> bool {
@@ -976,9 +1039,10 @@ impl Tab {
             self.independent_requests.abort_all();
         }
         let Some(commands) = &self.commands else {
-            self.state.report_local(TranscriptItem::Error(
-                "尚未连接；输入已保留，可用 /reconnect 重试。".into(),
-            ));
+            self.state
+                .report_local(TranscriptItem::Error(
+                    "尚未连接；输入已保留，可用 /reconnect 重试。".into(),
+                ));
             return false;
         };
         if let Err(error) = commands.try_send(Call {

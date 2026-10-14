@@ -37,14 +37,16 @@ impl Tab {
         let (Some(commands), Some(session)) = (&self.commands, &self.id) else {
             return viewer.tick();
         };
-        let remote = self.subagent.get_or_insert_with(|| Remote {
-            agent: viewer.id().into(),
-            after: 0,
-            next_poll: std::time::Instant::now(),
-            pending: None,
-            submission: None,
-            failed: false,
-        });
+        let remote = self
+            .subagent
+            .get_or_insert_with(|| Remote {
+                agent: viewer.id().into(),
+                after: 0,
+                next_poll: std::time::Instant::now(),
+                pending: None,
+                submission: None,
+                failed: false,
+            });
         if remote.agent != viewer.id() {
             self.subagent = None;
             return true;

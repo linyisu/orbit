@@ -24,7 +24,9 @@ fn resources(session: &str, workspace: &str, action: Action) -> Request {
 
 async fn request(backend: &Backend, request: Request) -> Result<Snapshot, String> {
     let (result, receiver) = tokio::sync::oneshot::channel();
-    backend.send(Command::Settings { request, result }).unwrap();
+    backend
+        .send(Command::Settings { request, result })
+        .unwrap();
     let response = tokio::time::timeout(Duration::from_secs(10), receiver)
         .await
         .expect("skill source request timed out")
@@ -56,8 +58,17 @@ async fn scan_token(backend: &Backend, workspace: &str) -> String {
 #[test]
 fn skill_source_transport_previews_conflicts_and_imports_only_selected_paths() {
     let directory = tempfile::tempdir().unwrap();
-    std::fs::write(directory.path().join(".fixture-skill-import"), "").unwrap();
-    let workspace = directory.path().to_string_lossy().into_owned();
+    std::fs::write(
+        directory
+            .path()
+            .join(".fixture-skill-import"),
+        "",
+    )
+    .unwrap();
+    let workspace = directory
+        .path()
+        .to_string_lossy()
+        .into_owned();
     let runtime = tokio::runtime::Runtime::new().unwrap();
     let (backend, mut events) = Backend::start(options(directory.path()), &runtime);
     runtime.block_on(async {
@@ -115,7 +126,9 @@ fn skill_source_transport_previews_conflicts_and_imports_only_selected_paths() {
             .unwrap();
         assert_eq!(workflow.path, "skills/工具/workflow");
         assert!(!workflow.conflict);
-        let Snapshot::Skills(before) = request(&backend, command(Action::Skills)).await.unwrap()
+        let Snapshot::Skills(before) = request(&backend, command(Action::Skills))
+            .await
+            .unwrap()
         else {
             panic!("skills expected")
         };
@@ -144,8 +157,9 @@ fn skill_source_transport_previews_conflicts_and_imports_only_selected_paths() {
             .unwrap_err()
             .contains("不在此来源")
         );
-        let Snapshot::Skills(after_rejection) =
-            request(&backend, command(Action::Skills)).await.unwrap()
+        let Snapshot::Skills(after_rejection) = request(&backend, command(Action::Skills))
+            .await
+            .unwrap()
         else {
             panic!("skills expected")
         };
@@ -222,22 +236,100 @@ fn skill_source_transport_previews_conflicts_and_imports_only_selected_paths() {
 #[test]
 fn skill_source_transport_rejects_failed_sources_stale_tokens_and_wrong_scope() {
     let directory = tempfile::tempdir().unwrap();
-    std::fs::write(directory.path().join(".fixture-skill-import"), "").unwrap();
-    let workspace = directory.path().to_string_lossy().into_owned();
+    std::fs::write(
+        directory
+            .path()
+            .join(".fixture-skill-import"),
+        "",
+    )
+    .unwrap();
+    let workspace = directory
+        .path()
+        .to_string_lossy()
+        .into_owned();
     let runtime = tokio::runtime::Runtime::new().unwrap();
     let (backend, mut events) = Backend::start(options(directory.path()), &runtime);
     runtime.block_on(async {
-        until(&mut events, |event| matches!(event, Event::Response(Response::Opened(_)))).await;
+        until(&mut events, |event| {
+            matches!(event, Event::Response(Response::Opened(_)))
+        })
+        .await;
         let command = |action| resources("demo", &workspace, action);
-        assert!(request(&backend, command(Action::ScanSkills { source: "bad-source".into() })).await.unwrap_err().contains("无法读取技能来源"));
-        assert!(request(&backend, command(Action::ScanSkills { source: "  ".into() })).await.unwrap_err().contains("请输入技能来源"));
-        let Snapshot::SkillSource { token, .. } = request(&backend, command(Action::ScanSkills { source: "fixture/skills".into() })).await.unwrap() else { panic!("source preview expected") };
-        let import = || Action::ImportSkills { token: token.clone(), paths: vec!["skills/frontend-design".into()] };
-        assert!(request(&backend, resources("demo", "previous-workspace", import())).await.unwrap_err().contains("工作区已切换"));
-        assert!(request(&backend, resources("another-session", &workspace, import())).await.is_err());
-        assert!(request(&backend, command(Action::ImportSkills { token: "expired-token".into(), paths: vec!["skills/frontend-design".into()] })).await.unwrap_err().contains("已过期"));
-        let Snapshot::Skills(skills) = request(&backend, command(Action::Skills)).await.unwrap() else { panic!("skills expected") };
-        assert_eq!(skills.len(), 1, "rejected scope/token requests cannot modify skills");
-        assert!(matches!(request(&backend, command(import())).await.unwrap(), Snapshot::Skills(skills) if skills.len() == 2));
+        assert!(
+            request(
+                &backend,
+                command(Action::ScanSkills {
+                    source: "bad-source".into()
+                })
+            )
+            .await
+            .unwrap_err()
+            .contains("无法读取技能来源")
+        );
+        assert!(
+            request(
+                &backend,
+                command(Action::ScanSkills {
+                    source: "  ".into()
+                })
+            )
+            .await
+            .unwrap_err()
+            .contains("请输入技能来源")
+        );
+        let Snapshot::SkillSource { token, .. } = request(
+            &backend,
+            command(Action::ScanSkills {
+                source: "fixture/skills".into(),
+            }),
+        )
+        .await
+        .unwrap() else {
+            panic!("source preview expected")
+        };
+        let import = || Action::ImportSkills {
+            token: token.clone(),
+            paths: vec!["skills/frontend-design".into()],
+        };
+        assert!(
+            request(&backend, resources("demo", "previous-workspace", import()))
+                .await
+                .unwrap_err()
+                .contains("工作区已切换")
+        );
+        assert!(
+            request(&backend, resources("another-session", &workspace, import()))
+                .await
+                .is_err()
+        );
+        assert!(
+            request(
+                &backend,
+                command(Action::ImportSkills {
+                    token: "expired-token".into(),
+                    paths: vec!["skills/frontend-design".into()]
+                })
+            )
+            .await
+            .unwrap_err()
+            .contains("已过期")
+        );
+        let Snapshot::Skills(skills) = request(&backend, command(Action::Skills))
+            .await
+            .unwrap()
+        else {
+            panic!("skills expected")
+        };
+        assert_eq!(
+            skills.len(),
+            1,
+            "rejected scope/token requests cannot modify skills"
+        );
+        assert!(matches!(
+            request(&backend, command(import()))
+                .await
+                .unwrap(),
+            Snapshot::Skills(skills) if skills.len() == 2
+        ));
     });
 }

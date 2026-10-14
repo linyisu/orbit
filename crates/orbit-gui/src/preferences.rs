@@ -41,6 +41,7 @@ pub(crate) struct Preferences {
     _save_observer: Option<Task<()>>,
     _writer: tokio::task::JoinHandle<()>,
 }
+
 impl Global for Preferences {}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -124,7 +125,11 @@ impl Preferences {
     /// The writer can coalesce values, but an older receipt cannot acknowledge a
     /// newer edit or hide its error.
     pub(crate) fn observe_saves(cx: &mut App) {
-        if cx.global::<Self>()._save_observer.is_some() {
+        if cx
+            .global::<Self>()
+            ._save_observer
+            .is_some()
+        {
             return;
         }
         let mut updates = cx.global::<Self>().save_updates.clone();
@@ -168,9 +173,13 @@ impl Preferences {
     pub(crate) fn set_mcp_start(config: &Path, allowed: bool, cx: &mut App) -> u64 {
         let this = cx.global_mut::<Self>();
         if allowed {
-            this.values.mcp_start_configs.insert(config.to_path_buf());
+            this.values
+                .mcp_start_configs
+                .insert(config.to_path_buf());
         } else {
-            this.values.mcp_start_configs.remove(config);
+            this.values
+                .mcp_start_configs
+                .remove(config);
         }
         this.publish()
     }
@@ -198,15 +207,24 @@ impl Preferences {
         id: &str,
         cx: &App,
     ) -> Placement {
-        cx.global::<Self>().values.navigation.placement(options, id)
+        cx.global::<Self>()
+            .values
+            .navigation
+            .placement(options, id)
     }
 
     pub(crate) fn session_categories(options: &crate::backend::Options, cx: &App) -> Vec<String> {
-        cx.global::<Self>().values.navigation.categories(options)
+        cx.global::<Self>()
+            .values
+            .navigation
+            .categories(options)
     }
 
     pub(crate) fn projects(options: &crate::backend::Options, cx: &App) -> Projects {
-        cx.global::<Self>().values.navigation.projects(options)
+        cx.global::<Self>()
+            .values
+            .navigation
+            .projects(options)
     }
 
     pub(crate) fn migrate_project_pins(
@@ -258,13 +276,17 @@ impl Preferences {
         cx: &mut App,
     ) -> anyhow::Result<u64> {
         let this = cx.global_mut::<Self>();
-        this.values.navigation.set_category(options, id, category)?;
+        this.values
+            .navigation
+            .set_category(options, id, category)?;
         Ok(this.publish())
     }
 
     pub(crate) fn forget_session(options: &crate::backend::Options, id: &str, cx: &mut App) -> u64 {
         let this = cx.global_mut::<Self>();
-        this.values.navigation.forget(options, id);
+        this.values
+            .navigation
+            .forget(options, id);
         this.publish()
     }
 
@@ -290,7 +312,9 @@ impl Preferences {
             ColorMode::Dark => Some(true),
         };
         this.publish();
-        let resolved = cx.global::<Self>().mode(window.appearance());
+        let resolved = cx
+            .global::<Self>()
+            .mode(window.appearance());
         gpui_kit::component::Theme::change(resolved, Some(window), cx);
         Self::apply_font(cx);
     }
@@ -298,7 +322,9 @@ impl Preferences {
     pub(crate) fn watch_appearance(window: &Window, _: &mut App) -> Subscription {
         window.observe_window_appearance(|window, cx| {
             if Self::color_mode(cx) == ColorMode::System {
-                let mode = cx.global::<Self>().mode(window.appearance());
+                let mode = cx
+                    .global::<Self>()
+                    .mode(window.appearance());
                 gpui_kit::component::Theme::change(mode, Some(window), cx);
                 Self::apply_font(cx);
             }
@@ -330,7 +356,9 @@ impl Preferences {
     }
 
     pub(crate) fn comfortable_width(cx: &App) -> bool {
-        cx.global::<Self>().values.comfortable_width
+        cx.global::<Self>()
+            .values
+            .comfortable_width
     }
 
     pub(crate) fn set_comfortable_width(value: bool, cx: &mut App) {
@@ -432,18 +460,42 @@ mod tests {
         let second = root.path().join("second.toml");
         let runtime = tokio::runtime::Runtime::new().unwrap();
         let mut preferences = Preferences::load(Some(&path), &runtime).unwrap();
-        preferences.values.mcp_start_configs.insert(first.clone());
+        preferences
+            .values
+            .mcp_start_configs
+            .insert(first.clone());
         preferences.publish();
         runtime.block_on(async {
-            preferences.save_updates.changed().await.unwrap();
+            preferences
+                .save_updates
+                .changed()
+                .await
+                .unwrap();
         });
         let mut loaded = Preferences::load(Some(&path), &runtime).unwrap();
-        assert!(loaded.values.mcp_start_configs.contains(&first));
-        assert!(!loaded.values.mcp_start_configs.contains(&second));
-        loaded.values.mcp_start_configs.remove(&first);
+        assert!(
+            loaded
+                .values
+                .mcp_start_configs
+                .contains(&first)
+        );
+        assert!(
+            !loaded
+                .values
+                .mcp_start_configs
+                .contains(&second)
+        );
+        loaded
+            .values
+            .mcp_start_configs
+            .remove(&first);
         loaded.publish();
         runtime.block_on(async {
-            loaded.save_updates.changed().await.unwrap();
+            loaded
+                .save_updates
+                .changed()
+                .await
+                .unwrap();
         });
         assert!(
             Preferences::load(Some(&path), &runtime)
@@ -492,7 +544,9 @@ mod tests {
         values
             .keybindings
             .insert("toggle_sidebar".into(), Some("ctrl-k ctrl-b".into()));
-        values.keybindings.insert("open_project".into(), None);
+        values
+            .keybindings
+            .insert("open_project".into(), None);
         values
             .keybindings
             .insert("future_command".into(), Some("ctrl-f12".into()));
@@ -510,7 +564,9 @@ mod tests {
         let json = serde_json::to_value(&values).unwrap();
         assert!(json.get("navigation").is_none());
         let options = crate::backend::Options::parse_from(["orbit-gui"]);
-        values.navigation.set_pin(&options, "one", true);
+        values
+            .navigation
+            .set_pin(&options, "one", true);
         values
             .navigation
             .set_category(&options, "one", Some("学习".into()))
@@ -519,7 +575,9 @@ mod tests {
             serde_json::from_slice(&serde_json::to_vec(&values).unwrap()).unwrap();
         assert_eq!(restored.font_size, Some(18));
         assert_eq!(restored.dark, Some(false));
-        let placement = restored.navigation.placement(&options, "one");
+        let placement = restored
+            .navigation
+            .placement(&options, "one");
         assert!(placement.is_pinned());
         assert_eq!(placement.category(), Some("学习"));
     }
@@ -592,7 +650,10 @@ mod tests {
             .keybindings
             .insert("toggle_sidebar".into(), Some("ctrl-k ctrl-b".into()));
         let options = crate::backend::Options::parse_from(["orbit-gui"]);
-        preferences.values.navigation.set_pin(&options, "one", true);
+        preferences
+            .values
+            .navigation
+            .set_pin(&options, "one", true);
         preferences
             .values
             .navigation
@@ -608,9 +669,12 @@ mod tests {
             .unwrap()
             .unwrap();
         });
-        assert!(
-            matches!(&*preferences.save_updates.borrow_and_update(), SaveStatus::Failed { revision, .. } if *revision == first)
-        );
+        assert!(matches!(
+            &*preferences
+                .save_updates
+                .borrow_and_update(),
+            SaveStatus::Failed { revision, .. } if *revision == first
+        ));
         assert_eq!(
             preferences.values.keybindings["toggle_sidebar"].as_deref(),
             Some("ctrl-k ctrl-b")
@@ -632,7 +696,9 @@ mod tests {
         );
         let restored: Values = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
         assert_eq!(restored.keybindings, preferences.values.keybindings);
-        let placement = restored.navigation.placement(&options, "one");
+        let placement = restored
+            .navigation
+            .placement(&options, "one");
         assert!(placement.is_pinned());
         assert_eq!(placement.category(), Some("学习"));
     }

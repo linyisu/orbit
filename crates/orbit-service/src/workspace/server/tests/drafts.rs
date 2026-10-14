@@ -5,7 +5,10 @@ async fn global_history_resolves_a_moved_project_before_resume_without_writing_o
     let fixture = Fixture::new("http://127.0.0.1:1/v1").await;
     let store = &fixture.handle.store;
     let old = &fixture.external;
-    let moved = fixture._root.path().join("moved-project");
+    let moved = fixture
+        ._root
+        .path()
+        .join("moved-project");
     let mut writer = store
         .create(old.display().to_string(), "test::test".into())
         .await
@@ -44,7 +47,11 @@ async fn global_history_resolves_a_moved_project_before_resume_without_writing_o
     assert_eq!(history[0].project_id, original.project_id);
     assert_eq!(history[0].workspace, moved.display().to_string());
     assert_eq!(
-        store.session(&id).await.unwrap().workspace,
+        store
+            .session(&id)
+            .await
+            .unwrap()
+            .workspace,
         original.workspace
     );
 
@@ -63,7 +70,11 @@ async fn global_history_resolves_a_moved_project_before_resume_without_writing_o
             .contains("session belongs to workspace")
     );
     assert_eq!(
-        store.session(&id).await.unwrap().project_id,
+        store
+            .session(&id)
+            .await
+            .unwrap()
+            .project_id,
         original.project_id
     );
 
@@ -93,7 +104,11 @@ async fn global_history_resolves_a_moved_project_before_resume_without_writing_o
     assert_eq!(snapshot.history.len(), 1);
 
     // Other workspaces also see the corrected location after a real resume.
-    let Response::Sessions(history) = fixture.request(Request::AllSessions).await.unwrap() else {
+    let Response::Sessions(history) = fixture
+        .request(Request::AllSessions)
+        .await
+        .unwrap()
+    else {
         panic!("missing refreshed history")
     };
     assert_eq!(history[0].workspace, info.workspace);
@@ -118,7 +133,10 @@ async fn global_history_lists_other_directories_without_changing_project_scoped_
     let store = &fixture.handle.store;
     let mut ids = Vec::new();
     for directory in [
-        &fixture.service.options.initial_directory,
+        &fixture
+            .service
+            .options
+            .initial_directory,
         &fixture.external,
     ] {
         let mut writer = store
@@ -135,15 +153,24 @@ async fn global_history_lists_other_directories_without_changing_project_scoped_
             .await
             .unwrap();
     }
-    let Response::Sessions(global) = fixture.request(Request::AllSessions).await.unwrap() else {
+    let Response::Sessions(global) = fixture
+        .request(Request::AllSessions)
+        .await
+        .unwrap()
+    else {
         panic!("missing global history")
     };
     assert_eq!(global.len(), 2);
-    assert!(
-        ids.iter()
-            .all(|id| global.iter().any(|session| &session.id == id))
-    );
-    let Response::Sessions(local) = fixture.request(Request::Sessions).await.unwrap() else {
+    assert!(ids.iter().all(|id| {
+        global
+            .iter()
+            .any(|session| &session.id == id)
+    }));
+    let Response::Sessions(local) = fixture
+        .request(Request::Sessions)
+        .await
+        .unwrap()
+    else {
         panic!("missing project history")
     };
     assert_eq!(local.len(), 1);
@@ -225,7 +252,11 @@ async fn resumed_transcript_pages_join_live_updates_without_reordering_or_losing
         })
         .await
         .unwrap();
-    let handle = fixture.service.session(&id).await.unwrap();
+    let handle = fixture
+        .service
+        .session(&id)
+        .await
+        .unwrap();
     let mut after = 0;
     let mut received = Vec::new();
     loop {
@@ -258,9 +289,10 @@ async fn resumed_transcript_pages_join_live_updates_without_reordering_or_losing
         .unwrap();
     let tail = handle.page(0, after).await.unwrap();
     assert_eq!(tail.next, initial + 1);
-    assert!(
-        matches!(&tail.updates[..], [protocol::Update::Profile(info)] if info.mode == Mode::Yolo)
-    );
+    assert!(matches!(
+        &tail.updates[..],
+        [protocol::Update::Profile(info)] if info.mode == Mode::Yolo
+    ));
     let mut replay = Vec::new();
     let mut cursor = 0;
     while cursor < initial {
@@ -272,7 +304,12 @@ async fn resumed_transcript_pages_join_live_updates_without_reordering_or_losing
         serde_json::to_value(&replay[..received.len()]).unwrap(),
         serde_json::to_value(received).unwrap()
     );
-    assert!(handle.page(1, tail.next + 1).await.is_err());
+    assert!(
+        handle
+            .page(1, tail.next + 1)
+            .await
+            .is_err()
+    );
 }
 
 #[tokio::test]
@@ -282,8 +319,20 @@ async fn draft_preferences_stay_in_memory_until_first_message_and_survive_resume
     let id = fixture.handle.info.id.clone();
     let store = &fixture.handle.store;
     assert!(store.list().await.unwrap().is_empty());
-    assert!(store.git_baseline(&id).await.unwrap().is_none());
-    assert!(store.workspace_baseline(&id).await.unwrap().is_none());
+    assert!(
+        store
+            .git_baseline(&id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        store
+            .workspace_baseline(&id)
+            .await
+            .unwrap()
+            .is_none()
+    );
     fixture.mode(Mode::Yolo).await;
     fixture
         .request(Request::Plan {
@@ -330,12 +379,21 @@ async fn draft_preferences_stay_in_memory_until_first_message_and_survive_resume
     fixture
         .handle
         .action(SessionAction::ChangeDirectory {
-            path: fixture.external.to_string_lossy().into_owned(),
+            path: fixture
+                .external
+                .to_string_lossy()
+                .into_owned(),
         })
         .await
         .unwrap();
     assert!(store.list().await.unwrap().is_empty());
-    assert!(store.projects().await.unwrap().is_empty());
+    assert!(
+        store
+            .projects()
+            .await
+            .unwrap()
+            .is_empty()
+    );
     assert_no_domain_records(store);
     assert_eq!(fixture.handle.current_info().await.mode, Mode::Yolo);
     assert!(
@@ -371,7 +429,14 @@ async fn draft_preferences_stay_in_memory_until_first_message_and_survive_resume
     .await
     .unwrap();
     // A failed model connection is still a real conversation and must remain resumable.
-    assert_eq!(store.list_resumable().await.unwrap().len(), 1);
+    assert_eq!(
+        store
+            .list_resumable()
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
     let snapshot = store.load(&id).await.unwrap();
     assert_eq!(snapshot.runs.len(), 1);
     assert_eq!(snapshot.runs[0].prompt, "hello");
@@ -397,7 +462,12 @@ async fn draft_preferences_stay_in_memory_until_first_message_and_survive_resume
     assert_eq!(resumed.session.id(), id);
     assert_eq!(resumed.resources.mode, Mode::Yolo);
     assert_eq!(
-        resumed.resources.planning.snapshot().await.mode,
+        resumed
+            .resources
+            .planning
+            .snapshot()
+            .await
+            .mode,
         plan::WorkMode::Plan
     );
 }
@@ -430,13 +500,33 @@ async fn last_client_discards_drafts_but_retains_running_sessions_until_finish()
         .service
         .release_client(vec![info.id.clone()], 0)
         .await;
-    assert!(fixture.service.session(&info.id).await.is_ok());
+    assert!(
+        fixture
+            .service
+            .session(&info.id)
+            .await
+            .is_ok()
+    );
     fixture
         .service
         .release_client(vec![info.id.clone()], 0)
         .await;
-    assert!(fixture.service.session(&info.id).await.is_err());
-    assert!(fixture.handle.store.list().await.unwrap().is_empty());
+    assert!(
+        fixture
+            .service
+            .session(&info.id)
+            .await
+            .is_err()
+    );
+    assert!(
+        fixture
+            .handle
+            .store
+            .list()
+            .await
+            .unwrap()
+            .is_empty()
+    );
 
     let Response::Opened(started) = fixture
         .request(Request::Open {
@@ -450,7 +540,11 @@ async fn last_client_discards_drafts_but_retains_running_sessions_until_finish()
     else {
         panic!("missing draft")
     };
-    let handle = fixture.service.session(&started.id).await.unwrap();
+    let handle = fixture
+        .service
+        .session(&started.id)
+        .await
+        .unwrap();
     handle
         .command(session::Command::Start {
             request_id: "first".into(),
@@ -465,13 +559,39 @@ async fn last_client_discards_drafts_but_retains_running_sessions_until_finish()
         .service
         .release_client(vec![started.id.clone()], 0)
         .await;
-    assert!(fixture.service.session(&started.id).await.is_ok());
-    assert_eq!(fixture.handle.store.list().await.unwrap().len(), 1);
-    handle.command(session::Command::Cancel).await.unwrap();
+    assert!(
+        fixture
+            .service
+            .session(&started.id)
+            .await
+            .is_ok()
+    );
+    assert_eq!(
+        fixture
+            .handle
+            .store
+            .list()
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    handle
+        .command(session::Command::Cancel)
+        .await
+        .unwrap();
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
-            fixture.service.collect_idle_sessions().await;
-            if fixture.service.session(&started.id).await.is_err() {
+            fixture
+                .service
+                .collect_idle_sessions()
+                .await;
+            if fixture
+                .service
+                .session(&started.id)
+                .await
+                .is_err()
+            {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -480,7 +600,13 @@ async fn last_client_discards_drafts_but_retains_running_sessions_until_finish()
     .await
     .unwrap();
     assert_eq!(
-        fixture.handle.store.list_resumable().await.unwrap().len(),
+        fixture
+            .handle
+            .store
+            .list_resumable()
+            .await
+            .unwrap()
+            .len(),
         1
     );
     // Retirement loses only the runtime cache, never durable request receipts.
@@ -515,7 +641,10 @@ async fn last_client_discards_drafts_but_retains_running_sessions_until_finish()
             .len(),
         1
     );
-    fixture.service.release_client(vec![started.id], 0).await;
+    fixture
+        .service
+        .release_client(vec![started.id], 0)
+        .await;
 }
 
 #[tokio::test]
@@ -565,8 +694,17 @@ async fn closing_idle_persisted_sessions_releases_capacity_and_preserves_resume(
             panic!("missing restored session")
         };
         assert_eq!(info.id, id);
-        fixture.service.release_client(vec![id.clone()], 0).await;
-        assert!(fixture.service.session(&id).await.is_err());
+        fixture
+            .service
+            .release_client(vec![id.clone()], 0)
+            .await;
+        assert!(
+            fixture
+                .service
+                .session(&id)
+                .await
+                .is_err()
+        );
         let snapshot = store.load(&id).await.unwrap();
         assert_eq!(snapshot.runs[0].prompt, format!("question {index}"));
         ids.push(id);
@@ -584,12 +722,34 @@ async fn closing_idle_persisted_sessions_releases_capacity_and_preserves_resume(
             .await
             .unwrap();
     }
-    fixture.service.release_client(vec![id.clone()], 0).await;
-    assert!(fixture.service.session(&id).await.is_ok());
-    fixture.service.release_client(vec![id.clone()], 1).await;
-    assert!(fixture.service.session(&id).await.is_err());
+    fixture
+        .service
+        .release_client(vec![id.clone()], 0)
+        .await;
+    assert!(
+        fixture
+            .service
+            .session(&id)
+            .await
+            .is_ok()
+    );
+    fixture
+        .service
+        .release_client(vec![id.clone()], 1)
+        .await;
+    assert!(
+        fixture
+            .service
+            .session(&id)
+            .await
+            .is_err()
+    );
     assert_eq!(
-        store.list_resumable().await.unwrap().len(),
+        store
+            .list_resumable()
+            .await
+            .unwrap()
+            .len(),
         MAX_SESSIONS + 2
     );
 }
@@ -616,7 +776,15 @@ async fn btw_is_ephemeral_and_last_viewer_close_or_disconnect_discards_it() {
         panic!("missing side answer")
     };
     assert_eq!(initial.records.unwrap().len(), 1);
-    assert!(fixture.handle.store.list().await.unwrap().is_empty());
+    assert!(
+        fixture
+            .handle
+            .store
+            .list()
+            .await
+            .unwrap()
+            .is_empty()
+    );
     let Response::Questions(shared) = request(
         20,
         Request::OpenQuestions {
@@ -664,7 +832,10 @@ async fn btw_is_ephemeral_and_last_viewer_close_or_disconnect_discards_it() {
     };
     assert_eq!(shared.records.unwrap().len(), 1);
     // A disconnect follows the same release path even when the main session stays open.
-    fixture.service.release_client(vec![], 20).await;
+    fixture
+        .service
+        .release_client(vec![], 20)
+        .await;
     assert!(
         request(
             20,
@@ -676,7 +847,15 @@ async fn btw_is_ephemeral_and_last_viewer_close_or_disconnect_discards_it() {
         .is_err()
     );
     assert!(!fixture.handle.questions.running().await);
-    assert!(fixture.handle.store.list().await.unwrap().is_empty());
+    assert!(
+        fixture
+            .handle
+            .store
+            .list()
+            .await
+            .unwrap()
+            .is_empty()
+    );
     assert!(
         request(
             20,
@@ -721,8 +900,16 @@ async fn btw_is_ephemeral_and_last_viewer_close_or_disconnect_discards_it() {
 
 fn assert_no_domain_records(store: &orbit_store::store::Store) {
     let db = rusqlite::Connection::open(store.path()).unwrap();
-    let tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name <> 'seaql_migrations'").unwrap()
-        .query_map([], |row| row.get::<_, String>(0)).unwrap().collect::<Result<Vec<_>, _>>().unwrap();
+    let tables = db
+        .prepare(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE \
+        'sqlite_%' AND name <> 'seaql_migrations'",
+        )
+        .unwrap()
+        .query_map([], |row| row.get::<_, String>(0))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
     for table in tables {
         let count: i64 = db
             .query_row(&format!("SELECT count(*) FROM \"{table}\""), [], |row| {
@@ -775,9 +962,17 @@ async fn explicit_directory_replacement_recovers_history_after_filesystem_identi
         .dispatch(open(), &options, 0)
         .await
         .unwrap_err();
-    assert!(error.to_string().contains("session belongs to workspace"));
+    assert!(
+        error
+            .to_string()
+            .contains("session belongs to workspace")
+    );
     assert_eq!(
-        store.session(&id).await.unwrap().workspace,
+        store
+            .session(&id)
+            .await
+            .unwrap()
+            .workspace,
         original.workspace
     );
     fixture
@@ -804,7 +999,11 @@ async fn explicit_directory_replacement_recovers_history_after_filesystem_identi
     assert_eq!(history[0].id, id);
     assert_eq!(history[0].project_id, original.project_id);
     assert_eq!(history[0].workspace, moved.display().to_string());
-    let Response::Opened(info) = fixture.service.dispatch(open(), &options, 0).await.unwrap()
+    let Response::Opened(info) = fixture
+        .service
+        .dispatch(open(), &options, 0)
+        .await
+        .unwrap()
     else {
         panic!("failed to resume relocated session")
     };

@@ -60,12 +60,16 @@ mod tests {
         let child = root.path().join("src");
         std::fs::create_dir(&child).unwrap();
         assert_eq!(
-            branch(child.to_str().unwrap()).await.as_deref(),
+            branch(child.to_str().unwrap())
+                .await
+                .as_deref(),
             Some("test-branch")
         );
         std::fs::write(root.path().join(".git/HEAD"), "ref: refs/heads/other\n").unwrap();
         assert_eq!(
-            branch(child.to_str().unwrap()).await.as_deref(),
+            branch(child.to_str().unwrap())
+                .await
+                .as_deref(),
             Some("other")
         );
     }

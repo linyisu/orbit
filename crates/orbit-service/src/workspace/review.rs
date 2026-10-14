@@ -8,14 +8,22 @@ use orbit_protocol::Capability;
 
 pub(super) async fn execute(setup: &PreparedWorkspace, action: Action) -> Result<Snapshot> {
     ensure!(
-        !setup.resources.policy.disabled(Capability::Files),
+        !setup
+            .resources
+            .policy
+            .disabled(Capability::Files),
         "文件功能已禁用"
     );
-    if matches!(action, Action::List { kind, .. } | Action::Diff { kind, .. } if kind != Kind::Checkpoint)
-        || matches!(action, Action::Stage { .. } | Action::Unstage { .. })
+    if matches!(
+        action,
+        Action::List { kind, .. } | Action::Diff { kind, .. } if kind != Kind::Checkpoint
+    ) || matches!(action, Action::Stage { .. } | Action::Unstage { .. })
     {
         ensure!(
-            !setup.resources.policy.disabled(Capability::Git),
+            !setup
+                .resources
+                .policy
+                .disabled(Capability::Git),
             "Git 功能已禁用"
         );
     }
@@ -41,9 +49,14 @@ pub(super) async fn execute(setup: &PreparedWorkspace, action: Action) -> Result
                     undone: record.undone,
                 })
                 .collect();
-            let end = offset.saturating_add(500).min(entries.len());
+            let end = offset
+                .saturating_add(500)
+                .min(entries.len());
             Ok(Snapshot::List {
-                entries: entries.get(offset..end).unwrap_or_default().to_vec(),
+                entries: entries
+                    .get(offset..end)
+                    .unwrap_or_default()
+                    .to_vec(),
                 next: (end < entries.len()).then_some(end),
                 branch: None,
             })
@@ -59,44 +72,67 @@ pub(super) async fn execute(setup: &PreparedWorkspace, action: Action) -> Result
                 .context("Git status is missing entries")?
                 .iter()
                 .filter_map(|entry| {
-                    let xy = entry["xy"].as_str().unwrap_or("..").as_bytes();
+                    let xy = entry["xy"]
+                        .as_str()
+                        .unwrap_or("..")
+                        .as_bytes();
                     let include = match kind {
                         Kind::Untracked => entry["kind"] == "untracked",
                         Kind::Staged => xy
                             .first()
                             .is_some_and(|value| !matches!(value, b'.' | b' ')),
-                        Kind::Unstaged => {
-                            xy.get(1).is_some_and(|value| !matches!(value, b'.' | b' '))
-                        }
+                        Kind::Unstaged => xy
+                            .get(1)
+                            .is_some_and(|value| !matches!(value, b'.' | b' ')),
                         Kind::Checkpoint => false,
                     };
                     include.then(|| Entry {
-                        path: entry["path"].as_str().unwrap_or_default().to_owned(),
+                        path: entry["path"]
+                            .as_str()
+                            .unwrap_or_default()
+                            .to_owned(),
                         kind,
-                        status: entry["xy"].as_str().unwrap_or("新增").to_owned(),
+                        status: entry["xy"]
+                            .as_str()
+                            .unwrap_or("新增")
+                            .to_owned(),
                         undone: false,
                     })
                 })
                 .collect();
             Ok(Snapshot::List {
                 entries,
-                next: listing["next_offset"].as_u64().map(|value| value as usize),
-                branch: listing["branch"]["head"].as_str().map(str::to_owned),
+                next: listing["next_offset"]
+                    .as_u64()
+                    .map(|value| value as usize),
+                branch: listing["branch"]["head"]
+                    .as_str()
+                    .map(str::to_owned),
             })
         }
         Action::Diff {
             kind: Kind::Checkpoint,
             path,
         } => {
-            let changes = session.store.workspace_changes(session.id()).await?;
+            let changes = session
+                .store
+                .workspace_changes(session.id())
+                .await?;
             let record = changes
                 .iter()
                 .rev()
                 .find(|record| record.change.path == path)
                 .context("该文件的写入检查点已不存在，请刷新")?;
-            let before = record.change.before.as_deref().unwrap_or_default();
+            let before = record
+                .change
+                .before
+                .as_deref()
+                .unwrap_or_default();
             ensure!(
-                before.len().saturating_add(record.change.after.len()) <= 8 * 1024 * 1024,
+                before
+                    .len()
+                    .saturating_add(record.change.after.len())
+                    <= 8 * 1_024 * 1_024,
                 "检查点过大，无法在桌面差异视图中完整显示"
             );
             let patch = similar::TextDiff::configure()
@@ -150,7 +186,10 @@ pub(super) async fn execute(setup: &PreparedWorkspace, action: Action) -> Result
         action @ (Action::Stage { .. } | Action::Unstage { .. }) => {
             ensure!(!setup.resources.policy.read_only, "只读会话不能修改暂存区");
             ensure!(
-                !setup.resources.policy.disabled(Capability::Write),
+                !setup
+                    .resources
+                    .policy
+                    .disabled(Capability::Write),
                 "写入功能已禁用"
             );
             let staged = matches!(action, Action::Stage { .. });

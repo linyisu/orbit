@@ -52,7 +52,10 @@ impl Config {
             return;
         };
         let (hosts, _) = discovery::snapshot();
-        if let Some(host) = hosts.iter().find(|host| &host.name == alias) {
+        if let Some(host) = hosts
+            .iter()
+            .find(|host| &host.name == alias)
+        {
             let explicit = self.fields.clone();
             self.fill(host);
             for (index, input) in explicit.into_iter().enumerate().skip(1) {
@@ -99,8 +102,12 @@ impl Config {
         if self.spec.is_wsl() {
             wsl.into_iter()
                 .filter(|name| {
-                    name.to_lowercase()
-                        .contains(&self.fields[0].text.trim().to_lowercase())
+                    name.to_lowercase().contains(
+                        &self.fields[0]
+                            .text
+                            .trim()
+                            .to_lowercase(),
+                    )
                 })
                 .map(Candidate::Distribution)
                 .collect()
@@ -119,7 +126,10 @@ impl Config {
         } else {
             self.rendered_candidates.clone()
         };
-        let Some(candidate) = candidates.into_iter().nth(self.suggestion) else {
+        let Some(candidate) = candidates
+            .into_iter()
+            .nth(self.suggestion)
+        else {
             return;
         };
         match candidate {
@@ -153,7 +163,10 @@ impl Config {
 
     pub(super) fn start(&mut self) -> Action {
         self.picker = false;
-        let mut values = self.fields.clone().map(|input| input.text);
+        let mut values = self
+            .fields
+            .clone()
+            .map(|input| input.text);
         if let Some(host) = &self.selected_host {
             // Keep the alias so OpenSSH still applies ProxyJump and other host options.
             values[0] = host.name.clone();
@@ -179,8 +192,11 @@ impl Config {
                 KeyCode::Esc => self.picker = false,
                 KeyCode::Enter => self.choose(),
                 KeyCode::Down => {
-                    self.suggestion =
-                        (self.suggestion + 1).min(self.candidates().len().saturating_sub(1))
+                    self.suggestion = (self.suggestion + 1).min(
+                        self.candidates()
+                            .len()
+                            .saturating_sub(1),
+                    )
                 }
                 KeyCode::Up => self.suggestion = self.suggestion.saturating_sub(1),
                 _ => {
@@ -210,9 +226,14 @@ impl Config {
                 self.focus = 1;
             }
             KeyCode::Tab | KeyCode::BackTab | KeyCode::Enter => {
-                let index = indices.iter().position(|i| *i == self.focus).unwrap_or(0);
-                let back =
-                    key.code == KeyCode::BackTab || key.modifiers.contains(KeyModifiers::SHIFT);
+                let index = indices
+                    .iter()
+                    .position(|i| *i == self.focus)
+                    .unwrap_or(0);
+                let back = key.code == KeyCode::BackTab
+                    || key
+                        .modifiers
+                        .contains(KeyModifiers::SHIFT);
                 self.focus = indices[if back {
                     (index + indices.len() - 1) % indices.len()
                 } else {
@@ -220,8 +241,11 @@ impl Config {
                 }];
             }
             KeyCode::Down if self.spec.is_wsl() && self.focus == 0 => {
-                self.suggestion =
-                    (self.suggestion + 1).min(self.candidates().len().saturating_sub(1))
+                self.suggestion = (self.suggestion + 1).min(
+                    self.candidates()
+                        .len()
+                        .saturating_sub(1),
+                )
             }
             KeyCode::Up if self.spec.is_wsl() && self.focus == 0 => {
                 self.suggestion = self.suggestion.saturating_sub(1)
@@ -295,7 +319,11 @@ impl Config {
             .position(|row| row.contains(&self.focus))
             .unwrap_or(0);
         let start = focused_row.saturating_sub(capacity.saturating_sub(1));
-        for row in rows.into_iter().skip(start).take(capacity) {
+        for row in rows
+            .into_iter()
+            .skip(start)
+            .take(capacity)
+        {
             let left = if row.first() == Some(&0) {
                 area.width * 2 / 3
             } else {
@@ -353,11 +381,16 @@ impl Config {
             let count = (area.bottom().saturating_sub(y) as usize)
                 .min(render::MAX_COMPLETION_ITEMS)
                 .min(candidates.len());
-            self.suggestion = self.suggestion.min(candidates.len().saturating_sub(1));
+            self.suggestion = self
+                .suggestion
+                .min(candidates.len().saturating_sub(1));
             self.offset = self
                 .offset
                 .min(self.suggestion)
-                .max(self.suggestion.saturating_sub(count.saturating_sub(1)))
+                .max(
+                    self.suggestion
+                        .saturating_sub(count.saturating_sub(1)),
+                )
                 .min(candidates.len().saturating_sub(count));
             let start = self.offset;
             let panel = Rect::new(area.x, y, area.width, count as u16);
@@ -429,7 +462,11 @@ fn host_candidates(hosts: Vec<discovery::Host>, query: &str) -> Vec<Candidate> {
     let query = query.trim().to_lowercase();
     hosts
         .into_iter()
-        .filter(|host| host.name.to_lowercase().contains(&query))
+        .filter(|host| {
+            host.name
+                .to_lowercase()
+                .contains(&query)
+        })
         .map(Candidate::Host)
         .chain(std::iter::once(Candidate::Manual))
         .collect()
@@ -478,12 +515,20 @@ mod tests {
     fn selecting_a_config_host_fills_fields_and_retains_its_ssh_alias() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("config");
-        std::fs::write(&path, "Host dev\n HostName server.example\n User alice\n Port 2222\n IdentityFile ~/.ssh/dev\n ProxyJump bastion\n").unwrap();
+        std::fs::write(
+            &path,
+            "Host dev\n HostName server.example\n User alice\n Port 2222\n \
+            IdentityFile ~/.ssh/dev\n ProxyJump bastion\n",
+        )
+        .unwrap();
         let hosts = discovery::hosts(&path, directory.path());
         let mut config = Config::new(Spec::parse("/ssh").unwrap());
         config.fill(&hosts[0]);
         assert_eq!(
-            config.fields.clone().map(|field| field.text),
+            config
+                .fields
+                .clone()
+                .map(|field| field.text),
             ["server.example", "alice", "2222", "~/.ssh/dev", ""]
         );
         let Action::Start(spec) = config.start() else {
@@ -534,7 +579,11 @@ mod tests {
         });
         config.suggestion = config.candidates().len() - 1;
         config.choose();
-        assert!(config.fields[..4].iter().all(|field| field.text.is_empty()));
+        assert!(
+            config.fields[..4]
+                .iter()
+                .all(|field| field.text.is_empty())
+        );
         assert_eq!(config.fields[4].text, "/project");
         config.fields[0].set("new.example".into());
         config.handle(&KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));

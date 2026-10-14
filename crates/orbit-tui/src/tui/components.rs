@@ -29,11 +29,13 @@ pub(super) fn hint_above(frame: &mut Frame<'_>, anchor: Rect, text: &str) {
     if width < 3 || anchor.y.saturating_sub(bounds.y) < 3 {
         return;
     }
-    let paragraph = Paragraph::new(text).wrap(Wrap { trim: false }).style(
-        Style::default()
-            .fg(THEME.overlay_foreground)
-            .bg(THEME.overlay_background),
-    );
+    let paragraph = Paragraph::new(text)
+        .wrap(Wrap { trim: false })
+        .style(
+            Style::default()
+                .fg(THEME.overlay_foreground)
+                .bg(THEME.overlay_background),
+        );
     let height = paragraph
         .line_count(width - 2)
         .saturating_add(2)
@@ -53,8 +55,14 @@ pub(super) fn hint_above(frame: &mut Frame<'_>, anchor: Rect, text: &str) {
 }
 
 pub(super) fn centered(bounds: Rect, width: u16, height: u16) -> Rect {
-    let width = bounds.width.saturating_sub(4).min(width);
-    let height = bounds.height.saturating_sub(2).min(height);
+    let width = bounds
+        .width
+        .saturating_sub(4)
+        .min(width);
+    let height = bounds
+        .height
+        .saturating_sub(2)
+        .min(height);
     Rect::new(
         bounds.x + (bounds.width - width) / 2,
         bounds.y + (bounds.height - height) / 2,
@@ -67,7 +75,9 @@ pub(super) fn centered(bounds: Rect, width: u16, height: u16) -> Rect {
 pub(super) fn modal(frame: &mut Frame<'_>, area: Rect) -> Rect {
     let inner = surface(frame, area, panel());
     Rect::new(
-        inner.x.saturating_add(1.min(inner.width)),
+        inner
+            .x
+            .saturating_add(1.min(inner.width)),
         inner.y,
         inner.width.saturating_sub(2),
         inner.height,
@@ -93,12 +103,15 @@ pub(super) fn surface(frame: &mut Frame<'_>, area: Rect, block: Block<'_>) -> Re
 pub(super) fn normal() -> Style {
     Style::default().fg(THEME.foreground)
 }
+
 pub(super) fn muted() -> Style {
     Style::default().fg(THEME.secondary)
 }
+
 pub(super) fn accent() -> Style {
     Style::default().fg(THEME.accent)
 }
+
 pub(super) fn highlighted() -> Style {
     Style::default()
         .fg(THEME.on_accent)
@@ -112,6 +125,7 @@ pub(super) struct Control {
     pub selected: bool,
     pub disabled: bool,
 }
+
 impl Control {
     pub fn style(self, base: Style) -> Style {
         if self.disabled {
@@ -149,6 +163,7 @@ pub(super) struct ActionBar {
     x: u16,
     y: u16,
 }
+
 impl ActionBar {
     pub fn new(area: Rect) -> Self {
         Self {
@@ -157,9 +172,13 @@ impl ActionBar {
             area,
         }
     }
+
     pub fn button(&mut self, frame: &mut Frame<'_>, label: &str, state: Control) -> Option<Rect> {
-        let width =
-            (label.width().saturating_add(4).min(u16::MAX as usize) as u16).min(self.area.width);
+        let width = (label
+            .width()
+            .saturating_add(4)
+            .min(u16::MAX as usize) as u16)
+            .min(self.area.width);
         if self.x.saturating_add(width) > self.area.right() {
             self.x = self.area.x;
             self.y = self.y.saturating_add(1);
@@ -168,7 +187,10 @@ impl ActionBar {
             return None;
         }
         let target = button(frame, Rect::new(self.x, self.y, width, 1), label, state);
-        self.x = self.x.saturating_add(width).saturating_add(2);
+        self.x = self
+            .x
+            .saturating_add(width)
+            .saturating_add(2);
         target
     }
 }
@@ -188,8 +210,10 @@ pub(super) fn choice_lines(text: &str, style: Style, width: u16) -> Vec<Line<'st
 
 pub(super) fn inset_line(mut line: Line<'static>, width: u16) -> Line<'static> {
     let padding = ROW_PADDING.min(width / 2) as usize;
-    line.spans.insert(0, Span::raw(" ".repeat(padding)));
-    line.spans.push(Span::raw(" ".repeat(padding)));
+    line.spans
+        .insert(0, Span::raw(" ".repeat(padding)));
+    line.spans
+        .push(Span::raw(" ".repeat(padding)));
     line
 }
 

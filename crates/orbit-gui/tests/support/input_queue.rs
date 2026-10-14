@@ -28,7 +28,10 @@ pub(super) fn enqueue(
         Err(error) => return Err(error.into()),
     };
     anyhow::ensure!(queue.session == session, "消息不属于当前会话");
-    let id = queue.entries.last().map_or(1, |entry| entry.id + 1);
+    let id = queue
+        .entries
+        .last()
+        .map_or(1, |entry| entry.id + 1);
     queue.entries.push(Entry {
         images,
         id,
@@ -49,8 +52,14 @@ pub(super) fn consume(workspace: &str) -> anyhow::Result<Vec<Entry>> {
 
 pub(super) fn execute(workspace: &str, request: &Value) -> Value {
     match execute_inner(workspace, request) {
-        Ok(snapshot) => json!({"type":"input_queue","value":snapshot}),
-        Err(error) => json!({"type":"error","value":format!("{error:#}")}),
+        Ok(snapshot) => json!({
+            "type": "input_queue",
+            "value": snapshot
+        }),
+        Err(error) => json!({
+            "type": "error",
+            "value": format!("{error:#}")
+        }),
     }
 }
 
@@ -63,7 +72,10 @@ fn execute_inner(workspace: &str, request: &Value) -> anyhow::Result<Snapshot> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Queue {
             session: "demo".into(),
             run: Some(71),
-            entries: if directory.join(".fixture-input-queue").exists() {
+            entries: if directory
+                .join(".fixture-input-queue")
+                .exists()
+            {
                 (1..=35).map(|index| Entry {
                     images: vec![],
                     id: index * 7,
@@ -83,7 +95,10 @@ fn execute_inner(workspace: &str, request: &Value) -> anyhow::Result<Snapshot> {
     };
     anyhow::ensure!(request["session"] == queue.session, "消息不属于当前会话");
     if std::fs::remove_file(directory.join(".fixture-input-queue-consume-once")).is_ok()
-        && let Some(entry) = queue.entries.iter_mut().find(|entry| entry.editable())
+        && let Some(entry) = queue
+            .entries
+            .iter_mut()
+            .find(|entry| entry.editable())
     {
         entry.state = State::Claimed;
         std::fs::write(&path, serde_json::to_vec(&queue)?)?;
@@ -122,7 +137,7 @@ fn execute_inner(workspace: &str, request: &Value) -> anyhow::Result<Snapshot> {
             anyhow::ensure!(entry.editable(), "消息已被取走，无法继续修改");
             anyhow::ensure!(entry.content == expected, "消息内容已变化，请刷新后重试");
             anyhow::ensure!(!content.trim().is_empty(), "消息不能为空");
-            anyhow::ensure!(content.trim().len() <= 1024 * 1024, "消息过长");
+            anyhow::ensure!(content.trim().len() <= 1_024 * 1_024, "消息过长");
             if std::fs::remove_file(directory.join(".fixture-input-queue-fail-once")).is_ok() {
                 anyhow::bail!("测试保存未确认；草稿应保留，请刷新核对后重试。");
             }
@@ -142,7 +157,9 @@ fn execute_inner(workspace: &str, request: &Value) -> anyhow::Result<Snapshot> {
                 .ok_or_else(|| anyhow::anyhow!("消息已移除"))?;
             anyhow::ensure!(entry.editable(), "消息已被取走，无法移除");
             anyhow::ensure!(entry.content == expected, "消息内容已变化，请刷新后重试");
-            queue.entries.retain(|entry| entry.id != id);
+            queue
+                .entries
+                .retain(|entry| entry.id != id);
             Snapshot::Removed { id }
         }
     };

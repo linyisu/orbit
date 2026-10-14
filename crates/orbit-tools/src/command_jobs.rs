@@ -61,26 +61,44 @@ impl Tool for CommandJobs {
     fn definition(&self) -> ToolDefinition {
         let description = match self.action {
             CommandJobAction::Status => {
-                "Inspect managed background commands in this session. Returns status, output_id and a bounded result preview. Omit job_ids to list this run's commands. Completion notifications are automatic: do not repeatedly poll this tool; use wait_commands when no independent work remains."
+                "Inspect managed background commands in this session. Returns status, output_id \
+                    and a bounded result preview. Omit job_ids to list this run's commands. \
+                    Completion notifications are automatic: do not repeatedly poll this tool; use \
+                    wait_commands when no independent work remains."
             }
             CommandJobAction::Wait => {
-                "Suspend without model requests until any or all selected background commands finish. Omit job_ids to wait for outstanding commands in this run. mode=any returns when one finishes; mode=all waits for all. Returns bounded results and output_ids for read_command_output. This is event-driven and has no polling interval; execution deadlines still apply."
+                "Suspend without model requests until any or all selected background commands \
+                    finish. Omit job_ids to wait for outstanding commands in this run. mode=any \
+                    returns when one finishes; mode=all waits for all. Returns bounded results \
+                    and output_ids for read_command_output. This is event-driven and has no \
+                    polling interval; execution deadlines still apply."
             }
             CommandJobAction::Cancel => {
-                "Request cancellation of the selected background commands in this session, including their child processes. Requires explicit job_ids; completed jobs are unchanged. Returns cancelling until the process has actually stopped; use wait_commands to await cleanup."
+                "Request cancellation of the selected background commands in this session, \
+                    including their child processes. Requires explicit job_ids; completed jobs \
+                    are unchanged. Returns cancelling until the process has actually stopped; use \
+                    wait_commands to await cleanup."
             }
         };
         let mut properties = json!({
             "job_ids": {
-                "type": "array", "items": { "type": "string", "minLength": 1 },
-                "maxItems": 8, "uniqueItems": true,
+                "type": "array",
+                "items": {
+                    "type": "string",
+                    "minLength": 1
+                },
+                "maxItems": 8,
+                "uniqueItems": true,
                 "description": "Opaque job IDs returned by run_command; private to this session"
             }
         });
 
         if matches!(self.action, CommandJobAction::Wait) {
-            properties["mode"] =
-                json!({ "type": "string", "enum": ["any", "all"], "default": "any" });
+            properties["mode"] = json!({
+                "type": "string",
+                "enum": ["any", "all"],
+                "default": "any"
+            });
         }
 
         let required = if matches!(self.action, CommandJobAction::Cancel) {
@@ -92,7 +110,10 @@ impl Tool for CommandJobs {
             self.name(),
             description,
             json!({
-                "type": "object", "properties": properties, "required": required, "additionalProperties": false,
+                "type": "object",
+                "properties": properties,
+                "required": required,
+                "additionalProperties": false,
             }),
         )
     }
@@ -142,7 +163,12 @@ impl Tool for CommandJobs {
                     self.jobs.cancel(&args.job_ids)?
                 }
             };
-            Ok(ToolOutput::text(json!({ "jobs": snapshots }).to_string()))
+            Ok(ToolOutput::text(
+                json!({
+                    "jobs": snapshots
+                })
+                .to_string(),
+            ))
         })
     }
 }

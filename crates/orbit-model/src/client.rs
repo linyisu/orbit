@@ -117,7 +117,9 @@ impl ModelClient {
                 .is_some_and(|key| !key.is_empty() && host == key)
         {
             return Err(ModelError::InvalidBaseUrl(
-                "base_url appears to contain an API key instead of a service address; put the service URL in base_url and the credential in api_key".into(),
+                "base_url appears to contain an API key instead of a service address; put the \
+                    service URL in base_url and the credential in api_key"
+                    .into(),
             ));
         }
 
@@ -187,11 +189,15 @@ impl ModelClient {
             self.config.api_format,
             ApiFormat::GoogleCodeAssist | ApiFormat::ChatgptCodex
         ) {
-            let stream = self.stream_with_cancel(request, cancellation).await?;
+            let stream = self
+                .stream_with_cancel(request, cancellation)
+                .await?;
             return crate::collect::completion(stream, &self.config.model).await;
         }
 
-        let (response, _) = self.send(request, false, cancellation.clone()).await?;
+        let (response, _) = self
+            .send(request, false, cancellation.clone())
+            .await?;
         let decode = async {
             match self.config.api_format {
                 ApiFormat::OpenaiChatCompletions => {
@@ -210,10 +216,13 @@ impl ModelClient {
         };
         select! {
             _ = cancellation.cancelled() => Err(ModelError::Cancelled),
-            result = time::timeout(self.config.timeout, decode) => result.unwrap_or_else(|_| Err(ModelError::Timeout {
-                duration: self.config.timeout,
-                stage: "HTTP response headers received; waiting for the complete JSON body".into(),
-            })),
+            result = time::timeout(self.config.timeout, decode) => result.unwrap_or_else(|_| {
+                Err(ModelError::Timeout {
+                    duration: self.config.timeout,
+                    stage: "HTTP response headers received; waiting for the complete JSON body"
+                        .into(),
+                })
+            }),
         }
     }
 
@@ -237,7 +246,9 @@ impl ModelClient {
         request: ChatRequest,
         cancellation: CancellationToken,
     ) -> Result<(ModelStream, u32), ModelError> {
-        let (response, retries) = self.send(request, true, cancellation.clone()).await?;
+        let (response, retries) = self
+            .send(request, true, cancellation.clone())
+            .await?;
         let content_type = response
             .headers()
             .get(header::CONTENT_TYPE)
@@ -251,7 +262,8 @@ impl ModelClient {
             self.config.api_format == ApiFormat::ChatgptCodex && content_type.is_empty();
         if !content_type.contains("text/event-stream") && !codex_without_type {
             return Err(ModelError::Protocol(format!(
-                "streaming endpoint returned HTTP {} with Content-Type {:?}; expected text/event-stream",
+                "streaming endpoint returned HTTP {} with Content-Type {:?}; expected \
+                    text/event-stream",
                 response.status(),
                 content_type
             )));
@@ -358,7 +370,10 @@ impl ModelClient {
     ) -> Result<Response, ModelError> {
         let endpoint = &self.endpoint;
         #[cfg(test)]
-        let endpoint = self.request_endpoint.as_ref().unwrap_or(endpoint);
+        let endpoint = self
+            .request_endpoint
+            .as_ref()
+            .unwrap_or(endpoint);
         let mut builder = self
             .http
             .post(endpoint.clone())
@@ -369,19 +384,28 @@ impl ModelClient {
         if let (Some(store), Some(reference)) = (&self.auth_store, &self.config.credential) {
             let auth = select! {
                 _ = cancellation.cancelled() => return Err(ModelError::Cancelled),
-                result = time::timeout(self.config.timeout, store.resolve(
-                    &reference.name, &self.endpoint, match format {
-                        ApiFormat::AnthropicMessages => orbit_auth::AuthTarget::Anthropic,
-                        ApiFormat::GoogleCodeAssist => orbit_auth::AuthTarget::GoogleCodeAssist,
-                        ApiFormat::ChatgptCodex => orbit_auth::AuthTarget::ChatgptCodex,
-                        _ => orbit_auth::AuthTarget::Openai,
-                    },
-                )) => result.map_err(|_| orbit_auth::AuthError::Timeout)??,
+                result = time::timeout(
+                    self.config.timeout,
+                    store.resolve(
+                        &reference.name,
+                        &self.endpoint,
+                        match format {
+                            ApiFormat::AnthropicMessages => orbit_auth::AuthTarget::Anthropic,
+                            ApiFormat::GoogleCodeAssist => {
+                                orbit_auth::AuthTarget::GoogleCodeAssist
+                            }
+                            ApiFormat::ChatgptCodex => orbit_auth::AuthTarget::ChatgptCodex,
+                            _ => orbit_auth::AuthTarget::Openai,
+                        },
+                    ),
+                ) => result.map_err(|_| orbit_auth::AuthError::Timeout)??,
             };
 
             if format == ApiFormat::GoogleCodeAssist {
-                body["project"] =
-                    serde_json::json!(auth.project_id.ok_or(orbit_auth::AuthError::InvalidToken)?);
+                body["project"] = serde_json::json!(
+                    auth.project_id
+                        .ok_or(orbit_auth::AuthError::InvalidToken)?
+                );
             }
 
             if auth.kind == orbit_auth::CredentialKind::AntigravityOAuth {
@@ -405,14 +429,17 @@ impl ModelClient {
         let builder = builder.json(&body);
         let response = select! {
             _ = cancellation.cancelled() => return Err(ModelError::Cancelled),
-            result = time::timeout(self.config.timeout, builder.send()) => {
-                match result {
-                    Ok(result) => result?,
-                    Err(Elapsed { .. }) => {
-                        return Err(ModelError::Timeout { duration: self.config.timeout, stage: "waiting for HTTP response headers (no response body received)".into() });
-                    }
+            result = time::timeout(self.config.timeout, builder.send()) => match result {
+                Ok(result) => result?,
+                Err(Elapsed { .. }) => {
+                    return Err(ModelError::Timeout {
+                        duration: self.config.timeout,
+                        stage: "waiting for HTTP \
+                            response headers (no response body received)"
+                            .into(),
+                    });
                 }
-            }
+            },
         };
 
         if response.status().is_success() {
@@ -472,7 +499,9 @@ where
                         Ok(None) => Ok(None),
                         Err(Elapsed { .. }) => Err(ModelError::Timeout {
                             duration: timeout,
-                            stage: format!("no SSE data received during the idle timeout ({received_bytes} body bytes received previously, {decoded_events} model events)"),
+                            stage: format!("no SSE data received during the idle timeout \
+                                ({received_bytes} body bytes received previously, \
+                                {decoded_events} model events)"),
                         }),
                     }
                 }
@@ -503,7 +532,8 @@ where
                 let frame = match String::from_utf8(bytes) {
                     Ok(frame) => frame,
                     Err(_) => {
-                        yield Err(ModelError::Protocol("SSE frame contains invalid UTF-8".to_owned()));
+                        yield Err(ModelError::Protocol("SSE frame contains invalid UTF-8"
+                            .to_owned()));
                         return;
                     }
                 };
@@ -533,7 +563,8 @@ where
         let buffer = match String::from_utf8(buffer) {
             Ok(buffer) => buffer,
             Err(_) => {
-                yield Err(ModelError::Protocol("SSE stream ended inside a UTF-8 character".to_owned()));
+                yield Err(ModelError::Protocol("SSE stream ended inside a UTF-8 character"
+                    .to_owned()));
                 return;
             }
         };
@@ -602,7 +633,11 @@ pub(crate) fn upstream_error(value: &serde_json::Value) -> Option<ModelError> {
         .or_else(|| value["message"].as_str())
         .unwrap_or("provider reported a failed response");
     let code = error
-        .and_then(|error| error.get("code").or_else(|| error.get("type")))
+        .and_then(|error| {
+            error
+                .get("code")
+                .or_else(|| error.get("type"))
+        })
         .and_then(|code| code.as_str());
     let response_id = value
         .get("response")
@@ -620,8 +655,12 @@ pub(crate) fn upstream_error(value: &serde_json::Value) -> Option<ModelError> {
 }
 
 pub(crate) fn find_sse_separator(buffer: &[u8]) -> Option<usize> {
-    let lf = buffer.windows(2).position(|bytes| bytes == b"\n\n");
-    let crlf = buffer.windows(4).position(|bytes| bytes == b"\r\n\r\n");
+    let lf = buffer
+        .windows(2)
+        .position(|bytes| bytes == b"\n\n");
+    let crlf = buffer
+        .windows(4)
+        .position(|bytes| bytes == b"\r\n\r\n");
 
     match (lf, crlf) {
         (Some(lf), Some(crlf)) => Some(lf.min(crlf)),

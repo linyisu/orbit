@@ -30,21 +30,35 @@ pub(crate) fn encode(
     for message in request.messages {
         match message {
             ChatMessage::Runtime { kind, content } => {
-                messages.push(json!({ "role": "user", "content": crate::runtime_context::render(kind, &content) }));
+                messages.push(json!({
+                    "role": "user",
+                    "content": crate::runtime_context::render(kind, &content)
+                }));
             }
             ChatMessage::System { content } => {
-                messages.push(json!({ "role": "system", "content": content }));
+                messages.push(json!({
+                    "role": "system",
+                    "content": content
+                }));
             }
             ChatMessage::User {
                 content,
                 attachments,
             } => {
                 if attachments.is_empty() {
-                    messages.push(json!({ "role": "user", "content": content }));
+                    messages.push(json!({
+                        "role": "user",
+                        "content": content
+                    }));
                 } else {
-                    let mut blocks = vec![
-                        json!({ "type": "text", "text": if content.is_empty() { "[图片]" } else { &content } }),
-                    ];
+                    let mut blocks = vec![json!({
+                        "type": "text",
+                        "text": if content.is_empty() {
+                            "[图片]"
+                        } else {
+                            &content
+                        }
+                    })];
 
                     for attachment in attachments {
                         let Some((mime_type, data)) = attachment.image_if_available()? else {
@@ -52,11 +66,16 @@ pub(crate) fn encode(
                         };
                         blocks.push(json!({
                             "type": "image_url",
-                            "image_url": { "url": format!("data:{mime_type};base64,{data}") }
+                            "image_url": {
+                                "url": format!("data:{mime_type};base64,{data}")
+                            }
                         }));
                     }
 
-                    messages.push(json!({ "role": "user", "content": blocks }));
+                    messages.push(json!({
+                        "role": "user",
+                        "content": blocks
+                    }));
                 }
             }
 
@@ -71,7 +90,10 @@ pub(crate) fn encode(
                         call
                     })
                     .collect::<Vec<_>>();
-                let mut message = json!({ "role": "assistant", "content": content });
+                let mut message = json!({
+                    "role": "assistant",
+                    "content": content
+                });
                 if !calls.is_empty() {
                     message["tool_calls"] = json!(calls);
                 }
@@ -81,12 +103,19 @@ pub(crate) fn encode(
             ChatMessage::Tool {
                 tool_call_id,
                 content,
-            } => messages
-                .push(json!({ "role": "tool", "tool_call_id": tool_call_id, "content": content })),
+            } => messages.push(json!({
+                "role": "tool",
+                "tool_call_id": tool_call_id,
+                "content": content
+            })),
         }
     }
 
-    let mut body = json!({ "model": model, "messages": messages, "stream": stream });
+    let mut body = json!({
+        "model": model,
+        "messages": messages,
+        "stream": stream
+    });
 
     if !request.tools.is_empty() {
         body["tools"] = json!(request.tools);
@@ -101,7 +130,9 @@ pub(crate) fn encode(
     }
 
     if stream {
-        body["stream_options"] = json!({ "include_usage": true });
+        body["stream_options"] = json!({
+            "include_usage": true
+        });
     }
 
     if let (Some(effort), Some(ReasoningAdapter::OpenaiChat)) =
@@ -131,9 +162,13 @@ pub(crate) async fn decode_completion(response: Response) -> Result<ChatCompleti
     }
 
     let payload: WireCompletionResponse = serde_json::from_value(value)?;
-    let choice = payload.choices.into_iter().next().ok_or_else(|| {
-        crate::client::invalid_response("OpenAI response did not contain choices")
-    })?;
+    let choice = payload
+        .choices
+        .into_iter()
+        .next()
+        .ok_or_else(|| {
+            crate::client::invalid_response("OpenAI response did not contain choices")
+        })?;
 
     Ok(ChatCompletion {
         id: payload.id,
@@ -163,7 +198,11 @@ pub(crate) fn stream(
         let mut events = Vec::new();
 
         for choice in chunk.choices {
-            if let Some(text) = choice.delta.content.filter(|text| !text.is_empty()) {
+            if let Some(text) = choice
+                .delta
+                .content
+                .filter(|text| !text.is_empty())
+            {
                 events.push(StreamEvent::TextDelta(text));
             }
 
@@ -182,7 +221,9 @@ pub(crate) fn stream(
                     metadata: None,
                     index: call.index.unwrap_or_default(),
                     id: call.id,
-                    name: function.as_ref().and_then(|value| value.name.clone()),
+                    name: function
+                        .as_ref()
+                        .and_then(|value| value.name.clone()),
                     arguments: function
                         .and_then(|value| value.arguments)
                         .unwrap_or_default(),
@@ -282,10 +323,16 @@ mod input_tests {
     fn optional_wire_arrays_accept_missing_null_and_empty_but_reject_wrong_types() {
         for fields in [
             json!({}),
-            json!({"tool_calls": null}),
-            json!({"tool_calls": []}),
+            json!({
+                "tool_calls": null
+            }),
+            json!({
+                "tool_calls": []
+            }),
         ] {
-            let mut message = json!({"content": "hello"});
+            let mut message = json!({
+                "content": "hello"
+            });
             message
                 .as_object_mut()
                 .unwrap()
@@ -297,12 +344,23 @@ mod input_tests {
         }
 
         for invalid in [json!({}), json!("oops"), json!(1)] {
-            assert!(serde_json::from_value::<WireDelta>(json!({"tool_calls": invalid})).is_err());
+            assert!(
+                serde_json::from_value::<WireDelta>(json!({
+                    "tool_calls": invalid
+                }))
+                .is_err()
+            );
         }
-        let usage: WireStreamResponse = serde_json::from_value(json!({"choices": null})).unwrap();
+        let usage: WireStreamResponse = serde_json::from_value(json!({
+            "choices": null
+        }))
+        .unwrap();
         assert!(usage.choices.is_empty());
         assert!(
-            serde_json::from_value::<WireCompletionResponse>(json!({"choices": null})).is_err()
+            serde_json::from_value::<WireCompletionResponse>(json!({
+                "choices": null
+            }))
+            .is_err()
         );
     }
 
@@ -317,7 +375,9 @@ mod input_tests {
                     ChatMessage::assistant_tool_calls(vec![ToolCall::function(
                         "call-1",
                         "web_search",
-                        json!({"query": "rust"}),
+                        json!({
+                            "query": "rust"
+                        }),
                     )]),
                 ]),
                 None,
@@ -327,8 +387,14 @@ mod input_tests {
             .unwrap();
 
             assert_eq!(body["messages"][1]["content"], "hello back");
-            assert!(body["messages"][1].get("tool_calls").is_none());
-            let calls = body["messages"][2]["tool_calls"].as_array().unwrap();
+            assert!(
+                body["messages"][1]
+                    .get("tool_calls")
+                    .is_none()
+            );
+            let calls = body["messages"][2]["tool_calls"]
+                .as_array()
+                .unwrap();
             assert_eq!(calls.len(), 1);
             assert_eq!(calls[0]["id"], "call-1");
             assert_eq!(calls[0]["function"]["name"], "web_search");
@@ -359,7 +425,9 @@ mod input_tests {
             "renamed-by-gateway",
             request,
             Some(ReasoningAdapter::OpenaiChat),
-            &json!({ "enable_thinking": true }),
+            &json!({
+                "enable_thinking": true
+            }),
             true,
         )
         .unwrap();
@@ -376,7 +444,9 @@ mod input_tests {
             request,
             Some(ReasoningAdapter::OpenaiChat),
             &json!({
-                "thinking": { "type": "enabled" }
+                "thinking": {
+                    "type": "enabled"
+                }
             }),
             true,
         )
@@ -407,7 +477,13 @@ mod input_tests {
             true,
         )
         .unwrap();
-        assert_eq!(body["messages"][0]["content"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            body["messages"][0]["content"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
         assert_eq!(body["messages"][1]["role"], "user");
         assert!(!body.to_string().contains("gone.png"));
     }

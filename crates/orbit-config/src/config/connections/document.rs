@@ -20,7 +20,11 @@ pub fn provider(spec: &ProviderSpec) -> Result<Item> {
     {
         for (_, item) in overrides.iter_mut() {
             if let Item::Table(table) = item {
-                *item = Item::Value(std::mem::take(table).into_inline_table().into());
+                *item = Item::Value(
+                    std::mem::take(table)
+                        .into_inline_table()
+                        .into(),
+                );
             }
         }
     }
@@ -29,12 +33,20 @@ pub fn provider(spec: &ProviderSpec) -> Result<Item> {
 
 pub fn models(destination: &mut Item, spec: &ProviderSpec) -> Result<()> {
     let mut fields = provider(spec)?;
-    destination["models"] = fields.as_table_mut().unwrap().remove("models").unwrap();
+    destination["models"] = fields
+        .as_table_mut()
+        .unwrap()
+        .remove("models")
+        .unwrap();
     let table = destination
         .as_table_like_mut()
         .expect("provider is a table");
     table.remove("model_overrides");
-    if let Some(overrides) = fields.as_table_mut().unwrap().remove("model_overrides") {
+    if let Some(overrides) = fields
+        .as_table_mut()
+        .unwrap()
+        .remove("model_overrides")
+    {
         table.insert("model_overrides", overrides);
     }
     Ok(())

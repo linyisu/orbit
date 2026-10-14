@@ -40,7 +40,10 @@ fn checked_path(workspace: &str, path: &str) -> anyhow::Result<PathBuf> {
 
 pub(super) fn read_file(workspace: &str, path: &str) -> Value {
     if !Path::new(workspace).is_dir() {
-        return json!({"type":"file","value":"aGVsbG8gZ3VpCg=="});
+        return json!({
+            "type": "file",
+            "value": "aGVsbG8gZ3VpCg=="
+        });
     }
     match checked_path(workspace, path).and_then(|path| {
         if !path.exists() {
@@ -48,13 +51,19 @@ pub(super) fn read_file(workspace: &str, path: &str) -> Value {
         }
         anyhow::ensure!(path.is_file(), "只能读取普通文件");
         let bytes = std::fs::read(path)?;
-        anyhow::ensure!(bytes.len() <= 20 * 1024 * 1024, "文件超过 20 MiB");
+        anyhow::ensure!(bytes.len() <= 20 * 1_024 * 1_024, "文件超过 20 MiB");
         Ok(bytes)
     }) {
         Ok(bytes) => {
-            json!({"type":"file","value":base64::engine::general_purpose::STANDARD.encode(bytes)})
+            json!({
+                "type": "file",
+                "value": base64::engine::general_purpose::STANDARD.encode(bytes)
+            })
         }
-        Err(error) => json!({"type":"error","value":error.to_string()}),
+        Err(error) => json!({
+            "type": "error",
+            "value": error.to_string()
+        }),
     }
 }
 
@@ -80,7 +89,11 @@ pub(super) fn execute(workspace: &str, request: &Value) -> Value {
                 let mut entries = vec![];
                 for item in std::fs::read_dir(target)? {
                     let item = item?;
-                    let Some(name) = item.file_name().to_str().map(str::to_owned) else {
+                    let Some(name) = item
+                        .file_name()
+                        .to_str()
+                        .map(str::to_owned)
+                    else {
                         continue;
                     };
                     if !include_hidden && name.starts_with('.') {
@@ -109,7 +122,11 @@ pub(super) fn execute(workspace: &str, request: &Value) -> Value {
                 }
                 entries.sort_by(|left, right| left.path.cmp(&right.path));
                 let next_offset = (entries.len() > offset + 200).then_some(offset + 200);
-                let entries = entries.into_iter().skip(offset).take(200).collect();
+                let entries = entries
+                    .into_iter()
+                    .skip(offset)
+                    .take(200)
+                    .collect();
                 Ok(Snapshot::Directory {
                     path,
                     entries,
@@ -124,13 +141,13 @@ pub(super) fn execute(workspace: &str, request: &Value) -> Value {
                 content,
             } => {
                 anyhow::ensure!(
-                    content.len() <= 1024 * 1024 && !content.contains('\0'),
+                    content.len() <= 1_024 * 1_024 && !content.contains('\0'),
                     "文件不是可保存的 UTF-8 文本"
                 );
                 let target = checked_path(workspace, &path)?;
                 let before = std::fs::read_to_string(&target)?;
                 anyhow::ensure!(
-                    before.len() <= 1024 * 1024 && !before.contains('\0'),
+                    before.len() <= 1_024 * 1_024 && !before.contains('\0'),
                     "文件不是可编辑文本"
                 );
                 anyhow::ensure!(before == original, "文件已被其他程序修改，编辑内容已保留");
@@ -152,7 +169,13 @@ pub(super) fn execute(workspace: &str, request: &Value) -> Value {
         }
     })();
     match result {
-        Ok(snapshot) => json!({"type":"files","value":snapshot}),
-        Err(error) => json!({"type":"error","value":error.to_string()}),
+        Ok(snapshot) => json!({
+            "type": "files",
+            "value": snapshot
+        }),
+        Err(error) => json!({
+            "type": "error",
+            "value": error.to_string()
+        }),
     }
 }

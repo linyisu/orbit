@@ -9,6 +9,7 @@ pub struct Model {
     pub payload: String,
     pub created_at: i64,
 }
+
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
 pub enum Relation {
     #[sea_orm(
@@ -18,6 +19,7 @@ pub enum Relation {
     )]
     Session,
 }
+
 impl ActiveModelBehavior for ActiveModel {}
 
 impl Related<super::sessions::Entity> for Entity {

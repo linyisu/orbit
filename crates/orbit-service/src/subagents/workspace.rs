@@ -25,10 +25,15 @@ pub(super) async fn prepare(
         return Ok(parent.canonicalize()?);
     }
     ensure!(
-        agent.chars().all(|value| value.is_ascii_hexdigit()) && agent.len() == 32,
+        agent
+            .chars()
+            .all(|value| value.is_ascii_hexdigit())
+            && agent.len() == 32,
         "invalid child identity"
     );
-    let destination = database.with_extension("worktrees").join(agent);
+    let destination = database
+        .with_extension("worktrees")
+        .join(agent);
     ensure!(!destination.exists(), "child worktree already exists");
     let root = git(parent, &["rev-parse", "--show-toplevel"])
         .await
@@ -45,10 +50,15 @@ pub(super) async fn prepare(
         let tree = format!(
             "{}:{}",
             base.trim(),
-            relative.to_str().context("workspace path is not UTF-8")?
+            relative
+                .to_str()
+                .context("workspace path is not UTF-8")?
         );
         ensure!(
-            git(&root, &["cat-file", "-t", &tree]).await?.trim() == "tree",
+            git(&root, &["cat-file", "-t", &tree])
+                .await?
+                .trim()
+                == "tree",
             "当前目录在 HEAD 中不存在，请在仓库根目录创建开发子代理"
         );
     }
@@ -62,7 +72,9 @@ pub(super) async fn prepare(
             "-b",
             &branch,
             "--",
-            destination.to_str().context("worktree path is not UTF-8")?,
+            destination
+                .to_str()
+                .context("worktree path is not UTF-8")?,
             base.trim(),
         ],
     )
@@ -107,9 +119,13 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let repo = directory.path().join("repo");
         std::fs::create_dir(&repo).unwrap();
-        git(&repo, &["init", "-q"]).await.unwrap();
+        git(&repo, &["init", "-q"])
+            .await
+            .unwrap();
         std::fs::write(repo.join("file.txt"), "base").unwrap();
-        git(&repo, &["add", "file.txt"]).await.unwrap();
+        git(&repo, &["add", "file.txt"])
+            .await
+            .unwrap();
         git(
             &repo,
             &[

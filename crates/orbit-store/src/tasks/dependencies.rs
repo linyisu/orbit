@@ -26,7 +26,9 @@ pub(super) async fn replace(
         .await?;
     let ids: BTreeSet<_> = rows.iter().map(|r| r.id).collect();
     ensure!(
-        dependencies.iter().all(|id| ids.contains(id)),
+        dependencies
+            .iter()
+            .all(|id| ids.contains(id)),
         "dependency does not belong to this project"
     );
     let mut graph = BTreeMap::<i64, Vec<i64>>::new();
@@ -47,7 +49,13 @@ pub(super) async fn replace(
     while let Some(current) = pending.pop() {
         ensure!(current != id, "task dependencies would form a cycle");
         if visited.insert(current) {
-            pending.extend(graph.get(&current).into_iter().flatten().copied());
+            pending.extend(
+                graph
+                    .get(&current)
+                    .into_iter()
+                    .flatten()
+                    .copied(),
+            );
         }
     }
     deps::Entity::delete_many()

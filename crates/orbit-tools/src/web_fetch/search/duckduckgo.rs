@@ -5,9 +5,9 @@ use super::*;
 use crate::web_fetch::dom::{attribute as attr, text};
 use html2text::Handle;
 
+/// DuckDuckGo uses a few legacy identifiers rather than ISO/BCP-47.
+/// <https://duckduckgo.com/duckduckgo-help-pages/settings/params>
 fn locale(region: &str, language: &str) -> String {
-    // DuckDuckGo uses a few legacy identifiers rather than ISO/BCP-47.
-    // https://duckduckgo.com/duckduckgo-help-pages/settings/params
     match (region.to_ascii_uppercase().as_str(), language) {
         ("GB", "en") => "uk-en".into(),
         ("JP", "ja") => "jp-jp".into(),
@@ -156,8 +156,10 @@ fn parse_results(body: &str, limit: usize) -> Vec<SearchResult> {
         return Vec::new();
     };
     fn collect(node: &Handle, results: &mut Vec<SearchResult>) {
-        if attr(node, "class").is_some_and(|v| v.split_whitespace().any(|c| c == "result__a"))
-            && let Some(href) = attr(node, "href")
+        if attr(node, "class").is_some_and(|v| {
+            v.split_whitespace()
+                .any(|c| c == "result__a")
+        }) && let Some(href) = attr(node, "href")
             && let Ok(mut url) = url::Url::parse("https://duckduckgo.com")
                 .unwrap()
                 .join(&href)
@@ -201,9 +203,12 @@ fn parse_results(body: &str, limit: usize) -> Vec<SearchResult> {
             collect(child, results);
         }
     }
+
     fn find_snippet(node: &Handle) -> String {
-        if attr(node, "class").is_some_and(|v| v.split_whitespace().any(|c| c == "result__snippet"))
-        {
+        if attr(node, "class").is_some_and(|v| {
+            v.split_whitespace()
+                .any(|c| c == "result__snippet")
+        }) {
             return text(node);
         }
 

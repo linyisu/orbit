@@ -15,7 +15,8 @@ const CLIENT_ID: &str = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
 const AUTHORIZE_URL: &str = "https://claude.ai/oauth/authorize";
 const TOKEN_URL: &str = "https://api.anthropic.com/v1/oauth/token";
 const API_BASE: &str = "https://api.anthropic.com/v1/";
-const SCOPES: &str = "org:create_api_key user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload";
+const SCOPES: &str = "org:create_api_key user:profile user:inference user:sessions:claude_code \
+    user:mcp_servers user:file_upload";
 
 /// One-use PKCE state; tokens and the verifier are never exposed in Debug output.
 pub struct AnthropicLogin {
@@ -95,7 +96,10 @@ pub(crate) async fn refresh(previous: &Credential) -> Result<Credential> {
     if previous.endpoint != API_BASE {
         return Err(AuthError::Scope);
     }
-    let refresh = previous.refresh.as_ref().ok_or(AuthError::LoginRequired)?;
+    let refresh = previous
+        .refresh
+        .as_ref()
+        .ok_or(AuthError::LoginRequired)?;
     let body = json!({
         "grant_type": "refresh_token",
         "client_id": CLIENT_ID,
@@ -125,7 +129,11 @@ async fn exchange(
     let status = response.status();
     let mut bytes = Vec::new();
 
-    while let Some(chunk) = response.chunk().await.map_err(|_| AuthError::Transport)? {
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|_| AuthError::Transport)?
+    {
         if bytes.len().saturating_add(chunk.len()) > crate::http::MAX_TOKEN_RESPONSE_BYTES {
             return Err(AuthError::InvalidToken);
         }
@@ -248,15 +256,25 @@ mod tests {
                     .parse()
                     .unwrap();
                 let mut request_body = vec![0; length];
-                socket.read_exact(&mut request_body).await.unwrap();
+                socket
+                    .read_exact(&mut request_body)
+                    .await
+                    .unwrap();
                 let response = format!(
-                    "HTTP/1.1 {status}\r\nContent-Length: {}\r\nLocation: https://example.invalid/token\r\nConnection: close\r\n\r\n{body}",
+                    "HTTP/1.1 {status}\r\nContent-Length: {}\r\nLocation: \
+                        https://example.invalid/token\r\nConnection: close\r\n\r\n{body}",
                     body.len()
                 );
-                socket.write_all(response.as_bytes()).await.unwrap();
+                socket
+                    .write_all(response.as_bytes())
+                    .await
+                    .unwrap();
                 serde_json::from_slice::<Value>(&request_body).unwrap()
             };
-            let grant = json!({ "grant_type": "refresh_token", "refresh_token": "old-refresh" });
+            let grant = json!({
+                "grant_type": "refresh_token",
+                "refresh_token": "old-refresh"
+            });
 
             let (result, received) = tokio::join!(exchange(&endpoint, grant.clone(), None), server);
 
@@ -318,14 +336,18 @@ mod tests {
         let initial = json!({
             "access_token": "access-one",
             "refresh_token": "refresh-one",
-            "expires_in": 3600,
-            "account": { "uuid": "account-one" }
+            "expires_in": 3_600,
+            "account": {
+                "uuid": "account-one"
+            }
         });
         let first = token_response(&serde_json::to_vec(&initial).unwrap(), None).unwrap();
         let update = json!({
             "access_token": "access-two",
-            "expires_in": 7200,
-            "account": { "uuid": "different" }
+            "expires_in": 7_200,
+            "account": {
+                "uuid": "different"
+            }
         });
 
         let second = token_response(&serde_json::to_vec(&update).unwrap(), Some(&first)).unwrap();

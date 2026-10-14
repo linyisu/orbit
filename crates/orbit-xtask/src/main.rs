@@ -49,16 +49,18 @@ fn root() -> &'static Path {
 }
 
 #[tokio::main]
+/// The portable-bundle test uses this Rust executable as its SSH transport stand-in.
 async fn main() -> Result<()> {
-    // The portable-bundle test uses this Rust executable as its SSH transport stand-in.
     if std::env::current_exe()?
         .file_name()
         .is_some_and(|name| name == "ssh")
-        || std::env::args_os().next().is_some_and(|name| {
-            Path::new(&name)
-                .file_name()
-                .is_some_and(|name| name == "ssh")
-        })
+        || std::env::args_os()
+            .next()
+            .is_some_and(|name| {
+                Path::new(&name)
+                    .file_name()
+                    .is_some_and(|name| name == "ssh")
+            })
     {
         return remote::transport().await;
     }
@@ -74,7 +76,9 @@ async fn main() -> Result<()> {
         Task::VerifyBundle { directory } => {
             let directory = match directory {
                 Some(path) => path,
-                None => bundle::target_directory(root()).await?.join("bundle"),
+                None => bundle::target_directory(root())
+                    .await?
+                    .join("bundle"),
             };
             remote::verify(&directory).await?;
         }

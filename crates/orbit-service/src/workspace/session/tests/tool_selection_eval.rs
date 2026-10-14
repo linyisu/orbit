@@ -125,8 +125,14 @@ async fn evaluate(settings: &Settings, case: Case, repetition: usize) -> Result<
     // Bound the cost of a bad choice without changing the available tools.
     setup.resources.budget.max_turns = 8;
     setup.resources.budget.max_tool_calls = 16;
-    setup.resources.budget.max_output_tokens = setup.resources.budget.max_output_tokens.min(4096);
-    let handle = Handle::spawn(setup, None).await.unwrap();
+    setup.resources.budget.max_output_tokens = setup
+        .resources
+        .budget
+        .max_output_tokens
+        .min(4_096);
+    let handle = Handle::spawn(setup, None)
+        .await
+        .unwrap();
     handle
         .command(Command::SetMode {
             mode: orbit_protocol::Mode::Auto,
@@ -179,7 +185,10 @@ async fn evaluate(settings: &Settings, case: Case, repetition: usize) -> Result<
                                 && let Some((target, before, after)) = &intended_change
                             {
                                 native_file_change |= changes.iter().any(|change| {
-                                    workspace.join(&change.path).canonicalize().ok()
+                                    workspace
+                                        .join(&change.path)
+                                        .canonicalize()
+                                        .ok()
                                         == Some(workspace.join(target))
                                         && change.before.as_deref() == *before
                                         && change.after == *after
@@ -218,13 +227,18 @@ async fn evaluate(settings: &Settings, case: Case, repetition: usize) -> Result<
         .context("evaluation cancellation did not finish")?;
     }
     handle.command(Command::Close).await?;
-    let unchanged = fs::read(workspace.join("untouched.bin")).ok().as_deref() == Some(UNTOUCHED);
+    let unchanged = fs::read(workspace.join("untouched.bin"))
+        .ok()
+        .as_deref()
+        == Some(UNTOUCHED);
     let expected = match case {
         Case::EditParagraph => original.replace(OLD_TEXT, NEW_TEXT),
         _ => original,
     };
-    let notes_ok =
-        fs::read(workspace.join("notes.md")).ok().as_deref() == Some(expected.as_bytes());
+    let notes_ok = fs::read(workspace.join("notes.md"))
+        .ok()
+        .as_deref()
+        == Some(expected.as_bytes());
     let mut files = fs::read_dir(&workspace)?
         .map(|entry| entry.map(|entry| entry.file_name()))
         .collect::<std::io::Result<Vec<_>>>()?;
@@ -243,7 +257,9 @@ async fn evaluate(settings: &Settings, case: Case, repetition: usize) -> Result<
             Case::ReadUrl => fetched_marker && answer.contains(&settings.marker),
             Case::EditParagraph => true,
             Case::CreateFile => {
-                fs::read(workspace.join("greeting.txt")).ok().as_deref()
+                fs::read(workspace.join("greeting.txt"))
+                    .ok()
+                    .as_deref()
                     == Some(b"Hello, Orbit!\n".as_slice())
             }
         };
@@ -251,17 +267,35 @@ async fn evaluate(settings: &Settings, case: Case, repetition: usize) -> Result<
     // Judge the operation that fulfilled the task, not unrelated read-only
     // inspection or post-edit verification through the shell.
     let choice_ok = match case {
-        Case::ReadUrl => fetched_marker && !calls.iter().any(|tool| tool == "run_command"),
-        Case::EditParagraph => native_file_change && !calls.iter().any(|tool| tool == "write_file"),
+        Case::ReadUrl => {
+            fetched_marker
+                && !calls
+                    .iter()
+                    .any(|tool| tool == "run_command")
+        }
+        Case::EditParagraph => {
+            native_file_change
+                && !calls
+                    .iter()
+                    .any(|tool| tool == "write_file")
+        }
         Case::CreateFile => native_file_change,
     };
     println!(
         "{}",
         json!({
-            "case": case.name(), "repetition": repetition, "model": settings.model,
-            "status": status, "task_ok": task_ok, "tool_choice_ok": choice_ok,
-            "native_tool_failed": failed.iter().any(|tool| tool == preferred),
-            "calls": calls, "succeeded": succeeded, "failed": failed
+            "case": case.name(),
+            "repetition": repetition,
+            "model": settings.model,
+            "status": status,
+            "task_ok": task_ok,
+            "tool_choice_ok": choice_ok,
+            "native_tool_failed": failed
+                .iter()
+                .any(|tool| tool == preferred),
+            "calls": calls,
+            "succeeded": succeeded,
+            "failed": failed
         })
     );
     Ok(task_ok && choice_ok)
@@ -288,7 +322,13 @@ async fn real_model_tool_selection() -> Result<()> {
         }
     }
     let total = repetitions * 3;
-    println!("{}", json!({"passed": passed, "total": total}));
+    println!(
+        "{}",
+        json!({
+            "passed": passed,
+            "total": total
+        })
+    );
     ensure!(
         passed == total,
         "real-model evaluation: {passed}/{total} passed; inspect JSON reports"

@@ -1,3 +1,6 @@
+//! Provider request and stream adapters with shared model-facing data types.
+//! Credential acquisition and persistence belong to orbit-auth.
+
 pub mod anthropic;
 pub mod client;
 pub mod error;

@@ -57,7 +57,12 @@ impl ConnectionLogs {
     }
 
     fn record_secret(&mut self, secret: &str, window: &mut Window, cx: &mut Context<Self>) {
-        if !secret.is_empty() && !self.secrets.iter().any(|stored| stored == secret) {
+        if !secret.is_empty()
+            && !self
+                .secrets
+                .iter()
+                .any(|stored| stored == secret)
+        {
             self.secrets.push(secret.to_owned());
             self.sync(self.lines.clone(), window, cx);
         }
@@ -88,7 +93,10 @@ fn filtered_log(line: &str, secrets: &[String]) -> String {
         return "[含凭据的日志已隐藏]".into();
     }
     let mut filtered = line.to_owned();
-    for secret in secrets.iter().filter(|secret| !secret.is_empty()) {
+    for secret in secrets
+        .iter()
+        .filter(|secret| !secret.is_empty())
+    {
         filtered = filtered.replace(secret, "[已隐藏凭据]");
     }
     filtered
@@ -256,6 +264,7 @@ impl Workspace {
             cx,
         );
     }
+
     pub(super) fn search_sessions(&self, window: &mut Window, cx: &mut Context<Self>) {
         use gpui_kit::component::command::{Command as Palette, CommandItem, CommandState};
         let owner = cx.weak_entity();
@@ -354,6 +363,7 @@ impl From<orbit_client::interaction::Challenge> for ConnectionChallenge {
         }
     }
 }
+
 impl ConnectionChallenge {
     fn pending(&self) -> bool {
         self.reply
@@ -361,6 +371,7 @@ impl ConnectionChallenge {
             .as_ref()
             .is_some_and(|reply| !reply.is_closed())
     }
+
     fn answer(&self, answer: Option<String>) -> bool {
         self.reply
             .borrow_mut()
@@ -376,7 +387,8 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.connection_challenges.push_back(challenge.into());
+        self.connection_challenges
+            .push_back(challenge.into());
         self.show_connection_challenge(window, cx);
     }
 
@@ -454,7 +466,11 @@ impl Workspace {
         {
             self.connection_challenges.pop_front();
         }
-        let Some(challenge) = self.connection_challenges.front().cloned() else {
+        let Some(challenge) = self
+            .connection_challenges
+            .front()
+            .cloned()
+        else {
             return;
         };
         self.auth_dialog_open = true;
@@ -501,7 +517,10 @@ impl Workspace {
                     let answer = if confirm {
                         "yes".into()
                     } else {
-                        keyboard_input.read(cx).value().to_string()
+                        keyboard_input
+                            .read(cx)
+                            .value()
+                            .to_string()
                     };
                     let _ = keyboard_owner.update(cx, |view, cx| {
                         view.finish_connection_challenge(
@@ -522,19 +541,21 @@ impl Workspace {
                 .footer(
                     h_flex()
                         .gap_2()
-                        .child(Button::new("ssh-cancel").label("取消").on_click(
-                            move |_, window, cx| {
-                                let _ = cancel_owner.update(cx, |view, cx| {
-                                    view.finish_connection_challenge(
-                                        &cancel_challenge,
-                                        None,
-                                        true,
-                                        window,
-                                        cx,
-                                    )
-                                });
-                            },
-                        ))
+                        .child(
+                            Button::new("ssh-cancel")
+                                .label("取消")
+                                .on_click(move |_, window, cx| {
+                                    let _ = cancel_owner.update(cx, |view, cx| {
+                                        view.finish_connection_challenge(
+                                            &cancel_challenge,
+                                            None,
+                                            true,
+                                            window,
+                                            cx,
+                                        )
+                                    });
+                                }),
+                        )
                         .child(
                             Button::new("ssh-answer")
                                 .primary()
@@ -543,7 +564,10 @@ impl Workspace {
                                     let answer = if confirm {
                                         "yes".into()
                                     } else {
-                                        answer_input.read(cx).value().to_string()
+                                        answer_input
+                                            .read(cx)
+                                            .value()
+                                            .to_string()
                                     };
                                     let _ = answer_owner.update(cx, |view, cx| {
                                         view.finish_connection_challenge(

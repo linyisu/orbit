@@ -38,6 +38,7 @@ pub trait ModelBackend: Send + Sync {
                 .map(|stream| (stream, None))
         })
     }
+
     fn complete<'a>(
         &'a self,
         request: ChatRequest,
@@ -115,7 +116,10 @@ impl ModelBackend for ModelClientBackend {
         request: ChatRequest,
         cancellation: CancellationToken,
     ) -> CompletionFuture<'a> {
-        Box::pin(self.client.complete_with_cancel(request, cancellation))
+        Box::pin(
+            self.client
+                .complete_with_cancel(request, cancellation),
+        )
     }
 
     fn stream<'a>(
@@ -123,7 +127,10 @@ impl ModelBackend for ModelClientBackend {
         request: ChatRequest,
         cancellation: CancellationToken,
     ) -> StreamFuture<'a> {
-        Box::pin(self.client.stream_with_cancel(request, cancellation))
+        Box::pin(
+            self.client
+                .stream_with_cancel(request, cancellation),
+        )
     }
 }
 
@@ -136,7 +143,12 @@ pub struct MockModel {
 
 impl MockModel {
     pub fn new(responses: impl IntoIterator<Item = ChatCompletion>) -> Self {
-        Self::from_results(responses.into_iter().map(Ok).collect::<Vec<_>>())
+        Self::from_results(
+            responses
+                .into_iter()
+                .map(Ok)
+                .collect::<Vec<_>>(),
+        )
     }
 
     pub fn from_results(
@@ -200,7 +212,9 @@ impl ModelBackend for MockModel {
         cancellation: CancellationToken,
     ) -> StreamFuture<'a> {
         Box::pin(async move {
-            let completion = self.complete(request, cancellation.clone()).await?;
+            let completion = self
+                .complete(request, cancellation.clone())
+                .await?;
             let message = match completion.message {
                 ChatMessage::Assistant {
                     content,

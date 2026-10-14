@@ -19,7 +19,8 @@ use serde::Deserialize;
 
 use crate::models as catalog;
 
-pub const MIN_CONTEXT_TOKENS: usize = 8192;
+/// Minimum declared context window accepted for a configured model.
+pub const MIN_CONTEXT_TOKENS: usize = 8_192;
 
 #[derive(Clone, Debug, Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]
@@ -130,14 +131,13 @@ fn default_max_tool_calls() -> usize {
     AgentConfig::default().max_tool_calls
 }
 
+/// `extra` is for provider extensions. These fields are owned by Orbit's request encoder; accepting
+/// them here would silently replace the model, transport shape, output budget, or tool contract.
 pub fn validate_reasoning_extra(
     model: &str,
     api_format: ApiFormat,
     extra: &toml::Table,
 ) -> Result<()> {
-    // `extra` is for provider extensions. These fields are owned by Orbit's
-    // request encoder; accepting them here would silently replace the model,
-    // transport shape, output budget, or tool contract.
     for key in [
         "model",
         "messages",
@@ -151,7 +151,8 @@ pub fn validate_reasoning_extra(
     ] {
         if extra.contains_key(key) {
             bail!(
-                "model {model:?}: reasoning.extra may not override the standard request field {key:?}"
+                "model {model:?}: reasoning.extra may not override the standard request field \
+                    {key:?}"
             );
         }
     }
@@ -197,12 +198,17 @@ pub fn antigravity_profiles() -> Result<Vec<ModelProfile>> {
                 })
             });
 
-            Ok(serde_json::from_value(serde_json::json!({
-                "id": id,
-                "context_tokens": model.context_window,
-                "supports_vision": model.input.iter().any(|kind| kind == "image"),
-                "reasoning": reasoning
-            }))?)
+            Ok(serde_json::from_value(serde_json::json!(
+                {
+                    "id": id,
+                    "context_tokens": model.context_window,
+                    "supports_vision": model
+                        .input
+                        .iter()
+                        .any(|kind| kind == "image"),
+                    "reasoning": reasoning
+                }
+            ))?)
         })
         .collect()
 }
@@ -252,7 +258,8 @@ impl FileConfig {
                     .any(|model| model.id.trim().is_empty())
             {
                 bail!(
-                    "provider {name:?} must set nonempty base_url, models, at most one of api_key or credential, a positive timeout_seconds, and max_retries from 0 to 5"
+                    "provider {name:?} must set nonempty base_url, models, at most one of api_key \
+                        or credential, a positive timeout_seconds, and max_retries from 0 to 5"
                 );
             }
         }
@@ -266,7 +273,9 @@ impl FileConfig {
             let mut models = std::collections::BTreeSet::new();
 
             for model in &provider.models {
-                let output = model.max_output_tokens.unwrap_or(config.max_output_tokens);
+                let output = model
+                    .max_output_tokens
+                    .unwrap_or(config.max_output_tokens);
                 anyhow::ensure!(
                     output > 0,
                     "model {:?}: max_output_tokens must be positive",
@@ -294,7 +303,9 @@ impl FileConfig {
                     }
 
                     if reasoning.efforts.is_empty()
-                        || !reasoning.efforts.contains(&reasoning.default)
+                        || !reasoning
+                            .efforts
+                            .contains(&reasoning.default)
                     {
                         bail!(
                             "model {:?}: reasoning efforts must include its default",
@@ -314,23 +325,29 @@ impl FileConfig {
                     validate_reasoning_extra(&model.id, provider.api_format, &reasoning.extra)?;
                 }
 
-                let input_context_tokens = model.input_context_tokens.unwrap_or_else(|| {
-                    model
-                        .context_tokens
-                        .unwrap_or(config.context_tokens)
-                        .saturating_sub(output as usize)
-                });
+                let input_context_tokens = model
+                    .input_context_tokens
+                    .unwrap_or_else(|| {
+                        model
+                            .context_tokens
+                            .unwrap_or(config.context_tokens)
+                            .saturating_sub(output as usize)
+                    });
 
                 if input_context_tokens < MIN_CONTEXT_TOKENS {
                     bail!(
-                        "model {:?}: input context window must be at least {MIN_CONTEXT_TOKENS} tokens",
+                        "model {:?}: input context window must be at least {MIN_CONTEXT_TOKENS} \
+                            tokens",
                         model.id
                     );
                 }
             }
         }
 
-        config.compaction.validate().map_err(anyhow::Error::msg)?;
+        config
+            .compaction
+            .validate()
+            .map_err(anyhow::Error::msg)?;
 
         if let Some(name) = &config.compaction.model {
             anyhow::ensure!(
@@ -338,18 +355,23 @@ impl FileConfig {
                     .model_options()?
                     .iter()
                     .any(|m| &m.qualified_name() == name)
-                    || name.split_once("::").is_some_and(|(provider, model)| {
-                        !model.is_empty()
-                            && config
-                                .providers
-                                .get(provider)
-                                .is_some_and(|p| p.spec.models.is_auto())
-                    }),
+                    || name
+                        .split_once("::")
+                        .is_some_and(|(provider, model)| {
+                            !model.is_empty()
+                                && config
+                                    .providers
+                                    .get(provider)
+                                    .is_some_and(|p| p.spec.models.is_auto())
+                        }),
                 "compaction.model must name a configured provider::model"
             );
         }
 
-        config.command.validate().map_err(anyhow::Error::msg)?;
+        config
+            .command
+            .validate()
+            .map_err(anyhow::Error::msg)?;
         config.mcp.validate()?;
 
         Ok(())
@@ -374,14 +396,19 @@ impl FileConfig {
                 .iter()
                 .find(|m| m.id == choice.model)
                 .unwrap();
-            let input = entry.input_context_tokens.unwrap_or_else(|| {
-                entry
-                    .context_tokens
-                    .unwrap_or(self.context_tokens)
-                    .saturating_sub(runtime.settings.max_output_tokens)
-            });
+            let input = entry
+                .input_context_tokens
+                .unwrap_or_else(|| {
+                    entry
+                        .context_tokens
+                        .unwrap_or(self.context_tokens)
+                        .saturating_sub(runtime.settings.max_output_tokens)
+                });
 
-            runtime.settings.max_input_tokens = runtime.settings.max_input_tokens.min(input);
+            runtime.settings.max_input_tokens = runtime
+                .settings
+                .max_input_tokens
+                .min(input);
             runtime.backend = Some(std::sync::Arc::new(ModelClientBackend::new(
                 ModelClient::new(choice.config)?,
             )));
@@ -410,16 +437,25 @@ impl FileConfig {
                     .get(&model.id)
                     .and_then(|model| model.max_output_tokens)
                     .unwrap_or(self.max_output_tokens);
-                let max_output_tokens =
-                    requested_output.min(model.max_output_tokens.unwrap_or(u32::MAX));
-                let input_context_tokens = model.input_context_tokens.unwrap_or_else(|| {
+                let max_output_tokens = requested_output.min(
                     model
-                        .context_tokens
-                        .unwrap_or(self.context_tokens)
-                        .saturating_sub(max_output_tokens as usize)
-                });
+                        .max_output_tokens
+                        .unwrap_or(u32::MAX),
+                );
+                let input_context_tokens = model
+                    .input_context_tokens
+                    .unwrap_or_else(|| {
+                        model
+                            .context_tokens
+                            .unwrap_or(self.context_tokens)
+                            .saturating_sub(max_output_tokens as usize)
+                    });
                 let context_tokens = model.input_context_tokens.map_or_else(
-                    || model.context_tokens.unwrap_or(self.context_tokens),
+                    || {
+                        model
+                            .context_tokens
+                            .unwrap_or(self.context_tokens)
+                    },
                     |input| input.saturating_add(max_output_tokens as usize),
                 );
                 let default_reasoning = crate::account_models::default_reasoning(
@@ -427,14 +463,19 @@ impl FileConfig {
                     &provider.base_url,
                     &model.id,
                 );
-                let reasoning = model.reasoning.as_ref().or(default_reasoning.as_ref());
-                let supports_vision = model.supports_vision.unwrap_or_else(|| {
-                    crate::account_models::default_vision(
-                        provider.api_format,
-                        &provider.base_url,
-                        &model.id,
-                    )
-                });
+                let reasoning = model
+                    .reasoning
+                    .as_ref()
+                    .or(default_reasoning.as_ref());
+                let supports_vision = model
+                    .supports_vision
+                    .unwrap_or_else(|| {
+                        crate::account_models::default_vision(
+                            provider.api_format,
+                            &provider.base_url,
+                            &model.id,
+                        )
+                    });
 
                 options.push(catalog::ModelOption {
                     max_output_tokens,

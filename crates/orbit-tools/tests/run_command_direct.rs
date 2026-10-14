@@ -20,20 +20,32 @@ async fn unavailable_output_retention_does_not_prevent_command_execution() {
             ToolCall::function(
                 "output",
                 "run_command",
-                json!({"command": "printf 'result'; exit 7"}),
+                json!({
+                    "command": "printf 'result'; exit 7"
+                }),
             ),
             CancellationToken::new(),
         )
         .await
     });
-    receiver.recv().await.unwrap().decision.send(true).unwrap();
+    receiver
+        .recv()
+        .await
+        .unwrap()
+        .decision
+        .send(true)
+        .unwrap();
     let output = task.await.unwrap().unwrap();
     let result: serde_json::Value = serde_json::from_str(&output.content).unwrap();
     assert_eq!(result["exit_code"], 7);
     assert_eq!(result["stdout"], "result");
     assert_eq!(result["retained_output_truncated"], true);
     assert!(result["output_id"].is_null());
-    assert!(result["retained_output_error"].as_str().is_some());
+    assert!(
+        result["retained_output_error"]
+            .as_str()
+            .is_some()
+    );
 }
 
 #[tokio::test]
@@ -46,19 +58,24 @@ async fn auto_native_network_enabled_script_executes_in_requested_workspace_dire
         sender,
         CommandLimits::default(),
     );
-    let task = tokio::spawn(async move {
-        tool.execute(ToolCall::function("script", "run_command", json!({
-            "command": "for value in first second; do printf '%s\\n' \"$value\"; done > result.txt; pwd",
-            "cwd": "src", "workspace_access": "read_write", "network": "allow"
+    let task =
+        tokio::spawn(async move {
+            tool.execute(ToolCall::function("script", "run_command", json!({
+            "command": "for value in first second; do printf '%s\\n' \"$value\"; done > \
+                result.txt; pwd",
+            "cwd": "src",
+            "workspace_access": "read_write",
+            "network": "allow"
         })), CancellationToken::new()).await
-    });
+        });
     let request = tokio::time::timeout(std::time::Duration::from_secs(5), receiver.recv())
         .await
         .unwrap()
         .unwrap();
-    assert!(
-        matches!(&request.preview, approval::ApprovalPreview::Command(command) if command.network_allowed)
-    );
+    assert!(matches!(
+        &request.preview,
+        approval::ApprovalPreview::Command(command) if command.network_allowed
+    ));
     let allow = approval::auto_allows(&request.preview, root.path());
     request.decision.send(allow).unwrap();
     assert!(allow);
@@ -80,8 +97,11 @@ async fn auto_literal_text_pipeline_creates_and_appends_workspace_files_without_
     let tool = RunCommand::new(Workspace::new(root.path()).unwrap(), sender);
     let task = tokio::spawn(async move {
         tool.execute(ToolCall::function("text", "run_command", json!({
-            "command": "mkdir -p demo && echo 'literal $(touch unexpected) | >' > demo/text.txt && printf '%s\\n' 'second line' | tee -a demo/text.txt ../mirror.txt > demo/output.txt && cat demo/text.txt | tee demo/copy.txt",
-            "cwd": "existing", "workspace_access": "read_write"
+            "command": "mkdir -p demo && echo 'literal $(touch unexpected) | >' > demo/text.txt && \
+                printf '%s\\n' 'second line' | tee -a demo/text.txt ../mirror.txt > \
+                demo/output.txt && cat demo/text.txt | tee demo/copy.txt",
+            "cwd": "existing",
+            "workspace_access": "read_write"
         })), CancellationToken::new()).await
     });
     let request = receiver.recv().await.unwrap();
@@ -92,11 +112,19 @@ async fn auto_literal_text_pipeline_creates_and_appends_workspace_files_without_
     assert_eq!(value["exit_code"], 0, "{value}");
     let expected = "literal $(touch unexpected) | >\nsecond line\n";
     assert_eq!(
-        fs::read_to_string(root.path().join("existing/demo/text.txt")).unwrap(),
+        fs::read_to_string(
+            root.path()
+                .join("existing/demo/text.txt")
+        )
+        .unwrap(),
         expected
     );
     assert_eq!(
-        fs::read_to_string(root.path().join("existing/demo/copy.txt")).unwrap(),
+        fs::read_to_string(
+            root.path()
+                .join("existing/demo/copy.txt")
+        )
+        .unwrap(),
         expected
     );
     assert_eq!(
@@ -104,10 +132,19 @@ async fn auto_literal_text_pipeline_creates_and_appends_workspace_files_without_
         "second line\n"
     );
     assert_eq!(
-        fs::read_to_string(root.path().join("existing/demo/output.txt")).unwrap(),
+        fs::read_to_string(
+            root.path()
+                .join("existing/demo/output.txt")
+        )
+        .unwrap(),
         "second line\n"
     );
-    assert!(!root.path().join("existing/unexpected").exists());
+    assert!(
+        !root
+            .path()
+            .join("existing/unexpected")
+            .exists()
+    );
 }
 
 #[tokio::test]
@@ -140,7 +177,11 @@ async fn auto_local_mkdir_creates_nested_and_quoted_directories_in_the_requested
     let output = task.await.unwrap().unwrap();
     let value: serde_json::Value = serde_json::from_str(&output.content).unwrap();
     assert_eq!(value["exit_code"], 0, "{value}");
-    assert!(root.path().join("existing/demo folder/nested").is_dir());
+    assert!(
+        root.path()
+            .join("existing/demo folder/nested")
+            .is_dir()
+    );
     assert!(root.path().join("another").is_dir());
     assert!(!root.path().join("demo folder").exists());
 }
@@ -161,7 +202,10 @@ async fn run_command_executes_directly_in_workspace_and_persists_changes() {
             ToolCall::function(
                 "test",
                 "run_command",
-                json!({ "command": "echo 'direct execution' > output.txt", "workspace_access": "read_write" }),
+                json!({
+                    "command": "echo 'direct execution' > output.txt",
+                    "workspace_access": "read_write"
+                }),
             ),
             CancellationToken::new(),
         )
@@ -181,7 +225,11 @@ async fn run_command_executes_directly_in_workspace_and_persists_changes() {
         .expect("verification evidence should be present");
 
     assert!(!evidence.input.digest.is_empty());
-    assert!(evidence.isolation.contains("native user process"));
+    assert!(
+        evidence
+            .isolation
+            .contains("native user process")
+    );
 
     let post_output = evidence
         .output
@@ -189,13 +237,19 @@ async fn run_command_executes_directly_in_workspace_and_persists_changes() {
 
     assert!(!post_output.digest.is_empty());
     assert_ne!(post_output.digest, evidence.input.digest);
-    assert!(post_output.files.contains_key("output.txt"));
+    assert!(
+        post_output
+            .files
+            .contains_key("output.txt")
+    );
 
     let created = ws_temp.path().join("output.txt");
 
     assert!(created.is_file());
     assert_eq!(
-        fs::read_to_string(created).unwrap().trim(),
+        fs::read_to_string(created)
+            .unwrap()
+            .trim(),
         "direct execution"
     );
 }
@@ -205,7 +259,7 @@ async fn run_command_reports_when_workspace_fingerprint_is_unavailable() {
     let ws_temp = tempfile::tempdir().unwrap();
     fs::write(
         ws_temp.path().join("large.txt"),
-        vec![b'x'; 2 * 1024 * 1024],
+        vec![b'x'; 2 * 1_024 * 1_024],
     )
     .unwrap();
     let workspace = Workspace::new(ws_temp.path()).unwrap();
@@ -217,20 +271,34 @@ async fn run_command_reports_when_workspace_fingerprint_is_unavailable() {
     let tool = RunCommand::with_limits(workspace, sender, limits);
     let task = tokio::spawn(async move {
         tool.execute(
-            ToolCall::function("scan_limit", "run_command", json!({ "command": "true" })),
+            ToolCall::function(
+                "scan_limit",
+                "run_command",
+                json!({
+                    "command": "true"
+                }),
+            ),
             CancellationToken::new(),
         )
         .await
     });
 
-    receiver.recv().await.unwrap().decision.send(true).unwrap();
+    receiver
+        .recv()
+        .await
+        .unwrap()
+        .decision
+        .send(true)
+        .unwrap();
     let output = task.await.unwrap().unwrap();
     let result: serde_json::Value = serde_json::from_str(&output.content).unwrap();
 
     assert_eq!(result["exit_code"], 0);
     assert!(output.verification.is_none());
 
-    let warning = result["verification_error"].as_str().unwrap();
+    let warning = result["verification_error"]
+        .as_str()
+        .unwrap();
 
     assert!(warning.contains("input workspace fingerprint unavailable"));
     assert!(warning.contains("output workspace fingerprint unavailable"));
@@ -239,7 +307,10 @@ async fn run_command_reports_when_workspace_fingerprint_is_unavailable() {
 #[tokio::test]
 async fn run_command_executes_in_specified_cwd() {
     let ws_temp = tempfile::tempdir().unwrap();
-    let sub = ws_temp.path().join("crates").join("my_crate");
+    let sub = ws_temp
+        .path()
+        .join("crates")
+        .join("my_crate");
     fs::create_dir_all(&sub).unwrap();
 
     let workspace = match Workspace::new(ws_temp.path()) {
@@ -274,11 +345,18 @@ async fn run_command_executes_in_specified_cwd() {
 
     assert_eq!(value["exit_code"], 0);
     assert_eq!(
-        value["stdout"].as_str().unwrap().lines().next().unwrap(),
+        value["stdout"]
+            .as_str()
+            .unwrap()
+            .lines()
+            .next()
+            .unwrap(),
         sub.to_str().unwrap()
     );
     assert_eq!(
-        fs::read_to_string(sub.join("output.txt")).unwrap().trim(),
+        fs::read_to_string(sub.join("output.txt"))
+            .unwrap()
+            .trim(),
         "from_sub"
     );
 }
@@ -325,7 +403,13 @@ async fn network_request_defaults_offline_and_cannot_exceed_policy() {
     let tool = RunCommand::new(workspace.clone(), sender);
     let task = tokio::spawn(async move {
         tool.execute(
-            ToolCall::function("network", "run_command", json!({"command":"pwd"})),
+            ToolCall::function(
+                "network",
+                "run_command",
+                json!({
+                    "command": "pwd"
+                }),
+            ),
             CancellationToken::new(),
         )
         .await
@@ -354,7 +438,10 @@ async fn network_request_defaults_offline_and_cannot_exceed_policy() {
             ToolCall::function(
                 "network",
                 "run_command",
-                json!({"command":"pwd", "network":"allow"})
+                json!({
+                    "command": "pwd",
+                    "network": "allow"
+                })
             ),
             CancellationToken::new()
         )
@@ -401,7 +488,10 @@ async fn run_command_uses_project_git_configuration_for_status_and_commit() {
         }),
     );
     let t1 = tool.clone();
-    let task = tokio::spawn(async move { t1.execute(call, CancellationToken::new()).await });
+    let task = tokio::spawn(async move {
+        t1.execute(call, CancellationToken::new())
+            .await
+    });
     let req = receiver.recv().await.unwrap();
     assert!(matches!(
         req.preview,
@@ -423,8 +513,10 @@ async fn run_command_uses_project_git_configuration_for_status_and_commit() {
         }),
     );
     let t2 = tool.clone();
-    let task2 =
-        tokio::spawn(async move { t2.execute(call_commit, CancellationToken::new()).await });
+    let task2 = tokio::spawn(async move {
+        t2.execute(call_commit, CancellationToken::new())
+            .await
+    });
     let req2 = receiver.recv().await.unwrap();
     req2.decision.send(true).unwrap();
 

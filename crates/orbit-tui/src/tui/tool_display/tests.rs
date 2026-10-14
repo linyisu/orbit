@@ -4,7 +4,25 @@ use super::*;
 
 #[test]
 fn symbol_lookup_uses_shared_evidence_view_without_requiring_an_inventory() {
-    let value = json!({"symbols":[{"path":"src/parser.rs","line":12,"name":"parse","signature":"pub fn parse()","kind":"function"}],"references":[{"path":"tests/parser.rs","line":4,"name":"parse","targets":[{"path":"src/parser.rs","line":12}]}],"truncated":{}});
+    let value = json!({
+        "symbols": [{
+            "path": "src/parser.rs",
+            "line": 12,
+            "name": "parse",
+            "signature": "pub fn parse()",
+            "kind": "function"
+        }],
+        "references": [{
+            "path": "tests/parser.rs",
+            "line": 4,
+            "name": "parse",
+            "targets": [{
+                "path": "src/parser.rs",
+                "line": 12
+            }]
+        }],
+        "truncated": {}
+    });
     let tool = row("code_symbols", value);
     for expanded in [false, true] {
         let rendered = lines(&tool, expanded, 80)
@@ -23,14 +41,34 @@ fn overview_preview_has_readable_evidence_and_expand_controls() {
     let value = json!({
         "inventory": {
             "files": 3,
-            "languages": { "Rust": 2 },
-            "directories": [{ "path": "src", "files": 2 }]
+            "languages": {
+                "Rust": 2
+            },
+            "directories": [{
+                "path": "src",
+                "files": 2
+            }]
         },
-        "manifests": [{ "path": "Cargo.toml", "package": "example", "parsed": true, "verification_candidates": [{ "argv": ["cargo", "test"] }] }],
+        "manifests": [{
+            "path": "Cargo.toml",
+            "package": "example",
+            "parsed": true,
+            "verification_candidates": [{
+                "argv": ["cargo", "test"]
+            }]
+        }],
         "test_files": ["tests/check.rs"],
         "instruction_files": [],
-        "symbols": [{ "path": "src/lib.rs", "line": 3, "name": "parse" }],
-        "truncated": { "scan": false, "content": false, "output": false }
+        "symbols": [{
+            "path": "src/lib.rs",
+            "line": 3,
+            "name": "parse"
+        }],
+        "truncated": {
+            "scan": false,
+            "content": false,
+            "output": false
+        }
     });
     let tool = row("project_overview", value);
 
@@ -77,14 +115,25 @@ fn row(name: &str, output: Value) -> ToolRow {
 
 #[test]
 fn agent_read_summaries_show_task_and_content_instead_of_internal_cursors() {
-    let args = json!({"agent_id":"orbit-agent","message_id":5601,"offset":4000}).to_string();
+    let args = json!({
+        "agent_id": "orbit-agent",
+        "message_id": 5_601,
+        "offset": 4_000
+    })
+    .to_string();
     let mut tool = row(
         "read_agent",
         json!({
-            "agent":{"id":"orbit-agent","task":"审查 Orbit 渲染逻辑"},
-            "view":"result", "message_id":5601, "offset":4000, "next_offset":8000,
-            "content":"\n## 修复中文字符边界\n第二行不放进摘要",
-            "result_available":true
+            "agent": {
+                "id": "orbit-agent",
+                "task": "审查 Orbit 渲染逻辑"
+            },
+            "view": "result",
+            "message_id": 5_601,
+            "offset": 4_000,
+            "next_offset": 8_000,
+            "content": "\n## 修复中文字符边界\n第二行不放进摘要",
+            "result_available": true
         }),
     );
 
@@ -104,22 +153,80 @@ fn agent_read_summaries_show_task_and_content_instead_of_internal_cursors() {
     assert_eq!(tool.output, original);
 
     for (content, expected) in [
-            (json!({"role":"user","content":"检查 Orbit 工具显示"}).to_string(), "任务说明 · 检查 Orbit 工具显示"),
-            (json!({"role":"assistant","content":null,"tool_calls":[{"metadata":{"signature":"orbit-signature"},"function":{"name":"read_file","arguments":json!({"path":"src/orbit.rs"}).to_string()}}]}).to_string(), "工具调用 · read_file src/orbit.rs"),
-            (json!({"role":"tool","content":json!({"content":"1: fn orbit() {}\n2: // Orbit"}).to_string()}).to_string(), "工具结果 · 1: fn orbit() {}"),
-            (json!({"role":"assistant","content":"Orbit 审查报告\n后续内容"}).to_string(), "回答 · Orbit 审查报告"),
-            (String::new(), "没有后续记录"),
-        ] {
-            tool.output = json!({"agent":{"task":"审查 Orbit 渲染逻辑"},"content":content,"total_characters":content.chars().count()}).to_string();
-            assert_eq!(group_call_summary(&tool), expected);
-        }
-
-    tool.output = json!({"content":"{\"role\":\"assistant\",\"tool_calls\":[", "message_id":5601})
+        (
+            json!({
+                "role": "user",
+                "content": "检查 Orbit 工具显示"
+            })
+            .to_string(),
+            "任务说明 · 检查 Orbit 工具显示",
+        ),
+        (
+            json!({
+                "role": "assistant",
+                "content": null,
+                "tool_calls": [{
+                    "metadata": {
+                        "signature": "orbit-signature"
+                    },
+                    "function": {
+                        "name": "read_file",
+                        "arguments": json!({
+                            "path": "src/orbit.rs"
+                        })
+                        .to_string()
+                    }
+                }]
+            })
+            .to_string(),
+            "工具调用 · read_file src/orbit.rs",
+        ),
+        (
+            json!({
+                "role": "tool",
+                "content": json!({
+                    "content": "1: fn orbit() {}\n2: // Orbit"
+                })
+                .to_string()
+            })
+            .to_string(),
+            "工具结果 · 1: fn orbit() {}",
+        ),
+        (
+            json!({
+                "role": "assistant",
+                "content": "Orbit 审查报告\n后续内容"
+            })
+            .to_string(),
+            "回答 · Orbit 审查报告",
+        ),
+        (String::new(), "没有后续记录"),
+    ] {
+        tool.output = json!({
+            "agent": {
+                "task": "审查 Orbit 渲染逻辑"
+            },
+            "content": content,
+            "total_characters": content.chars().count()
+        })
         .to_string();
+        assert_eq!(group_call_summary(&tool), expected);
+    }
+
+    tool.output = json!({
+        "content": "{\"role\":\"assistant\",\"tool_calls\":[",
+        "message_id": 5_601
+    })
+    .to_string();
     let summary = group_call_summary(&tool);
     assert!(summary.starts_with("执行记录片段 · 读取了"));
     assert!(!summary.contains("tool_calls"));
-    tool.output = json!({"view":"result","result_available":false,"status":"running"}).to_string();
+    tool.output = json!({
+        "view": "result",
+        "result_available": false,
+        "status": "running"
+    })
+    .to_string();
     assert_eq!(group_call_summary(&tool), "结果尚未生成");
     tool.output.clear();
     assert_eq!(group_call_summary(&tool), "读取中");
@@ -145,8 +252,12 @@ fn memory_save_shows_title_and_scoped_preview_without_changing_the_result() {
         }),
     );
 
-    tool.arguments =
-        json!({ "title": "审查记录", "category": "fact", "content": content }).to_string();
+    tool.arguments = json!({
+        "title": "审查记录",
+        "category": "fact",
+        "content": content
+    })
+    .to_string();
     let original = tool.output.clone();
 
     assert_eq!(memory_summary(&tool.arguments), "审查记录");
@@ -158,7 +269,13 @@ fn memory_save_shows_title_and_scoped_preview_without_changing_the_result() {
             .to_string()
             .contains("已保存 · 事实 · 当前会话 · #12")
     );
-    assert!(preview.last().unwrap().to_string().contains("[展开]"));
+    assert!(
+        preview
+            .last()
+            .unwrap()
+            .to_string()
+            .contains("[展开]")
+    );
 
     for width in [0, 1, 5, 30, 80] {
         for expanded in [false, true] {
@@ -174,7 +291,12 @@ fn memory_save_shows_title_and_scoped_preview_without_changing_the_result() {
     let expanded = lines(&tool, true, 60).unwrap();
     let actual: String = expanded[1..expanded.len() - 1]
         .iter()
-        .map(|line| line.to_string().strip_prefix("    ").unwrap().to_owned())
+        .map(|line| {
+            line.to_string()
+                .strip_prefix("    ")
+                .unwrap()
+                .to_owned()
+        })
         .collect();
 
     assert_eq!(actual, content.lines().collect::<String>());
@@ -192,9 +314,17 @@ fn highlighted(lines: &[Line<'static>]) -> String {
 
 #[test]
 fn search_title_includes_query_and_scope_even_before_results_arrive() {
-    let mut tool = row("search_text", json!({ "matches": [] }));
-    tool.arguments =
-        json!({ "query": "workspace snapshot", "path": "crates/orbit-tools/src" }).to_string();
+    let mut tool = row(
+        "search_text",
+        json!({
+            "matches": []
+        }),
+    );
+    tool.arguments = json!({
+        "query": "workspace snapshot",
+        "path": "crates/orbit-tools/src"
+    })
+    .to_string();
     tool.status = ToolStatus::Running;
     let view = super::super::render::transcript_lines_at_width(
         &[super::super::app::TranscriptItem::Tool(tool)],
@@ -213,19 +343,34 @@ fn search_title_includes_query_and_scope_even_before_results_arrive() {
 #[test]
 fn highlighting_follows_literal_regex_case_and_unicode_search_rules() {
     for (config, text, expected) in [
-        (json!({ "query": "a.b" }), "a.b A.B axb", "a.bA.B"),
         (
-            json!({ "query": "a.b", "case_sensitive": true }),
+            json!({
+                "query": "a.b"
+            }),
+            "a.b A.B axb",
+            "a.bA.B",
+        ),
+        (
+            json!({
+                "query": "a.b",
+                "case_sensitive": true
+            }),
             "a.b A.B axb",
             "a.b",
         ),
         (
-            json!({ "query": "a.b", "regex": true }),
+            json!({
+                "query": "a.b",
+                "regex": true
+            }),
             "a.b A.B axb",
             "a.bA.Baxb",
         ),
         (
-            json!({ "query": r"中文\s+value", "regex": true }),
+            json!({
+                "query": r"中文\s+value",
+                "regex": true
+            }),
             "前缀：中文\tVALUE 后缀",
             "中文    VALUE",
         ),
@@ -246,12 +391,22 @@ fn highlighting_follows_literal_regex_case_and_unicode_search_rules() {
         assert_eq!(highlighted(&view), expected);
     }
 
-    assert!(matcher(&json!({ "query": "[", "regex": true })).is_none());
+    assert!(
+        matcher(&json!({
+            "query": "[",
+            "regex": true
+        }))
+        .is_none()
+    );
 }
 
 #[test]
 fn highlight_survives_wrapping_and_focuses_long_line_previews() {
-    let pattern = matcher(&json!({ "query": "^ABCDEFGH$", "regex": true })).unwrap();
+    let pattern = matcher(&json!({
+        "query": "^ABCDEFGH$",
+        "regex": true
+    }))
+    .unwrap();
     let mut view: Vec<Line<'static>> = vec![];
     source(
         &mut view,
@@ -266,9 +421,15 @@ fn highlight_survives_wrapping_and_focuses_long_line_previews() {
 
     assert_eq!(view.len(), 2);
     assert_eq!(highlighted(&view), "ABCDEFGH");
-    assert!(view.iter().all(|line| line.width() <= 15));
+    assert!(
+        view.iter()
+            .all(|line| line.width() <= 15)
+    );
 
-    let pattern = matcher(&json!({ "query": "TARGET" })).unwrap();
+    let pattern = matcher(&json!({
+        "query": "TARGET"
+    }))
+    .unwrap();
     let text = format!("{} TARGET {}", "中文".repeat(50), "suffix".repeat(10));
 
     for width in [11, 12, 32, 80] {
@@ -284,7 +445,10 @@ fn highlight_survives_wrapping_and_focuses_long_line_previews() {
             width,
         );
 
-        assert!(view.iter().all(|line| line.width() <= usize::from(width)));
+        assert!(
+            view.iter()
+                .all(|line| line.width() <= usize::from(width))
+        );
 
         if width >= 32 {
             assert_eq!(highlighted(&view), "TARGET");
@@ -297,25 +461,41 @@ fn search_groups_files_and_merges_overlapping_context_without_mutating_results()
     let row = row(
         "search_text",
         json!({
-            "matches": [{
-                "path": "src/main.rs",
-                "line": 12,
-                "column": 1,
-                "text": "let first = 1;",
-                "context": [{ "line": 11, "text": "fn main() {" }, { "line": 13, "text": "let second = 2;" }]
-            }, {
-                "path": "src/main.rs",
-                "line": 13,
-                "column": 1,
-                "text": "let second = 2;",
-                "context": [{ "line": 12, "text": "let first = 1;" }]
-            }, {
-                "path": "src/main.rs",
-                "line": 13,
-                "column": 5,
-                "text": "let second = 2;",
-                "context": []
-            }],
+            "matches": [
+                {
+                    "path": "src/main.rs",
+                    "line": 12,
+                    "column": 1,
+                    "text": "let first = 1;",
+                    "context": [
+                        {
+                            "line": 11,
+                            "text": "fn main() {"
+                        },
+                        {
+                            "line": 13,
+                            "text": "let second = 2;"
+                        }
+                    ]
+                },
+                {
+                    "path": "src/main.rs",
+                    "line": 13,
+                    "column": 1,
+                    "text": "let second = 2;",
+                    "context": [{
+                        "line": 12,
+                        "text": "let first = 1;"
+                    }]
+                },
+                {
+                    "path": "src/main.rs",
+                    "line": 13,
+                    "column": 5,
+                    "text": "let second = 2;",
+                    "context": []
+                }
+            ],
             "has_more": true,
             "scan_truncated": true
         }),
@@ -346,9 +526,20 @@ fn search_retains_syntax_state_in_context_and_resets_it_across_gaps() {
         json!({
             "query": "orbit",
             "matches": [
-                { "path": "src/orbit.rs", "line": 2, "text": "fn orbit_in_comment() {}",
-                  "context": [{ "line": 1, "text": "/*" }] },
-                { "path": "src/orbit.rs", "line": 20, "text": "fn orbit() {}" }
+                {
+                    "path": "src/orbit.rs",
+                    "line": 2,
+                    "text": "fn orbit_in_comment() {}",
+                    "context": [{
+                        "line": 1,
+                        "text": "/*"
+                    }]
+                },
+                {
+                    "path": "src/orbit.rs",
+                    "line": 20,
+                    "text": "fn orbit() {}"
+                }
             ]
         }),
     );
@@ -359,7 +550,10 @@ fn search_retains_syntax_state_in_context_and_resets_it_across_gaps() {
     ] {
         let line = view
             .iter()
-            .find(|line| line.to_string().contains(&format!("{number} │")))
+            .find(|line| {
+                line.to_string()
+                    .contains(&format!("{number} │"))
+            })
             .unwrap();
         let keyword = line
             .spans
@@ -389,7 +583,10 @@ fn file_preview_clips_by_cells_and_expansion_keeps_source_and_gutter() {
         for expanded in [false, true] {
             let view = lines(&row, expanded, width).unwrap();
 
-            assert!(view.iter().all(|line| line.width() <= usize::from(width)));
+            assert!(
+                view.iter()
+                    .all(|line| line.width() <= usize::from(width))
+            );
         }
     }
 
@@ -406,13 +603,16 @@ fn file_preview_clips_by_cells_and_expansion_keeps_source_and_gutter() {
 
             assert!(text.starts_with("     744 │ ") || text.starts_with("         │ "));
 
-            text.split_once("│ ").unwrap().1.to_owned()
+            text.split_once("│ ")
+                .unwrap()
+                .1
+                .to_owned()
         })
         .collect::<String>();
 
     assert_eq!(reconstructed, safe_output(&source));
 
-    for end in [4, 92, 168, 1024] {
+    for end in [4, 92, 168, 1_024] {
         let file = self::row(
             "read_file",
             json!({
@@ -432,7 +632,12 @@ fn file_preview_clips_by_cells_and_expansion_keeps_source_and_gutter() {
 
 #[test]
 fn empty_search_and_invalid_or_failed_results_stay_distinct() {
-    let empty = row("search_text", json!({ "matches": [] }));
+    let empty = row(
+        "search_text",
+        json!({
+            "matches": []
+        }),
+    );
 
     assert!(
         lines(&empty, false, 80).unwrap()[0]
@@ -440,7 +645,12 @@ fn empty_search_and_invalid_or_failed_results_stay_distinct() {
             .contains("0 处匹配")
     );
 
-    let mut invalid = row("read_file", json!({ "error": "cannot read" }));
+    let mut invalid = row(
+        "read_file",
+        json!({
+            "error": "cannot read"
+        }),
+    );
 
     assert!(lines(&invalid, false, 80).is_none());
 

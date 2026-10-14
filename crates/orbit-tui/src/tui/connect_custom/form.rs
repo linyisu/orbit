@@ -43,7 +43,10 @@ impl Field {
 
     pub fn choice(label: &str, value: &str, choices: &[&str]) -> Self {
         let mut field = Self::text(label, value, "");
-        field.choices = choices.iter().map(|value| (*value).to_owned()).collect();
+        field.choices = choices
+            .iter()
+            .map(|value| (*value).to_owned())
+            .collect();
         field
     }
 
@@ -67,7 +70,10 @@ pub(super) fn area(bounds: Rect, width: u16, height: u16) -> Rect {
 fn start(input: &InputState, width: usize, secret: bool) -> usize {
     let mut used = 1;
     let mut start = input.cursor;
-    for (index, grapheme) in input.text[..input.cursor].grapheme_indices(true).rev() {
+    for (index, grapheme) in input.text[..input.cursor]
+        .grapheme_indices(true)
+        .rev()
+    {
         used += if secret { 1 } else { grapheme.width() };
         if used > width {
             break;
@@ -111,7 +117,9 @@ pub(in crate::tui) fn input_line(
 pub(in crate::tui) fn cursor_column(input: &InputState, width: usize, secret: bool) -> usize {
     let offset = start(input, width, secret);
     if secret {
-        input.text[offset..input.cursor].graphemes(true).count()
+        input.text[offset..input.cursor]
+            .graphemes(true)
+            .count()
     } else {
         input.text[offset..input.cursor].width()
     }
@@ -154,7 +162,10 @@ pub(in crate::tui) fn edit(input: &mut InputState, code: KeyCode, modifiers: Key
 }
 
 pub(in crate::tui) fn paste(input: &mut InputState, text: &str) {
-    let text: String = text.chars().filter(|c| !c.is_control()).collect();
+    let text: String = text
+        .chars()
+        .filter(|c| !c.is_control())
+        .collect();
     if input.text.len() - input.selection().map_or(0, |r| r.len()) + text.len() <= 16_384 {
         input.insert(&text);
     }
@@ -167,7 +178,10 @@ pub(super) async fn choose(
     choices: &[String],
     current: &str,
 ) -> Result<Option<String>> {
-    let mut selected = choices.iter().position(|v| v == current).unwrap_or(0);
+    let mut selected = choices
+        .iter()
+        .position(|v| v == current)
+        .unwrap_or(0);
     let mut offset = selected;
     let mut pointer = None;
     loop {
@@ -177,7 +191,10 @@ pub(super) async fn choose(
             let outer = area(
                 frame.area(),
                 56,
-                choices.len().saturating_add(4).min(u16::MAX as usize) as u16,
+                choices
+                    .len()
+                    .saturating_add(4)
+                    .min(u16::MAX as usize) as u16,
             );
 
             viewport = components::surface(
@@ -185,7 +202,11 @@ pub(super) async fn choose(
                 outer,
                 components::panel().title(format!(" {title} ")),
             );
-            offset = offset.min(choices.len().saturating_sub(viewport.height as usize));
+            offset = offset.min(
+                choices
+                    .len()
+                    .saturating_sub(viewport.height as usize),
+            );
             if let Some(point) = pointer
                 && viewport.contains(point)
             {
@@ -242,7 +263,11 @@ pub(super) async fn choose(
                 pointer = None;
                 match key.code {
                     KeyCode::Esc => return Ok(None),
-                    KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    KeyCode::Char('c')
+                        if key
+                            .modifiers
+                            .contains(KeyModifiers::CONTROL) =>
+                    {
                         return Ok(None);
                     }
                     KeyCode::Enter => return Ok(Some(choices[selected].clone())),
@@ -265,14 +290,18 @@ pub(super) async fn choose(
                 if viewport.contains(point) {
                     match mouse.kind {
                         MouseEventKind::ScrollDown => {
-                            offset = (offset + 3)
-                                .min(choices.len().saturating_sub(viewport.height as usize))
+                            offset = (offset + 3).min(
+                                choices
+                                    .len()
+                                    .saturating_sub(viewport.height as usize),
+                            )
                         }
 
                         MouseEventKind::ScrollUp => offset = offset.saturating_sub(3),
                         MouseEventKind::Down(MouseButton::Left) => {
-                            if let Some((index, _)) =
-                                rows.iter().find(|(_, row)| row.contains(point))
+                            if let Some((index, _)) = rows
+                                .iter()
+                                .find(|(_, row)| row.contains(point))
                             {
                                 return Ok(Some(choices[*index].clone()));
                             }
@@ -302,7 +331,11 @@ mod tests {
         edit(&mut input, KeyCode::Delete, KeyModifiers::NONE);
 
         assert_eq!(input.text, "你好中");
-        assert!(input.text.is_char_boundary(start(&input, 3, false)));
+        assert!(
+            input
+                .text
+                .is_char_boundary(start(&input, 3, false))
+        );
         let hidden = input_line(&input, 30, true, true, "");
         assert!(!hidden.to_string().contains("你好"));
         assert!(hidden.to_string().contains('•'));

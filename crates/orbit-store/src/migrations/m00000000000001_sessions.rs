@@ -6,6 +6,7 @@ impl MigrationName for Migration {
         "00000000000001_sessions"
     }
 }
+
 #[async_trait::async_trait]
 impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
@@ -14,10 +15,26 @@ impl MigrationTrait for Migration {
                 Table::create()
                     .table(Alias::new("sessions"))
                     .if_not_exists()
-                    .col(ColumnDef::new(Alias::new("id")).text().primary_key())
-                    .col(ColumnDef::new(Alias::new("workspace")).text().not_null())
-                    .col(ColumnDef::new(Alias::new("model")).text().not_null())
-                    .col(ColumnDef::new(Alias::new("demo")).integer().not_null())
+                    .col(
+                        ColumnDef::new(Alias::new("id"))
+                            .text()
+                            .primary_key(),
+                    )
+                    .col(
+                        ColumnDef::new(Alias::new("workspace"))
+                            .text()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(Alias::new("model"))
+                            .text()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(Alias::new("demo"))
+                            .integer()
+                            .not_null(),
+                    )
                     .col(
                         ColumnDef::new(Alias::new("title"))
                             .text()
@@ -44,9 +61,21 @@ impl MigrationTrait for Migration {
                 Table::create()
                     .table(Alias::new("runs"))
                     .if_not_exists()
-                    .col(ColumnDef::new(Alias::new("id")).integer().primary_key())
-                    .col(ColumnDef::new(Alias::new("session_id")).text().not_null())
-                    .col(ColumnDef::new(Alias::new("prompt")).text().not_null())
+                    .col(
+                        ColumnDef::new(Alias::new("id"))
+                            .integer()
+                            .primary_key(),
+                    )
+                    .col(
+                        ColumnDef::new(Alias::new("session_id"))
+                            .text()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(Alias::new("prompt"))
+                            .text()
+                            .not_null(),
+                    )
                     .col(
                         ColumnDef::new(Alias::new("status"))
                             .text()
@@ -84,9 +113,21 @@ impl MigrationTrait for Migration {
                 Table::create()
                     .table(Alias::new("events"))
                     .if_not_exists()
-                    .col(ColumnDef::new(Alias::new("id")).integer().primary_key())
-                    .col(ColumnDef::new(Alias::new("run_id")).integer().not_null())
-                    .col(ColumnDef::new(Alias::new("payload")).text().not_null())
+                    .col(
+                        ColumnDef::new(Alias::new("id"))
+                            .integer()
+                            .primary_key(),
+                    )
+                    .col(
+                        ColumnDef::new(Alias::new("run_id"))
+                            .integer()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(Alias::new("payload"))
+                            .text()
+                            .not_null(),
+                    )
                     .foreign_key(
                         ForeignKey::create()
                             .from(Alias::new("events"), Alias::new("run_id"))
@@ -108,6 +149,7 @@ impl MigrationTrait for Migration {
             .await?;
         Ok(())
     }
+
     async fn down(&self, _: &SchemaManager) -> Result<(), DbErr> {
         super::forward_only()
     }

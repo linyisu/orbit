@@ -18,7 +18,9 @@ pub(in crate::tui) fn handle_link_hover(state: &mut UiState, event: &Event) -> O
     let offset = if state.follow_bottom {
         state.max_scroll
     } else {
-        state.max_scroll.saturating_sub(state.scroll)
+        state
+            .max_scroll
+            .saturating_sub(state.scroll)
     };
     let viewport = state.selection.viewport;
     let target = |point: (u16, u16)| {
@@ -54,7 +56,10 @@ pub(super) fn draw_link_tooltip(
         return;
     };
     let viewport = state.selection.viewport;
-    let Some(hit) = state.transcript_layout.link_hit(viewport, offset, point) else {
+    let Some(hit) = state
+        .transcript_layout
+        .link_hit(viewport, offset, point)
+    else {
         state.link_hovered = None;
         return;
     };
@@ -98,7 +103,9 @@ fn tooltip_area(surface: Rect, anchor: Rect, width: u16) -> Option<Rect> {
     if width == 0 || surface.height == 0 {
         return None;
     }
-    let x = anchor.x.clamp(surface.x, surface.right() - width);
+    let x = anchor
+        .x
+        .clamp(surface.x, surface.right() - width);
     let area = Rect::new(x, anchor.bottom(), width, 1);
     // Other content may be covered temporarily. Never cover the hovered object
     // or switch above/beside it just because the viewport has run out of room.

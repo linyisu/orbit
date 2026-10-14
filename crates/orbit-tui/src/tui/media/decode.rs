@@ -16,11 +16,11 @@ use super::{Key, Network, Prepared, Source, View, view::Background};
 
 const MAX_SOURCE_BYTES: usize = orbit_model::types::Attachment::MAX_IMAGE_BYTES;
 const MAX_REMOTE_CACHE_BYTES: usize = 2 * MAX_SOURCE_BYTES;
-const MAX_RENDER_EDGE_PIXELS: u32 = 2048;
+const MAX_RENDER_EDGE_PIXELS: u32 = 2_048;
 const MAX_PREVIEW_PIXELS: u64 = super::MAX_CACHE_BYTES as u64 / 8;
-pub(super) const MAX_DECODE_EDGE_PIXELS: u32 = 8192;
-const MAX_TEX_BYTES: usize = 8192;
-pub(super) const MAX_SOURCE_PIXELS: u64 = 16 * 1024 * 1024;
+pub(super) const MAX_DECODE_EDGE_PIXELS: u32 = 8_192;
+const MAX_TEX_BYTES: usize = 8_192;
+pub(super) const MAX_SOURCE_PIXELS: u64 = 16 * 1_024 * 1_024;
 
 #[derive(Default)]
 pub(super) struct Decoder {
@@ -49,7 +49,10 @@ impl Decoder {
         let image = match &key.source {
             Source::Image(source) => {
                 let bytes = if super::is_remote(source) {
-                    let network = key.network.as_ref().context("图片请求缺少网络配置")?;
+                    let network = key
+                        .network
+                        .as_ref()
+                        .context("图片请求缺少网络配置")?;
                     let remote_key = (network.clone(), source.clone());
                     if let Some(bytes) = self.remote_bytes.get(&remote_key) {
                         bytes.clone()
@@ -69,7 +72,11 @@ impl Decoder {
                                 .block_on(network.0.fetch_image(source))?,
                         );
 
-                        while self.remote_bytes.values().map(|b| b.len()).sum::<usize>()
+                        while self
+                            .remote_bytes
+                            .values()
+                            .map(|b| b.len())
+                            .sum::<usize>()
                             + bytes.len()
                             > MAX_REMOTE_CACHE_BYTES
                         {
@@ -80,7 +87,8 @@ impl Decoder {
                             }
                         }
 
-                        self.remote_bytes.insert(remote_key, bytes.clone());
+                        self.remote_bytes
+                            .insert(remote_key, bytes.clone());
                         bytes
                     }
                 } else if let Some(files) = &key.files {
@@ -110,12 +118,18 @@ impl Decoder {
                             + bytes.len()
                             > MAX_REMOTE_CACHE_BYTES
                         {
-                            let Some(oldest) = self.workspace_bytes.keys().next().cloned() else {
+                            let Some(oldest) = self
+                                .workspace_bytes
+                                .keys()
+                                .next()
+                                .cloned()
+                            else {
                                 break;
                             };
                             self.workspace_bytes.remove(&oldest);
                         }
-                        self.workspace_bytes.insert(asset, bytes.clone());
+                        self.workspace_bytes
+                            .insert(asset, bytes.clone());
                         bytes
                     }
                 } else {
@@ -155,7 +169,9 @@ impl Decoder {
                         self.fonts = Some(Arc::new(db));
                     }
 
-                    let tree = self.assets.svg(&bytes, self.fonts.clone())?;
+                    let tree = self
+                        .assets
+                        .svg(&bytes, self.fonts.clone())?;
                     let (image, overflow) = raster_tree(&tree, max_w, max_h, key.large, key.view)?;
                     pan_extent = overflow;
                     image
@@ -211,7 +227,9 @@ impl Decoder {
                     let image = raster_svg(
                         svg.as_bytes(),
                         max_w,
-                        max_h.saturating_sub(u32::from(cell.height)).max(1),
+                        max_h
+                            .saturating_sub(u32::from(cell.height))
+                            .max(1),
                         None,
                         false,
                     )?;
@@ -353,7 +371,7 @@ mod math_bounds_tests {
             r"\int_0^1 x^2 dx",
         ] {
             let (svg, _) = math_svg(tex, false, 32, [220, 224, 232]).unwrap();
-            let original = raster_svg(svg.as_bytes(), 1200, 400, None, false).unwrap();
+            let original = raster_svg(svg.as_bytes(), 1_200, 400, None, false).unwrap();
             let painted = |image: &DynamicImage| {
                 image
                     .to_rgba8()
@@ -421,7 +439,7 @@ fn selected_image(image: &RgbaImage) -> RgbaImage {
         let ink = alpha * 3;
         for (channel, background) in pixel.0[..3].iter_mut().zip([r, g, b]) {
             *channel =
-                ((u32::from(*channel) * ink + u32::from(background) * (1020 - ink)) / 1020) as u8;
+                ((u32::from(*channel) * ink + u32::from(background) * (1_020 - ink)) / 1_020) as u8;
         }
 
         pixel[3] = 255;
@@ -523,7 +541,9 @@ pub(super) fn parse_svg(
         options.fontdb = fonts;
     }
     // A preview may not read arbitrary external files referenced by an SVG.
-    options.image_href_resolver.resolve_string = Box::new(|_, _| None);
+    options
+        .image_href_resolver
+        .resolve_string = Box::new(|_, _| None);
     let resolver = usvg::ImageHrefResolver::default_data_resolver();
     options.image_href_resolver.resolve_data = Box::new(move |mime, data, opts| {
         if data.len() > MAX_SOURCE_BYTES {
@@ -599,7 +619,7 @@ mod selection_tests {
     #[test]
     fn svg_view_renders_a_bounded_crop_at_the_requested_pan_and_preserves_alpha() {
         let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><rect width="50" height="100" fill="red"/><rect x="50" width="50" height="100" fill="blue" fill-opacity="0.5"/></svg>"#;
-        for (pan, expected) in [(-1000, [255, 0, 0, 255]), (1000, [0, 0, 255, 128])] {
+        for (pan, expected) in [(-1_000, [255, 0, 0, 255]), (1_000, [0, 0, 255, 128])] {
             let view = View {
                 zoom: 800,
                 pan: (pan, 0),
@@ -625,7 +645,12 @@ mod selection_tests {
         assert_eq!(selected.dimensions(), image.dimensions());
         assert_eq!(selected.get_pixel(0, 0).0, [r, g, b, 255]);
         assert_ne!(selected.get_pixel(1, 0), image.get_pixel(1, 0));
-        assert!(selected.pixels().all(|pixel| pixel[3] == 255));
-        assert_eq!(image.get_pixel(0, 0)[3], 0); // The original remains transparent.
+        assert!(
+            selected
+                .pixels()
+                .all(|pixel| pixel[3] == 255)
+        );
+        // The original remains transparent.
+        assert_eq!(image.get_pixel(0, 0)[3], 0);
     }
 }

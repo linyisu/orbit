@@ -6,6 +6,7 @@ impl MigrationName for Migration {
         "00000000000018_tabs"
     }
 }
+
 #[async_trait::async_trait]
 impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
@@ -37,6 +38,7 @@ impl MigrationTrait for Migration {
             .await?;
         Ok(())
     }
+
     async fn down(&self, _: &SchemaManager) -> Result<(), DbErr> {
         super::forward_only()
     }

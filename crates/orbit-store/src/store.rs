@@ -55,7 +55,10 @@ impl Store {
     pub async fn open(path: impl AsRef<Path>) -> Result<Self> {
         let path = std::path::absolute(path)?;
         let path = tokio::task::spawn_blocking(move || -> Result<PathBuf> {
-            std::fs::create_dir_all(path.parent().context("database has no parent")?)?;
+            std::fs::create_dir_all(
+                path.parent()
+                    .context("database has no parent")?,
+            )?;
             private_file(&path)?;
             Ok(path.canonicalize()?)
         })
@@ -63,18 +66,23 @@ impl Store {
         let connection = Database::open(&path).await?;
         let store = Self { connection, path };
         store.ensure_attachment_index().await?;
-        store.collect_attachment_garbage().await?;
+        store
+            .collect_attachment_garbage()
+            .await?;
         Ok(store)
     }
+
     pub fn path(&self) -> &Path {
         &self.path
     }
+
     pub(crate) async fn write_access<T, F: std::future::Future<Output = Result<T>>>(
         &self,
         operation: impl FnOnce(DatabaseConnection) -> F,
     ) -> Result<T> {
         self.connection.write(operation).await
     }
+
     pub(crate) async fn read_access<T, F: std::future::Future<Output = Result<T>>>(
         &self,
         operation: impl FnOnce(DatabaseConnection) -> F,
@@ -94,7 +102,9 @@ impl Store {
             id: crate::database::new_id()?,
             workspace,
             model,
-            project_id: project.map(|p| p.id).unwrap_or_default(),
+            project_id: project
+                .map(|p| p.id)
+                .unwrap_or_default(),
             title: String::new(),
             reasoning_effort: None,
             updated_at: crate::database::now(),
@@ -110,7 +120,10 @@ impl Store {
         let history = history.to_vec();
         let database = self.path.clone();
         let mut session = session.clone();
-        session.project_id = self.resolve_project(&session.workspace).await?.id;
+        session.project_id = self
+            .resolve_project(&session.workspace)
+            .await?
+            .id;
         let id = session.id.clone();
         self.write_access(move |conn| async move {
             let tx = conn.begin().await?;
@@ -327,7 +340,9 @@ impl Store {
                 let run_id = row.id;
                 let prompt = row.prompt;
                 let status = row.status;
-                let elapsed_ms = row.elapsed_ms.map(|ms| ms.max(0) as u64);
+                let elapsed_ms = row
+                    .elapsed_ms
+                    .map(|ms| ms.max(0) as u64);
                 let decoded = run_events
                     .remove(&run_id)
                     .unwrap_or_default()
@@ -350,7 +365,10 @@ impl Store {
                         .into_iter()
                         .map(|attachment| orbit_protocol::MessageImage {
                             name: attachment.name().to_owned(),
-                            path: attachment.path().to_string_lossy().into_owned(),
+                            path: attachment
+                                .path()
+                                .to_string_lossy()
+                                .into_owned(),
                         })
                         .collect(),
                     _ => Vec::new(),
@@ -411,7 +429,10 @@ impl Store {
     /// No automatic retention policy deletes canonical history.
     pub async fn delete_session(&self, id: &str) -> Result<bool> {
         ensure!(
-            id.len() == 32 && id.bytes().all(|byte| byte.is_ascii_hexdigit()),
+            id.len() == 32
+                && id
+                    .bytes()
+                    .all(|byte| byte.is_ascii_hexdigit()),
             "invalid session ID"
         );
 
@@ -435,7 +456,9 @@ impl Store {
             .map(|a| a.id)
             .collect::<Vec<_>>();
         let lease_ids = session_ids.clone();
-        let lock_root = self.path.with_extension("session-locks");
+        let lock_root = self
+            .path
+            .with_extension("session-locks");
         let leases = tokio::task::spawn_blocking(move || -> Result<Vec<File>> {
             lease_ids
                 .into_iter()
@@ -515,7 +538,11 @@ impl Store {
                     }
                 }
 
-                std::fs::remove_file(cleanup_path.with_extension("session-locks").join(id))?;
+                std::fs::remove_file(
+                    cleanup_path
+                        .with_extension("session-locks")
+                        .join(id),
+                )?;
             }
 
             Ok(())
@@ -524,37 +551,47 @@ impl Store {
         drop(leases);
         drop(parent_lease);
 
-        self.collect_attachment_garbage().await?;
+        self.collect_attachment_garbage()
+            .await?;
 
         Ok(deleted)
     }
 
     pub async fn reclaim_unused_space(&self) -> Result<()> {
-        self.collect_attachment_garbage().await?;
+        self.collect_attachment_garbage()
+            .await?;
         self.connection.reclaim().await
     }
 
     pub async fn acquire(&self, id: &str) -> Result<SessionWriter> {
         ensure!(
-            id.len() == 32 && id.bytes().all(|b| b.is_ascii_hexdigit()),
+            id.len() == 32
+                && id
+                    .bytes()
+                    .all(|b| b.is_ascii_hexdigit()),
             "invalid session ID"
         );
 
         self.session(id).await?;
         let id = id.to_owned();
-        let lock_dir = self.path.with_extension("session-locks");
+        let lock_dir = self
+            .path
+            .with_extension("session-locks");
         let lock_id = id.clone();
         let lock = tokio::task::spawn_blocking(move || -> Result<File> {
             std::fs::create_dir_all(&lock_dir)?;
             let file = private_file(&lock_dir.join(lock_id))?;
-            file.try_lock().map_err(|error| match error {
-                std::fs::TryLockError::WouldBlock => {
-                    anyhow::anyhow!("该会话的写入锁正在被占用，当前服务暂时无法接入。请稍后重连。")
-                }
-                std::fs::TryLockError::Error(error) => {
-                    anyhow::Error::new(error).context("无法获取会话锁")
-                }
-            })?;
+            file.try_lock()
+                .map_err(|error| match error {
+                    std::fs::TryLockError::WouldBlock => {
+                        anyhow::anyhow!(
+                            "该会话的写入锁正在被占用，当前服务暂时无法接入。请稍后重连。"
+                        )
+                    }
+                    std::fs::TryLockError::Error(error) => {
+                        anyhow::Error::new(error).context("无法获取会话锁")
+                    }
+                })?;
 
             Ok(file)
         })
@@ -592,6 +629,7 @@ struct SessionSummary {
     updated_at: i64,
     project_id: Option<String>,
 }
+
 impl SessionSummary {
     fn into_session(self) -> Result<Session> {
         Ok(Session {
@@ -601,10 +639,13 @@ impl SessionSummary {
             reasoning_effort: self.reasoning_effort,
             title: self.title,
             updated_at: self.updated_at,
-            project_id: self.project_id.context("session has no project")?,
+            project_id: self
+                .project_id
+                .context("session has no project")?,
         })
     }
 }
+
 fn session_summaries() -> Select<sessions::Entity> {
     sessions::Entity::find()
         .select_only()
@@ -629,12 +670,16 @@ fn session_summaries() -> Select<sessions::Entity> {
 fn session_model(row: sessions::Model, project: Option<projects::Model>) -> Result<Session> {
     Ok(Session {
         id: row.id,
-        workspace: project.and_then(|p| p.path).unwrap_or(row.workspace),
+        workspace: project
+            .and_then(|p| p.path)
+            .unwrap_or(row.workspace),
         model: row.model,
         reasoning_effort: row.reasoning_effort,
         title: row.title,
         updated_at: row.updated_at,
-        project_id: row.project_id.context("session has no project")?,
+        project_id: row
+            .project_id
+            .context("session has no project")?,
     })
 }
 
@@ -657,7 +702,11 @@ fn ensure_real_directory_if_present(path: &Path) -> Result<bool> {
 
 pub(crate) fn private_file(path: &Path) -> std::io::Result<File> {
     let mut options = OpenOptions::new();
-    options.create(true).truncate(false).read(true).write(true);
+    options
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true);
     #[cfg(unix)]
     options.mode(0o600);
     options.open(path)
@@ -690,7 +739,9 @@ mod tests {
                 store
                     .read_access(move |conn| async move {
                         let tx = conn.begin().await?;
-                        sessions::Entity::find().all(&tx).await?;
+                        sessions::Entity::find()
+                            .all(&tx)
+                            .await?;
                         let _ = started.send(());
                         proceed.await.unwrap();
                         tx.commit().await?;

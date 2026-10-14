@@ -111,12 +111,15 @@ impl Preview {
         );
         let close_width = (icons::CLOSE_THICK.width() + 2).min(usize::from(header.width)) as u16;
         self.close = Rect::new(
-            header.right().saturating_sub(close_width),
+            header
+                .right()
+                .saturating_sub(close_width),
             header.y,
             close_width,
             header.height,
         );
-        self.controls.push((self.close, Control::Close));
+        self.controls
+            .push((self.close, Control::Close));
         let title = match &self.source {
             Source::Image(path) => path.as_str(),
             Source::Math { tex, .. } => tex.as_str(),
@@ -125,7 +128,9 @@ impl Preview {
             Paragraph::new(Line::styled(
                 fit_label(
                     &safe_output(title),
-                    header.width.saturating_sub(close_width + 1) as usize,
+                    header
+                        .width
+                        .saturating_sub(close_width + 1) as usize,
                     true,
                 ),
                 Style::default()
@@ -133,7 +138,9 @@ impl Preview {
                     .add_modifier(Modifier::BOLD),
             )),
             Rect {
-                width: header.width.saturating_sub(close_width + 1),
+                width: header
+                    .width
+                    .saturating_sub(close_width + 1),
                 ..header
             },
         );
@@ -224,8 +231,16 @@ impl Preview {
             && let Some(picture) = &self.picture
             && picture.size.width <= body.width
         {
-            let x = body.x + body.width.saturating_sub(picture.size.width) / 2;
-            let y = body.y + body.height.saturating_sub(picture.size.height) / 2;
+            let x = body.x
+                + body
+                    .width
+                    .saturating_sub(picture.size.width)
+                    / 2;
+            let y = body.y
+                + body
+                    .height
+                    .saturating_sub(picture.size.height)
+                    / 2;
             for row in 0..picture.size.height.min(body.height) {
                 super::schedule(
                     &Fragment {
@@ -280,7 +295,8 @@ impl Preview {
                 Paragraph::new(label).style(self.control_style(Control::Background)),
                 area,
             );
-            self.controls.push((area, Control::Background));
+            self.controls
+                .push((area, Control::Background));
             x += width;
         }
         frame.render_widget(
@@ -364,17 +380,19 @@ impl Preview {
     }
 
     fn pan_extent(&self) -> (f32, f32) {
-        self.picture.as_ref().map_or((0.0, 0.0), |picture| {
-            if let Some(native) = &picture.native {
-                let geometry = native.geometry(self.body, self.view);
-                (
-                    geometry.overflow.0 / f32::from(native.cell.width),
-                    geometry.overflow.1 / f32::from(native.cell.height),
-                )
-            } else {
-                picture.pan_extent
-            }
-        })
+        self.picture
+            .as_ref()
+            .map_or((0.0, 0.0), |picture| {
+                if let Some(native) = &picture.native {
+                    let geometry = native.geometry(self.body, self.view);
+                    (
+                        geometry.overflow.0 / f32::from(native.cell.width),
+                        geometry.overflow.1 / f32::from(native.cell.height),
+                    )
+                } else {
+                    picture.pan_extent
+                }
+            })
     }
 
     fn drag_to(&mut self, point: (u16, u16)) {
@@ -401,7 +419,9 @@ impl Preview {
             Event::Key(key) if key.kind != KeyEventKind::Release => {
                 if key.code == KeyCode::Esc
                     || (key.code == KeyCode::Char('c')
-                        && key.modifiers.contains(KeyModifiers::CONTROL))
+                        && key
+                            .modifiers
+                            .contains(KeyModifiers::CONTROL))
                 {
                     return (true, true);
                 }

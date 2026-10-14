@@ -61,11 +61,13 @@ impl ResolvedPath {
     }
 
     pub fn is_subpath_of(&self, parent: &ResolvedPath) -> bool {
-        self.canonical.starts_with(&parent.canonical)
+        self.canonical
+            .starts_with(&parent.canonical)
     }
 
     pub fn is_subpath_of_canonical(&self, parent_canonical: &Path) -> bool {
-        self.canonical.starts_with(parent_canonical)
+        self.canonical
+            .starts_with(parent_canonical)
     }
 }
 
@@ -158,7 +160,11 @@ mod tests {
     #[test]
     fn resolves_non_existent_future_child() {
         let tmp = tempfile::tempdir().unwrap();
-        let future_path = tmp.path().join("sub1").join("sub2").join("new_file.txt");
+        let future_path = tmp
+            .path()
+            .join("sub1")
+            .join("sub2")
+            .join("new_file.txt");
 
         let resolved = ResolvedPath::resolve(&future_path, None).unwrap();
         let canonical_tmp = std::fs::canonicalize(tmp.path()).unwrap();
@@ -166,7 +172,10 @@ mod tests {
         assert!(resolved.is_subpath_of_canonical(&canonical_tmp));
         assert_eq!(
             resolved.canonical(),
-            canonical_tmp.join("sub1").join("sub2").join("new_file.txt")
+            canonical_tmp
+                .join("sub1")
+                .join("sub2")
+                .join("new_file.txt")
         );
     }
 
@@ -209,10 +218,15 @@ mod tests {
         let nested = tmp.path().join("a").join("b");
         std::fs::create_dir_all(&nested).unwrap();
 
-        let traversal = nested.join("..").join("b").join("file.txt");
+        let traversal = nested
+            .join("..")
+            .join("b")
+            .join("file.txt");
         let resolved = ResolvedPath::resolve(&traversal, None).unwrap();
 
-        let expected = std::fs::canonicalize(&nested).unwrap().join("file.txt");
+        let expected = std::fs::canonicalize(&nested)
+            .unwrap()
+            .join("file.txt");
 
         assert_eq!(resolved.canonical(), expected);
     }

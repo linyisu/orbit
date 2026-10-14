@@ -6,6 +6,7 @@ impl MigrationName for Migration {
         "00000000000005_tasks_memories"
     }
 }
+
 #[async_trait::async_trait]
 impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
@@ -13,14 +14,25 @@ impl MigrationTrait for Migration {
             .create_table(
                 Table::create()
                     .table(Alias::new("project_tasks"))
-                    .col(ColumnDef::new(Alias::new("id")).integer().primary_key())
-                    .col(ColumnDef::new(Alias::new("project_id")).text().not_null())
+                    .col(
+                        ColumnDef::new(Alias::new("id"))
+                            .integer()
+                            .primary_key(),
+                    )
+                    .col(
+                        ColumnDef::new(Alias::new("project_id"))
+                            .text()
+                            .not_null(),
+                    )
                     .col(ColumnDef::new(Alias::new("parent_id")).integer())
                     .col(
-                        ColumnDef::new(Alias::new("title")).text().not_null().check(
-                            Expr::expr(Func::char_length(Expr::col(Alias::new("title"))))
-                                .between(1, 512),
-                        ),
+                        ColumnDef::new(Alias::new("title"))
+                            .text()
+                            .not_null()
+                            .check(
+                                Expr::expr(Func::char_length(Expr::col(Alias::new("title"))))
+                                    .between(1, 512),
+                            ),
                     )
                     .col(
                         ColumnDef::new(Alias::new("details"))
@@ -29,7 +41,7 @@ impl MigrationTrait for Migration {
                             .default("")
                             .check(
                                 Expr::expr(Func::char_length(Expr::col(Alias::new("details"))))
-                                    .lte(8192),
+                                    .lte(8_192),
                             ),
                     )
                     .col(
@@ -95,8 +107,16 @@ impl MigrationTrait for Migration {
             .create_table(
                 Table::create()
                     .table(Alias::new("project_memories"))
-                    .col(ColumnDef::new(Alias::new("id")).integer().primary_key())
-                    .col(ColumnDef::new(Alias::new("project_id")).text().not_null())
+                    .col(
+                        ColumnDef::new(Alias::new("id"))
+                            .integer()
+                            .primary_key(),
+                    )
+                    .col(
+                        ColumnDef::new(Alias::new("project_id"))
+                            .text()
+                            .not_null(),
+                    )
                     .col(
                         ColumnDef::new(Alias::new("category"))
                             .text()
@@ -109,10 +129,13 @@ impl MigrationTrait for Migration {
                             ])),
                     )
                     .col(
-                        ColumnDef::new(Alias::new("title")).text().not_null().check(
-                            Expr::expr(Func::char_length(Expr::col(Alias::new("title"))))
-                                .between(1, 512),
-                        ),
+                        ColumnDef::new(Alias::new("title"))
+                            .text()
+                            .not_null()
+                            .check(
+                                Expr::expr(Func::char_length(Expr::col(Alias::new("title"))))
+                                    .between(1, 512),
+                            ),
                     )
                     .col(
                         ColumnDef::new(Alias::new("content"))
@@ -120,7 +143,7 @@ impl MigrationTrait for Migration {
                             .not_null()
                             .check(
                                 Expr::expr(Func::char_length(Expr::col(Alias::new("content"))))
-                                    .between(1, 8192),
+                                    .between(1, 8_192),
                             ),
                     )
                     .col(ColumnDef::new(Alias::new("source_session_id")).text())
@@ -175,6 +198,7 @@ impl MigrationTrait for Migration {
             .await?;
         Ok(())
     }
+
     async fn down(&self, _: &SchemaManager) -> Result<(), DbErr> {
         super::forward_only()
     }

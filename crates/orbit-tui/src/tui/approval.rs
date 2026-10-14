@@ -24,7 +24,9 @@ pub fn captures(state: &UiState, event: &Event) -> bool {
     match event {
         Event::Key(key) => {
             key.kind == KeyEventKind::Press
-                && key.modifiers.contains(KeyModifiers::CONTROL)
+                && key
+                    .modifiers
+                    .contains(KeyModifiers::CONTROL)
                 && matches!(key.code, KeyCode::Char('y' | 'Y' | 'n' | 'c'))
                 && !(key.code == KeyCode::Char('c') && state.input.selected_text().is_some())
         }
@@ -89,10 +91,16 @@ pub fn handle(state: &mut UiState, event: Event) -> Action {
         }
 
         Event::Key(key) if key.kind == KeyEventKind::Press => {
-            if key.modifiers.contains(KeyModifiers::CONTROL) {
+            if key
+                .modifiers
+                .contains(KeyModifiers::CONTROL)
+            {
                 return match key.code {
                     KeyCode::Char('y' | 'Y') if state.approval_shown => {
-                        if key.modifiers.contains(KeyModifiers::SHIFT) {
+                        if key
+                            .modifiers
+                            .contains(KeyModifiers::SHIFT)
+                        {
                             Action::AlwaysAllow
                         } else {
                             Action::Approve
@@ -182,7 +190,10 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
 
     let (title, header_lines, body_lines) = match proposal {
         orbit_tools::approval::ApprovalPreview::Write(preview) => {
-            let before = preview.before.as_deref().unwrap_or_default();
+            let before = preview
+                .before
+                .as_deref()
+                .unwrap_or_default();
             let after = preview.after.as_str();
             let op_tag = if preview.before.is_some() {
                 "[修改文件]"
@@ -292,7 +303,13 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
                 ),
                 Span::raw(" "),
             ]);
-            let digits = preview.before.lines().count().to_string().len().max(4);
+            let digits = preview
+                .before
+                .lines()
+                .count()
+                .to_string()
+                .len()
+                .max(4);
             let diff_lines = super::code::file_lines(&preview.path, &preview.before)
                 .iter()
                 .enumerate()
@@ -391,7 +408,9 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
                         target,
                         risk_notice,
                     } => {
-                        let desc = risk_notice.as_deref().unwrap_or("可能影响未提交工作区修改");
+                        let desc = risk_notice
+                            .as_deref()
+                            .unwrap_or("可能影响未提交工作区修改");
                         header_lines.push(Line::from(vec![
                             Span::raw("  "),
                             Span::styled(
@@ -415,7 +434,9 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
                     }
 
                     orbit_runtime::git::GitOperationKind::ConfigMutation { key, .. } => {
-                        let target_key = key.as_deref().unwrap_or("仓库配置/Hooks");
+                        let target_key = key
+                            .as_deref()
+                            .unwrap_or("仓库配置/Hooks");
                         header_lines.push(Line::from(vec![
                             Span::raw("  "),
                             Span::styled(
@@ -577,7 +598,9 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
         .line_count(areas[1].width)
         .saturating_sub(areas[1].height as usize)
         .min(u16::MAX as usize);
-    state.approval_scroll = state.approval_scroll.min(state.approval_max_scroll);
+    state.approval_scroll = state
+        .approval_scroll
+        .min(state.approval_max_scroll);
     frame.render_widget(
         paragraph.scroll((state.approval_scroll as u16, 0)),
         areas[1],

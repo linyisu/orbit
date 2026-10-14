@@ -7,8 +7,8 @@ use tokio_util::sync::CancellationToken;
 
 use super::{Arguments, PdfPages, ReadDocument, failed, invalid, worker};
 
-const MAX_PAGES: usize = 4;
-const MAX_EDGE: f32 = 2048.0;
+const MAX_ATTACHED_PAGES: usize = 4;
+const MAX_PAGE_EDGE_PIXELS: f32 = 2048.0;
 
 #[derive(Clone, Copy, Default, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -26,7 +26,9 @@ struct RenderedPage {
 }
 
 fn selected_pages(pdf: &PdfPages, args: &Arguments) -> Result<(Vec<u32>, Option<u32>), ToolError> {
-    let start = args.image_start_page.unwrap_or(pdf.start_page);
+    let start = args
+        .image_start_page
+        .unwrap_or(pdf.start_page);
     if start < pdf.start_page || start > pdf.end_page {
         return Err(invalid(
             "image_start_page must be within the requested PDF page range",
@@ -39,7 +41,10 @@ fn selected_pages(pdf: &PdfPages, args: &Arguments) -> Result<(Vec<u32>, Option<
             page.page >= start && (args.images == ImageMode::Always || page.needs_image())
         })
         .map(|page| page.page);
-    let selected = pages.by_ref().take(MAX_PAGES).collect();
+    let selected = pages
+        .by_ref()
+        .take(MAX_ATTACHED_PAGES)
+        .collect();
     Ok((selected, pages.next()))
 }
 
@@ -63,7 +68,11 @@ pub(super) async fn attach(
     };
     let mut value: serde_json::Value = serde_json::from_str(&content).map_err(failed)?;
     let mut attachments = Vec::new();
-    let mut vision = json!({"attached_pages": [], "failures": [], "next_image_start_page": null});
+    let mut vision = json!({
+        "attached_pages": [],
+        "failures": [],
+        "next_image_start_page": null
+    });
     if args.images == ImageMode::Off {
         vision["status"] = json!("disabled");
     } else {
@@ -74,7 +83,8 @@ pub(super) async fn attach(
         } else if !supports_vision {
             vision["status"] = json!("unavailable");
             vision["warning"] = json!(
-                "Current model cannot receive images, or image capability is disabled. Only extracted text is available; switch to a vision model to read these pages."
+                "Current model cannot receive images, or image capability is disabled. Only \
+                    extracted text is available; switch to a vision model to read these pages."
             );
         } else if let Some(executable) = &tool.worker {
             let pages_arg = selected
@@ -101,7 +111,10 @@ pub(super) async fn attach(
                     vision["failures"] = json!(
                         selected
                             .iter()
-                            .map(|page| json!({"page":page,"error":"render worker failed"}))
+                            .map(|page| json!({
+                                "page": page,
+                                "error": "render worker failed"
+                            }))
                             .collect::<Vec<_>>()
                     );
                 }
@@ -140,7 +153,8 @@ pub(super) async fn attach(
                         Err(error) => {
                             vision["status"] = json!("failed");
                             vision["warning"] = json!(format!(
-                                "Could not load rendered pages; text extraction is preserved: {error}"
+                                "Could not load rendered pages; text extraction is preserved: \
+                                    {error}"
                             ));
                         }
                     }
@@ -149,7 +163,12 @@ pub(super) async fn attach(
             // Failed pages are explicit and may be retried; this cursor covers the remaining batch.
             vision["next_image_start_page"] = json!(next);
             vision["note"] = json!(
-                "Attachments are temporary full physical PDF pages in ascending order, named with page numbers. Inspect the images now to read diagrams and missing text. They are discarded after this model request and are not saved in history or checkpoints; reread the source document when needed. Text warnings do not mean images are unreadable. Follow next_image_start_page with the SAME start_page/end_page to load remaining pages."
+                "Attachments are temporary full physical PDF pages in ascending order, named with \
+                    page numbers. Inspect the images now to read diagrams and missing text. They \
+                    are discarded after this model request and are not saved in history or \
+                    checkpoints; reread the source document when needed. Text warnings do not \
+                    mean images are unreadable. Follow next_image_start_page with the SAME \
+                    start_page/end_page to load remaining pages."
             );
         } else {
             vision["status"] = json!("unavailable");
@@ -172,15 +191,18 @@ fn import_pages(
     let directory = temporary.path();
     let file = std::fs::File::open(directory.join("result.json")).map_err(failed)?;
     let results: Vec<RenderedPage> =
-        serde_json::from_reader(file.take(64 * 1024)).map_err(failed)?;
+        serde_json::from_reader(file.take(64 * 1_024)).map_err(failed)?;
     let mut images = Vec::new();
     let mut failures = Vec::new();
     for &page in selected {
-        let result = results.iter().find(|result| result.page == page);
+        let result = results
+            .iter()
+            .find(|result| result.page == page);
         let error = match result {
             Some(RenderedPage { error: None, .. }) => {
                 let path = directory.join(format!("page-{page}.png"));
-                // Authorize a fixed basename beneath the private temporary_output directory; never trust
+                // Authorize a fixed basename beneath the private temporary_output directory; never
+                // trust
                 // output paths returned by a document parser, including symlinks.
                 let loaded = orbit_runtime::filesystem::Workspace::new(directory)
                     .and_then(|workspace| workspace.authorize_read(&path))
@@ -227,12 +249,17 @@ fn import_pages(
 pub fn render_worker(input: &Path, output: &Path, pages: &str) -> Result<(), String> {
     let pages: Vec<u32> = pages
         .split(',')
-        .map(|page| page.parse().map_err(|_| "invalid render page".to_owned()))
+        .map(|page| {
+            page.parse()
+                .map_err(|_| "invalid render page".to_owned())
+        })
         .collect::<Result<_, _>>()?;
     if pages.is_empty()
-        || pages.len() > MAX_PAGES
+        || pages.len() > MAX_ATTACHED_PAGES
         || pages.contains(&0)
-        || pages.windows(2).any(|pair| pair[0] >= pair[1])
+        || pages
+            .windows(2)
+            .any(|pair| pair[0] >= pair[1])
     {
         return Err("render pages must be 1–4 increasing positive page numbers".into());
     }
@@ -246,7 +273,9 @@ pub fn render_worker(input: &Path, output: &Path, pages: &str) -> Result<(), Str
     }
     let pdf =
         hayro::hayro_syntax::Pdf::new(bytes).map_err(|e| format!("cannot render PDF: {e:?}"))?;
-    let directory = output.parent().ok_or("missing output directory")?;
+    let directory = output
+        .parent()
+        .ok_or("missing output directory")?;
     let mut results = Vec::new();
     for number in pages {
         let rendered =
@@ -259,7 +288,7 @@ pub fn render_worker(input: &Path, output: &Path, pages: &str) -> Result<(), Str
                 if !width.is_finite() || !height.is_finite() || width <= 0.0 || height <= 0.0 {
                     return Err("invalid PDF page dimensions".into());
                 }
-                let scale = (MAX_EDGE / width.max(height)).min(3.0);
+                let scale = (MAX_PAGE_EDGE_PIXELS / width.max(height)).min(3.0);
                 if width * scale < 1.0 || height * scale < 1.0 {
                     return Err("unsupported PDF page aspect ratio".into());
                 }
@@ -276,7 +305,9 @@ pub fn render_worker(input: &Path, output: &Path, pages: &str) -> Result<(), Str
                     &Default::default(),
                     &settings,
                 );
-                let png = image.into_png().map_err(|e| e.to_string())?;
+                let png = image
+                    .into_png()
+                    .map_err(|e| e.to_string())?;
                 if png.len() > crate::image_assets::MAX_IMAGE_BYTES {
                     return Err("rendered page exceeds 20 MiB".into());
                 }

@@ -36,6 +36,7 @@ impl Store {
         })
         .await
     }
+
     pub async fn enable_project_plugin(&self, value: ProjectPlugin) -> Result<ProjectPlugin> {
         validate_project_plugin(&value)?;
         self.write_access(|conn| async move {
@@ -87,6 +88,7 @@ impl Store {
         })
         .await
     }
+
     pub async fn disable_project_plugin(
         &self,
         project_id: &str,
@@ -108,6 +110,7 @@ impl Store {
         .await
     }
 }
+
 fn plugin(row: plugins::Model) -> ProjectPlugin {
     ProjectPlugin {
         project_id: row.project_id,
@@ -119,6 +122,7 @@ fn plugin(row: plugins::Model) -> ProjectPlugin {
         enabled_at: row.enabled_at,
     }
 }
+
 fn validate_project_plugin(plugin: &ProjectPlugin) -> Result<()> {
     validate_project_plugin_key(
         &plugin.project_id,
@@ -130,7 +134,7 @@ fn validate_project_plugin(plugin: &ProjectPlugin) -> Result<()> {
         "plugin package source must not be empty"
     );
     ensure!(
-        plugin.package_source.len() <= 4096,
+        plugin.package_source.len() <= 4_096,
         "plugin package source exceeds 4096 bytes"
     );
 
@@ -144,7 +148,10 @@ fn validate_project_plugin(plugin: &ProjectPlugin) -> Result<()> {
 
     if let Some(revision) = &plugin.marketplace_revision {
         ensure!(
-            revision.len() == 40 && revision.bytes().all(|byte| byte.is_ascii_hexdigit()),
+            revision.len() == 40
+                && revision
+                    .bytes()
+                    .all(|byte| byte.is_ascii_hexdigit()),
             "marketplace revision must be a Git commit ID"
         );
     }
@@ -167,7 +174,7 @@ fn validate_project_plugin_key(
         "marketplace source must not be empty"
     );
     ensure!(
-        marketplace_source.len() <= 4096,
+        marketplace_source.len() <= 4_096,
         "marketplace source exceeds 4096 bytes"
     );
     ensure!(

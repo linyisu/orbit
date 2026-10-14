@@ -88,12 +88,12 @@ impl Store {
         content: Option<String>,
     ) -> Result<()> {
         ensure!(
-            id > 0 && expected.len() <= 1024 * 1024,
+            id > 0 && expected.len() <= 1_024 * 1_024,
             "invalid queued input identity"
         );
         if let Some(content) = &content {
             ensure!(
-                !content.trim().is_empty() && content.len() <= 1024 * 1024,
+                !content.trim().is_empty() && content.len() <= 1_024 * 1_024,
                 "message must contain 1..1048576 bytes"
             );
         }

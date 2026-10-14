@@ -4,9 +4,15 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 #[tokio::test]
 async fn permission_changes_release_only_eligible_waiters_and_reach_all_observers() {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .unwrap();
     let fixture = Fixture::new(&format!("http://{}/v1", listener.local_addr().unwrap())).await;
-    let inside = fixture.service.options.initial_directory.join("inside.txt");
+    let inside = fixture
+        .service
+        .options
+        .initial_directory
+        .join("inside.txt");
     let outside = fixture.external.join("outside.txt");
     let model = tokio::spawn(write_model(listener, outside.clone()));
     let info = fixture.mode(Mode::Ask).await;
@@ -24,7 +30,9 @@ async fn permission_changes_release_only_eligible_waiters_and_reach_all_observer
         })
         .await
         .unwrap();
-    let pending = fixture.wait(|page| !page.approvals.is_empty()).await;
+    let pending = fixture
+        .wait(|page| !page.approvals.is_empty())
+        .await;
     assert!(pending.timing.unwrap().paused);
     assert_eq!(fixture.handle.current_info().await.mode, Mode::Ask);
     assert!(!inside.exists());
@@ -33,7 +41,13 @@ async fn permission_changes_release_only_eligible_waiters_and_reach_all_observer
         .service
         .release_client(vec![info.id.clone()], 0)
         .await;
-    assert!(fixture.service.session(&info.id).await.is_ok());
+    assert!(
+        fixture
+            .service
+            .session(&info.id)
+            .await
+            .is_ok()
+    );
     assert_eq!(fixture.page(0).await.approvals[0].id, first);
     fixture
         .request(Request::Open {
@@ -46,7 +60,11 @@ async fn permission_changes_release_only_eligible_waiters_and_reach_all_observer
         .unwrap();
     fixture.mode(Mode::Auto).await;
     let pending = fixture
-        .wait(|page| page.approvals.iter().any(|a| a.id != first))
+        .wait(|page| {
+            page.approvals
+                .iter()
+                .any(|a| a.id != first)
+        })
         .await;
     assert_eq!(fs::read_to_string(&inside).unwrap(), "inside");
     assert!(!outside.exists());
@@ -121,7 +139,11 @@ async fn failed_permission_persistence_never_publishes_or_confirms_the_change() 
     let before = fixture.mode(Mode::Ask).await;
     let cursor = fixture.page(0).await.next;
     let db = rusqlite::Connection::open(&fixture.service.options.database).unwrap();
-    db.execute_batch("CREATE TRIGGER refuse_mode BEFORE INSERT ON tui_session_state BEGIN SELECT RAISE(ABORT, 'test storage failure'); END;").unwrap();
+    db.execute_batch(
+        "CREATE TRIGGER refuse_mode BEFORE INSERT ON tui_session_state BEGIN SELECT \
+        RAISE(ABORT, 'test storage failure'); END;",
+    )
+    .unwrap();
     assert!(
         fixture
             .request(Request::SetMode {
@@ -136,10 +158,20 @@ async fn failed_permission_persistence_never_publishes_or_confirms_the_change() 
         (after.mode, after.mode_revision),
         (before.mode, before.mode_revision)
     );
-    assert!(fixture.page(cursor).await.updates.is_empty());
-    db.execute_batch("DROP TRIGGER refuse_mode;").unwrap();
+    assert!(
+        fixture
+            .page(cursor)
+            .await
+            .updates
+            .is_empty()
+    );
+    db.execute_batch("DROP TRIGGER refuse_mode;")
+        .unwrap();
     assert_eq!(
-        fixture.mode(Mode::Auto).await.mode_revision,
+        fixture
+            .mode(Mode::Auto)
+            .await
+            .mode_revision,
         before.mode_revision + 1
     );
 }
@@ -163,19 +195,40 @@ pub(super) async fn write_model(listener: tokio::net::TcpListener, outside: std:
             })
             .unwrap();
         let mut body = vec![0; length];
-        socket.read_exact(&mut body).await.unwrap();
+        socket
+            .read_exact(&mut body)
+            .await
+            .unwrap();
         let request: serde_json::Value = serde_json::from_slice(&body).unwrap();
         let (kind, body) = if request["stream"] == true {
             let delta = match step {
                 0 | 1 => {
                     let args = if step == 0 {
-                        json!({"path":"inside.txt","content":"inside"})
+                        json!({
+                            "path": "inside.txt",
+                            "content": "inside"
+                        })
                     } else {
-                        json!({"path":outside,"content":"outside"})
+                        json!({
+                            "path": outside,
+                            "content": "outside"
+                        })
                     };
-                    json!({"tool_calls":[{"index":0,"id":format!("write-{step}"),"type":"function","function":{"name":"write_file","arguments":args.to_string()}}]})
+                    json!({
+                        "tool_calls": [{
+                            "index": 0,
+                            "id": format!("write-{step}"),
+                            "type": "function",
+                            "function": {
+                                "name": "write_file",
+                                "arguments": args.to_string()
+                            }
+                        }]
+                    })
                 }
-                _ => json!({"content":"done"}),
+                _ => json!({
+                    "content": "done"
+                }),
             };
             let finish = if step < 2 { "tool_calls" } else { "stop" };
             step += 1;
@@ -183,13 +236,46 @@ pub(super) async fn write_model(listener: tokio::net::TcpListener, outside: std:
                 "text/event-stream",
                 format!(
                     "data: {}\n\ndata: {}\n\ndata: [DONE]\n\n",
-                    json!({"choices":[{"index":0,"delta":delta}]}),
-                    json!({"choices":[{"index":0,"delta":{},"finish_reason":finish}]})
+                    json!({
+                        "choices": [{
+                            "index": 0,
+                            "delta": delta
+                        }]
+                    }),
+                    json!({
+                        "choices": [{
+                            "index": 0,
+                            "delta": {},
+                            "finish_reason": finish
+                        }]
+                    })
                 ),
             )
         } else {
-            ("application/json", json!({"choices":[{"message":{"role":"assistant","content":"test"},"finish_reason":"stop"}]}).to_string())
+            (
+                "application/json",
+                json!({
+                    "choices": [{
+                        "message": {
+                            "role": "assistant",
+                            "content": "test"
+                        },
+                        "finish_reason": "stop"
+                    }]
+                })
+                .to_string(),
+            )
         };
-        socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: {kind}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).as_bytes()).await.unwrap();
+        socket
+            .write_all(
+                format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: {kind}\r\nContent-Length: \
+            {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
     }
 }

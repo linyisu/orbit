@@ -6,6 +6,7 @@ pub(crate) struct ImageHttpClient {
     client: reqwest::Client,
     runtime: tokio::runtime::Handle,
 }
+
 impl ImageHttpClient {
     pub fn new(runtime: tokio::runtime::Handle) -> anyhow::Result<Self> {
         Ok(Self {
@@ -17,13 +18,16 @@ impl ImageHttpClient {
         })
     }
 }
+
 impl HttpClient for ImageHttpClient {
     fn user_agent(&self) -> Option<&http::HeaderValue> {
         None
     }
+
     fn proxy(&self) -> Option<&url::Url> {
         None
     }
+
     fn send(
         &self,
         request: Request<AsyncBody>,
@@ -48,7 +52,9 @@ impl HttpClient for ImageHttpClient {
                 anyhow::ensure!(chunk.len() <= limit - bytes.len(), "图片超过 20 MiB");
                 bytes.extend_from_slice(&chunk);
             }
-            result.body(AsyncBody::from(bytes)).map_err(Into::into)
+            result
+                .body(AsyncBody::from(bytes))
+                .map_err(Into::into)
         });
         Box::pin(async move { task.await? })
     }
@@ -66,13 +72,23 @@ mod tests {
         let server = std::thread::spawn(move || {
             for _ in 0..2 {
                 let (mut socket, _) = listener.accept().unwrap();
-                let mut request = [0; 1024];
+                let mut request = [0; 1_024];
                 let count = socket.read(&mut request).unwrap();
                 if String::from_utf8_lossy(&request[..count]).contains("/image ") {
-                    socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 3\r\nContent-Type: image/png\r\nConnection: close\r\n\r\npng").unwrap();
+                    socket
+                        .write_all(
+                            b"HTTP/1.1 200 OK\r\nContent-Length: 3\r\nContent-Type: \
+                        image/png\r\nConnection: close\r\n\r\npng",
+                        )
+                        .unwrap();
                 } else {
-                    socket.write_all(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n").unwrap();
-                    let chunk = vec![b'x'; 1024 * 1024];
+                    socket
+                        .write_all(
+                            b"HTTP/1.1 200 OK\r\nTransfer-Encoding: \
+                        chunked\r\nConnection: close\r\n\r\n",
+                        )
+                        .unwrap();
+                    let chunk = vec![b'x'; 1_024 * 1_024];
                     for _ in 0..21 {
                         if socket
                             .write_all(b"100000\r\n")

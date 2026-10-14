@@ -26,6 +26,7 @@ pub(crate) enum WorkspaceEvent {
     Catalog(Vec<SessionEntry>),
     SessionDeleted { id: String, options: Box<Options> },
 }
+
 impl EventEmitter<WorkspaceEvent> for Workspace {}
 
 impl Workspace {
@@ -41,7 +42,11 @@ impl Workspace {
         if !self
             .files
             .as_ref()
-            .is_some_and(|files| files.read(cx).belongs_to(&session, &workspace))
+            .is_some_and(|files| {
+                files
+                    .read(cx)
+                    .belongs_to(&session, &workspace)
+            })
         {
             if let Some(previous) = self.files.take()
                 && previous.read(cx).has_unsaved_changes()
@@ -51,7 +56,11 @@ impl Workspace {
             if let Some(index) = self
                 .file_drafts
                 .iter()
-                .position(|files| files.read(cx).belongs_to_workspace(&workspace))
+                .position(|files| {
+                    files
+                        .read(cx)
+                        .belongs_to_workspace(&workspace)
+                })
             {
                 let files = self.file_drafts.remove(index);
                 files.update(cx, |files, cx| files.bind_session(session, cx));
@@ -90,7 +99,11 @@ impl Workspace {
         if !self
             .review
             .as_ref()
-            .is_some_and(|review| review.read(cx).belongs_to(&session, &workspace))
+            .is_some_and(|review| {
+                review
+                    .read(cx)
+                    .belongs_to(&session, &workspace)
+            })
         {
             let owner = cx.weak_entity();
             self.review =
@@ -134,23 +147,30 @@ impl Workspace {
             title: self.title.to_string(),
             text: self.input.read(cx).value().to_string(),
             paths: self.paths.clone(),
-            retry: self.pending.as_ref().or(self.retry.as_ref()).map(|send| {
-                crate::workbench::storage::SavedSend {
+            retry: self
+                .pending
+                .as_ref()
+                .or(self.retry.as_ref())
+                .map(|send| crate::workbench::storage::SavedSend {
                     id: send.id.clone(),
                     session: send.session.clone(),
                     text: send.text.to_string(),
                     paths: send.paths.clone(),
                     steer: send.steer,
-                }
-            }),
+                }),
             clipboard_files: self
                 .clipboard_files
                 .iter()
-                .filter(|file| self.paths.iter().any(|path| path == file.path()))
+                .filter(|file| {
+                    self.paths
+                        .iter()
+                        .any(|path| path == file.path())
+                })
                 .cloned()
                 .collect(),
         }
     }
+
     pub(crate) fn restore(
         &mut self,
         saved: crate::workbench::storage::SavedTask,
@@ -173,8 +193,13 @@ impl Workspace {
         });
         cx.notify();
     }
+
     pub(super) fn adjacent_task(&self, forward: bool, cx: &mut Context<Self>) {
-        let Some(ix) = self.open_tasks.iter().position(|task| task.key == self.key) else {
+        let Some(ix) = self
+            .open_tasks
+            .iter()
+            .position(|task| task.key == self.key)
+        else {
             return;
         };
         let len = self.open_tasks.len();
@@ -185,27 +210,33 @@ impl Workspace {
         };
         cx.emit(WorkspaceEvent::Activate(self.open_tasks[next].key.clone()));
     }
+
     pub(crate) fn options(&self) -> &Options {
         &self.options
     }
+
     pub(crate) fn catalog(&self) -> &[SessionEntry] {
         &self.sessions
     }
+
     pub(crate) fn key(&self) -> &str {
         &self.key
     }
+
     pub(crate) fn files_need_attention(&self, cx: &App) -> bool {
         self.files
             .iter()
             .chain(self.file_drafts.iter())
             .any(|files| files.read(cx).has_unsaved_changes())
     }
+
     pub(crate) fn files_saving(&self, cx: &App) -> bool {
         self.files
             .iter()
             .chain(self.file_drafts.iter())
             .any(|files| files.read(cx).is_saving())
     }
+
     pub(crate) fn discard_file_edits(&mut self, cx: &mut Context<Self>) {
         self.files = None;
         self.file_drafts.clear();
@@ -214,6 +245,7 @@ impl Workspace {
         }
         cx.notify();
     }
+
     pub(crate) fn focus_file_edits(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(files) = self.files.clone() {
             self.page = MainPage::Files;
@@ -221,14 +253,19 @@ impl Workspace {
             cx.notify();
         }
     }
+
     pub(crate) fn can_resume(&self, id: &str, options: &Options) -> bool {
-        (self.info.as_ref().is_some_and(|info| info.id == id)
+        (self
+            .info
+            .as_ref()
+            .is_some_and(|info| info.id == id)
             || self.options.resume.as_deref() == Some(id))
             && options
                 .workspace
                 .as_ref()
                 .is_none_or(|path| path == &PathBuf::from(self.location.as_ref()))
     }
+
     pub(crate) fn summary(&self) -> WorkspaceSummary {
         WorkspaceSummary {
             key: self.key.clone(),
@@ -260,6 +297,7 @@ impl Workspace {
             unread: false,
         }
     }
+
     pub(crate) fn status(&self) -> &'static str {
         if !self.connection_challenges.is_empty() {
             return "等待 SSH 验证";
@@ -299,6 +337,7 @@ impl Workspace {
         }
         self.execution.phase().label()
     }
+
     pub(crate) fn is_empty_draft(&self, cx: &App) -> bool {
         self.options.resume.is_none()
             && self.info.as_ref().is_none_or(|info| !info.persisted)
@@ -319,6 +358,7 @@ impl Workspace {
             && self.question_form.is_none()
             && self.tasks.is_none()
     }
+
     pub(crate) fn set_visible(
         &mut self,
         visible: bool,
@@ -349,6 +389,7 @@ impl Workspace {
         }
         cx.notify();
     }
+
     pub(crate) fn set_catalog(&mut self, catalog: Vec<SessionEntry>, cx: &mut Context<Self>) {
         self.sessions = catalog;
         self.refresh_title(cx);
@@ -373,13 +414,19 @@ impl Workspace {
                     .map(|entry| entry.title.as_ref())
             });
         self.title = session_title(
-            self.info.as_ref().is_some_and(|info| info.persisted) || self.options.resume.is_some(),
+            self.info
+                .as_ref()
+                .is_some_and(|info| info.persisted)
+                || self.options.resume.is_some(),
             title,
-            self.conversation.read(cx).first_prompt(),
+            self.conversation
+                .read(cx)
+                .first_prompt(),
             &self.title,
         )
         .into();
     }
+
     pub(crate) fn set_open_tasks(
         &mut self,
         tasks: Vec<WorkspaceSummary>,
@@ -394,21 +441,25 @@ impl Workspace {
     pub(crate) fn new_task(&mut self, cx: &mut Context<Self>) {
         self.open(None, cx);
     }
+
+    /// An explicit new-task action can reuse the tab, but its old draft connection must not retain
+    /// obsolete model or MCP settings.
     pub(crate) fn reopen_empty_draft(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        // An explicit new-task action can reuse the tab, but its old draft
-        // connection must not retain obsolete model or MCP settings.
         if !self.opening && self.is_empty_draft(cx) {
             self.connect(window, cx);
         }
     }
+
     pub(crate) fn reconnect_if_needed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.connected && !self.opening && !self.recovery.is_active() {
             self.connect(window, cx);
         }
     }
+
     pub(crate) fn connection_unestablished(&self) -> bool {
         self.info.is_none() && !self.connected
     }
+
     pub(crate) fn has_draft(&self, cx: &App) -> bool {
         self.pending.is_some()
             || self.picker_pending
@@ -416,15 +467,19 @@ impl Workspace {
             || !self.paths.is_empty()
             || !self.input.read(cx).value().is_empty()
     }
+
     pub(crate) fn window_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.settings(false, window, cx);
     }
+
     pub(crate) fn window_commands(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.commands(window, cx);
     }
+
     pub(crate) fn window_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.search_sessions(window, cx);
     }
+
     pub(crate) fn focus_composer(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.page = MainPage::Conversation;
         if window.viewport_size().width < window.rem_size() * 72. {
@@ -453,7 +508,9 @@ impl Workspace {
                 // Loading, an accessory, or a question form hides the ordinary input.
                 self.focus.focus(window, cx);
             }
-            MainPage::Conversation => self.input.update(cx, |input, cx| input.focus(window, cx)),
+            MainPage::Conversation => self
+                .input
+                .update(cx, |input, cx| input.focus(window, cx)),
             MainPage::Files => {
                 if let Some(files) = &self.files {
                     files.update(cx, |files, cx| files.focus(window, cx));
@@ -485,7 +542,11 @@ impl Workspace {
                 .question_form
                 .as_ref()
                 .is_some_and(|form| !form.read(cx).hidden());
-        let stale_input = hidden_composer && self.input.focus_handle(cx).is_focused(window);
+        let stale_input = hidden_composer
+            && self
+                .input
+                .focus_handle(cx)
+                .is_focused(window);
         // A retained handle can outlive its rendered focus node. Bounds changes
         // catch the imminent compact layout; focus-lost catches font changes
         // and a Sheet restoring a handle that disappeared while it was open.
@@ -493,6 +554,7 @@ impl Workspace {
             self.focus_page(window, cx);
         }
     }
+
     pub(crate) fn window_command(
         &mut self,
         command: actions::WorkspaceCommand,
@@ -501,6 +563,7 @@ impl Workspace {
     ) {
         self.execute(command, window, cx);
     }
+
     pub(crate) fn toggle_inspector(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let section = if self.inspector.is_some() {
             None
@@ -521,7 +584,9 @@ impl Workspace {
         self.panel = None;
         if self.page == MainPage::Conversation {
             if self.inspector == Some(inspector::Section::Execution) {
-                self.inspector_state.focus.focus(window, cx);
+                self.inspector_state
+                    .focus
+                    .focus(window, cx);
             } else if self.inspector.is_some()
                 && window.viewport_size().width < window.rem_size() * 72.
             {
@@ -534,6 +599,7 @@ impl Workspace {
         }
         cx.notify();
     }
+
     pub(super) fn watch_agents(&mut self, cx: &mut Context<Self>) {
         let scope = (self.visible && self.inspector == Some(inspector::Section::Agents))
             .then(|| {
@@ -546,6 +612,7 @@ impl Workspace {
             self.command(Command::WatchAgents(scope), cx);
         }
     }
+
     pub(crate) fn environment(&self) -> String {
         self.options
             .ssh
@@ -559,6 +626,7 @@ impl Workspace {
             })
             .unwrap_or_else(|| "本地".into())
     }
+
     pub(super) fn show_project_tasks(
         &mut self,
         create: bool,

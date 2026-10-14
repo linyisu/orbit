@@ -27,7 +27,9 @@ fn every_catalog_target_exists_and_all_ids_and_aliases_resolve() {
     for language in &REGISTRY.languages {
         if let Some(target) = &language.syntect {
             assert!(
-                SYNTAXES.find_syntax_by_name(target).is_some(),
+                SYNTAXES
+                    .find_syntax_by_name(target)
+                    .is_some(),
                 "{}: missing {target}",
                 language.id
             );
@@ -67,10 +69,15 @@ fn badge_identity_preserves_languages_without_highlighting_and_ignores_attribute
 }
 
 #[test]
+/// Syntect associates .v with Verilog, but Shiki's language ID v means V.
 fn unsupported_catalog_languages_do_not_fall_through_to_unrelated_extensions() {
-    // Syntect associates .v with Verilog, but Shiki's language ID v means V.
     assert!(syntax_for_label("v").is_none());
-    assert_eq!(syntax_for_label("module.v").unwrap().name, "Verilog");
+    assert_eq!(
+        syntax_for_label("module.v")
+            .unwrap()
+            .name,
+        "Verilog"
+    );
     assert!(syntax_for_label("angular-html").is_none());
     assert!(syntax_for_label("invented-language").is_none());
 }
@@ -99,17 +106,26 @@ fn file_types_resolve_paths_with_spaces_and_preserve_extension_meanings() {
     for path in ["docs/Orbit Guide.MD", "README.markdown"] {
         assert_eq!(syntax_for_path(path).unwrap().name, "Markdown", "{path}");
     }
-    assert_eq!(syntax_for_path("src/markdown.rs").unwrap().name, "Rust");
+    assert_eq!(
+        syntax_for_path("src/markdown.rs")
+            .unwrap()
+            .name,
+        "Rust"
+    );
     assert!(syntax_for_path("docs/notes.mdx").is_none());
     assert_eq!(
-        syntax_for_path("docs.md/notes.txt").unwrap().name,
+        syntax_for_path("docs.md/notes.txt")
+            .unwrap()
+            .name,
         "Plain Text"
     );
     for path in ["src/Orbit Code.RS", r"C:\Orbit Code\main.rs"] {
         assert_eq!(syntax_for_path(path).unwrap().name, "Rust", "{path}");
     }
     assert_eq!(
-        syntax_for_path("src/Orbit Module.v").unwrap().name,
+        syntax_for_path("src/Orbit Module.v")
+            .unwrap()
+            .name,
         "Verilog"
     );
     assert!(syntax_for_path("Dockerfile").is_some());

@@ -20,7 +20,11 @@ impl MigrationTrait for Migration {
                             .not_null()
                             .primary_key(),
                     )
-                    .col(ColumnDef::new(Alias::new("session_id")).text().not_null())
+                    .col(
+                        ColumnDef::new(Alias::new("session_id"))
+                            .text()
+                            .not_null(),
+                    )
                     .foreign_key(
                         ForeignKey::create()
                             .from(Alias::new("task_claims"), Alias::new("task_id"))
@@ -49,7 +53,11 @@ impl MigrationTrait for Migration {
             .create_table(
                 Table::create()
                     .table(Alias::new("task_dependencies"))
-                    .col(ColumnDef::new(Alias::new("task_id")).integer().not_null())
+                    .col(
+                        ColumnDef::new(Alias::new("task_id"))
+                            .integer()
+                            .not_null(),
+                    )
                     .col(
                         ColumnDef::new(Alias::new("depends_on_id"))
                             .integer()
@@ -89,6 +97,7 @@ impl MigrationTrait for Migration {
             .await?;
         Ok(())
     }
+
     async fn down(&self, _: &SchemaManager) -> Result<(), DbErr> {
         super::forward_only()
     }

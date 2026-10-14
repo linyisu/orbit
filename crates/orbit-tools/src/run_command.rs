@@ -106,7 +106,7 @@ impl CommandLimits {
             );
         }
 
-        if !(1..=1024).contains(&self.max_scan_mib)
+        if !(1..=1_024).contains(&self.max_scan_mib)
             || !(1..=100_000).contains(&self.max_scan_entries)
         {
             return Err("max_scan_mib must be 1..1024 and max_scan_entries 1..100000");
@@ -114,16 +114,20 @@ impl CommandLimits {
 
         self.process_limits.validate()?;
         if self.verification_commands.len() > 16
-            || self.verification_commands.iter().any(|(name, cmd)| {
-                name.is_empty()
-                    || name.len() > 64
-                    || cmd.trim().is_empty()
-                    || cmd.len() > 4096
-                    || cmd.contains('\0')
-            })
+            || self
+                .verification_commands
+                .iter()
+                .any(|(name, cmd)| {
+                    name.is_empty()
+                        || name.len() > 64
+                        || cmd.trim().is_empty()
+                        || cmd.len() > 4_096
+                        || cmd.contains('\0')
+                })
         {
             return Err(
-                "at most 16 named verification commands; commands must be nonempty and at most 4096 bytes",
+                "at most 16 named verification commands; commands must be nonempty and at most \
+                    4096 bytes",
             );
         }
 
@@ -173,24 +177,59 @@ impl Tool for RunCommand {
         ToolDefinition::function(
             "run_command",
             format!(
-                "Run builds, tests, Git, local processing or operations that need a shell. Prefer web_search/web_fetch for ordinary public web research, edit_file for localized text edits and write_file for new files. Scripts remain appropriate for bulk transformations or requests needing authentication/custom headers that web_fetch cannot provide. Uses the target user's shell, HOME, environment and real working directory, without a filesystem or network sandbox. workspace_access and network declare intended effects for approval, not OS restrictions. Auto approves all commands started in the workspace, including networked scripts; Ask requests confirmation; Yolo approves automatically. Approval does not confine a command to its starting directory. Save generated files in the project or a user-specified location; these outputs belong to the user. Timeout, cancellation and resource/output limits apply. background=true returns a job_id; use wait_commands when idle and read_command_output for temporary raw logs. Raw logs are deleted at task end; bounded results remain in history. Jobs do not survive a service restart. Verification commands: {}.",
+                "Run builds, tests, Git, local processing or operations that need a shell. Prefer \
+                    web_search/web_fetch for ordinary public web research, edit_file for \
+                    localized text edits and write_file for new files. Scripts remain appropriate \
+                    for bulk transformations or requests needing authentication/custom headers \
+                    that web_fetch cannot provide. Uses the target user's shell, HOME, \
+                    environment and real working directory, without a filesystem or network \
+                    sandbox. workspace_access and network declare intended effects for approval, \
+                    not OS restrictions. Auto approves all commands started in the workspace, \
+                    including networked scripts; Ask requests confirmation; Yolo approves \
+                    automatically. Approval does not confine a command to its starting directory. \
+                    Save generated files in the project or a user-specified location; these \
+                    outputs belong to the user. Timeout, cancellation and resource/output limits \
+                    apply. background=true returns a job_id; use wait_commands when idle and \
+                    read_command_output for temporary raw logs. Raw logs are deleted at task end; \
+                    bounded results remain in history. Jobs do not survive a service restart. \
+                    Verification commands: {}.",
                 serde_json::to_string(&self.limits.verification_commands).unwrap_or_default()
             ),
             json!({
                 "type": "object",
                 "properties": {
-                    "command": { "type": "string", "description": "The shell command to execute" },
-                    "background": { "type": "boolean", "default": false, "description": "Run independently and immediately return a job_id; wait_commands sleeps without model requests and completions are delivered automatically" },
-                    "network": { "type": "string", "enum": ["deny", "allow"], "default": "deny", "description": "Request network access explicitly; cannot exceed the configured policy" },
+                    "command": {
+                        "type": "string",
+                        "description": "The shell command to execute"
+                    },
+                    "background": {
+                        "type": "boolean",
+                        "default": false,
+                        "description": "Run independently and immediately return a job_id; \
+                            wait_commands sleeps without model requests and completions are \
+                            delivered automatically"
+                    },
+                    "network": {
+                        "type": "string",
+                        "enum": ["deny", "allow"],
+                        "default": "deny",
+                        "description": "Request network access explicitly; cannot exceed the \
+                            configured policy"
+                    },
                     "cwd": {
                         "type": "string",
-                        "description": "Optional working directory for the command. Relative paths are resolved against the workspace root. Defaults to the workspace root."
+                        "description": "Optional working directory for the command. Relative paths \
+                            are resolved against the workspace root. Defaults to the workspace \
+                            root."
                     },
                     "workspace_access": {
                         "type": "string",
                         "enum": ["read", "read_write"],
                         "default": "read",
-                        "description": "Declared workspace access for approval, not an OS restriction. Defaults to 'read'. Specify 'read_write' if the command needs to modify files in the workspace (such as cargo build, npm install, code generation)."
+                        "description": "Declared workspace access for approval, not an OS \
+                            restriction. Defaults to 'read'. Specify 'read_write' if the command \
+                            needs to modify files in the workspace (such as cargo build, npm \
+                            install, code generation)."
                     },
                     "timeout_seconds": {
                         "type": "integer",
@@ -210,7 +249,9 @@ impl Tool for RunCommand {
         Box::pin(async move {
             let args: Arguments = serde_json::from_str(&call.function.arguments)
                 .map_err(|e| invalid(e.to_string()))?;
-            self.limits.validate().map_err(invalid)?;
+            self.limits
+                .validate()
+                .map_err(invalid)?;
             if args.background && self.jobs.is_none() {
                 return Err(invalid(
                     "background commands are unavailable for this adapter",
@@ -256,7 +297,11 @@ impl Tool for RunCommand {
 
             let workspace_access = args.workspace_access;
             if args.network.is_allowed()
-                && (!self.workspace.policy().network_policy().is_allowed()
+                && (!self
+                    .workspace
+                    .policy()
+                    .network_policy()
+                    .is_allowed()
                     || !self.limits.network.is_allowed())
             {
                 return Err(invalid("network access is disabled by the command policy"));
@@ -266,7 +311,12 @@ impl Tool for RunCommand {
             let mut external_capabilities = Vec::new();
             let mut external_write = false;
 
-            for r in &self.workspace.policy().effective_policy().persistent_read {
+            for r in &self
+                .workspace
+                .policy()
+                .effective_policy()
+                .persistent_read
+            {
                 external_capabilities.push(format!("{} (ro, persistent)", r.canonical().display()));
             }
 
@@ -281,7 +331,12 @@ impl Tool for RunCommand {
                     .push(format!("{} (rw, persistent)", rw.canonical().display()));
             }
 
-            if let Ok(store) = self.workspace.policy().session_grants().read() {
+            if let Ok(store) = self
+                .workspace
+                .policy()
+                .session_grants()
+                .read()
+            {
                 for grant in store.grants() {
                     if !grant.environment.is_local() {
                         continue;
@@ -300,7 +355,10 @@ impl Tool for RunCommand {
             let request = ApprovalRequest {
                 preview: ApprovalPreview::Command(CommandPreview {
                     command: args.command.clone(),
-                    cwd: args.cwd.clone().filter(|s| !s.is_empty()),
+                    cwd: args
+                        .cwd
+                        .clone()
+                        .filter(|s| !s.is_empty()),
                     workspace_access,
                     timeout_seconds,
                     network_allowed,
@@ -313,7 +371,9 @@ impl Tool for RunCommand {
             tokio::select! {
                 biased;
                 _ = cancellation.cancelled() => return Err(ToolError::Cancelled),
-                result = self.approvals.send(request) => result.map_err(|_| ToolError::ExecutionFailed("command approval unavailable".into()))?,
+                result = self.approvals.send(request) => result.map_err(|_| {
+                    ToolError::ExecutionFailed("command approval unavailable".into())
+                })?,
             }
             let approved = tokio::select! {
                 biased;
@@ -376,13 +436,19 @@ impl Tool for RunCommand {
             .with_verification(fingerprint, workspace_files, skipped_entries);
 
             let execution_policy = ExecutionPolicy {
-                resources: self.limits.process_limits.clone().into(),
+                resources: self
+                    .limits
+                    .process_limits
+                    .clone()
+                    .into(),
                 ..Default::default()
             };
 
             let workspace = self.workspace.clone();
             let scan_limits = self.limits.clone().into();
-            let output_id = output_log.as_ref().map(|log| log.id().to_owned());
+            let output_id = output_log
+                .as_ref()
+                .map(|log| log.id().to_owned());
             let command = request.command.clone();
             let background = args.background;
             let execute = move |token: CancellationToken| async move {
@@ -427,7 +493,8 @@ impl Tool for RunCommand {
                             .as_ref()
                             .is_some_and(|output| output.digest != evidence.input.digest)
                     {
-                        let warning = "workspace changed while the background command was running; this result does not verify the current workspace";
+                        let warning = "workspace changed while the background command was running; \
+                            this result does not verify the current workspace";
                         if let Some(existing) = &mut verification_error {
                             existing.push_str("; ");
                             existing.push_str(warning);
@@ -467,7 +534,8 @@ impl Tool for RunCommand {
                     "background": true,
                     "running": true,
                     "status": job.status,
-                    "message": "Command started in the background. Completion will be delivered automatically; use wait_commands when there is no independent work."
+                    "message": "Command started in the background. Completion will be delivered \
+                        automatically; use wait_commands when there is no independent work."
                 }).to_string());
 
                 output.background_job = Some(job.job_id);
@@ -492,11 +560,15 @@ mod configuration_tests {
 
     #[test]
     fn command_configuration_validates_scan_and_process_budgets() {
-        let limits: CommandLimits = toml::from_str("max_scan_mib=128\nmax_scan_entries=20000\n[verification_commands]\ntest='cargo test --offline'\n").unwrap();
+        let limits: CommandLimits = toml::from_str(
+            "max_scan_mib=128\nmax_scan_entries=20000\n[veri\
+            fication_commands]\ntest='cargo test --offline'\n",
+        )
+        .unwrap();
 
         assert!(limits.validate().is_ok());
         assert_eq!(limits.max_scan_mib, 128);
-        assert_eq!(limits.max_scan_entries, 20000);
+        assert_eq!(limits.max_scan_entries, 20_000);
 
         let offline: CommandLimits = toml::from_str("network='deny'").unwrap();
 
@@ -511,7 +583,8 @@ mod configuration_tests {
         assert!(bad.validate().is_err());
 
         let mut bad = limits.clone();
-        bad.process_limits.max_memory_bytes = 1024; // < 16 MiB
+        // < 16 MiB
+        bad.process_limits.max_memory_bytes = 1_024;
 
         assert!(bad.validate().is_err());
     }

@@ -4,7 +4,9 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 #[tokio::test]
 async fn background_model_refresh_updates_the_open_session_catalog() {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .unwrap();
     let fixture = Fixture::new(&format!("http://{}/v1", listener.local_addr().unwrap())).await;
     let mut config = crate::config::FileConfig::load(
         &fixture.service.options.config,
@@ -31,7 +33,11 @@ async fn background_model_refresh_updates_the_open_session_catalog() {
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     fs::write(path, r#"{"source":{"url":"https://models.dev/api.json"},"providers":{"fixture":{"models":{"test":{"limit":{"context":128000}}}}}}"#).unwrap();
     let info = open(&fixture, None).await;
-    let handle = fixture.service.session(&info.id).await.unwrap();
+    let handle = fixture
+        .service
+        .session(&info.id)
+        .await
+        .unwrap();
     let (mut socket, _) = tokio::time::timeout(Duration::from_secs(2), listener.accept())
         .await
         .unwrap()
@@ -46,10 +52,25 @@ async fn background_model_refresh_updates_the_open_session_catalog() {
             .starts_with("GET /v1/models")
     );
     let body = r#"{"data":[{"id":"test","context_tokens":200000}]}"#;
-    socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+    socket
+        .write_all(
+            format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: \
+        {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            )
+            .as_bytes(),
+        )
+        .await
+        .unwrap();
     tokio::time::timeout(Duration::from_secs(2), async {
         loop {
-            if handle.current_info().await.context_tokens == 200000 {
+            if handle
+                .current_info()
+                .await
+                .context_tokens
+                == 200_000
+            {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -57,7 +78,10 @@ async fn background_model_refresh_updates_the_open_session_catalog() {
     })
     .await
     .expect("background refresh never reached the opened session");
-    handle.command(session::Command::Close).await.unwrap();
+    handle
+        .command(session::Command::Close)
+        .await
+        .unwrap();
 }
 
 const MCP: &str = r#"touch "$1"
@@ -77,10 +101,16 @@ fn enable_mcp(fixture: &mut Fixture) -> (PathBuf, PathBuf) {
         &fixture.service.options.auth_directory,
     )
     .unwrap();
-    config.mcp = serde_json::from_value(serde_json::json!({"servers": {"echo": {
-        "command": "/bin/sh", "enabled": true, "timeout_seconds": 5,
-        "args": ["-c", MCP, "fixture", started, release]
-    }}}))
+    config.mcp = serde_json::from_value(serde_json::json!({
+        "servers": {
+            "echo": {
+                "command": "/bin/sh",
+                "enabled": true,
+                "timeout_seconds": 5,
+                "args": ["-c", MCP, "fixture", started, release]
+            }
+        }
+    }))
     .unwrap();
     fs::write(
         &fixture.service.options.config,
@@ -114,7 +144,9 @@ async fn open(fixture: &Fixture, resume: Option<String>) -> SessionInfo {
 
 #[tokio::test]
 async fn new_and_saved_sessions_open_while_model_refresh_and_mcp_are_stalled() {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .unwrap();
     let mut fixture = Fixture::new(&format!("http://{}/v1", listener.local_addr().unwrap())).await;
     let (_started, _release) = enable_mcp(&mut fixture);
     let mut config = crate::config::FileConfig::load(
@@ -170,11 +202,31 @@ async fn new_and_saved_sessions_open_while_model_refresh_and_mcp_are_stalled() {
     let fresh = open(&fixture, None).await;
     assert_ne!(fresh.id, saved);
     assert!(!fresh.persisted);
-    assert_eq!(open(&fixture, Some(saved.clone())).await.id, saved);
-    let handle = fixture.service.session(&saved).await.unwrap();
+    assert_eq!(
+        open(&fixture, Some(saved.clone()))
+            .await
+            .id,
+        saved
+    );
+    let handle = fixture
+        .service
+        .session(&saved)
+        .await
+        .unwrap();
     let page = handle.page(0, 0).await.unwrap();
-    assert!(page.updates.iter().any(|update| matches!(update, orbit_protocol::Update::Started { prompt, .. } if prompt == "saved message")));
-    let Snapshot::Mcp(statuses) = handle.resources(Action::Mcp, None).await.unwrap() else {
+    assert!(
+        page.updates
+            .iter()
+            .any(|update| matches!(
+                update,
+                orbit_protocol::Update::Started { prompt, .. } if prompt == "saved message"
+            ))
+    );
+    let Snapshot::Mcp(statuses) = handle
+        .resources(Action::Mcp, None)
+        .await
+        .unwrap()
+    else {
         panic!()
     };
     assert_eq!(statuses[0].detail, "正在连接");
@@ -193,11 +245,17 @@ async fn new_and_saved_sessions_open_while_model_refresh_and_mcp_are_stalled() {
 
 #[tokio::test]
 async fn first_send_waits_for_mcp_tools_without_blocking_control_commands() {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .unwrap();
     let mut fixture = Fixture::new(&format!("http://{}/v1", listener.local_addr().unwrap())).await;
     let (started, release) = enable_mcp(&mut fixture);
     let info = open(&fixture, None).await;
-    let handle = fixture.service.session(&info.id).await.unwrap();
+    let handle = fixture
+        .service
+        .session(&info.id)
+        .await
+        .unwrap();
     tokio::time::timeout(Duration::from_secs(2), async {
         while !started.exists() {
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -229,7 +287,10 @@ async fn first_send_waits_for_mcp_tools_without_blocking_control_commands() {
     .unwrap()
     .unwrap();
     assert!(!canceled.is_finished());
-    handle.command(session::Command::Cancel).await.unwrap();
+    handle
+        .command(session::Command::Cancel)
+        .await
+        .unwrap();
     assert!(
         canceled
             .await
@@ -267,7 +328,13 @@ async fn first_send_waits_for_mcp_tools_without_blocking_control_commands() {
             if request["stream"] == true { break (socket, request); }
             // Session title generation races with the main streaming request.
             let body = r#"{"choices":[{"message":{"role":"assistant","content":"test"},"finish_reason":"stop"}]}"#;
-            socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+            socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: \
+                application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body
+                    .len())
+                    .as_bytes())
+                    .await
+                    .unwrap();
         }
     }).await.unwrap();
     assert!(
@@ -277,9 +344,23 @@ async fn first_send_waits_for_mcp_tools_without_blocking_control_commands() {
             .iter()
             .any(|tool| tool["function"]["name"] == "mcp__echo__echo")
     );
-    let body = "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"done\"}}]}\n\ndata: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n";
-    socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
-    handle.command(session::Command::Cancel).await.unwrap();
+    let body = "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"done\"}}]}\n\ndata: \
+        {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n";
+    socket
+        .write_all(
+            format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: \
+        {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            )
+            .as_bytes(),
+        )
+        .await
+        .unwrap();
+    handle
+        .command(session::Command::Cancel)
+        .await
+        .unwrap();
     tokio::time::timeout(Duration::from_secs(3), async {
         while handle.view.lock().await.busy {
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -287,5 +368,8 @@ async fn first_send_waits_for_mcp_tools_without_blocking_control_commands() {
     })
     .await
     .unwrap();
-    handle.command(session::Command::Close).await.unwrap();
+    handle
+        .command(session::Command::Close)
+        .await
+        .unwrap();
 }

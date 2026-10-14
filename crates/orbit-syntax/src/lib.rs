@@ -76,7 +76,10 @@ fn normalized_label(info: &str) -> String {
         .trim_start_matches('.')
         .to_ascii_lowercase();
 
-    label.strip_prefix("language-").unwrap_or(&label).to_owned()
+    label
+        .strip_prefix("language-")
+        .unwrap_or(&label)
+        .to_owned()
 }
 
 fn language(label: &str) -> Option<&'static Language> {
@@ -127,16 +130,21 @@ pub fn syntax_for_label(info: &str) -> Option<&'static SyntaxReference> {
         return syntax(language);
     }
 
-    SYNTAXES.find_syntax_by_token(token).or_else(|| {
-        token
-            .rsplit_once('.')
-            .and_then(|(_, extension)| SYNTAXES.find_syntax_by_extension(extension))
-    })
+    SYNTAXES
+        .find_syntax_by_token(token)
+        .or_else(|| {
+            token
+                .rsplit_once('.')
+                .and_then(|(_, extension)| SYNTAXES.find_syntax_by_extension(extension))
+        })
 }
 
 /// Resolve a file path by its filename or extension without reading the file.
 pub fn syntax_for_path(path: &str) -> Option<&'static SyntaxReference> {
-    let filename = path.rsplit(['/', '\\']).next().unwrap_or(path);
+    let filename = path
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(path);
     let extension = filename
         .rsplit_once('.')
         .map_or(filename, |(_, extension)| extension);

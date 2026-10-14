@@ -23,20 +23,20 @@ impl Default for CompactionSettings {
     fn default() -> Self {
         Self {
             model: None,
-            max_input_tokens: 16384,
-            max_output_tokens: 4096,
+            max_input_tokens: 16_384,
+            max_output_tokens: 4_096,
             request_timeout_seconds: 120,
             total_timeout_seconds: 360,
             manual_request_timeout_seconds: 180,
-            manual_total_timeout_seconds: 3600,
+            manual_total_timeout_seconds: 3_600,
         }
     }
 }
 
 impl CompactionSettings {
     pub fn validate(&self) -> Result<(), &'static str> {
-        if !(1024..=1_000_000).contains(&self.max_input_tokens)
-            || !(256..=32768).contains(&self.max_output_tokens)
+        if !(1_024..=1_000_000).contains(&self.max_input_tokens)
+            || !(256..=32_768).contains(&self.max_output_tokens)
         {
             return Err(
                 "compaction max_input_tokens must be 1024..1000000 and max_output_tokens 256..32768",
@@ -45,13 +45,15 @@ impl CompactionSettings {
 
         if self.request_timeout_seconds == 0
             || self.request_timeout_seconds > self.total_timeout_seconds
-            || self.total_timeout_seconds > 3600
+            || self.total_timeout_seconds > 3_600
             || self.manual_request_timeout_seconds == 0
             || self.manual_request_timeout_seconds > self.manual_total_timeout_seconds
-            || self.manual_total_timeout_seconds > 3600
+            || self.manual_total_timeout_seconds > 3_600
         {
             return Err(
-                "compaction timeouts must satisfy 1 <= request_timeout_seconds <= total_timeout_seconds <= 3600 and 1 <= manual_request_timeout_seconds <= manual_total_timeout_seconds <= 3600",
+                "compaction timeouts must satisfy 1 <= request_timeout_seconds <= \
+                    total_timeout_seconds <= 3600 and 1 <= manual_request_timeout_seconds <= \
+                    manual_total_timeout_seconds <= 3600",
             );
         }
 
@@ -77,7 +79,10 @@ impl CompactionRuntime {
         let mut runtime = self.clone();
 
         if runtime.backend.is_none() {
-            runtime.settings.max_input_tokens = runtime.settings.max_input_tokens.min(input);
+            runtime.settings.max_input_tokens = runtime
+                .settings
+                .max_input_tokens
+                .min(input);
         }
 
         runtime

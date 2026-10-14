@@ -187,8 +187,14 @@ impl LinkedLine {
 
     pub fn shift_offsets(&mut self, amount: isize) {
         for target in &mut self.media {
-            target.range.start = target.range.start.saturating_add_signed(amount);
-            target.range.end = target.range.end.saturating_add_signed(amount);
+            target.range.start = target
+                .range
+                .start
+                .saturating_add_signed(amount);
+            target.range.end = target
+                .range
+                .end
+                .saturating_add_signed(amount);
         }
 
         self.links.retain_mut(|link| {
@@ -197,7 +203,9 @@ impl LinkedLine {
             link.start < link.end
         });
         self.decorations.retain_mut(|range| {
-            range.start = range.start.saturating_add_signed(amount);
+            range.start = range
+                .start
+                .saturating_add_signed(amount);
             range.end = range.end.saturating_add_signed(amount);
             range.start < range.end
         });
@@ -205,11 +213,16 @@ impl LinkedLine {
 
     pub fn framed(mut self, leading: Vec<Span<'static>>, trailing: Vec<Span<'static>>) -> Self {
         if let Some(table) = &mut self.table {
-            table.leading.splice(0..0, leading.clone());
+            table
+                .leading
+                .splice(0..0, leading.clone());
             table.trailing.extend(trailing.clone());
         }
 
-        let columns = leading.iter().map(Span::width).sum::<usize>();
+        let columns = leading
+            .iter()
+            .map(Span::width)
+            .sum::<usize>();
         for graphic in &mut self.graphics {
             graphic.x = graphic.x.saturating_add(columns as u16);
         }
@@ -225,7 +238,12 @@ impl LinkedLine {
         for span in &mut self.line.spans {
             span.style = self.line.style.patch(span.style);
         }
-        self.shift_offsets(leading.iter().map(|span| span.content.len()).sum::<usize>() as isize);
+        self.shift_offsets(
+            leading
+                .iter()
+                .map(|span| span.content.len())
+                .sum::<usize>() as isize,
+        );
         self.line.spans.splice(0..0, leading);
         self.line.spans.extend(trailing);
         self.line.style = Style::default();
@@ -264,19 +282,22 @@ pub(super) struct Context<'a> {
 
 impl<'a> Context<'a> {
     pub(super) fn math_candidate(source: &str) -> bool {
-        source.trim_start_matches(' ').starts_with("$$")
+        source
+            .trim_start_matches(' ')
+            .starts_with("$$")
             && !source.starts_with("    ")
             && !source.starts_with('\t')
     }
 
+    /// The parser owns delimiter matching, escaping and multiline math. The inexpensive prefix
+    /// check avoids parsing the rest of a transcript for each ordinary text line.
     pub(super) fn math_block(&self, source: &str) -> Option<(usize, Vec<LinkedLine>)> {
-        // The parser owns delimiter matching, escaping and multiline math.
-        // The inexpensive prefix check avoids parsing the rest of a transcript
-        // for each ordinary text line.
         if !Self::math_candidate(source) {
             return None;
         }
-        let mut parser = self.parse(source, Options::ENABLE_MATH).into_offset_iter();
+        let mut parser = self
+            .parse(source, Options::ENABLE_MATH)
+            .into_offset_iter();
         let (event, range) = parser.next()?;
         let (event, range) = if matches!(event, Event::Start(Tag::Paragraph)) {
             parser.next()?
@@ -317,19 +338,25 @@ impl<'a> Context<'a> {
     }
 
     pub fn definitions(&self) -> Vec<(String, String, Option<String>)> {
-        let mut definitions = self.parser.as_ref().map_or_else(Vec::new, |parser| {
-            parser
-                .reference_definitions()
-                .iter()
-                .map(|(label, definition)| {
-                    (
-                        label.to_owned(),
-                        definition.dest.to_string(),
-                        definition.title.as_ref().map(ToString::to_string),
-                    )
-                })
-                .collect::<Vec<_>>()
-        });
+        let mut definitions = self
+            .parser
+            .as_ref()
+            .map_or_else(Vec::new, |parser| {
+                parser
+                    .reference_definitions()
+                    .iter()
+                    .map(|(label, definition)| {
+                        (
+                            label.to_owned(),
+                            definition.dest.to_string(),
+                            definition
+                                .title
+                                .as_ref()
+                                .map(ToString::to_string),
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            });
 
         definitions.sort();
         definitions.extend(
@@ -348,7 +375,8 @@ impl<'a> Context<'a> {
         path: &str,
         depth: usize,
     ) -> Option<(usize, Vec<LinkedLine>)> {
-        self.footnotes.block(offset, width, path, depth, self)
+        self.footnotes
+            .block(offset, width, path, depth, self)
     }
 
     fn parse<'s>(
@@ -360,7 +388,10 @@ impl<'a> Context<'a> {
             source,
             options,
             Some(move |link: BrokenLink<'s>| {
-                if let Some(url) = self.references.get(link.reference.as_ref()) {
+                if let Some(url) = self
+                    .references
+                    .get(link.reference.as_ref())
+                {
                     return Some((CowStr::from(url.clone()), CowStr::from("")));
                 }
                 let definition = self
@@ -405,7 +436,10 @@ impl Context<'_> {
         let mut protected = Vec::new();
         let mut opening = Vec::new();
         let mut closing = Vec::new();
-        for (event, range) in self.parse(source, Options::ENABLE_MATH).into_offset_iter() {
+        for (event, range) in self
+            .parse(source, Options::ENABLE_MATH)
+            .into_offset_iter()
+        {
             let delimiter = match event {
                 Event::Start(Tag::Strong) => 2,
                 Event::Start(Tag::Emphasis) => 1,
@@ -594,7 +628,10 @@ fn document_with_context(
             continue;
         }
 
-        let part = remaining.split_inclusive('\n').next().unwrap();
+        let part = remaining
+            .split_inclusive('\n')
+            .next()
+            .unwrap();
         let source = part.trim_end_matches(['\r', '\n']);
         out.extend(context.linked_lines(source, index, &mut fence, &mut inline));
         remaining = &remaining[part.len()..];
@@ -625,7 +662,9 @@ pub(super) fn expand_rule(line: &mut Line<'static>, width: u16) -> bool {
 use super::theme::THEME;
 
 pub(super) fn mark_style(style: Style) -> Style {
-    style.fg(THEME.md_mark).add_modifier(Modifier::UNDERLINED)
+    style
+        .fg(THEME.md_mark)
+        .add_modifier(Modifier::UNDERLINED)
 }
 
 /// Byte ranges and normalized targets for visible, bare web addresses.
@@ -634,7 +673,10 @@ pub(super) fn mark_style(style: Style) -> Style {
 fn bare_urls(text: &str) -> Vec<(std::ops::Range<usize>, String)> {
     let mut found: Vec<(std::ops::Range<usize>, String)> = Vec::new();
 
-    for (start, _) in text.match_indices("http").chain(text.match_indices("www.")) {
+    for (start, _) in text
+        .match_indices("http")
+        .chain(text.match_indices("www."))
+    {
         if start > 0
             && text[..start]
                 .chars()
@@ -662,18 +704,32 @@ fn bare_urls(text: &str) -> Vec<(std::ops::Range<usize>, String)> {
                 })
                 .unwrap_or(remainder.len());
 
-        while text[..end].chars().next_back().is_some_and(|ch| {
-            matches!(
-                ch,
-                '.' | ',' | ';' | ':' | '!' | '?' | '，' | '。' | '！' | '？' | '；' | '：'
-            )
-        }) {
-            end -= text[..end].chars().next_back().unwrap().len_utf8();
+        while text[..end]
+            .chars()
+            .next_back()
+            .is_some_and(|ch| {
+                matches!(
+                    ch,
+                    '.' | ',' | ';' | ':' | '!' | '?' | '，' | '。' | '！' | '？' | '；' | '：'
+                )
+            })
+        {
+            end -= text[..end]
+                .chars()
+                .next_back()
+                .unwrap()
+                .len_utf8();
         }
 
         while text[..end].ends_with(')')
-            && text[start..end].chars().filter(|&ch| ch == ')').count()
-                > text[start..end].chars().filter(|&ch| ch == '(').count()
+            && text[start..end]
+                .chars()
+                .filter(|&ch| ch == ')')
+                .count()
+                > text[start..end]
+                    .chars()
+                    .filter(|&ch| ch == '(')
+                    .count()
         {
             end -= 1;
         }
@@ -816,7 +872,10 @@ fn push_text_with_cjk_strong(
             push_text_with_bare_links(spans, &rest[..open], style, recover_mark);
         }
 
-        let strong_fg = if style.add_modifier.contains(Modifier::ITALIC) {
+        let strong_fg = if style
+            .add_modifier
+            .contains(Modifier::ITALIC)
+        {
             THEME.md_bold_italic
         } else {
             THEME.md_bold
@@ -825,7 +884,9 @@ fn push_text_with_cjk_strong(
         push_text_with_bare_links(
             spans,
             content,
-            style.fg(strong_fg).add_modifier(Modifier::BOLD),
+            style
+                .fg(strong_fg)
+                .add_modifier(Modifier::BOLD),
             recover_mark,
         );
         rest = &after_open[close + 2..];
@@ -872,13 +933,20 @@ fn recover_split_strong(spans: &mut Vec<Span<'static>>, start: usize, recover: b
         spans.drain(open..open + 2);
 
         for span in &mut spans[open..close - 2] {
-            let strong_fg = if span.style.add_modifier.contains(Modifier::ITALIC) {
+            let strong_fg = if span
+                .style
+                .add_modifier
+                .contains(Modifier::ITALIC)
+            {
                 THEME.md_bold_italic
             } else {
                 THEME.md_bold
             };
 
-            span.style = span.style.fg(strong_fg).add_modifier(Modifier::BOLD);
+            span.style = span
+                .style
+                .fg(strong_fg)
+                .add_modifier(Modifier::BOLD);
         }
 
         open = close - 2;
@@ -893,7 +961,8 @@ fn links(source: &str, rendered: &Line<'_>) -> Vec<LinkTarget> {
 impl Context<'_> {
     #[cfg(test)]
     pub fn links(&self, source: &str, _rendered: &Line<'_>) -> Vec<LinkTarget> {
-        self.linked_line(source, 0, &mut None).links
+        self.linked_line(source, 0, &mut None)
+            .links
     }
 }
 
@@ -973,13 +1042,17 @@ pub(super) fn line(source: &str, index: usize, fence: &mut Fence) -> Line<'stati
 impl Context<'_> {
     #[cfg(test)]
     pub fn line(&self, source: &str, index: usize, fence: &mut Fence) -> Line<'static> {
-        self.linked_line(source, index, fence).line
+        self.linked_line(source, index, fence)
+            .line
     }
 
     fn code_line(&self, source: &str, fence: &mut Fence) -> Option<Line<'static>> {
         let trimmed = source.trim_start();
         let marker = trimmed.chars().next().unwrap_or(' ');
-        let count = trimmed.chars().take_while(|c| *c == marker).count();
+        let count = trimmed
+            .chars()
+            .take_while(|c| *c == marker)
+            .count();
 
         if let Some(code) = fence {
             // Models frequently show a Markdown document inside a Markdown fence,
@@ -1016,7 +1089,9 @@ impl Context<'_> {
             }
 
             let indent = " ".repeat(code.indent);
-            let code_line = source.strip_prefix(&indent).unwrap_or(source);
+            let code_line = source
+                .strip_prefix(&indent)
+                .unwrap_or(source);
             return Some(
                 code.renderer
                     .render(

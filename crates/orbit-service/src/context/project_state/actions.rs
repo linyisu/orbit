@@ -31,7 +31,10 @@ pub async fn task(
     let result = match action {
         TaskAction::List { include_completed } => {
             return Ok(TaskResult::List(
-                session.store.tasks(project, include_completed).await?,
+                session
+                    .store
+                    .tasks(project, include_completed)
+                    .await?,
             ));
         }
         TaskAction::Add { title } => {
@@ -122,13 +125,19 @@ pub async fn memory(
     let result = match action {
         MemoryAction::List { include_inactive } => {
             return Ok(MemoryResult::List(
-                session.store.session_memories(id, include_inactive).await?,
+                session
+                    .store
+                    .session_memories(id, include_inactive)
+                    .await?,
             ));
         }
         MemoryAction::Search { query } => {
             ensure!(!query.trim().is_empty(), "搜索内容不能为空。");
             let query = query.trim().to_owned();
-            let memories = session.store.search_session_memories(id, &query, 8).await?;
+            let memories = session
+                .store
+                .search_session_memories(id, &query, 8)
+                .await?;
             return Ok(MemoryResult::Search { query, memories });
         }
         MemoryAction::Add { category, content } => {
@@ -160,7 +169,10 @@ pub async fn memory(
 
 fn concise_title(content: &str) -> String {
     const MAX_CHARS: usize = 72;
-    let mut title: String = content.chars().take(MAX_CHARS).collect();
+    let mut title: String = content
+        .chars()
+        .take(MAX_CHARS)
+        .collect();
     if content.chars().nth(MAX_CHARS).is_some() {
         title.push('…');
     }

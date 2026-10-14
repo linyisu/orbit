@@ -59,7 +59,12 @@ fn no_locks(root: &Path) {
     assert!(!root.join(".git/HEAD.lock").exists());
     let head = fs::read_to_string(root.join(".git/HEAD")).unwrap();
     if let Some(name) = head.trim().strip_prefix("ref: ") {
-        assert!(!root.join(".git").join(format!("{name}.lock")).exists());
+        assert!(
+            !root
+                .join(".git")
+                .join(format!("{name}.lock"))
+                .exists()
+        );
     }
 }
 
@@ -282,12 +287,22 @@ fn unsupported_index_and_symlink_admin_preserve_readonly_review() {
     let reviewed = review_index_patch(&workspace, "tracked.txt", false, false).unwrap();
     assert!(reviewed.patch.contains("+working"));
     assert!(reviewed.index_receipt.is_none());
-    assert!(reviewed.index_note.unwrap().contains("v2/v3"));
+    assert!(
+        reviewed
+            .index_note
+            .unwrap()
+            .contains("v2/v3")
+    );
     git(root, &["update-index", "--index-version=2"]);
     git(root, &["update-index", "--split-index"]);
     let reviewed = review_index_patch(&workspace, "tracked.txt", false, false).unwrap();
     assert!(reviewed.index_receipt.is_none());
-    assert!(reviewed.index_note.unwrap().contains("split/sparse"));
+    assert!(
+        reviewed
+            .index_note
+            .unwrap()
+            .contains("split/sparse")
+    );
 
     let directory = repository();
     let root = directory.path();
@@ -314,7 +329,12 @@ fn protected_alias_and_symlink_worktree_cannot_receive_mutation_receipts() {
     let reviewed = review_index_patch(&workspace, "link.txt", false, true).unwrap();
     assert!(reviewed.patch.contains("120000"));
     assert!(reviewed.index_receipt.is_none());
-    assert!(reviewed.index_note.unwrap().contains("符号链接"));
+    assert!(
+        reviewed
+            .index_note
+            .unwrap()
+            .contains("符号链接")
+    );
     no_locks(root);
 }
 
@@ -367,8 +387,16 @@ fn native_review_shows_and_stages_actual_mode_when_git_ignores_filemode() {
     fs::set_permissions(root.join("tracked.txt"), fs::Permissions::from_mode(0o755)).unwrap();
     let workspace = Workspace::new(root).unwrap();
     let reviewed = review_index_patch(&workspace, "tracked.txt", false, false).unwrap();
-    assert!(reviewed.patch.contains("old mode 100644"));
-    assert!(reviewed.patch.contains("new mode 100755"));
+    assert!(
+        reviewed
+            .patch
+            .contains("old mode 100644")
+    );
+    assert!(
+        reviewed
+            .patch
+            .contains("new mode 100755")
+    );
     let receipt = reviewed.index_receipt.unwrap();
     update(&workspace, "tracked.txt", &receipt, true);
     assert!(
@@ -393,7 +421,12 @@ fn missing_promisor_objects_never_launch_uploadpack_during_review_or_status() {
     let tree = String::from_utf8(git(root, &["rev-parse", "HEAD^{tree}"])).unwrap();
     let tree = tree.trim();
     let marker = configure_promisor_uploadpack(root);
-    fs::remove_file(root.join(".git/objects").join(&tree[..2]).join(&tree[2..])).unwrap();
+    fs::remove_file(
+        root.join(".git/objects")
+            .join(&tree[..2])
+            .join(&tree[2..]),
+    )
+    .unwrap();
     let workspace = Workspace::new(root).unwrap();
     let index_before = fs::read(root.join(".git/index")).unwrap();
     assert!(review_patch(&workspace, "tracked.txt", true, false).is_err());

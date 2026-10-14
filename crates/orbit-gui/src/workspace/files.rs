@@ -13,7 +13,7 @@ use gpui_kit::component::{
 use orbit_protocol::files::{Action, Entry, EntryKind, Snapshot};
 use state::DraftState;
 
-const EDIT_BYTES: usize = 1024 * 1024;
+const EDIT_BYTES: usize = 1_024 * 1_024;
 
 actions!(orbit_gui_files, [SaveFile, RefreshFiles]);
 
@@ -161,10 +161,13 @@ impl Files {
             .as_ref()
             .is_some_and(|document| document.original.is_some())
         {
-            self.editor.focus_handle(cx).focus(window, cx);
+            self.editor
+                .focus_handle(cx)
+                .focus(window, cx);
         } else {
             // Binary previews and an empty editor do not render EditorState.
-            self.tree.update(cx, |tree, cx| tree.focus(window, cx));
+            self.tree
+                .update(cx, |tree, cx| tree.focus(window, cx));
         }
     }
 
@@ -185,7 +188,7 @@ impl Files {
     fn cancel_read(&mut self, cx: &mut Context<Self>) {
         if matches!(
             self.pending,
-            Some(Operation::List { .. } | Operation::Read { .. } | Operation::Compare { .. })
+            Some(Operation::List { .. } | Operation::Read { .. } | Operation::Compare { .. },)
         ) {
             self.invalidate_request("已取消等待，编辑内容已保留", cx);
         }
@@ -327,7 +330,9 @@ impl Files {
                                 TreeItem::new(entry.path.clone(), name.to_owned())
                             })
                             .collect::<Vec<_>>();
-                        files.tree.update(cx, |tree, cx| tree.set_items(items, cx));
+                        files
+                            .tree
+                            .update(cx, |tree, cx| tree.set_items(items, cx));
                     }
                     (Operation::Read { path }, Ok(Response::File(encoded))) => {
                         match base64::engine::general_purpose::STANDARD.decode(encoded) {
@@ -570,15 +575,18 @@ impl Files {
         self.status = None;
         let editor = self.editor.entity_id();
         cx.defer_in(window, move |files, window, cx| {
-            let current = files.owner.upgrade().is_some_and(|owner| {
-                let owner = owner.read(cx);
-                owner.visible
-                    && owner.page == MainPage::Files
-                    && owner
-                        .files
-                        .as_ref()
-                        .is_some_and(|current| current.entity_id() == cx.entity_id())
-            });
+            let current = files
+                .owner
+                .upgrade()
+                .is_some_and(|owner| {
+                    let owner = owner.read(cx);
+                    owner.visible
+                        && owner.page == MainPage::Files
+                        && owner
+                            .files
+                            .as_ref()
+                            .is_some_and(|current| current.entity_id() == cx.entity_id())
+                });
             // A delayed read must not move focus back to a hidden page, an
             // obsolete editor, or behind a newly opened modal surface.
             if current
@@ -687,7 +695,12 @@ impl Files {
                                         window.close_dialog(cx);
                                         let _ = entity
                                             .update(cx, |files, cx| files.discard(window, cx));
-                                        let _ = owner.update(cx, |view, cx| view.close_files(window, cx));
+                                        let _ = owner
+                                            .update(cx,
+                                            |view,
+                                            cx| view
+                                            .close_files(window,
+                                            cx));
                                     }),
                             ),
                     )
@@ -837,7 +850,11 @@ impl Files {
             .readonly(!self.is_editable() || self.busy)
             .size_full();
         let Some(disk) = &self.disk else {
-            return div().flex_1().min_h_0().child(edited).into_any_element();
+            return div()
+                .flex_1()
+                .min_h_0()
+                .child(edited)
+                .into_any_element();
         };
         div()
             .flex_1()
@@ -849,7 +866,13 @@ impl Files {
                             v_flex()
                                 .size_full()
                                 .min_h_0()
-                                .child(div().px_3().py_1().text_sm().child("编辑内容"))
+                                .child(
+                                    div()
+                                        .px_3()
+                                        .py_1()
+                                        .text_sm()
+                                        .child("编辑内容"),
+                                )
                                 .child(div().flex_1().min_h_0().child(edited)),
                         ),
                     )
@@ -915,7 +938,10 @@ impl Files {
 
 impl Render for Files {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let narrow = self.width.unwrap_or(window.viewport_size().width) < window.rem_size() * 46.;
+        let narrow = self
+            .width
+            .unwrap_or(window.viewport_size().width)
+            < window.rem_size() * 46.;
         let owner = cx.weak_entity();
         let measured = self.width;
         let title = self
@@ -932,7 +958,9 @@ impl Render for Files {
         } else if self.draft.is_edited() {
             "未保存"
         } else {
-            self.status.as_deref().unwrap_or("与磁盘一致")
+            self.status
+                .as_deref()
+                .unwrap_or("与磁盘一致")
         };
         let editor = v_flex()
             .size_full()
@@ -972,7 +1000,11 @@ impl Render for Files {
                         .size_range(window.rem_size() * 10. ..window.rem_size() * 24.)
                         .child(self.browser(cx)),
                 )
-                .child(resizable_panel().min_w(rems(18.)).child(editor))
+                .child(
+                    resizable_panel()
+                        .min_w(rems(18.))
+                        .child(editor),
+                )
                 .into_any_element()
         };
         v_flex()
@@ -1124,7 +1156,13 @@ impl Render for Files {
                         .child("保存结果尚未确认。编辑内容已保留，请比较磁盘版本后继续。"),
                 )
             })
-            .child(div().flex_1().min_h_0().min_w_0().child(panes))
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .min_w_0()
+                    .child(panes),
+            )
             .child(
                 h_flex()
                     .px_3()

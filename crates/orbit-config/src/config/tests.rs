@@ -10,14 +10,17 @@ models = ["second", "first"]
 first = { supports_vision = false, reasoning = { efforts = ["low", "high"], default = "high" } }
 "#;
     let mut config = FileConfig::parse(input, Path::new("/tmp/config-test")).unwrap();
-    let provider = config.providers.get_mut("test").unwrap();
+    let provider = config
+        .providers
+        .get_mut("test")
+        .unwrap();
     provider.discovered = Some(vec![
         crate::test_support::TestModel::new("first")
             .vision(true)
-            .context(200000)
+            .context(200_000)
             .build(),
         crate::test_support::TestModel::new("second")
-            .context(100000)
+            .context(100_000)
             .build(),
         ModelProfile::new("unselected"),
     ]);
@@ -32,7 +35,11 @@ first = { supports_vision = false, reasoning = { efforts = ["low", "high"], defa
     );
     assert_eq!(provider.models[1].supports_vision, Some(false));
     assert_eq!(
-        provider.models[1].reasoning.as_ref().unwrap().adapter,
+        provider.models[1]
+            .reasoning
+            .as_ref()
+            .unwrap()
+            .adapter,
         ReasoningAdapter::OpenaiResponses
     );
     let serialized = toml::to_string(&config).unwrap();
@@ -87,7 +94,11 @@ credential = "orbit-fixture"
 reasoning = { "efforts" = ["low", "max"], "default" = "low" }
 "#;
     let config = FileConfig::parse(input, Path::new("/tmp/orbit-fixture-auth")).unwrap();
-    assert!(config.providers["orbit"].models[0].reasoning.is_none());
+    assert!(
+        config.providers["orbit"].models[0]
+            .reasoning
+            .is_none()
+    );
     let choices = config.model_options().unwrap();
     assert_eq!(choices.len(), 2);
     assert_eq!(
@@ -118,7 +129,12 @@ reasoning = { "efforts" = ["low", "max"], "default" = "low" }
 
     let mut discovered: FileConfig = toml::from_str(input).unwrap();
     discovered.auth_directory = config.auth_directory.clone();
-    discovered.providers.get_mut("orbit").unwrap().models[0].reasoning = None;
+    discovered
+        .providers
+        .get_mut("orbit")
+        .unwrap()
+        .models[0]
+        .reasoning = None;
     assert_eq!(
         discovered.model_options().unwrap()[0]
             .config
@@ -148,28 +164,33 @@ api_key = "test"
 "#;
     let config: FileConfig = toml::from_str(provider).unwrap();
 
-    assert_eq!(config.context_tokens, 128000);
+    assert_eq!(config.context_tokens, 128_000);
     assert!(config.auto_compact);
 
     let disabled: FileConfig =
         toml::from_str(&format!("auto_compact = false\n{provider}")).unwrap();
 
     assert!(!disabled.agent_config().auto_compact);
-    assert_eq!(config.max_output_tokens, 32000);
+    assert_eq!(config.max_output_tokens, 32_000);
     assert_eq!(config.providers["test"].timeout_seconds, 600);
     assert_eq!(config.providers["test"].max_retries, 2);
     assert_eq!(config.agent_config().max_turns, 0);
-    assert_eq!(config.agent_config().max_tool_calls, 2000);
+    assert_eq!(config.agent_config().max_tool_calls, 2_000);
     assert_eq!(config.command.default_timeout_seconds, 120);
     assert_eq!(config.command.max_timeout_seconds, 600);
 
-    let config: FileConfig = toml::from_str(&format!("context_tokens = 1000000\nmax_output_tokens = 64000\nmax_turns = 75\nmax_tool_calls = 500\n[command]\ndefault_timeout_seconds = 300\nmax_timeout_seconds = 1800\n{provider}")).unwrap();
+    let config: FileConfig = toml::from_str(&format!(
+        "context_tokens = 1000000\nmax_output_tokens \
+        = 64000\nmax_turns = 75\nmax_tool_calls = 500\n[command]\ndefault_timeout_seconds = \
+        300\nmax_timeout_seconds = 1800\n{provider}"
+    ))
+    .unwrap();
 
     assert_eq!(config.agent_config().max_turns, 75);
     assert_eq!(config.agent_config().max_tool_calls, 500);
-    assert_eq!(config.max_output_tokens, 64000);
-    assert_eq!(config.context_tokens, 1000000);
-    assert_eq!(config.command.max_timeout_seconds, 1800);
+    assert_eq!(config.max_output_tokens, 64_000);
+    assert_eq!(config.context_tokens, 1_000_000);
+    assert_eq!(config.command.max_timeout_seconds, 1_800);
     assert!(config.command.validate().is_ok());
 }
 
@@ -207,7 +228,9 @@ reasoning = { "efforts" = ["low", "high"], "default" = "high" }
 "#,
     )
     .unwrap();
-    let option = config.select_model("openai::reasoning-model").unwrap();
+    let option = config
+        .select_model("openai::reasoning-model")
+        .unwrap();
 
     assert_eq!(
         option.reasoning_efforts,
@@ -234,7 +257,9 @@ reasoning = { "efforts" = ["low", "high", "max"], "default" = "max", "extra" = {
     )
     .unwrap();
 
-    let option = config.select_model("anthropic::claude-test").unwrap();
+    let option = config
+        .select_model("anthropic::claude-test")
+        .unwrap();
 
     assert_eq!(
         option.reasoning_efforts,
@@ -325,11 +350,21 @@ credential = "anthropic"
 
     assert!(models[0].config.api_key.is_none());
     assert_eq!(
-        models[0].config.credential.as_ref().unwrap().directory,
+        models[0]
+            .config
+            .credential
+            .as_ref()
+            .unwrap()
+            .directory,
         auth_directory
     );
     assert_eq!(
-        models[0].config.credential.as_ref().unwrap().name,
+        models[0]
+            .config
+            .credential
+            .as_ref()
+            .unwrap()
+            .name,
         "anthropic"
     );
 
@@ -386,8 +421,16 @@ fn example_configuration_uses_valid_model_capability_profiles() {
     let models = config.model_options().unwrap();
 
     assert_eq!(models.len(), 3);
-    assert!(config.providers.contains_key("deepseek"));
-    assert!(models.iter().any(|model| model.supports_vision));
+    assert!(
+        config
+            .providers
+            .contains_key("deepseek")
+    );
+    assert!(
+        models
+            .iter()
+            .any(|model| model.supports_vision)
+    );
     assert!(
         models
             .iter()
@@ -498,17 +541,28 @@ models = ["fixture"]
         directory.path(),
     )
     .unwrap();
-    let provider = config.providers.get_mut("test").unwrap();
-    provider.models[0].max_output_tokens = Some(64000);
-    assert_eq!(config.model_options().unwrap()[0].max_output_tokens, 32000);
-    let provider = config.providers.get_mut("test").unwrap();
+    let provider = config
+        .providers
+        .get_mut("test")
+        .unwrap();
+    provider.models[0].max_output_tokens = Some(64_000);
+    assert_eq!(config.model_options().unwrap()[0].max_output_tokens, 32_000);
+    let provider = config
+        .providers
+        .get_mut("test")
+        .unwrap();
     provider
         .spec
         .model_overrides
         .entry("fixture".into())
         .or_default()
-        .max_output_tokens = Some(48000);
-    assert_eq!(config.model_options().unwrap()[0].max_output_tokens, 48000);
-    config.providers.get_mut("test").unwrap().models[0].max_output_tokens = Some(16000);
-    assert_eq!(config.model_options().unwrap()[0].max_output_tokens, 16000);
+        .max_output_tokens = Some(48_000);
+    assert_eq!(config.model_options().unwrap()[0].max_output_tokens, 48_000);
+    config
+        .providers
+        .get_mut("test")
+        .unwrap()
+        .models[0]
+        .max_output_tokens = Some(16_000);
+    assert_eq!(config.model_options().unwrap()[0].max_output_tokens, 16_000);
 }

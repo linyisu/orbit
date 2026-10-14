@@ -74,16 +74,20 @@ pub(super) fn read(
     updated.context_tokens = number(&fields[1])?;
     updated.input_context_tokens = number(&fields[2])?;
     updated.max_output_tokens = number(&fields[3])?;
-    let output = updated.max_output_tokens.unwrap_or(default_output);
+    let output = updated
+        .max_output_tokens
+        .unwrap_or(default_output);
     ensure!(output > 0, "输出上限必须大于 0");
-    let input = updated.input_context_tokens.unwrap_or_else(|| {
-        updated
-            .context_tokens
-            .unwrap_or(default_context)
-            .saturating_sub(output as usize)
-    });
+    let input = updated
+        .input_context_tokens
+        .unwrap_or_else(|| {
+            updated
+                .context_tokens
+                .unwrap_or(default_context)
+                .saturating_sub(output as usize)
+        });
 
-    ensure!(input >= 8192, "可用输入预算不能小于 8192 tokens");
+    ensure!(input >= 8_192, "可用输入预算不能小于 8192 tokens");
     updated.supports_vision = match fields[4].value() {
         "支持" => Some(true),
         "不支持" => Some(false),

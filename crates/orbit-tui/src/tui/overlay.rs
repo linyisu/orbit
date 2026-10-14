@@ -51,7 +51,9 @@ pub(super) fn active(state: &UiState) -> Option<Layer> {
 /// Called before the frozen-frame shortcut as well as after event dispatch.
 /// Opening through a command, transcript link or server event has one handoff.
 pub(super) fn sync(state: &mut UiState) {
-    state.management.approval(state.approval.is_some());
+    state
+        .management
+        .approval(state.approval.is_some());
     let layer = active(state);
     if layer != state.overlay_layer {
         state.overlay_layer = layer;
@@ -63,8 +65,8 @@ pub(super) fn sync(state: &mut UiState) {
     }
 }
 
+/// Reject queued pointer events until the visible surface has new geometry.
 pub(super) fn invalidate(state: &mut UiState) {
-    // Reject queued pointer events until the visible surface has new geometry.
     state.overlay_needs_layout = true;
     state.planning.invalidate_geometry();
     state.user_input.clear_geometry();

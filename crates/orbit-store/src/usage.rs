@@ -103,6 +103,7 @@ struct Pending {
     seen: bool,
     usage: Option<Usage>,
 }
+
 impl Pending {
     fn merge(&mut self, usage: Option<Usage>) {
         let Some(usage) = usage else {
@@ -115,13 +116,20 @@ impl Pending {
             cached_input_tokens: None,
             cache_write_input_tokens: None,
         });
-        current.prompt_tokens = usage.prompt_tokens.or(current.prompt_tokens);
-        current.completion_tokens = usage.completion_tokens.or(current.completion_tokens);
-        current.cached_input_tokens = usage.cached_input_tokens.or(current.cached_input_tokens);
+        current.prompt_tokens = usage
+            .prompt_tokens
+            .or(current.prompt_tokens);
+        current.completion_tokens = usage
+            .completion_tokens
+            .or(current.completion_tokens);
+        current.cached_input_tokens = usage
+            .cached_input_tokens
+            .or(current.cached_input_tokens);
         current.cache_write_input_tokens = usage
             .cache_write_input_tokens
             .or(current.cache_write_input_tokens);
     }
+
     fn flush(&mut self, result: &mut Session) -> bool {
         result.requests += usize::from(std::mem::take(&mut self.seen));
         let Some(usage) = self.usage.take() else {

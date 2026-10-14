@@ -12,22 +12,33 @@ async fn account_providers_authenticate_and_collect_sse_for_nonstream_callers() 
             orbit_auth::CredentialKind::ChatgptOAuth,
             "https://chatgpt.com/backend-api/codex",
             concat!(
-                "data: {\"type\":\"response.output_item.added\",\"output_index\":1,\"item\":{\"type\":\"function_call\",\"id\":\"item-one\",\"call_id\":\"call-one\",\"name\":\"test\",\"arguments\":\"\"}}\n\n",
-                "data: {\"type\":\"response.function_call_arguments.delta\",\"output_index\":1,\"item_id\":\"item-one\",\"delta\":\"{}\"}\n\n",
-                "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":10,\"output_tokens\":3,\"total_tokens\":13}}}\n\n"
+                "data: {\"type\":\"response.output_item.added\",\"output_index\":1,\"item\":{\"type\
+                    \":\"function_call\",\"id\":\"item-one\",\"call_id\":\"call-one\",\"name\":\"t\
+                    est\",\"arguments\":\"\"}}\n\n",
+                "data: {\"type\":\"response.function_call_arguments.delta\",\"output_index\":1,\"it\
+                    em_id\":\"item-one\",\"delta\":\"{}\"}\n\n",
+                "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"ou\
+                    tput\":[],\"usage\":{\"input_tokens\":10,\"output_tokens\":3,\"total_tokens\":\
+                    13}}}\n\n"
             ),
         ),
         (
             ApiFormat::GoogleCodeAssist,
             orbit_auth::CredentialKind::GoogleOAuth,
             "https://cloudcode-pa.googleapis.com",
-            "data: {\"response\":{\"candidates\":[{\"content\":{\"parts\":[{\"functionCall\":{\"name\":\"test\",\"args\":{}},\"thoughtSignature\":\"opaque-signature\"}]},\"finishReason\":\"STOP\"}],\"usageMetadata\":{\"promptTokenCount\":10,\"candidatesTokenCount\":1,\"thoughtsTokenCount\":2,\"totalTokenCount\":13}}}\n\n",
+            "data: {\"response\":{\"candidates\":[{\"content\":{\"parts\":[{\"functionCall\":{\"nam\
+                e\":\"test\",\"args\":{}},\"thoughtSignature\":\"opaque-signature\"}]},\"finishRea\
+                son\":\"STOP\"}],\"usageMetadata\":{\"promptTokenCount\":10,\"candidatesTokenCount\
+                \":1,\"thoughtsTokenCount\":2,\"totalTokenCount\":13}}}\n\n",
         ),
         (
             ApiFormat::GoogleCodeAssist,
             orbit_auth::CredentialKind::AntigravityOAuth,
             "https://daily-cloudcode-pa.googleapis.com",
-            "data: {\"response\":{\"candidates\":[{\"content\":{\"parts\":[{\"functionCall\":{\"name\":\"test\",\"args\":{}},\"thoughtSignature\":\"opaque-signature\"}]},\"finishReason\":\"STOP\"}],\"usageMetadata\":{\"promptTokenCount\":10,\"candidatesTokenCount\":1,\"thoughtsTokenCount\":2,\"totalTokenCount\":13}}}\n\n",
+            "data: {\"response\":{\"candidates\":[{\"content\":{\"parts\":[{\"functionCall\":{\"nam\
+                e\":\"test\",\"args\":{}},\"thoughtSignature\":\"opaque-signature\"}]},\"finishRea\
+                son\":\"STOP\"}],\"usageMetadata\":{\"promptTokenCount\":10,\"candidatesTokenCount\
+                \":1,\"thoughtsTokenCount\":2,\"totalTokenCount\":13}}}\n\n",
         ),
     ] {
         let directory = tempfile::tempdir().unwrap();
@@ -79,7 +90,8 @@ async fn account_providers_authenticate_and_collect_sse_for_nonstream_callers() 
             ..Default::default()
         };
         let mut model = ModelClient::new(config).unwrap();
-        // The credential scope remains the real service; only the test HTTP transport is redirected.
+        // The credential scope remains the real service; only the test HTTP transport is
+        // redirected.
         model.request_endpoint = Some(transport.parse().unwrap());
         let mut request = ChatRequest::new(vec![ChatMessage::user("hello")]);
         request.max_tokens = Some(10);
@@ -96,7 +108,10 @@ async fn account_providers_authenticate_and_collect_sse_for_nonstream_callers() 
         assert_eq!(tool_calls.len(), 1);
         assert_eq!(tool_calls[0].function.arguments, "{}");
         if kind == orbit_auth::CredentialKind::AntigravityOAuth {
-            assert!(wire.contains("user-agent: antigravity/hub/2.8.0 (aidev_client; os_type=darwin; arch=arm64; cl=963137146)"));
+            assert!(wire.contains(
+                "user-agent: antigravity/hub/2.8.0 (aidev_client; \
+                os_type=darwin; arch=arm64; cl=963137146)"
+            ));
             assert!(wire.contains("\"useragent\":\"antigravity\""));
             assert!(wire.contains("anthropic-beta: interleaved-thinking-2025-05-14"));
             assert!(wire.contains("\"requesttype\":\"agent\""));
@@ -131,8 +146,10 @@ async fn saved_credentials_are_resolved_for_requests_and_logout_takes_effect() {
     let root = tempfile::tempdir().unwrap();
     let store = orbit_auth::AuthStore::new(root.path().join("auth")).unwrap();
     let (base_url, request) = test_server(
-            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n\r\n{\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}",
-        ).await;
+        "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n\r\n{\"choices\":[{\"message\":{\
+                \"role\":\"assistant\",\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}",
+    )
+    .await;
     store
         .set_api_key("test", "stored-secret".into(), &base_url)
         .await
@@ -145,7 +162,10 @@ async fn saved_credentials_are_resolved_for_requests_and_logout_takes_effect() {
     let model = super::ModelClient::new(config).unwrap();
     let message = crate::types::ChatRequest::new(vec![crate::types::ChatMessage::user("hello")]);
 
-    model.complete(message.clone()).await.unwrap();
+    model
+        .complete(message.clone())
+        .await
+        .unwrap();
 
     assert!(
         request
@@ -159,7 +179,10 @@ async fn saved_credentials_are_resolved_for_requests_and_logout_takes_effect() {
     );
 
     store.remove("test").await.unwrap();
-    let error = model.complete(message).await.unwrap_err();
+    let error = model
+        .complete(message)
+        .await
+        .unwrap_err();
 
     assert!(matches!(
         error,
@@ -208,7 +231,10 @@ async fn does_not_follow_a_model_endpoint_redirect() {
 #[test]
 fn recognizes_context_limit_before_truncating_a_long_error_body() {
     let body = serde_json::json!({
-        "error": { "code": "context_length_exceeded", "message": "x".repeat(4_000) }
+        "error": {
+            "code": "context_length_exceeded",
+            "message": "x".repeat(4_000)
+        }
     })
     .to_string();
     let error = crate::error::ModelError::Http {
@@ -225,9 +251,10 @@ fn recognizes_context_limit_before_truncating_a_long_error_body() {
 #[tokio::test]
 async fn model_config_reasoning_effort_applies_when_request_has_no_override() {
     let (base_url, request) = test_server(
-            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n\r\n{\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}",
-        )
-        .await;
+        "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n\r\n{\"choices\":[{\"message\":{\
+                \"role\":\"assistant\",\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}",
+    )
+    .await;
     let mut config = client(&base_url, "openai_chat_completions", "mock", None).config;
     config.reasoning_adapter = Some(crate::types::ReasoningAdapter::OpenaiChat);
     config.reasoning_effort = Some(crate::types::ReasoningEffort::High);
@@ -240,7 +267,11 @@ async fn model_config_reasoning_effort_applies_when_request_has_no_override() {
         .await
         .unwrap();
 
-    assert!(request.await.contains("\"reasoning_effort\":\"high\""));
+    assert!(
+        request
+            .await
+            .contains("\"reasoning_effort\":\"high\"")
+    );
 }
 
 #[test]
@@ -253,7 +284,9 @@ fn rejects_credentials_used_as_service_addresses_without_echoing_them() {
             base_url: address.into(),
             ..Default::default()
         };
-        let error = super::ModelClient::new(config).unwrap_err().to_string();
+        let error = super::ModelClient::new(config)
+            .unwrap_err()
+            .to_string();
 
         assert!(error.contains("base URL is invalid"));
         assert!(!error.contains("sk-not-a-real-secret"));
@@ -303,9 +336,11 @@ fn model_config_debug_redacts_api_key() {
 #[tokio::test]
 async fn openai_chat_uses_chat_completions_and_bearer_auth() {
     let (base_url, request) = test_server(
-            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n\r\n{\"id\":\"chat-1\",\"model\":\"mock\",\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"hello\",\"tool_calls\":null},\"finish_reason\":\"stop\"}]}",
-        )
-        .await;
+        "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n\r\n{\"id\":\"chat-1\",\"model\":\
+                \"mock\",\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"hello\",\
+                \"tool_calls\":null},\"finish_reason\":\"stop\"}]}",
+    )
+    .await;
     let client = client(
         &base_url,
         "openai_chat_completions",
@@ -329,9 +364,11 @@ async fn openai_chat_uses_chat_completions_and_bearer_auth() {
 #[tokio::test]
 async fn openai_responses_maps_output_text_and_uses_responses_path() {
     let (base_url, request) = test_server(
-            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n\r\n{\"id\":\"resp-1\",\"model\":\"mock\",\"output_text\":\"hello from responses\",\"output\":[],\"status\":\"completed\",\"usage\":{\"input_tokens\":2,\"output_tokens\":3,\"total_tokens\":5}}",
-        )
-        .await;
+        "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n\r\n{\"id\":\"resp-1\",\"model\":\
+                \"mock\",\"output_text\":\"hello from responses\",\"output\":[],\"status\":\"compl\
+                eted\",\"usage\":{\"input_tokens\":2,\"output_tokens\":3,\"total_tokens\":5}}",
+    )
+    .await;
     let client = client(
         &base_url,
         "openai_responses",
@@ -363,16 +400,20 @@ async fn openai_responses_maps_output_text_and_uses_responses_path() {
 #[tokio::test]
 async fn anthropic_thinking_and_top_level_usage_survive_token_exhaustion() {
     let (base_url, request) = test_server(concat!(
-            "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\n\r\n",
-            "data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":321}}}\n\n",
-            "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"thinking\",\"thinking\":\"first \"}}\n\n",
-            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"reasoning\"}}\n\n",
-            "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"max_tokens\"},\"usage\":{\"output_tokens\":16384}}\n\n",
-            "data: {\"type\":\"message_stop\"}\n\n",
-        )).await;
+        "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\n\r\n",
+        "data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":321}}}\n\n",
+        "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"thin\
+                king\",\"thinking\":\"first \"}}\n\n",
+        "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"thinking_del\
+                ta\",\"thinking\":\"reasoning\"}}\n\n",
+        "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"max_tokens\"},\"usage\"\
+                :{\"output_tokens\":16384}}\n\n",
+        "data: {\"type\":\"message_stop\"}\n\n",
+    ))
+    .await;
     let client = client(&base_url, "anthropic_messages", "fixture", None);
     let mut req = ChatRequest::new(vec![ChatMessage::user("think")]);
-    req.max_tokens = Some(16384);
+    req.max_tokens = Some(16_384);
     let mut stream = client.stream(req).await.unwrap();
     let mut thinking = String::new();
     let mut input_tokens = None;
@@ -391,7 +432,7 @@ async fn anthropic_thinking_and_top_level_usage_survive_token_exhaustion() {
                     input_tokens = usage.prompt_tokens;
                 } else {
                     assert_eq!(finish_reason.as_deref(), Some("max_tokens"));
-                    assert_eq!(usage.completion_tokens, Some(16384));
+                    assert_eq!(usage.completion_tokens, Some(16_384));
 
                     finished = true;
                 }
@@ -404,15 +445,22 @@ async fn anthropic_thinking_and_top_level_usage_survive_token_exhaustion() {
     assert_eq!(thinking, "first reasoning");
     assert_eq!(input_tokens, Some(321));
     assert!(finished);
-    assert!(request.await.contains("\"max_tokens\":16384"));
+    assert!(
+        request
+            .await
+            .contains("\"max_tokens\":16384")
+    );
 }
 
 #[tokio::test]
 async fn anthropic_messages_maps_text_and_uses_anthropic_headers() {
     let (base_url, request) = test_server(
-            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n\r\n{\"id\":\"msg-1\",\"model\":\"claude\",\"content\":[{\"type\":\"text\",\"text\":\"hello from claude\"}],\"stop_reason\":\"end_turn\",\"usage\":{\"input_tokens\":4,\"output_tokens\":5}}",
-        )
-        .await;
+        "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n\r\n{\"id\":\"msg-1\",\"model\":\
+                \"claude\",\"content\":[{\"type\":\"text\",\"text\":\"hello from \
+                claude\"}],\"stop_reason\":\"end_turn\",\"usage\":{\"input_tokens\":4,\"output_tok\
+                ens\":5}}",
+    )
+    .await;
     let client = client(
         &base_url,
         "anthropic_messages",
@@ -443,11 +491,12 @@ async fn anthropic_messages_maps_text_and_uses_anthropic_headers() {
 #[tokio::test]
 async fn stream_accepts_done_frame_without_trailing_separator() {
     let (base_url, _) = test_server(concat!(
-            "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\n\r\n",
-            "data: {\"choices\":[{\"delta\":{\"content\":\"hello\",\"tool_calls\":null},\"finish_reason\":null}]}\n\n",
-            "data: [DONE]",
-        ))
-        .await;
+        "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\n\r\n",
+        "data: {\"choices\":[{\"delta\":{\"content\":\"hello\",\"tool_calls\":null},\"finish_re\
+                ason\":null}]}\n\n",
+        "data: [DONE]",
+    ))
+    .await;
     let client = client(&base_url, "openai_chat_completions", "mock-chat", None);
     let mut stream = client
         .stream(ChatRequest::new(vec![ChatMessage::user("hello")]))
@@ -467,11 +516,12 @@ async fn stream_accepts_done_frame_without_trailing_separator() {
 #[tokio::test]
 async fn responses_stream_maps_text_and_completion() {
     let (base_url, _) = test_server(concat!(
-            "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\n\r\n",
-            "data: {\"type\":\"response.output_text.delta\",\"delta\":\"hello\"}\n\n",
-            "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"usage\":{\"input_tokens\":1,\"output_tokens\":2,\"total_tokens\":3}}}\n\n",
-        ))
-        .await;
+        "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\n\r\n",
+        "data: {\"type\":\"response.output_text.delta\",\"delta\":\"hello\"}\n\n",
+        "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"usage\
+                \":{\"input_tokens\":1,\"output_tokens\":2,\"total_tokens\":3}}}\n\n",
+    ))
+    .await;
     let client = client(&base_url, "openai_responses", "mock-responses", None);
     let mut stream = client
         .stream(ChatRequest::new(vec![ChatMessage::user("hello")]))
@@ -496,17 +546,26 @@ async fn responses_stream_maps_text_and_completion() {
 fn reports_error_envelopes_in_all_stream_formats() {
     for value in [
         serde_json::json!({
-            "error": { "message": "overloaded", "code": "upstream_error" }
+            "error": {
+                "message": "overloaded",
+                "code": "upstream_error"
+            }
         }),
         serde_json::json!({
             "type": "error",
-            "error": { "type": "overloaded_error", "message": "overloaded" }
+            "error": {
+                "type": "overloaded_error",
+                "message": "overloaded"
+            }
         }),
         serde_json::json!({
             "type": "response.failed",
             "response": {
                 "id": "resp-test",
-                "error": { "code": "upstream_error", "message": "overloaded" }
+                "error": {
+                    "code": "upstream_error",
+                    "message": "overloaded"
+                }
             }
         }),
     ] {
@@ -515,9 +574,10 @@ fn reports_error_envelopes_in_all_stream_formats() {
         })
         .unwrap_err();
 
-        assert!(
-            matches!(error, ModelError::Upstream { message, .. } if message.contains("overloaded"))
-        );
+        assert!(matches!(
+            error,
+            ModelError::Upstream { message, .. } if message.contains("overloaded")
+        ));
     }
 }
 
@@ -572,7 +632,10 @@ async fn json_body_timeout_is_bounded_and_identifies_the_stage() {
     .unwrap()
     .unwrap_err();
 
-    assert!(matches!(error, ModelError::Timeout { stage, .. } if stage.contains("JSON body")));
+    assert!(matches!(
+        error,
+        ModelError::Timeout { stage, .. } if stage.contains("JSON body")
+    ));
 }
 
 #[tokio::test]
@@ -580,7 +643,11 @@ async fn active_stream_can_run_longer_than_the_idle_timeout() {
     let mut chunks = vec![b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\n\r\n".to_vec()];
 
     for _ in 0..30 {
-        chunks.push(b"data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"thinking\"},\"finish_reason\":null}]}\n\n".to_vec());
+        chunks.push(
+            b"data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"thinking\"},\"finish_\
+            reason\":null}]}\n\n"
+                .to_vec(),
+        );
     }
 
     chunks.push(b"data: [DONE]\n\n".to_vec());
@@ -633,7 +700,8 @@ async fn heartbeat_only_stream_times_out_with_received_byte_count() {
         .unwrap_err();
 
     assert!(
-        matches!(error, ModelError::Timeout { stage, .. } if stage.contains("8 body bytes received previously, 0 model events"))
+        matches!(error, ModelError::Timeout { stage, .. } if stage.contains("8 body bytes received \
+            previously, 0 model events"))
     );
 }
 
@@ -668,16 +736,17 @@ async fn preserves_unicode_split_across_network_chunks() {
 #[tokio::test]
 async fn retries_a_transient_http_failure_before_streaming_begins() {
     let (base_url, requests) = test_server_responses(vec![
-            b"HTTP/1.1 503 Service Unavailable\r\ncontent-length: 10\r\n\r\ntry again!".to_vec(),
-            concat!(
-                "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\n\r\n",
-                "data: {\"choices\":[{\"delta\":{\"content\":\"recovered\"},\"finish_reason\":null}]}\n\n",
-                "data: [DONE]\n\n",
-            )
-            .as_bytes()
-            .to_vec(),
-        ])
-        .await;
+        b"HTTP/1.1 503 Service Unavailable\r\ncontent-length: 10\r\n\r\ntry again!".to_vec(),
+        concat!(
+            "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\n\r\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"recovered\"},\"finish_reason\":null}\
+                    ]}\n\n",
+            "data: [DONE]\n\n",
+        )
+        .as_bytes()
+        .to_vec(),
+    ])
+    .await;
     let model = ModelClient::new(ModelConfig {
         base_url,
         max_retries: 1,
@@ -768,18 +837,26 @@ async fn test_server_responses(
     let listener = TcpListener::bind(("127.0.0.1", 0))
         .await
         .expect("bind test server");
-    let address = listener.local_addr().expect("local address");
+    let address = listener
+        .local_addr()
+        .expect("local address");
     let (sender, receiver) = tokio::sync::oneshot::channel();
 
     tokio::spawn(async move {
         let mut requests = 0;
 
         for response in responses {
-            let (mut socket, _) = listener.accept().await.expect("accept request");
+            let (mut socket, _) = listener
+                .accept()
+                .await
+                .expect("accept request");
             read_request(&mut socket).await;
 
             requests += 1;
-            socket.write_all(&response).await.expect("write response");
+            socket
+                .write_all(&response)
+                .await
+                .expect("write response");
             let _ = socket.shutdown().await;
         }
 
@@ -796,16 +873,24 @@ async fn test_server_held(
     let listener = TcpListener::bind(("127.0.0.1", 0))
         .await
         .expect("bind test server");
-    let address = listener.local_addr().expect("local address");
+    let address = listener
+        .local_addr()
+        .expect("local address");
     let chunks = Arc::new(chunks);
     let (sender, receiver) = tokio::sync::oneshot::channel();
 
     tokio::spawn(async move {
-        let (mut socket, _) = listener.accept().await.expect("accept request");
+        let (mut socket, _) = listener
+            .accept()
+            .await
+            .expect("accept request");
         let bytes = read_request(&mut socket).await;
 
         for chunk in chunks.iter() {
-            socket.write_all(chunk).await.expect("write response");
+            socket
+                .write_all(chunk)
+                .await
+                .expect("write response");
             time::sleep(Duration::from_millis(10)).await;
         }
 
@@ -815,6 +900,8 @@ async fn test_server_held(
     });
 
     (format!("http://{address}"), async move {
-        receiver.await.expect("request captured")
+        receiver
+            .await
+            .expect("request captured")
     })
 }

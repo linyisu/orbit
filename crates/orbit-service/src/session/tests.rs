@@ -17,32 +17,66 @@ async fn generated_title_follows_its_session_and_manual_rename_wins() {
         .begin("first question".into(), "model".into())
         .await
         .unwrap();
-    current.finish("cancelled", None).await.unwrap();
+    current
+        .finish("cancelled", None)
+        .await
+        .unwrap();
     let original_id = current.id().to_owned();
     current.title_task = Some(crate::session::title::TitleTask::ready("解析器修复").await);
-    let next = current.prepare_new("model".into()).await.unwrap();
+    let next = current
+        .prepare_new("model".into())
+        .await
+        .unwrap();
 
     let mut parked = current.swap_resume(next);
     assert!(parked.poll_title().await.unwrap());
     assert_eq!(parked.snapshot.session.title, "解析器修复");
-    assert!(current.snapshot.session.title.is_empty());
+    assert!(
+        current
+            .snapshot
+            .session
+            .title
+            .is_empty()
+    );
     assert_eq!(
-        current.store.session(&original_id).await.unwrap().title,
+        current
+            .store
+            .session(&original_id)
+            .await
+            .unwrap()
+            .title,
         "解析器修复"
     );
     assert!(parked.snapshot.history.is_empty());
 
     current.title_task = Some(crate::session::title::TitleTask::ready("自动生成标题").await);
-    current.rename("手动标题".into()).await.unwrap();
+    current
+        .rename("手动标题".into())
+        .await
+        .unwrap();
     assert!(!current.poll_title().await.unwrap());
-    assert!(current.store.session(current.id()).await.is_err());
+    assert!(
+        current
+            .store
+            .session(current.id())
+            .await
+            .is_err()
+    );
     current
         .begin("next question".into(), "model".into())
         .await
         .unwrap();
-    current.finish("cancelled", None).await.unwrap();
+    current
+        .finish("cancelled", None)
+        .await
+        .unwrap();
     assert_eq!(
-        current.store.session(current.id()).await.unwrap().title,
+        current
+            .store
+            .session(current.id())
+            .await
+            .unwrap()
+            .title,
         "手动标题"
     );
 }
@@ -57,21 +91,38 @@ async fn prepared_resume_is_atomic_and_releases_lease_when_cancelled() {
         .begin("question".into(), "model".into())
         .await
         .unwrap();
-    current.finish("cancelled", None).await.unwrap();
+    current
+        .finish("cancelled", None)
+        .await
+        .unwrap();
     let target = current.id().to_owned();
-    current.new_session("model".into()).await.unwrap();
+    current
+        .new_session("model".into())
+        .await
+        .unwrap();
     current
         .begin("another question".into(), "model".into())
         .await
         .unwrap();
-    current.finish("cancelled", None).await.unwrap();
+    current
+        .finish("cancelled", None)
+        .await
+        .unwrap();
     let original = current.id().to_owned();
-    let lease = current.store.acquire(&target).await.unwrap();
+    let lease = current
+        .store
+        .acquire(&target)
+        .await
+        .unwrap();
     let result = tokio::time::timeout(
         Duration::from_secs(1),
         SessionState::prepare_resume(
             current.store.clone(),
-            current.snapshot.session.project_id.clone(),
+            current
+                .snapshot
+                .session
+                .project_id
+                .clone(),
             target.clone(),
         ),
     )
@@ -82,27 +133,53 @@ async fn prepared_resume_is_atomic_and_releases_lease_when_cancelled() {
         Ok(_) => panic!("locked session was opened"),
     };
 
-    assert!(error.to_string().contains("写入锁正在被占用"));
+    assert!(
+        error
+            .to_string()
+            .contains("写入锁正在被占用")
+    );
     assert_eq!(current.id(), original);
 
     drop(lease);
     let prepared = SessionState::prepare_resume(
         current.store.clone(),
-        current.snapshot.session.project_id.clone(),
+        current
+            .snapshot
+            .session
+            .project_id
+            .clone(),
         target.clone(),
     )
     .await
     .unwrap();
 
     assert_eq!(current.id(), original);
-    assert!(current.store.acquire(&target).await.is_err());
+    assert!(
+        current
+            .store
+            .acquire(&target)
+            .await
+            .is_err()
+    );
 
     drop(prepared);
 
     // Cancelling a prepared switch releases the destination without
     // releasing the writer for the conversation still visible in the UI.
-    assert!(current.store.acquire(&target).await.is_ok());
-    assert!(current.store.acquire(&original).await.is_err());
+    assert!(
+        current
+            .store
+            .acquire(&target)
+            .await
+            .is_ok()
+    );
+    assert!(
+        current
+            .store
+            .acquire(&original)
+            .await
+            .is_err()
+    );
 }
 
 #[tokio::test]
@@ -200,7 +277,10 @@ async fn resumed_session_keeps_its_selected_model_profile() {
         .begin("question".into(), "deepseek::flash".into())
         .await
         .unwrap();
-    state.finish("cancelled", None).await.unwrap();
+    state
+        .finish("cancelled", None)
+        .await
+        .unwrap();
     drop(state);
 
     let restored = SessionState::open(database, Some(id), "qwen::default".into())
@@ -221,7 +301,10 @@ async fn renamed_session_keeps_its_identity_and_title_after_resume() {
         .await
         .unwrap();
     let id = state.id().to_owned();
-    state.rename("解析器重构".into()).await.unwrap();
+    state
+        .rename("解析器重构".into())
+        .await
+        .unwrap();
 
     assert_eq!(state.snapshot.session.title, "解析器重构");
     assert!(state.store.session(&id).await.is_err());
@@ -234,7 +317,10 @@ async fn renamed_session_keeps_its_identity_and_title_after_resume() {
         .begin("start conversation".into(), "model".into())
         .await
         .unwrap();
-    state.finish("cancelled", None).await.unwrap();
+    state
+        .finish("cancelled", None)
+        .await
+        .unwrap();
     drop(state);
 
     let restored = SessionState::open(database, Some(id.clone()), "model".into())
@@ -268,8 +354,15 @@ async fn switching_restores_context_preserves_old_session_and_checks_scope_and_l
         .unwrap();
 
     assert!(state.resume("missing").await.is_err());
-    let log = command_output.create_log().await.unwrap();
-    let first_command_output = command_output.lease().unwrap().path().to_owned();
+    let log = command_output
+        .create_log()
+        .await
+        .unwrap();
+    let first_command_output = command_output
+        .lease()
+        .unwrap()
+        .path()
+        .to_owned();
     drop(log);
 
     state
@@ -282,7 +375,10 @@ async fn switching_restores_context_preserves_old_session_and_checks_scope_and_l
 
     assert_eq!(state.snapshot.history, history);
 
-    state.new_session("model".into()).await.unwrap();
+    state
+        .new_session("model".into())
+        .await
+        .unwrap();
     let second = state.id().to_owned();
 
     assert_ne!(first, second);
@@ -293,10 +389,20 @@ async fn switching_restores_context_preserves_old_session_and_checks_scope_and_l
     std::fs::create_dir(&foreign_path).unwrap();
     let foreign = state
         .store
-        .create(foreign_path.to_string_lossy().into_owned(), "model".into())
+        .create(
+            foreign_path
+                .to_string_lossy()
+                .into_owned(),
+            "model".into(),
+        )
         .await
         .unwrap();
-    assert!(state.resume(foreign.id()).await.is_err());
+    assert!(
+        state
+            .resume(foreign.id())
+            .await
+            .is_err()
+    );
     assert_eq!(
         state
             .resumable()
@@ -308,7 +414,11 @@ async fn switching_restores_context_preserves_old_session_and_checks_scope_and_l
         vec![first.as_str()]
     );
 
-    let locked = state.store.acquire(&first).await.unwrap();
+    let locked = state
+        .store
+        .acquire(&first)
+        .await
+        .unwrap();
 
     assert!(state.resume(&first).await.is_err());
     assert_eq!(state.id(), second);
@@ -322,15 +432,32 @@ async fn switching_restores_context_preserves_old_session_and_checks_scope_and_l
     assert_eq!(state.snapshot.history, history);
     assert_eq!(state.snapshot.runs.len(), 1);
     assert!(state.store.load(&second).await.is_err());
-    assert!(state.store.acquire(&second).await.is_err());
+    assert!(
+        state
+            .store
+            .acquire(&second)
+            .await
+            .is_err()
+    );
 
     drop(state);
     let reopened = SessionState::open(tmp.path().join("sessions.db"), Some(first), "model".into())
         .await
         .unwrap();
 
-    assert!(reopened.command_output.lease().is_none());
-    assert!(reopened.command_output.create_log().await.is_err());
+    assert!(
+        reopened
+            .command_output
+            .lease()
+            .is_none()
+    );
+    assert!(
+        reopened
+            .command_output
+            .create_log()
+            .await
+            .is_err()
+    );
 }
 
 #[tokio::test]
@@ -345,21 +472,41 @@ async fn failed_cancelled_and_dropped_tasks_release_temporary_command_logs() {
             .begin("run a command".into(), "model".into())
             .await
             .unwrap();
-        let log = session.command_output.create_log().await.unwrap();
-        let directory = session.command_output.lease().unwrap().path().to_owned();
+        let log = session
+            .command_output
+            .create_log()
+            .await
+            .unwrap();
+        let directory = session
+            .command_output
+            .lease()
+            .unwrap()
+            .path()
+            .to_owned();
         drop(log);
-        session.finish(status, None).await.unwrap();
+        session
+            .finish(status, None)
+            .await
+            .unwrap();
         assert!(session.command_output.lease().is_none());
         assert!(!directory.exists());
     }
-    assert!(!database.with_extension("command-output").exists());
+    assert!(
+        !database
+            .with_extension("command-output")
+            .exists()
+    );
     session
         .begin("interrupted".into(), "model".into())
         .await
         .unwrap();
     let outputs = session.command_output.clone();
     let log = outputs.create_log().await.unwrap();
-    let directory = outputs.lease().unwrap().path().to_owned();
+    let directory = outputs
+        .lease()
+        .unwrap()
+        .path()
+        .to_owned();
     drop(log);
     drop(session);
     assert!(outputs.lease().is_none());
@@ -409,8 +556,18 @@ async fn calibration_restores_per_profile_without_cross_provider_contamination()
         .await
         .unwrap();
 
-    assert_eq!(session.calibration("a::model").estimate(100), 200);
-    assert_eq!(session.calibration("b::model").estimate(100), 500);
+    assert_eq!(
+        session
+            .calibration("a::model")
+            .estimate(100),
+        200
+    );
+    assert_eq!(
+        session
+            .calibration("b::model")
+            .estimate(100),
+        500
+    );
 }
 
 #[tokio::test]
@@ -445,7 +602,10 @@ async fn test_session_switch_and_resume_clears_session_grants() {
         1
     );
 
-    session.new_session("a::model".into()).await.unwrap();
+    session
+        .new_session("a::model".into())
+        .await
+        .unwrap();
 
     assert_eq!(
         workspace
@@ -479,7 +639,11 @@ async fn test_session_switch_and_resume_clears_session_grants() {
     let writer2 = session
         .store
         .create(
-            session.snapshot.session.workspace.clone(),
+            session
+                .snapshot
+                .session
+                .workspace
+                .clone(),
             "a::model".into(),
         )
         .await
@@ -489,7 +653,12 @@ async fn test_session_switch_and_resume_clears_session_grants() {
 
     let prepared = SessionState::prepare_resume(
         session.store.clone(),
-        session.store.session(&second_id).await.unwrap().project_id,
+        session
+            .store
+            .session(&second_id)
+            .await
+            .unwrap()
+            .project_id,
         second_id,
     )
     .await
@@ -609,7 +778,10 @@ async fn test_full_roundtrip_vision_to_text_to_vision_persists_attachments_lossl
         ChatMessage::assistant("I see a mountain in photo.png"),
     ];
 
-    session.finish("completed", Some(history)).await.unwrap();
+    session
+        .finish("completed", Some(history))
+        .await
+        .unwrap();
     let id = session.id().to_owned();
     drop(session);
 
@@ -720,8 +892,13 @@ async fn test_real_session_recovery_validation() {
         }
     }
 
-    let store = orbit_store::store::Store::open(copy_db).await.unwrap();
-    let saved = store.session(&session_id).await.unwrap();
+    let store = orbit_store::store::Store::open(copy_db)
+        .await
+        .unwrap();
+    let saved = store
+        .session(&session_id)
+        .await
+        .unwrap();
     let prepared =
         SessionState::prepare_resume(store.clone(), saved.project_id.clone(), session_id)
             .await

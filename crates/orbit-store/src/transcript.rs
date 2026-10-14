@@ -110,7 +110,10 @@ impl Store {
                         .into_iter()
                         .map(|image| orbit_protocol::MessageImage {
                             name: image.name().to_owned(),
-                            path: image.path().to_string_lossy().into_owned(),
+                            path: image
+                                .path()
+                                .to_string_lossy()
+                                .into_owned(),
                         })
                         .collect(),
                     _ => Vec::new(),
@@ -121,8 +124,12 @@ impl Store {
                         .filter(events::Column::Payload.starts_with(tag))
                         .order_by_asc(events::Column::Id)
                 };
-                let input = first("{\"InputReceived\":").one(&tx).await?;
-                let turn = first("{\"TurnStarted\":").one(&tx).await?;
+                let input = first("{\"InputReceived\":")
+                    .one(&tx)
+                    .await?;
+                let turn = first("{\"TurnStarted\":")
+                    .one(&tx)
+                    .await?;
                 let queued_input =
                     input.is_some_and(|input| turn.is_none_or(|turn| input.id < turn.id));
                 updates.push(Update::Started {
@@ -142,7 +149,10 @@ impl Store {
             }
             let offset = position - 1;
             let remaining = limit.saturating_sub(updates.len());
-            let count = index.events.saturating_sub(offset).min(remaining);
+            let count = index
+                .events
+                .saturating_sub(offset)
+                .min(remaining);
             if count > 0 {
                 for event in events::Entity::find()
                     .filter(events::Column::RunId.eq(index.id))
@@ -160,7 +170,9 @@ impl Store {
             }
             if position == index.events + 1 && index.finished && updates.len() < limit {
                 updates.push(Update::Finished {
-                    elapsed_ms: row.elapsed_ms.map(|ms| ms.max(0) as u64),
+                    elapsed_ms: row
+                        .elapsed_ms
+                        .map(|ms| ms.max(0) as u64),
                     status: row.status,
                 });
             }
@@ -179,7 +191,9 @@ mod tests {
     #[tokio::test]
     async fn paged_transcript_matches_full_receipts_while_runtime_keeps_only_execution_evidence() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Store::open(dir.path().join("orbit.db")).await.unwrap();
+        let store = Store::open(dir.path().join("orbit.db"))
+            .await
+            .unwrap();
         let mut writer = store
             .create(dir.path().display().to_string(), "test".into())
             .await
@@ -208,8 +222,19 @@ mod tests {
             // File activity is recovered from successful receipts even when the
             // containing message has already left the model's context window.
             let receipt = AgentEvent::ToolFinished {
-                call: ToolCall::function(format!("read-{run}"), "read_file", serde_json::json!({"path": "source.rs"})),
-                content: serde_json::json!({"path": "source.rs", "content": "source".repeat(20_000), "total_lines": 200}).to_string(),
+                call: ToolCall::function(
+                    format!("read-{run}"),
+                    "read_file",
+                    serde_json::json!({
+                        "path": "source.rs"
+                    }),
+                ),
+                content: serde_json::json!({
+                    "path": "source.rs",
+                    "content": "source".repeat(20_000),
+                    "total_lines": 200
+                })
+                .to_string(),
                 changes: vec![],
             };
             journal
@@ -247,15 +272,22 @@ mod tests {
         assert_eq!(
             runtime.files,
             orbit_agent::memory::FileActivity::from_events(
-                full.runs.iter().flat_map(|run| &run.events)
+                full.runs
+                    .iter()
+                    .flat_map(|run| &run.events)
             )
         );
         assert!(
-            serde_json::to_vec(&*runtime).unwrap().len()
+            serde_json::to_vec(&*runtime)
+                .unwrap()
+                .len()
                 < serde_json::to_vec(&full).unwrap().len() / 100
         );
 
-        let index = store.transcript_index(&id).await.unwrap();
+        let index = store
+            .transcript_index(&id)
+            .await
+            .unwrap();
         let mut expected = Vec::new();
         for run in full.runs {
             expected.push(Update::Started {
@@ -265,7 +297,11 @@ mod tests {
                     ..Default::default()
                 },
             });
-            expected.extend(run.events.into_iter().map(Update::agent));
+            expected.extend(
+                run.events
+                    .into_iter()
+                    .map(Update::agent),
+            );
             expected.push(Update::Finished {
                 status: run.status,
                 elapsed_ms: run.elapsed_ms,

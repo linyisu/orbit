@@ -69,6 +69,7 @@ enum Page {
     Agent,
     Mcp,
 }
+
 #[derive(Clone, Copy, Debug)]
 enum Hit {
     Agent,
@@ -107,15 +108,41 @@ impl AgentForm {
         let values = [
             settings.max_turns.to_string(),
             settings.max_tool_calls.to_string(),
-            settings.command.default_timeout_seconds.to_string(),
-            settings.command.max_timeout_seconds.to_string(),
-            settings.command.read_file_scan_bytes.to_string(),
-            settings.subagents.max_concurrent.to_string(),
+            settings
+                .command
+                .default_timeout_seconds
+                .to_string(),
+            settings
+                .command
+                .max_timeout_seconds
+                .to_string(),
+            settings
+                .command
+                .read_file_scan_bytes
+                .to_string(),
+            settings
+                .subagents
+                .max_concurrent
+                .to_string(),
             settings.subagents.max_turns.to_string(),
-            settings.subagents.max_tool_calls.to_string(),
-            settings.subagents.timeout_seconds.to_string(),
-            settings.subagents.explore_model.clone().unwrap_or_default(),
-            settings.subagents.review_model.clone().unwrap_or_default(),
+            settings
+                .subagents
+                .max_tool_calls
+                .to_string(),
+            settings
+                .subagents
+                .timeout_seconds
+                .to_string(),
+            settings
+                .subagents
+                .explore_model
+                .clone()
+                .unwrap_or_default(),
+            settings
+                .subagents
+                .review_model
+                .clone()
+                .unwrap_or_default(),
         ];
         let fields = values.map(input);
         Self {
@@ -124,7 +151,11 @@ impl AgentForm {
             compact: settings.auto_compact,
             network: settings.command.network.is_allowed(),
             subagents: settings.subagents.enabled,
-            disabled: settings.disabled_capabilities.iter().copied().collect(),
+            disabled: settings
+                .disabled_capabilities
+                .iter()
+                .copied()
+                .collect(),
             focus: 0,
             offset: 0,
             reveal: true,
@@ -212,7 +243,11 @@ impl McpForm {
         let server = McpServerConfig {
             transport: "stdio".into(),
             command: self.fields[1].text.trim().into(),
-            args: self.fields[2].text.lines().map(str::to_owned).collect(),
+            args: self.fields[2]
+                .text
+                .lines()
+                .map(str::to_owned)
+                .collect(),
             env,
             timeout_seconds: number(&self.fields[4].text, "MCP 超时")?,
             tools: self.fields[5]
@@ -283,8 +318,9 @@ impl State {
         state
     }
 
+    /// Refresh snapshots explicitly, retaining all form values. This is also the recovery path for
+    /// CAS failures.
     fn reload(&mut self) {
-        // Refresh snapshots explicitly, retaining all form values. This is also the recovery path for CAS failures.
         let result: Result<()> = match self.page {
             Page::Agent => AdvancedDraft::load(&self.path, &self.auth).map(|draft| {
                 if self.agent_form.is_none() {
@@ -320,7 +356,13 @@ impl State {
     fn server_names(&self) -> Vec<String> {
         self.mcp
             .as_ref()
-            .map(|draft| draft.servers().keys().cloned().collect())
+            .map(|draft| {
+                draft
+                    .servers()
+                    .keys()
+                    .cloned()
+                    .collect()
+            })
             .unwrap_or_default()
     }
 
@@ -328,7 +370,9 @@ impl State {
         let name = if create {
             None
         } else {
-            self.server_names().get(self.selected_server).cloned()
+            self.server_names()
+                .get(self.selected_server)
+                .cloned()
         };
         if !create && name.is_none() {
             return;
@@ -339,15 +383,16 @@ impl State {
             .is_some_and(|form| form.existing == name)
         {
             if let Some(previous) = self.mcp_form.take() {
-                self.mcp_drafts.insert(previous.existing.clone(), previous);
+                self.mcp_drafts
+                    .insert(previous.existing.clone(), previous);
             }
             if let Some(draft) = self.mcp_drafts.remove(&name) {
                 self.mcp_form = Some(draft);
             } else {
-                let server = self
-                    .mcp
-                    .as_ref()
-                    .and_then(|draft| name.as_ref().and_then(|name| draft.servers().get(name)));
+                let server = self.mcp.as_ref().and_then(|draft| {
+                    name.as_ref()
+                        .and_then(|name| draft.servers().get(name))
+                });
                 self.mcp_form = Some(McpForm::new(name.as_deref(), server));
             }
         }
@@ -460,7 +505,12 @@ impl State {
             Hit::New => self.edit_mcp(true),
             Hit::Edit => self.edit_mcp(false),
             Hit::Toggle => self.toggle_server(),
-            Hit::Remove => self.removing = self.server_names().get(self.selected_server).cloned(),
+            Hit::Remove => {
+                self.removing = self
+                    .server_names()
+                    .get(self.selected_server)
+                    .cloned()
+            }
             Hit::Server(index) => self.selected_server = index,
             Hit::AgentField(index) => {
                 if let Some(form) = &mut self.agent_form {
@@ -499,7 +549,9 @@ impl State {
         if let Event::Key(key) = event {
             if matches!(key.code, KeyCode::Tab | KeyCode::BackTab) {
                 form.focus = if key.code == KeyCode::BackTab
-                    || key.modifiers.contains(KeyModifiers::SHIFT)
+                    || key
+                        .modifiers
+                        .contains(KeyModifiers::SHIFT)
                 {
                     (form.focus + AGENT_FIELDS - 1) % AGENT_FIELDS
                 } else {
@@ -523,7 +575,8 @@ impl State {
                 if key.code == KeyCode::Enter {
                     form.tools.insert("\n");
                 } else {
-                    form.tools.edit(event, self.body.width.max(1) as usize);
+                    form.tools
+                        .edit(event, self.body.width.max(1) as usize);
                 }
                 form.reveal = true;
             } else {
@@ -560,7 +613,10 @@ impl State {
                 let count = 7 - first;
                 let relative = form.focus.saturating_sub(first);
                 form.focus = first
-                    + if key.code == KeyCode::BackTab || key.modifiers.contains(KeyModifiers::SHIFT)
+                    + if key.code == KeyCode::BackTab
+                        || key
+                            .modifiers
+                            .contains(KeyModifiers::SHIFT)
                     {
                         (relative + count - 1) % count
                     } else {
@@ -622,7 +678,10 @@ impl Panel for State {
             if key.code == KeyCode::Esc {
                 return Action::Close;
             }
-            if key.modifiers.contains(KeyModifiers::CONTROL) {
+            if key
+                .modifiers
+                .contains(KeyModifiers::CONTROL)
+            {
                 match key.code {
                     KeyCode::Char('s') => return self.activate(Hit::Save),
                     KeyCode::Char('r') => return self.activate(Hit::Reload),
@@ -642,8 +701,11 @@ impl Panel for State {
                 match key.code {
                     KeyCode::Up => self.selected_server = self.selected_server.saturating_sub(1),
                     KeyCode::Down => {
-                        self.selected_server = (self.selected_server + 1)
-                            .min(self.server_names().len().saturating_sub(1))
+                        self.selected_server = (self.selected_server + 1).min(
+                            self.server_names()
+                                .len()
+                                .saturating_sub(1),
+                        )
                     }
                     KeyCode::Char('n') => return self.activate(Hit::New),
                     KeyCode::Char('e') | KeyCode::Enter => return self.activate(Hit::Edit),
@@ -711,7 +773,11 @@ impl Panel for State {
                     }
                 } else {
                     self.selected_server = if down {
-                        (self.selected_server + 3).min(self.server_names().len().saturating_sub(1))
+                        (self.selected_server + 3).min(
+                            self.server_names()
+                                .len()
+                                .saturating_sub(1),
+                        )
                     } else {
                         self.selected_server.saturating_sub(3)
                     };
@@ -725,6 +791,7 @@ impl Panel for State {
         self.error("本地设置收到意外的服务响应，草稿已保留。".into());
         Action::None
     }
+
     fn error(&mut self, error: String) {
         self.error = Some(error);
         self.invalidate_geometry();
@@ -849,7 +916,9 @@ impl State {
                 .max(focus_row.saturating_sub(area.height as usize - 1));
             form.reveal = false;
         }
-        form.offset = form.offset.min(total.saturating_sub(area.height as usize));
+        form.offset = form
+            .offset
+            .min(total.saturating_sub(area.height as usize));
         for (index, label) in LABELS.iter().enumerate() {
             if let Some(rect) = virtual_row(area, form.offset, index * 2) {
                 frame.render_widget(Paragraph::new(*label).style(components::muted()), rect);
@@ -866,7 +935,8 @@ impl State {
                         "整数"
                     },
                 );
-                self.hits.push((rect, Hit::AgentField(index)));
+                self.hits
+                    .push((rect, Hit::AgentField(index)));
             }
         }
         for (index, (label, checked)) in [
@@ -888,7 +958,8 @@ impl State {
                     ),
                     rect,
                 );
-                self.hits.push((rect, Hit::AgentField(index + 11)));
+                self.hits
+                    .push((rect, Hit::AgentField(index + 11)));
             }
         }
         for (index, (capability, label)) in CAPABILITIES.iter().enumerate() {
@@ -905,7 +976,8 @@ impl State {
                     ),
                     rect,
                 );
-                self.hits.push((rect, Hit::AgentField(index + 14)));
+                self.hits
+                    .push((rect, Hit::AgentField(index + 14)));
             }
         }
         if let Some(rect) = virtual_row(area, form.offset, tools_start) {
@@ -933,7 +1005,8 @@ impl State {
                 std::mem::take(&mut form.tools_follow),
             );
             self.editor = rect;
-            self.hits.push((rect, Hit::AgentField(28)));
+            self.hits
+                .push((rect, Hit::AgentField(28)));
         }
     }
 
@@ -949,11 +1022,16 @@ impl State {
         );
         let names = self.server_names();
         let height = (area.height.saturating_sub(2) as usize / 2).max(1);
-        self.selected_server = self.selected_server.min(names.len().saturating_sub(1));
+        self.selected_server = self
+            .selected_server
+            .min(names.len().saturating_sub(1));
         self.server_offset = self
             .server_offset
             .min(self.selected_server)
-            .max(self.selected_server.saturating_sub(height - 1));
+            .max(
+                self.selected_server
+                    .saturating_sub(height - 1),
+            );
         for (index, name) in names
             .iter()
             .enumerate()
@@ -997,7 +1075,8 @@ impl State {
                     row(rect, 1),
                 );
             }
-            self.hits.push((rect, Hit::Server(index)));
+            self.hits
+                .push((rect, Hit::Server(index)));
         }
         if names.is_empty() {
             frame.render_widget(
@@ -1029,7 +1108,8 @@ impl State {
                     }),
                     rect,
                 );
-                self.hits.push((rect, Hit::McpField(index)));
+                self.hits
+                    .push((rect, Hit::McpField(index)));
             }
         }
         let right = Rect::new(
@@ -1098,25 +1178,30 @@ fn input(value: String) -> InputState {
     input.set(value);
     input
 }
+
 fn optional(value: &str) -> Option<String> {
     let value = value.trim();
     (!value.is_empty()).then(|| value.into())
 }
+
 fn number<T: std::str::FromStr>(value: &str, label: &str) -> Result<T> {
     value
         .trim()
         .parse()
         .map_err(|_| anyhow::anyhow!("{label} 应为非负整数。"))
 }
+
 fn check(checked: bool) -> &'static str {
     if checked { "[x]" } else { "[ ]" }
 }
+
 fn virtual_row(area: Rect, offset: usize, index: usize) -> Option<Rect> {
     index
         .checked_sub(offset)
         .filter(|row| *row < area.height as usize)
         .map(|row| Rect::new(area.x, area.y + row as u16, area.width, 1))
 }
+
 fn toolbar(
     frame: &mut Frame<'_>,
     area: Rect,
@@ -1143,7 +1228,12 @@ mod tests {
     fn state(mcp: bool) -> (tempfile::TempDir, State) {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("config.toml");
-        std::fs::write(&path, "# retain comment\nmax_turns=0\n[providers]\n[command]\nmax_scan_entries=1234\n[command.verification_commands]\ncheck='cargo check'\n").unwrap();
+        std::fs::write(
+            &path,
+            "# retain comment\nmax_turns=0\n[providers]\n[command]\nmax_scan_entr\
+            ies=1234\n[command.verification_commands]\ncheck='cargo check'\n",
+        )
+        .unwrap();
         let state = State::new(path, directory.path().join("auth"), mcp);
         (directory, state)
     }
@@ -1157,7 +1247,8 @@ mod tests {
         form.fields[5].set("3".into());
         form.network = false;
         form.disabled.insert(Capability::Write);
-        form.tools.set("read_file\nmcp__demo__tool".into());
+        form.tools
+            .set("read_file\nmcp__demo__tool".into());
         state.save();
         assert!(state.error.is_none(), "{:?}", state.error);
         let content = std::fs::read_to_string(&state.path).unwrap();
@@ -1166,23 +1257,56 @@ mod tests {
         assert!(content.contains("check='cargo check'"));
         let draft = AdvancedDraft::load(&state.path, &state.auth).unwrap();
         assert_eq!(draft.settings().max_turns, 17);
-        assert_eq!(draft.settings().subagents.max_concurrent, 3);
-        assert!(!draft.settings().command.network.is_allowed());
+        assert_eq!(
+            draft
+                .settings()
+                .subagents
+                .max_concurrent,
+            3
+        );
+        assert!(
+            !draft
+                .settings()
+                .command
+                .network
+                .is_allowed()
+        );
         assert_eq!(draft.settings().disabled_capabilities, [Capability::Write]);
     }
 
     #[test]
     fn stale_agent_config_preserves_form_and_requires_explicit_snapshot_refresh() {
         let (_directory, mut state) = state(false);
-        state.agent_form.as_mut().unwrap().fields[0].set("42".into());
+        state
+            .agent_form
+            .as_mut()
+            .unwrap()
+            .fields[0]
+            .set("42".into());
         let external = std::fs::read_to_string(&state.path).unwrap() + "\n# external change\n";
         std::fs::write(&state.path, &external).unwrap();
         state.save();
         assert!(state.error.is_some());
         assert_eq!(std::fs::read_to_string(&state.path).unwrap(), external);
-        assert_eq!(state.agent_form.as_ref().unwrap().fields[0].text, "42");
+        assert_eq!(
+            state
+                .agent_form
+                .as_ref()
+                .unwrap()
+                .fields[0]
+                .text,
+            "42"
+        );
         state.reload();
-        assert_eq!(state.agent_form.as_ref().unwrap().fields[0].text, "42");
+        assert_eq!(
+            state
+                .agent_form
+                .as_ref()
+                .unwrap()
+                .fields[0]
+                .text,
+            "42"
+        );
         state.save();
         assert!(state.error.is_none());
     }
@@ -1214,7 +1338,14 @@ mod tests {
         assert!(state.error.is_some());
         assert!(state.mcp_form.is_some());
         state.remove("demo".into());
-        assert!(state.mcp.as_ref().unwrap().servers().is_empty());
+        assert!(
+            state
+                .mcp
+                .as_ref()
+                .unwrap()
+                .servers()
+                .is_empty()
+        );
     }
 
     #[test]
@@ -1233,7 +1364,14 @@ mod tests {
         state.reload();
         state.save();
         assert!(state.error.is_none());
-        assert!(state.mcp.as_ref().unwrap().servers().contains_key("draft"));
+        assert!(
+            state
+                .mcp
+                .as_ref()
+                .unwrap()
+                .servers()
+                .contains_key("draft")
+        );
     }
 
     #[test]

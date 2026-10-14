@@ -19,7 +19,10 @@ async fn isolated_document_worker_converts_pages_and_invalidates_changed_source(
     let first: Value = serde_json::from_str(
         &tool
             .execute(
-                request(json!({"path":"data.csv","max_chars":12})),
+                request(json!({
+                    "path": "data.csv",
+                    "max_chars": 12
+                })),
                 CancellationToken::new(),
             )
             .await
@@ -31,7 +34,10 @@ async fn isolated_document_worker_converts_pages_and_invalidates_changed_source(
     let next: Value = serde_json::from_str(
         &tool
             .execute(
-                request(json!({"path":"data.csv","start_char":first["next_start_char"]})),
+                request(json!({
+                    "path": "data.csv",
+                    "start_char": first["next_start_char"]
+                })),
                 CancellationToken::new(),
             )
             .await
@@ -43,20 +49,32 @@ async fn isolated_document_worker_converts_pages_and_invalidates_changed_source(
     std::fs::write(root.path().join("data.csv"), "name,value\nchanged,9\n").unwrap();
     assert!(
         tool.execute(
-            request(json!({"path":"data.csv"})),
+            request(json!({
+                "path": "data.csv"
+            })),
             CancellationToken::new()
         )
         .await
         .unwrap()
         .contains("changed")
     );
-    assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 1);
+    assert_eq!(
+        std::fs::read_dir(root.path())
+            .unwrap()
+            .count(),
+        1
+    );
     let token = CancellationToken::new();
     token.cancel();
     assert!(
-        tool.execute(request(json!({"path":"data.csv"})), token)
-            .await
-            .is_err()
+        tool.execute(
+            request(json!({
+                "path": "data.csv"
+            })),
+            token
+        )
+        .await
+        .is_err()
     );
 }
 
@@ -73,7 +91,13 @@ async fn cancellation_terminates_a_running_conversion_worker() {
     let running = token.clone();
     let task = tokio::spawn(async move {
         tool.execute(
-            ToolCall::function("cancel", "read_document", json!({"path":"data.csv"})),
+            ToolCall::function(
+                "cancel",
+                "read_document",
+                json!({
+                    "path": "data.csv"
+                }),
+            ),
             running,
         )
         .await

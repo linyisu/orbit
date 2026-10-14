@@ -11,16 +11,35 @@ pub(super) async fn execute(
     action: TaskAction,
 ) -> Result<TaskResult> {
     ensure!(
-        !setup.resources.policy.disabled(Capability::ProjectState),
+        !setup
+            .resources
+            .policy
+            .disabled(Capability::ProjectState),
         "任务功能已禁用"
     );
     let workspace = &setup.session.snapshot.session.workspace;
     let project = if matches!(action, TaskAction::Add { .. } | TaskAction::Create { .. }) {
-        Some(setup.session.store.resolve_project(workspace).await?)
+        Some(
+            setup
+                .session
+                .store
+                .resolve_project(workspace)
+                .await?,
+        )
     } else {
-        setup.session.store.project_at(workspace).await?
+        setup
+            .session
+            .store
+            .project_at(workspace)
+            .await?
     };
-    setup.session.snapshot.session.project_id = project.map(|p| p.id).unwrap_or_default();
+    setup
+        .session
+        .snapshot
+        .session
+        .project_id = project
+        .map(|p| p.id)
+        .unwrap_or_default();
     crate::project_state::actions::task(&setup.session, &mut Vec::new(), action).await
 }
 
@@ -37,7 +56,14 @@ pub(super) async fn snapshot(
             let tasks = setup
                 .session
                 .store
-                .tasks(&setup.session.snapshot.session.project_id, true)
+                .tasks(
+                    &setup
+                        .session
+                        .snapshot
+                        .session
+                        .project_id,
+                    true,
+                )
                 .await?;
             Ok(TaskSnapshot {
                 tasks,
@@ -75,7 +101,11 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path();
         TestConfig::new()
-            .provider(TestProvider::new("test").key("test").models(["mock"]))
+            .provider(
+                TestProvider::new("test")
+                    .key("test")
+                    .models(["mock"]),
+            )
             .write(root.join("config.toml"))
             .unwrap();
         let options = crate::WorkspaceOptions {
@@ -111,7 +141,11 @@ mod tests {
         let all = tasks(&mut setup, create("依赖基础的任务", vec![first.id]))
             .await
             .unwrap();
-        let second = all.iter().find(|task| task.id != first.id).unwrap().clone();
+        let second = all
+            .iter()
+            .find(|task| task.id != first.id)
+            .unwrap()
+            .clone();
         assert_eq!(second.details, "由桌面创建");
         assert_eq!(second.blocked_by, [first.id]);
         assert!(
@@ -173,7 +207,10 @@ mod tests {
         )
         .await
         .unwrap();
-        let task = all.iter().find(|task| task.id == second.id).unwrap();
+        let task = all
+            .iter()
+            .find(|task| task.id == second.id)
+            .unwrap();
         assert_eq!(task.title, "更新后的任务");
         assert_eq!(task.details, "保留说明");
         assert_eq!(task.priority, 5);

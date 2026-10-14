@@ -37,7 +37,9 @@ impl CursorMotion {
             self.clear();
             return;
         };
-        let previous = self.previous.replace((screen, area, position));
+        let previous = self
+            .previous
+            .replace((screen, area, position));
         if self
             .trail
             .is_some_and(|trail| now.duration_since(trail.started) >= trail.duration)
@@ -80,8 +82,10 @@ impl CursorMotion {
         if !area.contains(trail.to) {
             return;
         }
-        let progress =
-            now.duration_since(trail.started).as_secs_f64() / trail.duration.as_secs_f64();
+        let progress = now
+            .duration_since(trail.started)
+            .as_secs_f64()
+            / trail.duration.as_secs_f64();
         if progress >= 1.0 {
             return;
         }
@@ -92,12 +96,20 @@ impl CursorMotion {
         let columns = if tail < trail.to.x {
             tail.max(trail.to.x.saturating_sub(3))..trail.to.x
         } else {
-            trail.to.x.saturating_add(1)..tail.saturating_add(1).min(trail.to.x.saturating_add(4))
+            trail.to.x.saturating_add(1)
+                ..tail
+                    .saturating_add(1)
+                    .min(trail.to.x.saturating_add(4))
         };
         let mut x = area.x;
         while x < area.right() {
-            let width = buffer[(x, trail.to.y)].symbol().width().max(1) as u16;
-            let end = x.saturating_add(width).min(area.right());
+            let width = buffer[(x, trail.to.y)]
+                .symbol()
+                .width()
+                .max(1) as u16;
+            let end = x
+                .saturating_add(width)
+                .min(area.right());
             if columns.start < end && columns.end > x && !(x..end).contains(&trail.to.x) {
                 let base = color_rgb(buffer[(x, trail.to.y)].bg)
                     .or_else(|| color_rgb(THEME.border_muted))
@@ -171,7 +183,11 @@ mod tests {
         motion.update(area, area, Some((4, 0).into()), now);
         motion.update(area, area, Some((9, 0).into()), now);
         motion.paint(&mut buffer, now);
-        for (old, new) in before.content.iter().zip(&buffer.content) {
+        for (old, new) in before
+            .content
+            .iter()
+            .zip(&buffer.content)
+        {
             assert_eq!(old.symbol(), new.symbol());
             assert_eq!(old.fg, new.fg);
         }

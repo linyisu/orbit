@@ -1,13 +1,15 @@
 use crate::{entities::workspace_requests as requests, store::Store};
 use anyhow::{Result, ensure};
 use sea_orm::*;
-const UNKNOWN_OUTCOME: &str = "request was reserved but its outcome is unknown; inspect session history before submitting a new request";
+const UNKNOWN_OUTCOME: &str = "request was reserved but its outcome is unknown; inspect session \
+    history before submitting a new request";
 #[derive(Debug, PartialEq, Eq)]
 pub enum RequestClaim {
     New,
     Accepted,
     Rejected(String),
 }
+
 impl Store {
     /// A durable reservation precedes work; an interrupted reservation never authorizes replay.
     pub async fn claim_workspace_request(
@@ -51,6 +53,7 @@ impl Store {
         })
         .await
     }
+
     pub async fn finish_workspace_request(
         &self,
         session: &str,
@@ -86,7 +89,10 @@ mod tests {
         let store = Store::open(&path).await.unwrap();
         let writer = store
             .create(
-                directory.path().to_string_lossy().into_owned(),
+                directory
+                    .path()
+                    .to_string_lossy()
+                    .into_owned(),
                 "mock".into(),
             )
             .await

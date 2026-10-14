@@ -57,7 +57,12 @@ fn list_marker(text: &str) -> bool {
         Some("•" | super::icons::CHECKBOX_MARKED_OUTLINE | super::icons::CHECKBOX_BLANK_OUTLINE)
     ) || text
         .strip_suffix(". ")
-        .is_some_and(|number| !number.is_empty() && number.bytes().all(|b| b.is_ascii_digit()))
+        .is_some_and(|number| {
+            !number.is_empty()
+                && number
+                    .bytes()
+                    .all(|b| b.is_ascii_digit())
+        })
 }
 
 fn is_rail_gutter(content: &str) -> bool {
@@ -83,7 +88,11 @@ fn take_gutter(line: &mut Line<'static>) -> Option<Gutter> {
             .iter()
             .take_while(|span| is_rail_gutter(&span.content))
             .count();
-        let gutter = Line::from(line.spans.drain(..count).collect::<Vec<_>>());
+        let gutter = Line::from(
+            line.spans
+                .drain(..count)
+                .collect::<Vec<_>>(),
+        );
         let width = gutter.width() as u16;
         return Some(Gutter {
             first: gutter.clone(),
@@ -97,14 +106,24 @@ fn take_gutter(line: &mut Line<'static>) -> Option<Gutter> {
     for (index, span) in line.spans.iter().enumerate() {
         if span.content == "▎ " {
             quote_end = Some(index);
-        } else if !span.content.chars().all(char::is_whitespace) {
+        } else if !span
+            .content
+            .chars()
+            .all(char::is_whitespace)
+        {
             break;
         }
     }
 
     if let Some(end) = quote_end {
-        let prefix = line.spans.drain(..=end).collect::<Vec<_>>();
-        let width = prefix.iter().map(Span::width).sum::<usize>() as u16;
+        let prefix = line
+            .spans
+            .drain(..=end)
+            .collect::<Vec<_>>();
+        let width = prefix
+            .iter()
+            .map(Span::width)
+            .sum::<usize>() as u16;
         let gutter = Line::from(prefix);
         return Some(Gutter {
             first: gutter.clone(),
@@ -121,20 +140,35 @@ fn take_gutter(line: &mut Line<'static>) -> Option<Gutter> {
             list_marker(&span.content)
                 && line.spans[..*index]
                     .iter()
-                    .all(|prefix| prefix.content.chars().all(char::is_whitespace))
+                    .all(|prefix| {
+                        prefix
+                            .content
+                            .chars()
+                            .all(char::is_whitespace)
+                    })
         })
         .map(|(index, _)| index);
     let end = marker.or_else(|| {
         line.spans
             .iter()
             .take_while(|span| {
-                !span.content.is_empty() && span.content.chars().all(char::is_whitespace)
+                !span.content.is_empty()
+                    && span
+                        .content
+                        .chars()
+                        .all(char::is_whitespace)
             })
             .count()
             .checked_sub(1)
     })?;
-    let prefix = line.spans.drain(..=end).collect::<Vec<_>>();
-    let width = prefix.iter().map(Span::width).sum::<usize>() as u16;
+    let prefix = line
+        .spans
+        .drain(..=end)
+        .collect::<Vec<_>>();
+    let width = prefix
+        .iter()
+        .map(Span::width)
+        .sum::<usize>() as u16;
 
     Some(Gutter {
         first: Line::from(prefix),
@@ -230,7 +264,10 @@ fn wrap_ranges_with(text: &str, width: u16, first_width: u16, mode: WrapMode) ->
                 let space = grapheme.chars().all(wrapping_space);
                 if space && !in_space && has_content {
                     let from = start + relative;
-                    let end = text.len() - text[from..].trim_start_matches(wrapping_space).len();
+                    let end = text.len()
+                        - text[from..]
+                            .trim_start_matches(wrapping_space)
+                            .len();
                     if opportunities.contains(&end) {
                         separator = Some(from..end);
                     }
@@ -267,7 +304,9 @@ fn wrap_ranges_with(text: &str, width: u16, first_width: u16, mode: WrapMode) ->
             ranges.push(start..separator.start);
             start = separator.end;
         } else {
-            let end = allowed.filter(|end| *end > start).unwrap_or(hard_end);
+            let end = allowed
+                .filter(|end| *end > start)
+                .unwrap_or(hard_end);
             ranges.push(start..end);
             start = end;
         }
@@ -306,13 +345,13 @@ pub(super) fn wrap_linked_line(
     wrap_linked_line_with(linked, width, WrapMode::Verbatim)
 }
 
+/// Mixed media must be wrapped once, after images have their cell sizes. Wrapping here would split
+/// formulas and lose their complete target range.
 fn wrap_linked_line_with(
     mut linked: super::markdown::LinkedLine,
     width: u16,
     mode: WrapMode,
 ) -> Vec<super::markdown::LinkedLine> {
-    // Mixed media must be wrapped once, after images have their cell sizes.
-    // Wrapping here would split formulas and lose their complete target range.
     if !linked.media.is_empty() || linked.table.is_some() {
         return vec![linked];
     }
@@ -322,7 +361,11 @@ fn wrap_linked_line_with(
         linked.line = original.clone();
     }
     let removed = original.to_string().len() - linked.line.to_string().len();
-    let available = width.saturating_sub(gutter.as_ref().map_or(0, |gutter| gutter.width));
+    let available = width.saturating_sub(
+        gutter
+            .as_ref()
+            .map_or(0, |gutter| gutter.width),
+    );
     let (lines, ranges) = wrap_line_with(&linked.line, available, mode);
     lines
         .into_iter()
@@ -352,7 +395,8 @@ fn wrap_linked_line_with(
                 offset,
             ));
             if let Some(prefix) = prefix {
-                line.spans.splice(0..0, prefix.spans.iter().cloned());
+                line.spans
+                    .splice(0..0, prefix.spans.iter().cloned());
             }
             super::markdown::LinkedLine {
                 line,
@@ -385,7 +429,10 @@ fn wrap_linked_line_with(
 fn byte_at_column(text: &str, range: &Range<usize>, column: u16) -> Option<usize> {
     let mut used = 0;
 
-    for (relative, grapheme) in text.get(range.clone())?.grapheme_indices(true) {
+    for (relative, grapheme) in text
+        .get(range.clone())?
+        .grapheme_indices(true)
+    {
         let width = grapheme.width() as u16;
 
         if column < used + width {
@@ -514,12 +561,19 @@ impl Entry {
 
         render::sanitize_line(line);
         let original = line.to_string();
-        let gutter = if let Some(column) = linked.graphics.iter().map(|g| g.x).min() {
+        let gutter = if let Some(column) = linked
+            .graphics
+            .iter()
+            .map(|g| g.x)
+            .min()
+        {
             take_gutter_before(line, column)
         } else {
             take_gutter(line)
         };
-        let removed = original.len().saturating_sub(line.to_string().len());
+        let removed = original
+            .len()
+            .saturating_sub(line.to_string().len());
         linked.links.retain_mut(|link| {
             if link.end <= removed {
                 return false;
@@ -531,11 +585,18 @@ impl Entry {
             true
         });
         for target in &mut linked.media {
-            target.range.start = target.range.start.saturating_sub(removed);
+            target.range.start = target
+                .range
+                .start
+                .saturating_sub(removed);
             target.range.end = target.range.end.saturating_sub(removed);
         }
 
-        let content_width = width.saturating_sub(gutter.as_ref().map_or(0, |gutter| gutter.width));
+        let content_width = width.saturating_sub(
+            gutter
+                .as_ref()
+                .map_or(0, |gutter| gutter.width),
+        );
         let (wrapped, ranges) = wrap_line(line, content_width);
         let decorations = ranges
             .iter()
@@ -600,7 +661,9 @@ impl Entry {
     }
 
     fn stream(&mut self, text: &str, thinking: bool, width: u16) {
-        if self.observed_bytes.is_some_and(|len| text.len() < len)
+        if self
+            .observed_bytes
+            .is_some_and(|len| text.len() < len)
             || !text.is_char_boundary(self.parsed_bytes)
         {
             self.clear();
@@ -624,7 +687,10 @@ impl Entry {
         };
 
         self.rows.truncate(self.stable_rows);
-        self.height = self.rows.last().map_or(0, |row| row.start + row.height);
+        self.height = self
+            .rows
+            .last()
+            .map_or(0, |row| row.start + row.height);
         if thinking && self.rows.is_empty() {
             self.push_linked(render::thinking_header(), width);
             self.stable_rows = self.rows.len();
@@ -651,7 +717,9 @@ impl Entry {
                     );
                 }
 
-                index += text[consumed..consumed + bytes].lines().count();
+                index += text[consumed..consumed + bytes]
+                    .lines()
+                    .count();
                 consumed += bytes;
                 // A following indented paragraph may extend this definition.
                 can_commit = false;
@@ -672,7 +740,9 @@ impl Entry {
                     );
                 }
 
-                index += text[consumed..consumed + bytes].lines().count();
+                index += text[consumed..consumed + bytes]
+                    .lines()
+                    .count();
                 consumed += bytes;
                 // Display math is provisional until its terminating newline is
                 // received, just like tables and HTML fragments.
@@ -716,7 +786,9 @@ impl Entry {
                     );
                 }
 
-                index += text[consumed..consumed + block.bytes].lines().count();
+                index += text[consumed..consumed + block.bytes]
+                    .lines()
+                    .count();
                 consumed += block.bytes;
                 if can_commit && block.complete && text[..consumed].ends_with('\n') {
                     self.stable_rows = self.rows.len();
@@ -737,7 +809,9 @@ impl Entry {
                     self.push_linked(line, width);
                 }
 
-                index += text[consumed..consumed + bytes].lines().count();
+                index += text[consumed..consumed + bytes]
+                    .lines()
+                    .count();
                 consumed += bytes;
 
                 // A partial next row (even just "| ") can temporarily end the parser's
@@ -760,7 +834,10 @@ impl Entry {
                 continue;
             }
 
-            let part = text[consumed..].split_inclusive('\n').next().unwrap();
+            let part = text[consumed..]
+                .split_inclusive('\n')
+                .next()
+                .unwrap();
             let complete = part.ends_with('\n');
             let line = if complete {
                 part.trim_end_matches('\n')
@@ -799,6 +876,9 @@ impl Entry {
         self.framed_input(text, images, width, super::icons::PROMPT);
     }
 
+    /// A complete frame lets user turns remain visually distinct after their contents wrap. Keep a
+    /// plain fallback for terminals too narrow to draw the two side rails without stealing all
+    /// useful text width.
     fn framed_input(
         &mut self,
         text: &str,
@@ -806,9 +886,6 @@ impl Entry {
         width: u16,
         icon: &str,
     ) {
-        // A complete frame lets user turns remain visually distinct after their
-        // contents wrap. Keep a plain fallback for terminals too narrow to
-        // draw the two side rails without stealing all useful text width.
         if width < 9 {
             let lines = images
                 .iter()
@@ -966,9 +1043,10 @@ impl TranscriptLayout {
         }
 
         let absolute = offset + usize::from(point.1 - area.y);
-        let entry = self
-            .entries
-            .get(self.entries.partition_point(|entry| entry.end <= absolute))?;
+        let entry = self.entries.get(
+            self.entries
+                .partition_point(|entry| entry.end <= absolute),
+        )?;
         let relative = absolute - (entry.end - entry.height);
         let row = entry.rows.get(
             entry
@@ -988,7 +1066,10 @@ impl TranscriptLayout {
         point: (u16, u16),
     ) -> Option<Rect> {
         let (entry, row, _) = self.row_at(area, offset, point)?;
-        let gutter = row.gutter.as_ref().map_or(0, |gutter| gutter.width);
+        let gutter = row
+            .gutter
+            .as_ref()
+            .map_or(0, |gutter| gutter.width);
         let column = point.0.checked_sub(area.x + gutter)?;
         let fragment = row
             .graphics
@@ -1033,9 +1114,13 @@ impl TranscriptLayout {
             return None;
         }
         let (_, row, wrapped) = self.row_at(area, offset, point)?;
-        let column = point
-            .0
-            .checked_sub(area.x + row.gutter.as_ref().map_or(0, |g| g.width))?;
+        let column = point.0.checked_sub(
+            area.x
+                + row
+                    .gutter
+                    .as_ref()
+                    .map_or(0, |g| g.width),
+        )?;
         row.graphics
             .iter()
             .find(|f| column >= f.x && column < f.x + f.picture.size.width)
@@ -1059,7 +1144,9 @@ impl TranscriptLayout {
             return None;
         }
         let absolute = offset + usize::from(point.1 - area.y);
-        let index = self.entries.partition_point(|entry| entry.end <= absolute);
+        let index = self
+            .entries
+            .partition_point(|entry| entry.end <= absolute);
         let entry = self.entries.get(index)?;
         let relative = absolute - (entry.end - entry.height);
         let row = entry
@@ -1067,7 +1154,10 @@ impl TranscriptLayout {
             .iter()
             .find(|row| row.start <= relative && relative < row.start + row.height)?;
         let id = row.html_disclosure.as_ref()?;
-        let width = row.wrapped.get(relative - row.start)?.width()
+        let width = row
+            .wrapped
+            .get(relative - row.start)?
+            .width()
             + row
                 .gutter
                 .as_ref()
@@ -1076,7 +1166,10 @@ impl TranscriptLayout {
     }
 
     pub(super) fn toggle_html(&mut self, index: usize, id: String) {
-        let toggles = self.html_toggles.entry(index).or_default();
+        let toggles = self
+            .html_toggles
+            .entry(index)
+            .or_default();
         if !toggles.remove(&id) {
             toggles.insert(id);
         }
@@ -1084,7 +1177,9 @@ impl TranscriptLayout {
     }
 
     pub(super) fn anchor_at(&self, offset: usize) -> Option<TranscriptAnchor> {
-        let entry_index = self.entries.partition_point(|entry| entry.end <= offset);
+        let entry_index = self
+            .entries
+            .partition_point(|entry| entry.end <= offset);
         let entry = self.entries.get(entry_index)?;
         let entry_start = entry.end.saturating_sub(entry.height);
         let relative = offset.saturating_sub(entry_start);
@@ -1128,8 +1223,10 @@ impl TranscriptLayout {
 
     /// Discard cached source offsets when text is edited or entries are removed.
     pub(super) fn reset_from(&mut self, index: usize) {
-        self.html_toggles.retain(|item, _| *item < index);
-        self.tool_scroll.retain(|item, _| *item < index);
+        self.html_toggles
+            .retain(|item, _| *item < index);
+        self.tool_scroll
+            .retain(|item, _| *item < index);
         self.reset_rows_from(index);
     }
 
@@ -1166,10 +1263,16 @@ impl TranscriptLayout {
             self.dirty_from = 0;
             self.width = width;
         }
-        self.tool_scroll.retain(|item, _| *item < items.len());
+        self.tool_scroll
+            .retain(|item, _| *item < items.len());
 
         if &self.expanded != expanded {
-            if let Some(index) = self.expanded.symmetric_difference(expanded).next().copied() {
+            if let Some(index) = self
+                .expanded
+                .symmetric_difference(expanded)
+                .next()
+                .copied()
+            {
                 self.invalidate_from(index);
             }
             self.expanded = expanded.clone();
@@ -1205,8 +1308,11 @@ impl TranscriptLayout {
             .and_then(|entry| entry.tool_group.as_ref())
             .map_or(first, |group| group.start);
         let first = super::tool_groups::start(items, first);
-        self.entries.resize_with(items.len(), Entry::default);
-        let mut end = first.checked_sub(1).map_or(0, |i| self.entries[i].end);
+        self.entries
+            .resize_with(items.len(), Entry::default);
+        let mut end = first
+            .checked_sub(1)
+            .map_or(0, |i| self.entries[i].end);
         let mut group = first..first;
 
         for (relative, (entry, item)) in self.entries[first..]
@@ -1249,7 +1355,9 @@ impl TranscriptLayout {
                         let start = entry.rows.len();
                         entry.push_linked(line, width);
                         if collapsible {
-                            entry.disclosures.extend(start..entry.rows.len());
+                            entry
+                                .disclosures
+                                .extend(start..entry.rows.len());
                         }
                     }
                 }
@@ -1328,20 +1436,29 @@ impl TranscriptLayout {
                             let first_row = entry.rows.len();
                             entry.push_linked(line, width);
                             if body.contains(&index) {
-                                body_rows.get_or_insert(first_row..first_row).end =
-                                    entry.rows.len();
+                                body_rows
+                                    .get_or_insert(first_row..first_row)
+                                    .end = entry.rows.len();
                             }
                             if collapsible {
-                                entry.disclosures.extend(first_row..entry.rows.len());
+                                entry
+                                    .disclosures
+                                    .extend(first_row..entry.rows.len());
                             }
                             if title.contains(&index) {
-                                entry.tool_header.get_or_insert(start..start).end = entry.height;
+                                entry
+                                    .tool_header
+                                    .get_or_insert(start..start)
+                                    .end = entry.height;
                             }
                         }
                         if let Some(body) = body_rows {
                             entry.limit_tool_body(
                                 body,
-                                self.tool_scroll.get(&item_index).copied().unwrap_or(0),
+                                self.tool_scroll
+                                    .get(&item_index)
+                                    .copied()
+                                    .unwrap_or(0),
                                 width,
                             );
                         }
@@ -1363,7 +1480,10 @@ impl TranscriptLayout {
                         expanded.contains(&(first + relative)),
                         width,
                     );
-                    if lines.last().is_some_and(|line| line.to_string().is_empty()) {
+                    if lines
+                        .last()
+                        .is_some_and(|line| line.to_string().is_empty())
+                    {
                         lines.pop();
                     }
                     for line in lines {
@@ -1415,7 +1535,10 @@ impl TranscriptLayout {
                     && entry.end - entry.height < offset + height
                     && !entry.disclosures.is_empty()
                     && (matches!(items.get(index), Some(TranscriptItem::Tool(_)))
-                        || matches!(items.get(index), Some(TranscriptItem::Thinking(row)) if row.finished)))
+                        || matches!(
+                            items.get(index),
+                            Some(TranscriptItem::Thinking(row)) if row.finished
+                        )))
                 .then_some(index)
             })
     }
@@ -1428,7 +1551,9 @@ impl TranscriptLayout {
 
     pub(super) fn tool_offset(&self, index: usize) -> Option<usize> {
         let entry = self.entries.get(index)?;
-        let row = entry.rows.get(*entry.disclosures.first()?)?;
+        let row = entry
+            .rows
+            .get(*entry.disclosures.first()?)?;
         Some(entry.end - entry.height + row.start)
     }
 
@@ -1445,7 +1570,10 @@ impl TranscriptLayout {
     }
 
     pub(super) fn group_range(&self, index: usize) -> Option<Range<usize>> {
-        self.entries.get(index)?.tool_group.clone()
+        self.entries
+            .get(index)?
+            .tool_group
+            .clone()
     }
 
     pub(super) fn visible_group(&self, offset: usize, height: usize) -> Option<usize> {
@@ -1466,7 +1594,9 @@ impl TranscriptLayout {
             return None;
         }
         let absolute = offset + usize::from(point.1 - area.y);
-        let index = self.entries.partition_point(|entry| entry.end <= absolute);
+        let index = self
+            .entries
+            .partition_point(|entry| entry.end <= absolute);
         let entry = self.entries.get(index)?;
         let row = entry.rows.get(entry.group_header?)?;
         let relative = absolute - (entry.end - entry.height);
@@ -1497,7 +1627,9 @@ impl TranscriptLayout {
         }
 
         let absolute = offset + usize::from(point.1 - area.y);
-        let index = self.entries.partition_point(|entry| entry.end <= absolute);
+        let index = self
+            .entries
+            .partition_point(|entry| entry.end <= absolute);
         let entry = self.entries.get(index)?;
 
         if !matches!(
@@ -1535,7 +1667,9 @@ impl TranscriptLayout {
     }
 
     pub fn height(&self) -> usize {
-        self.entries.last().map_or(0, |entry| entry.end)
+        self.entries
+            .last()
+            .map_or(0, |entry| entry.end)
     }
 
     pub(super) fn decorations(&self, absolute_row: usize) -> &[Range<usize>] {
@@ -1554,11 +1688,13 @@ impl TranscriptLayout {
                 .rows
                 .partition_point(|row| row.start + row.height <= relative),
         )?;
-        row.decorations.get(relative - row.start)
+        row.decorations
+            .get(relative - row.start)
     }
 
     pub(super) fn link_at(&self, area: Rect, offset: usize, point: (u16, u16)) -> Option<&str> {
-        self.link_hit(area, offset, point).map(|hit| hit.url)
+        self.link_hit(area, offset, point)
+            .map(|hit| hit.url)
     }
 
     pub(super) fn footnote_at(
@@ -1588,7 +1724,9 @@ impl TranscriptLayout {
         }
         let absolute = offset + usize::from(point.1 - area.y);
         Some(super::markdown::footnotes::Focus {
-            entry: self.entries.partition_point(|entry| entry.end <= absolute),
+            entry: self
+                .entries
+                .partition_point(|entry| entry.end <= absolute),
             target: hit.url.to_owned(),
             since: std::time::Instant::now(),
         })
@@ -1601,10 +1739,16 @@ impl TranscriptLayout {
         offset: usize,
         focus: &super::markdown::footnotes::Focus,
     ) {
-        let Some(entry) = self.entries.get(focus.entry).filter(|_| !focus.expired()) else {
+        let Some(entry) = self
+            .entries
+            .get(focus.entry)
+            .filter(|_| !focus.expired())
+        else {
             return;
         };
-        let style = Style::default().bg(THEME.md_mark).fg(THEME.on_accent);
+        let style = Style::default()
+            .bg(THEME.md_mark)
+            .fg(THEME.on_accent);
         for row in entry
             .rows
             .iter()
@@ -1637,8 +1781,13 @@ impl TranscriptLayout {
         point: (u16, u16),
     ) -> Option<LinkHit<'_>> {
         let (entry, row, wrapped) = self.row_at(area, offset, point)?;
-        let gutter_width = row.gutter.as_ref().map_or(0, |gutter| gutter.width);
-        let column = point.0.checked_sub(area.x + gutter_width)?;
+        let gutter_width = row
+            .gutter
+            .as_ref()
+            .map_or(0, |gutter| gutter.width);
+        let column = point
+            .0
+            .checked_sub(area.x + gutter_width)?;
         let range = row.ranges.get(wrapped)?;
         let text = row.line.to_string();
         let byte = byte_at_column(&text, range, column)?;
@@ -1679,7 +1828,9 @@ impl TranscriptLayout {
 
     pub fn draw(&self, frame: &mut Frame<'_>, area: Rect, offset: usize) {
         self.draw_buffer(frame.buffer_mut(), area, offset);
-        let first = self.entries.partition_point(|entry| entry.end <= offset);
+        let first = self
+            .entries
+            .partition_point(|entry| entry.end <= offset);
         for entry in self.entries[first..]
             .iter()
             .take_while(|entry| entry.end - entry.height < offset + usize::from(area.height))
@@ -1700,7 +1851,10 @@ impl TranscriptLayout {
                 if absolute < offset {
                     continue;
                 }
-                let gutter = row.gutter.as_ref().map_or(0, |g| g.width);
+                let gutter = row
+                    .gutter
+                    .as_ref()
+                    .map_or(0, |g| g.width);
                 for fragment in &row.graphics {
                     let x = area.x + gutter + fragment.x;
                     let image_area = Rect::new(
@@ -1727,7 +1881,9 @@ impl TranscriptLayout {
         offset: usize,
     ) {
         let mut y = area.y;
-        let first = self.entries.partition_point(|entry| entry.end <= offset);
+        let first = self
+            .entries
+            .partition_point(|entry| entry.end <= offset);
 
         for entry in &self.entries[first..] {
             let start = entry.end - entry.height;
@@ -1743,7 +1899,10 @@ impl TranscriptLayout {
 
                 let skip = relative.saturating_sub(row.start);
                 let height = (row.height - skip).min((area.bottom() - y) as usize) as u16;
-                let gutter_width = row.gutter.as_ref().map_or(0, |gutter| gutter.width);
+                let gutter_width = row
+                    .gutter
+                    .as_ref()
+                    .map_or(0, |gutter| gutter.width);
 
                 if let Some(gutter) = &row.gutter {
                     for dy in 0..height {

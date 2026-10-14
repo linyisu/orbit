@@ -40,25 +40,42 @@ pub(crate) fn encode(
     for message in request.messages {
         match message {
             ChatMessage::Runtime { kind, content } => {
-                input.push(json!({ "role": "user", "content": [{ "type": "input_text", "text": crate::runtime_context::render(kind, &content) }] }));
+                input.push(json!({
+                    "role": "user",
+                    "content": [{
+                        "type": "input_text",
+                        "text": crate::runtime_context::render(kind, &content)
+                    }]
+                }));
             }
             ChatMessage::System { .. } => {}
             ChatMessage::User {
                 content,
                 attachments,
             } => {
-                let mut blocks = vec![
-                    json!({ "type": "input_text", "text": if content.is_empty() { "[图片]" } else { &content } }),
-                ];
+                let mut blocks = vec![json!({
+                    "type": "input_text",
+                    "text": if content.is_empty() {
+                        "[图片]"
+                    } else {
+                        &content
+                    }
+                })];
 
                 for attachment in attachments {
                     let Some((mime_type, data)) = attachment.image_if_available()? else {
                         continue;
                     };
-                    blocks.push(json!({ "type": "input_image", "image_url": format!("data:{mime_type};base64,{data}") }));
+                    blocks.push(json!({
+                        "type": "input_image",
+                        "image_url": format!("data:{mime_type};base64,{data}")
+                    }));
                 }
 
-                input.push(json!({ "role": "user", "content": blocks }));
+                input.push(json!({
+                    "role": "user",
+                    "content": blocks
+                }));
             }
 
             ChatMessage::Assistant {
@@ -66,11 +83,22 @@ pub(crate) fn encode(
                 tool_calls,
             } => {
                 if let Some(content) = content {
-                    input.push(json!({ "role": "assistant", "content": [{ "type": "output_text", "text": content }] }));
+                    input.push(json!({
+                        "role": "assistant",
+                        "content": [{
+                            "type": "output_text",
+                            "text": content
+                        }]
+                    }));
                 }
 
                 for call in tool_calls {
-                    input.push(json!({ "type": "function_call", "call_id": call.id, "name": call.function.name, "arguments": call.function.arguments }));
+                    input.push(json!({
+                        "type": "function_call",
+                        "call_id": call.id,
+                        "name": call.function.name,
+                        "arguments": call.function.arguments
+                    }));
                 }
             }
 
@@ -78,7 +106,11 @@ pub(crate) fn encode(
                 tool_call_id,
                 content,
             } => {
-                input.push(json!({ "type": "function_call_output", "call_id": tool_call_id, "output": content }));
+                input.push(json!({
+                    "type": "function_call_output",
+                    "call_id": tool_call_id,
+                    "output": content
+                }));
             }
         }
     }
@@ -96,8 +128,12 @@ pub(crate) fn encode(
         })
         .collect::<Vec<_>>();
 
-    let mut body =
-        json!({ "model": model, "instructions": instructions, "input": input, "stream": stream });
+    let mut body = json!({
+        "model": model,
+        "instructions": instructions,
+        "input": input,
+        "stream": stream
+    });
 
     if !tools.is_empty() {
         body["tools"] = json!(tools);
@@ -178,7 +214,10 @@ pub(crate) fn stream(
             }
 
             "response.output_item.added" => {
-                if let Some(item) = event.item.filter(|item| item.kind == "function_call") {
+                if let Some(item) = event
+                    .item
+                    .filter(|item| item.kind == "function_call")
+                {
                     events.push(StreamEvent::ToolCallDelta(ToolCallDelta {
                         metadata: None,
                         index: event.output_index.unwrap_or_default(),
@@ -227,7 +266,11 @@ fn output_parts(output_text: Option<&str>, output: &[ResponseOutput]) -> (String
             output
                 .iter()
                 .filter(|item| item.kind == "message")
-                .flat_map(|item| item.content.as_deref().unwrap_or_default())
+                .flat_map(|item| {
+                    item.content
+                        .as_deref()
+                        .unwrap_or_default()
+                })
                 .filter_map(|part| part.text.as_deref())
                 .collect::<Vec<_>>()
                 .join("")
@@ -238,10 +281,16 @@ fn output_parts(output_text: Option<&str>, output: &[ResponseOutput]) -> (String
         .filter(|item| item.kind == "function_call")
         .filter_map(|item| {
             Some(ToolCall::function(
-                item.call_id.clone().or(item.id.clone())?,
+                item.call_id
+                    .clone()
+                    .or(item.id.clone())?,
                 item.name.clone()?,
-                serde_json::from_str(item.arguments.as_deref().unwrap_or("{}"))
-                    .unwrap_or_else(|_| json!({})),
+                serde_json::from_str(
+                    item.arguments
+                        .as_deref()
+                        .unwrap_or("{}"),
+                )
+                .unwrap_or_else(|_| json!({})),
             ))
         })
         .collect();
@@ -292,7 +341,13 @@ mod input_tests {
             true,
         )
         .unwrap();
-        assert_eq!(body["input"][0]["content"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            body["input"][0]["content"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
         assert_eq!(body["input"][1]["role"], "user");
         assert!(!body.to_string().contains("gone.png"));
     }

@@ -39,7 +39,9 @@ impl Workspace {
     ) {
         let Some(info) = &self.info else { return };
         if let Some(panel) = &self.side_questions
-            && panel.read(cx).belongs_to(&info.id, &self.options)
+            && panel
+                .read(cx)
+                .belongs_to(&info.id, &self.options)
             && !panel.read(cx).closed
         {
             let panel = panel.clone();
@@ -66,7 +68,11 @@ impl Workspace {
         let existing = self
             .side_questions
             .as_ref()
-            .filter(|panel| panel.read(cx).belongs_to(&info.id, &self.options));
+            .filter(|panel| {
+                panel
+                    .read(cx)
+                    .belongs_to(&info.id, &self.options)
+            });
         // A queued polling response must never reopen a sheet the user closed.
         let open = questions.selected.is_some();
         if let Some(panel) = existing
@@ -150,24 +156,28 @@ impl SideQuestions {
     }
 
     fn current_scope(&self, cx: &App) -> bool {
-        self.owner.upgrade().is_some_and(|owner| {
-            let workspace = owner.read(cx);
-            workspace.connected
-                && workspace
-                    .side_questions
-                    .as_ref()
-                    .is_some_and(|panel| panel.entity_id() == self.id)
-                && workspace.options.same_host(&self.options)
-                && workspace
-                    .info
-                    .as_ref()
-                    .is_some_and(|info| info.id == self.session)
-        })
+        self.owner
+            .upgrade()
+            .is_some_and(|owner| {
+                let workspace = owner.read(cx);
+                workspace.connected
+                    && workspace
+                        .side_questions
+                        .as_ref()
+                        .is_some_and(|panel| panel.entity_id() == self.id)
+                    && workspace
+                        .options
+                        .same_host(&self.options)
+                    && workspace
+                        .info
+                        .as_ref()
+                        .is_some_and(|info| info.id == self.session)
+            })
     }
 
+    /// Workspace calls this while holding its own entity lease. The caller has already checked the
+    /// session/host; reading it here would reenter it.
     fn receive(&mut self, questions: Questions, window: &mut Window, cx: &mut Context<Self>) {
-        // Workspace calls this while holding its own entity lease. The caller
-        // has already checked the session/host; reading it here would reenter it.
         if self.closed || questions.revision < self.revision {
             return;
         }
@@ -237,7 +247,12 @@ impl SideQuestions {
         if self.pending || self.running || self.closed {
             return;
         }
-        let question = self.input.read(cx).value().trim().to_string();
+        let question = self
+            .input
+            .read(cx)
+            .value()
+            .trim()
+            .to_string();
         if question.is_empty() {
             return;
         }
@@ -246,7 +261,9 @@ impl SideQuestions {
             cx.notify();
             return;
         }
-        let follow_up = (!self.new_question).then_some(self.selected).flatten();
+        let follow_up = (!self.new_question)
+            .then_some(self.selected)
+            .flatten();
         self.send(
             Request::Ask {
                 session: self.session.clone(),
@@ -293,9 +310,14 @@ impl SideQuestions {
         let sent = self
             .owner
             .update(cx, |workspace, _| {
-                workspace.backend.as_ref().is_some_and(|backend| {
-                    backend.send(Command::Settings { request, result }).is_ok()
-                })
+                workspace
+                    .backend
+                    .as_ref()
+                    .is_some_and(|backend| {
+                        backend
+                            .send(Command::Settings { request, result })
+                            .is_ok()
+                    })
             })
             .unwrap_or(false);
         if !sent {
@@ -363,7 +385,12 @@ impl Render for SideQuestions {
             .is_none_or(|width| width < window.rem_size() * 42.);
         let measured_width = self.width;
         let owner = cx.weak_entity();
-        let ready = !self.input.read(cx).value().trim().is_empty();
+        let ready = !self
+            .input
+            .read(cx)
+            .value()
+            .trim()
+            .is_empty();
         let selected_running = self
             .selected
             .and_then(|index| self.records.get(index))
@@ -401,7 +428,9 @@ impl Render for SideQuestions {
                             .disabled(self.pending)
                             .on_click(cx.listener(|panel, _, window, cx| {
                                 panel.new_question = true;
-                                panel.input.update(cx, |input, cx| input.focus(window, cx));
+                                panel
+                                    .input
+                                    .update(cx, |input, cx| input.focus(window, cx));
                                 cx.notify();
                             })),
                     ),
@@ -452,15 +481,24 @@ impl Render for SideQuestions {
                             .child(List::new(&self.list)),
                     )
                     .child(
-                        div().flex_1().min_h_0().min_w_0().when_some(
-                            self.selected
-                                .and_then(|index| self.records.get(index).cloned()),
-                            |detail, record| detail.child(record),
-                        ),
+                        div()
+                            .flex_1()
+                            .min_h_0()
+                            .min_w_0()
+                            .when_some(
+                                self.selected
+                                    .and_then(|index| self.records.get(index).cloned()),
+                                |detail, record| detail.child(record),
+                            ),
                     ),
             )
             .when_some(self.error.clone(), |view, error| {
-                view.child(div().text_sm().text_color(cx.theme().danger).child(error))
+                view.child(
+                    div()
+                        .text_sm()
+                        .text_color(cx.theme().danger)
+                        .child(error),
+                )
             })
             .child(
                 v_flex()
@@ -629,7 +667,12 @@ impl Render for QuestionDetail {
                         .plugin(crate::math::MathPlugin::display()),
                 )
                 .when_some(detail.record.error.clone(), |view, error| {
-                    view.child(div().text_sm().text_color(cx.theme().danger).child(error))
+                    view.child(
+                        div()
+                            .text_sm()
+                            .text_color(cx.theme().danger)
+                            .child(error),
+                    )
                 })
                 .into_any_element()
         })
@@ -677,7 +720,12 @@ impl ListDelegate for QuestionList {
                         .min_w_0()
                         .w_full()
                         .gap_1()
-                        .child(div().text_sm().text_ellipsis().child(item.question.clone()))
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_ellipsis()
+                                .child(item.question.clone()),
+                        )
                         .child(
                             div()
                                 .text_xs()

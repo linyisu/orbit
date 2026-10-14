@@ -13,13 +13,18 @@ fn mouse(kind: MouseEventKind, x: u16, y: u16) -> Event {
 #[test]
 fn report_dialog_scrolls_through_real_input_even_under_a_notification() {
     let (mut tab, _requests) = tab("本地");
-    tab.state.submit("existing conversation".into());
-    tab.state.input.set("keep this draft".into());
+    tab.state
+        .submit("existing conversation".into());
+    tab.state
+        .input
+        .set("keep this draft".into());
     let history_len = tab.state.transcript.len();
     let chat_scroll = tab.state.scroll;
     tab.apply(Response::Report(orbit_protocol::Report {
         title: "诊断记录".into(),
-        text: (0..100).map(|i| format!("record-{i:03}\n")).collect(),
+        text: (0..100)
+            .map(|i| format!("record-{i:03}\n"))
+            .collect(),
     }));
     tab.state
         .feedback
@@ -33,7 +38,8 @@ fn report_dialog_scrolls_through_real_input_even_under_a_notification() {
     let scrolled = render_screen(&mut tab.state);
     assert!(!scrolled.contains("record-000"));
     assert!(scrolled.contains("record-008"));
-    tab.handle(mouse(MouseEventKind::ScrollUp, 70, 3)).unwrap();
+    tab.handle(mouse(MouseEventKind::ScrollUp, 70, 3))
+        .unwrap();
     assert!(render_screen(&mut tab.state).contains("record-000"));
 
     for (key, first_visible, last_visible) in [
@@ -54,6 +60,7 @@ fn report_dialog_scrolls_through_real_input_even_under_a_notification() {
     assert_eq!(tab.state.transcript.len(), history_len);
     assert_eq!(tab.state.scroll, chat_scroll);
 }
+
 fn image() -> orbit_model::types::Attachment {
     orbit_model::types::Attachment::Image {
         lease: None,
@@ -174,7 +181,8 @@ fn control_d_with_image_draft() {
 #[test]
 fn pending_image_mouse_and_keyboard_focus_preserve_the_caption() {
     let (mut tab, _requests) = tab("本地");
-    tab.state.submit("existing conversation".into());
+    tab.state
+        .submit("existing conversation".into());
     tab.state.attachments = vec![image(), image()];
     tab.state.input.set("caption".into());
     render_screen(&mut tab.state);
@@ -223,7 +231,8 @@ fn bare_model_name_is_accepted() {
     let (mut tab, mut rx) = tab("本地");
     tab.state.model = "mock::previous".into();
     tab.state.model_completions = vec!["mock::model".into()];
-    tab.submit("/model model".into()).unwrap();
+    tab.submit("/model model".into())
+        .unwrap();
     assert!(matches!(
         rx.try_recv(),
         Ok(Call {
@@ -320,7 +329,9 @@ fn interrupted_tool_is_no_longer_running_after_restore() {
                 call: orbit_model::types::ToolCall::function(
                     "call",
                     "run_command",
-                    serde_json::json!({"command":"sleep 1"}),
+                    serde_json::json!({
+                        "command": "sleep 1"
+                    }),
                 ),
             })),
             Update::Finished {
@@ -329,14 +340,24 @@ fn interrupted_tool_is_no_longer_running_after_restore() {
             },
         ],
     );
-    assert!(tab.state.transcript.iter().all(|item|!matches!(item,TranscriptItem::Tool(tool) if tool.status==crate::tui::app::ToolStatus::Running)));
+    assert!(
+        tab.state
+            .transcript
+            .iter()
+            .all(|item| !matches!(
+                item,
+                TranscriptItem::Tool(tool) if tool.status == crate::tui::app::ToolStatus::Running
+            ))
+    );
 }
 
 #[test]
 fn model_changes_preserve_image_drafts_and_only_send_to_a_compatible_model() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("draft.png");
-    image::RgbaImage::new(1, 1).save(&path).unwrap();
+    image::RgbaImage::new(1, 1)
+        .save(&path)
+        .unwrap();
     let attachment = orbit_model::types::Attachment::Image {
         lease: None,
         name: "draft.png".into(),
@@ -344,9 +365,26 @@ fn model_changes_preserve_image_drafts_and_only_send_to_a_compatible_model() {
         path,
     };
     let (mut tab, mut requests) = tab("本地");
-    tab.state.attachments.push(attachment.clone());
-    tab.state.input.set("describe this picture".into());
-    let mut info: SessionInfo = serde_json::from_value(serde_json::json!({"id":"same-session","title":"","workspace":"/project","model":"mock","models":[],"supports_vision":false,"reasoning_effort":null,"reasoning_efforts":[],"context_tokens":1000,"input_context_tokens":900,"max_output_tokens":100})).unwrap();
+    tab.state
+        .attachments
+        .push(attachment.clone());
+    tab.state
+        .input
+        .set("describe this picture".into());
+    let mut info: SessionInfo = serde_json::from_value(serde_json::json!({
+        "id": "same-session",
+        "title": "",
+        "workspace": "/project",
+        "model": "mock",
+        "models": [],
+        "supports_vision": false,
+        "reasoning_effort": null,
+        "reasoning_efforts": [],
+        "context_tokens": 1_000,
+        "input_context_tokens": 900,
+        "max_output_tokens": 100
+    }))
+    .unwrap();
     for supports_vision in [false, true] {
         info.supports_vision = supports_vision;
         let Response::Page(mut update) =
@@ -426,6 +464,7 @@ fn queued_input_replay_has_one_user_message() {
 fn apply_page(tab: &mut Tab, updates: Vec<Update>) {
     tab.apply(super::page(updates, vec![]));
 }
+
 #[test]
 fn sent_images_have_a_message_marker_and_preserve_the_next_draft() {
     let (mut tab, _rx) = tab("本地");
@@ -446,11 +485,15 @@ fn sent_images_have_a_message_marker_and_preserve_the_next_draft() {
         tab.state
             .transcript
             .iter()
-            .any(|i| matches!(i,TranscriptItem::User(text) if text=="sent\n[图片：sent.png]"))
+            .any(|i| matches!(
+                i,
+                TranscriptItem::User(text) if text == "sent\n[图片：sent.png]"
+            ))
     );
     assert_eq!(tab.state.attachments.len(), 1);
     assert!(tab.starting_attachments.is_empty());
 }
+
 #[test]
 fn failed_start_restores_only_the_submitted_images() {
     let (mut tab, _rx) = tab("本地");
@@ -461,14 +504,24 @@ fn failed_start_restores_only_the_submitted_images() {
     assert_eq!(tab.state.attachments.len(), 2);
     assert_eq!(tab.state.input.text, "sent");
 }
+
 #[test]
 fn compact_preserves_the_image_draft_and_sends_no_uploads() {
     let (mut tab, mut requests) = tab("本地");
     tab.state.attachments.push(image());
     tab.submit("/compact".into()).unwrap();
-    assert!(
-        matches!(requests.try_recv(),Ok(Call {request:Request::Start{compact:true,images,..},..}) if images.is_empty())
-    );
+    assert!(matches!(
+        requests.try_recv(),
+        Ok(Call {
+            request:
+                Request::Start {
+                    compact: true,
+                    images,
+                    ..
+                },
+            ..
+        }) if images.is_empty()
+    ));
     apply_page(
         &mut tab,
         vec![Update::Started {
@@ -478,6 +531,7 @@ fn compact_preserves_the_image_draft_and_sends_no_uploads() {
     );
     assert_eq!(tab.state.attachments.len(), 1);
 }
+
 #[test]
 fn history_keeps_recorded_elapsed_and_live_clock_comes_from_the_service() {
     let (mut tab, _rx) = tab("本地");
@@ -490,26 +544,26 @@ fn history_keeps_recorded_elapsed_and_live_clock_comes_from_the_service() {
             },
             Update::Finished {
                 status: "completed".into(),
-                elapsed_ms: Some(94500),
+                elapsed_ms: Some(94_500),
             },
         ],
     );
     assert_eq!(
         tab.state.active_elapsed(),
-        std::time::Duration::from_millis(94500)
+        std::time::Duration::from_millis(94_500)
     );
     let Response::Page(mut frame) = super::page(vec![], vec![]) else {
         unreachable!()
     };
     frame.busy = true;
     frame.timing = Some(orbit_protocol::RunTiming {
-        elapsed_ms: 84000,
+        elapsed_ms: 84_000,
         paused: true,
     });
     tab.apply(Response::Page(frame));
     assert_eq!(
         tab.state.active_elapsed(),
-        std::time::Duration::from_millis(84000)
+        std::time::Duration::from_millis(84_000)
     );
 }
 
@@ -535,6 +589,7 @@ async fn catalog_refresh_waits_until_the_current_run_finishes() {
     }
     assert!(configured);
 }
+
 #[test]
 fn replay_preserves_reading_position_and_finalizes_only_replayed_background_tools() {
     let (mut tab, _rx) = tab("本地");
@@ -566,7 +621,15 @@ fn replay_preserves_reading_position_and_finalizes_only_replayed_background_tool
             },
         ],
     );
-    assert!(tab.state.transcript.iter().any(|item|matches!(item,TranscriptItem::Tool(tool) if tool.status==crate::tui::app::ToolStatus::Failed)));
+    assert!(
+        tab.state
+            .transcript
+            .iter()
+            .any(|item| matches!(
+                item,
+                TranscriptItem::Tool(tool) if tool.status == crate::tui::app::ToolStatus::Failed
+            ))
+    );
 }
 
 #[test]
@@ -592,10 +655,21 @@ fn running_command_card_updates_stdout_without_overwriting_a_finished_result() {
     frame.tool_progress = vec![orbit_protocol::ToolProgress {
         call_id: call.id.clone(),
         stdout: Some("first\nsecond".into()),
-        elapsed_ms: Some(12345),
+        elapsed_ms: Some(12_345),
     }];
     tab.apply(Response::Page(frame));
-    assert!(tab.state.transcript.iter().any(|item| matches!(item,TranscriptItem::Tool(tool) if serde_json::from_str::<serde_json::Value>(&tool.output).is_ok_and(|value|value["stdout"]=="first\nsecond" && value["elapsed_seconds"]==12))));
+    assert!(
+        tab.state
+            .transcript
+            .iter()
+            .any(|item| matches!(
+                item,
+                TranscriptItem::Tool(tool)
+                    if serde_json::from_str::<serde_json::Value>(&tool.output).is_ok_and(|value| {
+                        value["stdout"] == "first\nsecond" && value["elapsed_seconds"] == 12
+                    })
+            ))
+    );
     apply_page(
         &mut tab,
         vec![Update::Agent(Box::new(
@@ -619,7 +693,10 @@ fn running_command_card_updates_stdout_without_overwriting_a_finished_result() {
         tab.state
             .transcript
             .iter()
-            .any(|item| matches!(item,TranscriptItem::Tool(tool) if tool.output=="final result"))
+            .any(|item| matches!(
+                item,
+                TranscriptItem::Tool(tool) if tool.output == "final result"
+            ))
     );
 }
 
@@ -627,16 +704,38 @@ fn running_command_card_updates_stdout_without_overwriting_a_finished_result() {
 fn user_input_completed_tool_click_releases_frozen_transcript_before_drawing_modal() {
     let (mut tab, _) = tab("本地");
     let output = serde_json::json!({
-        "id": "answered-request", "call_id": "ask-1", "source": null,
+        "id": "answered-request",
+        "call_id": "ask-1",
+        "source": null,
         "status": "answered",
-        "form": { "questions": [{
-            "id": "choice", "title": "语言", "prompt": "选择开发语言",
-            "kind": "single", "options": [
-                { "id": "rust", "label": "Rust", "description": "系统编程" },
-                { "id": "python", "label": "Python", "description": "脚本" }
-            ], "allow_custom": true, "required": true
-        }] },
-        "answers": [{ "question_id": "choice", "selected": ["rust"], "text": "", "note": "" }]
+        "form": {
+            "questions": [{
+                "id": "choice",
+                "title": "语言",
+                "prompt": "选择开发语言",
+                "kind": "single",
+                "options": [
+                    {
+                        "id": "rust",
+                        "label": "Rust",
+                        "description": "系统编程"
+                    },
+                    {
+                        "id": "python",
+                        "label": "Python",
+                        "description": "脚本"
+                    }
+                ],
+                "allow_custom": true,
+                "required": true
+            }]
+        },
+        "answers": [{
+            "question_id": "choice",
+            "selected": ["rust"],
+            "text": "",
+            "note": ""
+        }]
     });
     tab.state.input.set("保留草稿".into());
     tab.state
@@ -656,7 +755,10 @@ fn user_input_completed_tool_click_releases_frozen_transcript_before_drawing_mod
         })
         .unwrap();
     let area = tab.state.selection.viewport;
-    let offset = tab.state.max_scroll.saturating_sub(tab.state.scroll);
+    let offset = tab
+        .state
+        .max_scroll
+        .saturating_sub(tab.state.scroll);
     let (x, y) = (area.y..area.bottom())
         .find_map(|y| {
             (area.x..area.right()).find_map(|x| {
@@ -760,9 +862,16 @@ fn resize_rejects_old_button_coordinates_until_the_dialog_is_painted() {
     let (mut tab, mut requests) = tab("本地");
     tab.state.planning.sync(
         serde_json::from_value(serde_json::json!({
-            "generation": 3, "mode": "plan", "plan": {
-                "id": "layout-test", "workspace": "/project", "revision": 1,
-                "title": "方案", "markdown": "正文", "steps": ["实施"], "status": "review"
+            "generation": 3,
+            "mode": "plan",
+            "plan": {
+                "id": "layout-test",
+                "workspace": "/project",
+                "revision": 1,
+                "title": "方案",
+                "markdown": "正文",
+                "steps": ["实施"],
+                "status": "review"
             }
         }))
         .unwrap(),
@@ -785,7 +894,8 @@ fn resize_rejects_old_button_coordinates_until_the_dialog_is_painted() {
             .unwrap()
     };
     let (x, y) = approve_point(&terminal);
-    tab.handle(Event::Resize(80, 25)).unwrap();
+    tab.handle(Event::Resize(80, 25))
+        .unwrap();
     tab.handle(mouse(MouseEventKind::Down(MouseButton::Left), x, y))
         .unwrap();
     assert!(requests.try_recv().is_err());
@@ -846,11 +956,14 @@ fn file_approval_scroll_and_editing_use_the_live_event_route() {
         .unwrap();
     assert!(tab.state.scroll > chat_scroll);
     assert_eq!(tab.state.approval_scroll, preview_scroll);
-    tab.handle(Event::Paste(" text".into())).unwrap();
+    tab.handle(Event::Paste(" text".into()))
+        .unwrap();
     assert_eq!(tab.state.input.text, "draft text");
     assert!(requests.try_recv().is_err());
     for (width, height) in [(24, 10), (10, 5), (1, 1), (140, 40)] {
-        terminal.backend_mut().resize(width, height);
+        terminal
+            .backend_mut()
+            .resize(width, height);
         terminal
             .resize(ratatui::layout::Rect::new(0, 0, width, height))
             .unwrap();
@@ -868,7 +981,10 @@ fn tool_output_wheel_uses_the_live_route_and_copy_follows_visible_content() {
         TranscriptItem::Tool(crate::tui::app::ToolRow {
             id: "output".into(),
             name: "run_command".into(),
-            arguments: serde_json::json!({"command": "example"}).to_string(),
+            arguments: serde_json::json!({
+                "command": "example"
+            })
+            .to_string(),
             status: crate::tui::app::ToolStatus::Finished,
             output: (0..30)
                 .map(|i| format!("https://orbit.example/{i:02}\n"))
@@ -877,7 +993,9 @@ fn tool_output_wheel_uses_the_live_route_and_copy_follows_visible_content() {
         TranscriptItem::Assistant("tail\n".repeat(100)),
     ];
     tab.state.expanded.insert(0);
-    tab.state.input.set("unfinished draft".into());
+    tab.state
+        .input
+        .set("unfinished draft".into());
     let mut terminal = Terminal::new(TestBackend::new(90, 35)).unwrap();
     terminal
         .draw(|f| crate::tui::render::draw(f, &mut tab.state))
@@ -891,7 +1009,9 @@ fn tool_output_wheel_uses_the_live_route_and_copy_follows_visible_content() {
     let point = (area.y..area.bottom())
         .find_map(|y| {
             (area.x..area.right()).find_map(|x| {
-                (tab.state.transcript_layout.link_at(area, 0, (x, y))
+                (tab.state
+                    .transcript_layout
+                    .link_at(area, 0, (x, y))
                     == Some("https://orbit.example/00"))
                 .then_some((x, y))
             })
@@ -909,7 +1029,9 @@ fn tool_output_wheel_uses_the_live_route_and_copy_follows_visible_content() {
     assert_eq!((tab.state.scroll, tab.state.max_scroll), outer);
     let expected = format!("https://orbit.example/{:02}", crate::tui::wheel::TOOL_LINES);
     assert_eq!(
-        tab.state.transcript_layout.link_at(area, 0, point),
+        tab.state
+            .transcript_layout
+            .link_at(area, 0, point),
         Some(expected.as_str())
     );
     tab.handle(mouse(
@@ -940,7 +1062,7 @@ fn replayed_reasoning_uses_saved_duration_and_live_reasoning_still_times_itself(
     use orbit_agent::events::AgentEvent;
     use orbit_model::types::StreamEvent;
     let (mut tab, _requests) = tab("本地");
-    for (replayed, saved) in [(true, Some(7500)), (true, None), (false, None)] {
+    for (replayed, saved) in [(true, Some(7_500)), (true, None), (false, None)] {
         let mut updates = vec![
             Update::Started {
                 prompt: "question".into(),
@@ -961,7 +1083,7 @@ fn replayed_reasoning_uses_saved_duration_and_live_reasoning_still_times_itself(
         ))));
         updates.push(Update::Finished {
             status: "completed".into(),
-            elapsed_ms: Some(8000),
+            elapsed_ms: Some(8_000),
         });
         apply_page(&mut tab, updates);
         let row = tab

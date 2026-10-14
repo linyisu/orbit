@@ -6,6 +6,7 @@ impl MigrationName for Migration {
         "00000000000012_checkpoints"
     }
 }
+
 #[async_trait::async_trait]
 impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
@@ -13,8 +14,16 @@ impl MigrationTrait for Migration {
             .create_table(
                 Table::create()
                     .table(Alias::new("execution_checkpoints"))
-                    .col(ColumnDef::new(Alias::new("run_id")).integer().primary_key())
-                    .col(ColumnDef::new(Alias::new("payload")).text().not_null())
+                    .col(
+                        ColumnDef::new(Alias::new("run_id"))
+                            .integer()
+                            .primary_key(),
+                    )
+                    .col(
+                        ColumnDef::new(Alias::new("payload"))
+                            .text()
+                            .not_null(),
+                    )
                     .foreign_key(
                         ForeignKey::create()
                             .from(Alias::new("execution_checkpoints"), Alias::new("run_id"))
@@ -26,6 +35,7 @@ impl MigrationTrait for Migration {
             .await?;
         Ok(())
     }
+
     async fn down(&self, _: &SchemaManager) -> Result<(), DbErr> {
         super::forward_only()
     }

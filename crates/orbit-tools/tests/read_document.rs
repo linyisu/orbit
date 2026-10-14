@@ -15,10 +15,16 @@ fn mixed_pdf() -> Vec<u8> {
         "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
         format!("<< /Type /Pages /Kids [{kids}] /Count {page_count} >>"),
         "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".into(),
-        "<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Length 3 >>\nstream\nabc\nendstream".into(),
+        "<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceRGB \
+            /BitsPerComponent 8 /Length 3 >>\nstream\nabc\nendstream"
+            .into(),
     ];
     for i in 0..page_count {
-        objects.push(format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> /XObject << /Im 4 0 R >> >> /Contents {} 0 R >>", 6 + i * 2));
+        objects.push(format!(
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << \
+            /Font << /F1 3 0 R >> /XObject << /Im 4 0 R >> >> /Contents {} 0 R >>",
+            6 + i * 2
+        ));
         let drawing = if i == 0 {
             ""
         } else {
@@ -72,7 +78,11 @@ async fn pdf_images_work_in_the_native_document_worker() {
             ToolCall::function(
                 "doc",
                 "read_document",
-                json!({"path":"mixed.pdf", "start_page":2, "end_page":3}),
+                json!({
+                    "path": "mixed.pdf",
+                    "start_page": 2,
+                    "end_page": 3
+                }),
             ),
             CancellationToken::new(),
         )
@@ -85,7 +95,12 @@ async fn pdf_images_work_in_the_native_document_worker() {
         "{value}"
     );
     assert_eq!(output.attachments.len(), 2);
-    assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 1);
+    assert_eq!(
+        std::fs::read_dir(root.path())
+            .unwrap()
+            .count(),
+        1
+    );
 }
 
 #[tokio::test]
@@ -95,7 +110,11 @@ async fn pdf_images_reach_attachments_with_page_numbers_and_bounded_continuation
     let tool = ReadDocument::new(Workspace::new(root.path()).unwrap())
         .with_worker(env!("CARGO_BIN_EXE_orbit-document-worker").into());
     let call = |extra: Value| {
-        let mut args = json!({"path":"mixed.pdf","start_page":1,"end_page":7});
+        let mut args = json!({
+            "path": "mixed.pdf",
+            "start_page": 1,
+            "end_page": 7
+        });
         args.as_object_mut()
             .unwrap()
             .extend(extra.as_object().unwrap().clone());
@@ -127,8 +146,12 @@ async fn pdf_images_reach_attachments_with_page_numbers_and_bounded_continuation
     )
     .unwrap()
     .to_rgb8();
-    assert_eq!(image.width().max(image.height()), 2048);
-    assert!(image.pixels().any(|pixel| pixel.0[0] < 150));
+    assert_eq!(image.width().max(image.height()), 2_048);
+    assert!(
+        image
+            .pixels()
+            .any(|pixel| pixel.0[0] < 150)
+    );
     let message = orbit_model::types::ChatMessage::user_with_attachments(
         "document pages",
         output.attachments.clone(),
@@ -140,7 +163,9 @@ async fn pdf_images_reach_attachments_with_page_numbers_and_bounded_continuation
     assert!(!temporary_path.exists());
     let next = tool
         .execute(
-            call(json!({"image_start_page":6})),
+            call(json!({
+                "image_start_page": 6
+            })),
             CancellationToken::new(),
         )
         .await
@@ -162,22 +187,37 @@ async fn pdf_images_reach_attachments_with_page_numbers_and_bounded_continuation
     assert!(text_only.attachments.is_empty());
     assert!(text_only.contains("Current model cannot receive images"));
     let off = tool
-        .execute(call(json!({"images":"off"})), CancellationToken::new())
+        .execute(
+            call(json!({
+                "images": "off"
+            })),
+            CancellationToken::new(),
+        )
         .await
         .unwrap();
     assert!(off.attachments.is_empty());
     let always = tool
         .execute(
-            call(json!({"start_page":1,"end_page":1,"images":"always"})),
+            call(json!({
+                "start_page": 1,
+                "end_page": 1,
+                "images": "always"
+            })),
             CancellationToken::new(),
         )
         .await
         .unwrap();
     assert_eq!(always.attachments.len(), 1);
-    assert!(always.attachments[0].name().contains("page 1"));
+    assert!(
+        always.attachments[0]
+            .name()
+            .contains("page 1")
+    );
     assert!(
         tool.execute(
-            call(json!({"image_start_page":8})),
+            call(json!({
+                "image_start_page": 8
+            })),
             CancellationToken::new()
         )
         .await
@@ -186,10 +226,16 @@ async fn pdf_images_reach_attachments_with_page_numbers_and_bounded_continuation
     let cancelled = CancellationToken::new();
     cancelled.cancel();
     assert!(matches!(
-        tool.execute(call(json!({})), cancelled).await,
+        tool.execute(call(json!({})), cancelled)
+            .await,
         Err(orbit_agent::tool::ToolError::Cancelled)
     ));
-    assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 1);
+    assert_eq!(
+        std::fs::read_dir(root.path())
+            .unwrap()
+            .count(),
+        1
+    );
 }
 
 #[tokio::test]
@@ -200,12 +246,25 @@ async fn render_failure_preserves_extracted_text() {
     std::fs::write(root.path().join("mixed.pdf"), mixed_pdf()).unwrap();
     let wrapper = data.path().join("worker.sh");
     let real = shlex::try_join([env!("CARGO_BIN_EXE_orbit-document-worker")]).unwrap();
-    std::fs::write(&wrapper, format!("#!/bin/sh\nif [ \"$1\" = --internal-pdf-render-worker ]; then exit 7; fi\nexec {real} \"$@\"\n")).unwrap();
+    std::fs::write(
+        &wrapper,
+        format!(
+            "#!/bin/sh\nif [ \"$1\" = --internal-pdf-render-worker ]; \
+        then exit 7; fi\nexec {real} \"$@\"\n"
+        ),
+    )
+    .unwrap();
     std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o700)).unwrap();
     let tool = ReadDocument::new(Workspace::new(root.path()).unwrap()).with_worker(wrapper);
     let output = tool
         .execute(
-            ToolCall::function("doc", "read_document", json!({"path":"mixed.pdf"})),
+            ToolCall::function(
+                "doc",
+                "read_document",
+                json!({
+                    "path": "mixed.pdf"
+                }),
+            ),
             CancellationToken::new(),
         )
         .await
@@ -214,7 +273,10 @@ async fn render_failure_preserves_extracted_text() {
     let value: Value = serde_json::from_str(&output).unwrap();
     assert_eq!(value["pdf"]["vision"]["status"], "failed");
     assert_eq!(
-        value["pdf"]["vision"]["failures"].as_array().unwrap().len(),
+        value["pdf"]["vision"]["failures"]
+            .as_array()
+            .unwrap()
+            .len(),
         4
     );
     assert!(
@@ -236,7 +298,10 @@ async fn standalone_worker_returns_paginated_content_and_invalidates_source_cach
     let first: Value = serde_json::from_str(
         &tool
             .execute(
-                call(json!({"path":"table.csv","max_chars":10})),
+                call(json!({
+                    "path": "table.csv",
+                    "max_chars": 10
+                })),
                 CancellationToken::new(),
             )
             .await
@@ -247,17 +312,34 @@ async fn standalone_worker_returns_paginated_content_and_invalidates_source_cach
     assert!(first["pdf"].is_null());
     std::fs::write(&path, "name,value\nchanged,42\n").unwrap();
     let next = tool
-        .execute(call(json!({"path":"table.csv"})), CancellationToken::new())
+        .execute(
+            call(json!({
+                "path": "table.csv"
+            })),
+            CancellationToken::new(),
+        )
         .await
         .unwrap();
     assert!(next.contains("changed"));
     let invalid = tool
         .execute(
-            call(json!({"path":"table.csv","start_page":2})),
+            call(json!({
+                "path": "table.csv",
+                "start_page": 2
+            })),
             CancellationToken::new(),
         )
         .await
         .unwrap_err();
-    assert!(invalid.to_string().contains("only for PDFs"));
-    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+    assert!(
+        invalid
+            .to_string()
+            .contains("only for PDFs")
+    );
+    assert_eq!(
+        std::fs::read_dir(dir.path())
+            .unwrap()
+            .count(),
+        1
+    );
 }

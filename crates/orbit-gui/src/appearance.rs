@@ -14,7 +14,8 @@ impl Appearance {
     pub(crate) fn load(path: &Path, window: &mut Window, cx: &mut App) -> Result<Self> {
         let module = HostModule::new("orbit-appearance")
             .declarations(
-                "export function isDark(): boolean;\nexport function setDark(dark: boolean): void;\n",
+                "export function isDark(): boolean;\nexport function setDark(dark: boolean): \
+                    void;\n",
             )
             .function("isDark", |_| {
                 gpui_shell::with_current_app(|cx| HostValue::from(cx.theme().mode.is_dark()))

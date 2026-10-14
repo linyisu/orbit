@@ -26,7 +26,10 @@ pub fn run() -> Result<bool> {
             "document worker requires input and output paths"
         );
         let page = |index: usize| -> Result<Option<u32>> {
-            match args.get(index).and_then(|value| value.to_str()) {
+            match args
+                .get(index)
+                .and_then(|value| value.to_str())
+            {
                 None | Some("-") => Ok(None),
                 Some(value) => Ok(Some(value.parse()?)),
             }

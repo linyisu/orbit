@@ -38,7 +38,10 @@ async fn saved_session_rename_keeps_history_and_rejects_another_writer() {
     );
     drop(writer);
     let before = store.load(&id).await.unwrap();
-    fixture.request(rename("跨项目的历史会话")).await.unwrap();
+    fixture
+        .request(rename("跨项目的历史会话"))
+        .await
+        .unwrap();
     let after = store.load(&id).await.unwrap();
     assert_eq!(after.session.id, before.session.id);
     assert_eq!(after.session.project_id, before.session.project_id);
@@ -47,14 +50,21 @@ async fn saved_session_rename_keeps_history_and_rejects_another_writer() {
     assert_eq!(after.runs.len(), before.runs.len());
     assert_eq!(after.history.len(), before.history.len());
     for title in [" ".to_owned(), "中".repeat(121)] {
-        assert!(fixture.request(rename(&title)).await.is_err());
+        assert!(
+            fixture
+                .request(rename(&title))
+                .await
+                .is_err()
+        );
     }
     assert_eq!(store.session(&id).await.unwrap().title, "跨项目的历史会话");
 }
 
 #[tokio::test]
 async fn running_session_can_be_renamed_but_delete_preserves_its_actor_and_history() {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .unwrap();
     let fixture = Fixture::new(&format!("http://{}/v1", listener.local_addr().unwrap())).await;
     let id = fixture.handle.info.id.clone();
     fixture
@@ -81,16 +91,43 @@ async fn running_session_can_be_renamed_but_delete_preserves_its_actor_and_histo
         })
         .await
         .unwrap();
-    assert_eq!(fixture.handle.current_info().await.title, "运行中的会话");
+    assert_eq!(
+        fixture
+            .handle
+            .current_info()
+            .await
+            .title,
+        "运行中的会话"
+    );
     let delete = || Request::Admin {
         action: Action::DeleteSession { id: id.clone() },
     };
-    let error = fixture.request(delete()).await.unwrap_err();
-    assert!(error.to_string().contains("会话正在运行"));
-    assert!(fixture.service.sessions.lock().await.contains_key(&id));
+    let error = fixture
+        .request(delete())
+        .await
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("会话正在运行")
+    );
+    assert!(
+        fixture
+            .service
+            .sessions
+            .lock()
+            .await
+            .contains_key(&id)
+    );
     assert!(fixture.page(0).await.busy);
     assert_eq!(
-        fixture.handle.store.session(&id).await.unwrap().title,
+        fixture
+            .handle
+            .store
+            .session(&id)
+            .await
+            .unwrap()
+            .title,
         "运行中的会话"
     );
     fixture
@@ -101,6 +138,20 @@ async fn running_session_can_be_renamed_but_delete_preserves_its_actor_and_histo
         .unwrap();
     fixture.wait(|page| !page.busy).await;
     fixture.request(delete()).await.unwrap();
-    assert!(!fixture.service.sessions.lock().await.contains_key(&id));
-    assert!(fixture.handle.store.session(&id).await.is_err());
+    assert!(
+        !fixture
+            .service
+            .sessions
+            .lock()
+            .await
+            .contains_key(&id)
+    );
+    assert!(
+        fixture
+            .handle
+            .store
+            .session(&id)
+            .await
+            .is_err()
+    );
 }

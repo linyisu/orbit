@@ -55,14 +55,21 @@ impl AgentInbox {
             ));
         }
 
-        state.messages.push_back(persist().await?);
+        state
+            .messages
+            .push_back(persist().await?);
         drop(state);
         self.changed.notify_waiters();
         Ok(())
     }
 
     pub(crate) async fn drain(&self) -> Vec<InboxMessage> {
-        self.state.lock().await.messages.drain(..).collect()
+        self.state
+            .lock()
+            .await
+            .messages
+            .drain(..)
+            .collect()
     }
 
     pub async fn snapshot(&self) -> InboxSnapshot {
@@ -131,7 +138,13 @@ impl AgentInbox {
             let notified = self.changed.notified();
             tokio::pin!(notified);
             notified.as_mut().enable();
-            if !self.state.lock().await.messages.is_empty() {
+            if !self
+                .state
+                .lock()
+                .await
+                .messages
+                .is_empty()
+            {
                 return;
             }
             notified.await;
@@ -415,13 +428,40 @@ mod tests {
             .await
             .unwrap();
         let requests = model.requests();
-        assert!(requests[0].messages.iter().any(|message| matches!(message,
-            ChatMessage::User { content, attachments } if content.is_empty() && attachments.len() == 1 && attachments[0].name() == "queued.png")));
+        assert!(
+            requests[0]
+                .messages
+                .iter()
+                .any(|message| matches!(
+                    message,
+                    ChatMessage::User {
+                        content,
+                        attachments,
+                    } if content.is_empty()
+                        && attachments.len() == 1
+                        && attachments[0].name() == "queued.png"
+                ))
+        );
 
-        assert!(requests[0].messages.iter().any(
-            |message| matches!(message, ChatMessage::User { content, .. } if content == "edited")
-        ));
-        assert!(!requests[0].messages.iter().any(|message| matches!(message, ChatMessage::User { content, .. } if content == "original" || content == "first")));
+        assert!(
+            requests[0]
+                .messages
+                .iter()
+                .any(|message| matches!(
+                    message,
+                    ChatMessage::User { content, .. } if content == "edited"
+                ))
+        );
+        assert!(
+            !requests[0]
+                .messages
+                .iter()
+                .any(|message| matches!(
+                    message,
+                    ChatMessage::User { content, .. }
+                        if content == "original" || content == "first"
+                ))
+        );
         let mut received = Vec::new();
         while let Ok(event) = events.try_recv() {
             if let AgentEvent::InputReceived {

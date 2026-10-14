@@ -6,6 +6,7 @@ impl MigrationName for Migration {
         "00000000000002_projects"
     }
 }
+
 #[async_trait::async_trait]
 impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
@@ -13,7 +14,11 @@ impl MigrationTrait for Migration {
             .create_table(
                 Table::create()
                     .table(Alias::new("projects"))
-                    .col(ColumnDef::new(Alias::new("id")).text().primary_key())
+                    .col(
+                        ColumnDef::new(Alias::new("id"))
+                            .text()
+                            .primary_key(),
+                    )
                     .col(ColumnDef::new(Alias::new("path")).text())
                     .col(ColumnDef::new(Alias::new("identity")).text())
                     .col(
@@ -44,8 +49,16 @@ impl MigrationTrait for Migration {
             .create_table(
                 Table::create()
                     .table(Alias::new("project_paths"))
-                    .col(ColumnDef::new(Alias::new("project_id")).text().not_null())
-                    .col(ColumnDef::new(Alias::new("path")).text().not_null())
+                    .col(
+                        ColumnDef::new(Alias::new("project_id"))
+                            .text()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(Alias::new("path"))
+                            .text()
+                            .not_null(),
+                    )
                     .primary_key(
                         Index::create()
                             .col(Alias::new("project_id"))
@@ -71,6 +84,7 @@ impl MigrationTrait for Migration {
             .await?;
         Ok(())
     }
+
     async fn down(&self, _: &SchemaManager) -> Result<(), DbErr> {
         super::forward_only()
     }

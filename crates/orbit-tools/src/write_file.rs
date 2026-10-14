@@ -21,7 +21,7 @@ use crate::approval::{
     ApprovalPreview, ApprovalRequest, ApprovalSender, DeletePreview, WritePreview,
 };
 
-const MAX_BYTES: usize = 1024 * 1024;
+const MAX_WRITE_BYTES: usize = 1_024 * 1_024;
 
 static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
 
@@ -56,7 +56,7 @@ impl WriteFile {
         content: String,
         cancellation: CancellationToken,
     ) -> Result<ToolOutput, ToolError> {
-        if path.trim().is_empty() || content.len() > MAX_BYTES || content.contains('\0') {
+        if path.trim().is_empty() || content.len() > MAX_WRITE_BYTES || content.contains('\0') {
             return Err(failed(
                 "文件内容必须是没有 NUL 的 UTF-8 文本，且不能超过 1 MiB",
             ));
@@ -101,12 +101,16 @@ impl WriteFile {
                     content: String::new(),
                 },
             )?;
-            let before = prepared.preview.before.as_deref().ok_or_else(|| {
-                failed("edit requires an existing file; use write_file to create one")
-            })?;
+            let before = prepared
+                .preview
+                .before
+                .as_deref()
+                .ok_or_else(|| {
+                    failed("edit requires an existing file; use write_file to create one")
+                })?;
             let after = transform(before)?;
 
-            if after.len() > MAX_BYTES || after.contains('\0') {
+            if after.len() > MAX_WRITE_BYTES || after.contains('\0') {
                 return Err(failed(
                     "edited content must be UTF-8 text without NUL, at most 1 MiB",
                 ));
@@ -152,7 +156,8 @@ impl WriteFile {
 
                 if prepared.preview.before.as_deref() != Some(expected.as_str()) {
                     return Err(failed(
-                        "cannot undo: current file differs from Orbit's checkpoint; it was changed after the recorded write",
+                        "cannot undo: current file differs from Orbit's checkpoint; it was changed \
+                            after the recorded write",
                     ));
                 }
 
@@ -165,11 +170,17 @@ impl WriteFile {
                 .approve_and_commit(&self.approvals, cancellation)
                 .await
                 .map(|output| {
-                    json!({ "path": change.path, "restored": true, "created_file_removed": false, "result": output.content })
+                    json!({
+                        "path": change.path,
+                        "restored": true,
+                        "created_file_removed": false,
+                        "result": output.content
+                    })
                     .to_string()
                 })
         } else {
-            self.delete_created(change, cancellation).await
+            self.delete_created(change, cancellation)
+                .await
         }
     }
 
@@ -191,7 +202,12 @@ impl WriteFile {
             .approve_and_commit(&self.approvals, cancellation)
             .await
             .map(|result| {
-                json!({ "path": change.path, "restored": true, "created_file_removed": true, "result": result })
+                json!({
+                    "path": change.path,
+                    "restored": true,
+                    "created_file_removed": true,
+                    "result": result
+                })
                 .to_string()
             })
     }
@@ -220,7 +236,8 @@ impl DeletePrepared {
         };
         if text != expected {
             return Err(failed(
-                "cannot undo: current file differs from Orbit's checkpoint; it was changed after the recorded write",
+                "cannot undo: current file differs from Orbit's checkpoint; it was changed after \
+                    the recorded write",
             ));
         }
 
@@ -247,7 +264,10 @@ impl DeletePrepared {
         tokio::select! {
             biased;
             _ = cancellation.cancelled() => return Err(ToolError::Cancelled),
-            sent = approvals.send(ApprovalRequest { preview, decision: sender }) => {
+            sent = approvals.send(ApprovalRequest {
+                preview,
+                decision: sender,
+            }) => {
                 sent.map_err(|_| failed("undo approval unavailable; no file was changed"))?;
             }
         }
@@ -285,7 +305,8 @@ impl DeletePrepared {
 
         if current.as_ref() != Some(&self.before) || text.as_deref() != Some(self.text.as_str()) {
             return Err(failed(
-                "cannot undo: current file differs from Orbit's checkpoint; it was changed after the recorded write",
+                "cannot undo: current file differs from Orbit's checkpoint; it was changed after \
+                    the recorded write",
             ));
         }
 
@@ -293,7 +314,12 @@ impl DeletePrepared {
         unlinkat(&parent, &name, AtFlags::empty()).map_err(failed)?;
         let synced = parent.sync_all().is_ok();
 
-        Ok(json!({ "path": self.path, "deleted": true, "directory_synced": synced }).to_string())
+        Ok(json!({
+            "path": self.path,
+            "deleted": true,
+            "directory_synced": synced
+        })
+        .to_string())
     }
 }
 
@@ -305,12 +331,23 @@ impl Tool for WriteFile {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition::function(
             "write_file",
-            "Create a new UTF-8 file, or intentionally replace a whole file when that is the task. content is the entire new file, not a patch; omitted existing content is lost. For a small change to an existing file, read the relevant region and use edit_file instead. Parent directories must exist. Use workspace paths or outside paths granted via request_capability. Auto approves workspace-local writes; external writes require approval. Old and new files are each limited to 1 MiB. Protected metadata, escaping symlinks and hard links are rejected; concurrent changes cause a conflict. Never retry a denied write without a new user request.",
+            "Create a new UTF-8 file, or intentionally replace a whole file when that is the task. \
+                content is the entire new file, not a patch; omitted existing content is lost. \
+                For a small change to an existing file, read the relevant region and use \
+                edit_file instead. Parent directories must exist. Use workspace paths or outside \
+                paths granted via request_capability. Auto approves workspace-local writes; \
+                external writes require approval. Old and new files are each limited to 1 MiB. \
+                Protected metadata, escaping symlinks and hard links are rejected; concurrent \
+                changes cause a conflict. Never retry a denied write without a new user request.",
             json!({
                 "type": "object",
                 "properties": {
-                    "path": { "type": "string" },
-                    "content": { "type": "string" }
+                    "path": {
+                        "type": "string"
+                    },
+                    "content": {
+                        "type": "string"
+                    }
                 },
                 "required": ["path", "content"],
                 "additionalProperties": false
@@ -328,11 +365,12 @@ impl Tool for WriteFile {
             })?;
 
             if args.path.trim().is_empty()
-                || args.content.len() > MAX_BYTES
+                || args.content.len() > MAX_WRITE_BYTES
                 || args.content.contains('\0')
             {
                 return Err(failed(
-                    "path must be nonempty and content must be UTF-8 text without NUL, at most 1 MiB",
+                    "path must be nonempty and content must be UTF-8 text without NUL, at most 1 \
+                        MiB",
                 ));
             }
 
@@ -412,7 +450,9 @@ impl Prepared {
         tokio::select! {
             biased;
             _ = cancellation.cancelled() => return Err(ToolError::Cancelled),
-            sent = approvals.send(approval) => { sent.map_err(|_| failed("write approval unavailable; no file was changed"))?; }
+            sent = approvals.send(approval) => {
+                sent.map_err(|_| failed("write approval unavailable; no file was changed"))?;
+            }
         }
         let approved = tokio::select! {
             biased;
@@ -486,7 +526,9 @@ impl Prepared {
             .workspace
             .open_granted_write_parent(path)
             .map_err(failed)?;
-        let current = current_parent.metadata().map_err(failed)?;
+        let current = current_parent
+            .metadata()
+            .map_err(failed)?;
 
         if now != self.before
             || text != self.preview.before
@@ -514,7 +556,10 @@ impl Prepared {
 
         // The rename has committed; do not turn a subsequent cancellation into a
         // misleading 'not written' result. Report directory sync separately.
-        let sync_error = parent.sync_all().err().map(|error| error.to_string());
+        let sync_error = parent
+            .sync_all()
+            .err()
+            .map(|error| error.to_string());
 
         Ok(json!({
             "path": self.preview.path,
@@ -557,11 +602,11 @@ fn snapshot(
     let before = fingerprint(&file)?;
     let mut bytes = Vec::new();
     (&file)
-        .take(MAX_BYTES as u64 + 1)
+        .take(MAX_WRITE_BYTES as u64 + 1)
         .read_to_end(&mut bytes)
         .map_err(failed)?;
 
-    if bytes.len() > MAX_BYTES {
+    if bytes.len() > MAX_WRITE_BYTES {
         return Err(failed("existing file exceeds the 1 MiB write limit"));
     }
 

@@ -2,7 +2,8 @@ use orbit_model::types::{StreamEvent, ToolCall};
 
 use crate::tool::FileChange;
 
-pub const MAX_STREAM_FRAGMENT_BYTES: usize = 64 * 1024;
+/// Maximum UTF-8 byte size after coalescing adjacent stream fragments.
+pub const MAX_STREAM_FRAGMENT_BYTES: usize = 64 * 1_024;
 
 /// Coalesce adjacent stream fragments without crossing semantic barriers.
 /// Live delivery may use this only before publishing the previous event's cursor.
@@ -30,8 +31,14 @@ pub fn coalesce(previous: &mut AgentEvent, next: &AgentEvent) -> bool {
             AgentEvent::Model(StreamEvent::ToolCallDelta(a)),
             AgentEvent::Model(StreamEvent::ToolCallDelta(b)),
         ) if a.index == b.index
-            && a.arguments.len().saturating_add(b.arguments.len()) <= MAX_STREAM_FRAGMENT_BYTES
-            && a.id.as_ref().zip(b.id.as_ref()).is_none_or(|(a, b)| a == b)
+            && a.arguments
+                .len()
+                .saturating_add(b.arguments.len())
+                <= MAX_STREAM_FRAGMENT_BYTES
+            && a.id
+                .as_ref()
+                .zip(b.id.as_ref())
+                .is_none_or(|(a, b)| a == b)
             && a.metadata
                 .as_ref()
                 .zip(b.metadata.as_ref())
@@ -44,7 +51,9 @@ pub fn coalesce(previous: &mut AgentEvent, next: &AgentEvent) -> bool {
                 a.metadata = Some(metadata.clone());
             }
             if let Some(name) = &b.name {
-                a.name.get_or_insert_default().push_str(name);
+                a.name
+                    .get_or_insert_default()
+                    .push_str(name);
             }
             a.arguments.push_str(&b.arguments);
             true
@@ -154,13 +163,19 @@ mod tests {
             "ToolFinished": {
                 "call": {
                     "id": "call-1",
-                    "function": { "name": "write_file", "arguments": "{}" }
+                    "function": {
+                        "name": "write_file",
+                        "arguments": "{}"
+                    }
                 },
                 "content": "{\"path\":\"a.txt\"}"
             }
         }))
         .unwrap();
 
-        assert!(matches!(event, AgentEvent::ToolFinished { changes, .. } if changes.is_empty()));
+        assert!(matches!(
+            event,
+            AgentEvent::ToolFinished { changes, .. } if changes.is_empty()
+        ));
     }
 }

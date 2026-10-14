@@ -6,6 +6,7 @@ impl MigrationName for Migration {
         "00000000000025_questions"
     }
 }
+
 #[async_trait::async_trait]
 impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
@@ -14,10 +15,26 @@ impl MigrationTrait for Migration {
                 Table::create()
                     .table(Alias::new("user_inputs"))
                     .if_not_exists()
-                    .col(ColumnDef::new(Alias::new("id")).integer().primary_key())
-                    .col(ColumnDef::new(Alias::new("session_id")).text().not_null())
-                    .col(ColumnDef::new(Alias::new("request_id")).text().not_null())
-                    .col(ColumnDef::new(Alias::new("payload")).text().not_null())
+                    .col(
+                        ColumnDef::new(Alias::new("id"))
+                            .integer()
+                            .primary_key(),
+                    )
+                    .col(
+                        ColumnDef::new(Alias::new("session_id"))
+                            .text()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(Alias::new("request_id"))
+                            .text()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(Alias::new("payload"))
+                            .text()
+                            .not_null(),
+                    )
                     .index(
                         Index::create()
                             .col(Alias::new("session_id"))
@@ -46,6 +63,7 @@ impl MigrationTrait for Migration {
             .await?;
         Ok(())
     }
+
     async fn down(&self, _: &SchemaManager) -> Result<(), DbErr> {
         super::forward_only()
     }

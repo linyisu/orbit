@@ -27,6 +27,7 @@ enum Focus {
     Diff,
     Path,
 }
+
 #[derive(Debug)]
 enum Pending {
     List { append: bool },
@@ -96,14 +97,17 @@ impl State {
             cache: None,
         }
     }
+
     pub(super) fn with_kind(mut self, kind: Kind) -> Self {
         self.kind = kind;
         self
     }
+
     pub(super) fn at(mut self, path: Option<String>) -> Self {
         self.initial_path = path;
         self
     }
+
     pub(super) fn initial(&mut self) -> Request {
         if let Some(path) = self.initial_path.take() {
             self.diff(path)
@@ -111,6 +115,7 @@ impl State {
             self.list(false)
         }
     }
+
     fn request(&self, action: ReviewAction) -> Request {
         Request::Review {
             session: self.session.clone(),
@@ -118,6 +123,7 @@ impl State {
             action,
         }
     }
+
     fn list(&mut self, append: bool) -> Request {
         self.pending = Some(Pending::List { append });
         self.message = None;
@@ -126,6 +132,7 @@ impl State {
             offset: if append { self.next.unwrap_or(0) } else { 0 },
         })
     }
+
     fn clear_diff(&mut self) {
         self.reviewed_path = None;
         self.patch.clear();
@@ -135,6 +142,7 @@ impl State {
         self.diff_offset = 0;
         self.confirm_undo = false;
     }
+
     fn diff(&mut self, path: String) -> Request {
         self.clear_diff();
         self.path.set(path.clone());
@@ -145,6 +153,7 @@ impl State {
             path,
         })
     }
+
     fn select_kind(&mut self, kind: Kind) -> Action {
         if self.pending.is_some() || self.kind == kind {
             return Action::None;
@@ -158,6 +167,7 @@ impl State {
         self.focus = Focus::List;
         Action::Request(self.list(false))
     }
+
     fn index(&mut self) -> Action {
         if self.pending.is_some() {
             return Action::None;
@@ -174,13 +184,16 @@ impl State {
         self.message = None;
         Action::Request(self.request(action))
     }
+
     fn undo(&mut self) -> Action {
         if self.pending.is_some() {
             return Action::None;
         }
         let (Some(path), Some(checkpoint)) = (
             self.reviewed_path.clone(),
-            self.checkpoint.as_ref().filter(|c| !c.undone),
+            self.checkpoint
+                .as_ref()
+                .filter(|c| !c.undone),
         ) else {
             return Action::None;
         };
@@ -193,6 +206,7 @@ impl State {
         self.message = None;
         Action::Request(self.request(action))
     }
+
     fn selected(&mut self) -> Action {
         if self.pending.is_some() {
             return Action::None;
@@ -204,6 +218,7 @@ impl State {
         self.focus = Focus::Diff;
         Action::Request(self.diff(path))
     }
+
     fn activate(&mut self, key: char) -> Action {
         if key == 'c' {
             return Action::Close;
@@ -213,7 +228,11 @@ impl State {
         }
         match key {
             's' => self.index(),
-            'u' if self.checkpoint.as_ref().is_some_and(|c| !c.undone) => {
+            'u' if self
+                .checkpoint
+                .as_ref()
+                .is_some_and(|c| !c.undone) =>
+            {
                 self.confirm_undo = true;
                 Action::None
             }
@@ -227,6 +246,7 @@ impl State {
             _ => Action::None,
         }
     }
+
     fn rows(&mut self, width: u16) -> &[Line<'static>] {
         if !self
             .cache
@@ -275,10 +295,18 @@ impl Panel for State {
             if key.code == KeyCode::Esc {
                 return Action::Close;
             }
-            if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            if key.code == KeyCode::Char('c')
+                && key
+                    .modifiers
+                    .contains(KeyModifiers::CONTROL)
+            {
                 return Action::Copy(self.patch.clone());
             }
-            if key.code == KeyCode::Char('l') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            if key.code == KeyCode::Char('l')
+                && key
+                    .modifiers
+                    .contains(KeyModifiers::CONTROL)
+            {
                 self.focus = Focus::Path;
                 self.path.select_all();
                 return Action::None;
@@ -325,7 +353,8 @@ impl Panel for State {
                         self.focus = Focus::Diff;
                         return Action::Request(self.diff(path));
                     }
-                    self.path.edit(event, self.path_area.width.max(2) as usize);
+                    self.path
+                        .edit(event, self.path_area.width.max(2) as usize);
                 }
                 Focus::List => match key.code {
                     KeyCode::Enter => return self.selected(),
@@ -343,7 +372,9 @@ impl Panel for State {
                             .min(self.entries.len().saturating_sub(1))
                     }
                     KeyCode::PageUp => {
-                        self.selected = self.selected.saturating_sub(self.list_area.height as usize)
+                        self.selected = self
+                            .selected
+                            .saturating_sub(self.list_area.height as usize)
                     }
                     KeyCode::Home => self.selected = 0,
                     KeyCode::End => self.selected = self.entries.len().saturating_sub(1),
@@ -372,7 +403,8 @@ impl Panel for State {
             return Action::None;
         } else if let Event::Paste(_) = event {
             if self.focus == Focus::Path {
-                self.path.edit(event, self.path_area.width.max(2) as usize);
+                self.path
+                    .edit(event, self.path_area.width.max(2) as usize);
             }
         } else if let Event::Mouse(mouse) = event {
             let point = (mouse.column, mouse.row).into();
@@ -385,13 +417,17 @@ impl Panel for State {
                     {
                         return self.activate(*action);
                     }
-                    if let Some((_, kind)) =
-                        self.kind_hits.iter().find(|(area, _)| area.contains(point))
+                    if let Some((_, kind)) = self
+                        .kind_hits
+                        .iter()
+                        .find(|(area, _)| area.contains(point))
                     {
                         return self.select_kind(*kind);
                     }
-                    if let Some((_, index)) =
-                        self.row_hits.iter().find(|(area, _)| area.contains(point))
+                    if let Some((_, index)) = self
+                        .row_hits
+                        .iter()
+                        .find(|(area, _)| area.contains(point))
                     {
                         self.selected = *index;
                         return self.selected();
@@ -409,7 +445,9 @@ impl Panel for State {
                         3
                     };
                     if self.diff_area.contains(point) {
-                        self.diff_offset = self.diff_offset.saturating_add_signed(delta);
+                        self.diff_offset = self
+                            .diff_offset
+                            .saturating_add_signed(delta);
                     } else if self.list_area.contains(point) {
                         self.selected = self
                             .selected
@@ -422,6 +460,7 @@ impl Panel for State {
         }
         Action::None
     }
+
     fn receive(&mut self, response: Response) -> Action {
         if let Response::Error(error) = response {
             self.error(error);
@@ -444,8 +483,11 @@ impl Panel for State {
                     self.selected = 0;
                     self.list_offset = 0;
                 }
-                self.entries
-                    .extend(entries.into_iter().filter(|entry| entry.kind == self.kind));
+                self.entries.extend(
+                    entries
+                        .into_iter()
+                        .filter(|entry| entry.kind == self.kind),
+                );
                 self.next = next;
                 self.branch = branch;
             }
@@ -494,6 +536,7 @@ impl Panel for State {
         }
         Action::None
     }
+
     fn error(&mut self, error: String) {
         let mutating = matches!(self.pending.take(), Some(Pending::Index | Pending::Undo));
         if mutating {
@@ -503,6 +546,7 @@ impl Panel for State {
         self.message = Some(error);
         self.confirm_undo = false;
     }
+
     fn invalidate_geometry(&mut self) {
         self.list_area = Rect::default();
         self.diff_area = Rect::default();
@@ -511,6 +555,7 @@ impl Panel for State {
         self.kind_hits.clear();
         self.action_hits.clear();
     }
+
     fn draw(&mut self, frame: &mut Frame<'_>, area: Rect) {
         self.invalidate_geometry();
         if area.is_empty() {
@@ -521,10 +566,12 @@ impl Panel for State {
             area,
             format!(
                 "文件变更{}{}",
-                self.branch.as_ref().map_or(String::new(), |branch| format!(
-                    " · {}",
-                    safe_output(branch)
-                )),
+                self.branch
+                    .as_ref()
+                    .map_or(String::new(), |branch| format!(
+                        " · {}",
+                        safe_output(branch)
+                    )),
                 if self.pending.is_some() {
                     " · 处理中…"
                 } else {
@@ -575,7 +622,8 @@ impl Panel for State {
             area.x,
             area.y + 3,
             area.width,
-            area.height.saturating_sub(3 + footer_height),
+            area.height
+                .saturating_sub(3 + footer_height),
         );
         let (list, diff) = if body.width >= 64 {
             let width = 28.min(body.width / 3);
@@ -716,7 +764,11 @@ impl Panel for State {
         ] {
             let disabled = (self.pending.is_some() && key != 'c')
                 || (key == 's' && (self.kind == Kind::Checkpoint || self.receipt.is_none()))
-                || (key == 'u' && !self.checkpoint.as_ref().is_some_and(|c| !c.undone))
+                || (key == 'u'
+                    && !self
+                        .checkpoint
+                        .as_ref()
+                        .is_some_and(|c| !c.undone))
                 || (key == 'y' && self.reviewed_path.is_none())
                 || (key == 'n' && self.next.is_none());
             if let Some(target) = bar.button(
@@ -742,6 +794,7 @@ mod tests {
     fn key(code: KeyCode) -> Event {
         Event::Key(KeyEvent::new(code, KeyModifiers::NONE))
     }
+
     fn reviewed(kind: Kind) -> State {
         let mut state = State::new("session".into(), "/workspace".into())
             .with_kind(kind)
@@ -760,6 +813,7 @@ mod tests {
         }));
         state
     }
+
     #[test]
     fn index_operations_use_the_reviewed_receipt_and_refresh_after_acknowledgement() {
         for kind in [Kind::Unstaged, Kind::Staged, Kind::Untracked] {
@@ -798,6 +852,7 @@ mod tests {
             assert!(state.receipt.is_none());
         }
     }
+
     #[test]
     fn undo_requires_confirmation_and_the_exact_checkpoint_identity() {
         let mut state = reviewed(Kind::Checkpoint);
@@ -833,6 +888,7 @@ mod tests {
         ));
         assert!(!state.confirm_undo);
     }
+
     #[test]
     fn paging_and_kind_switch_never_reuse_a_diff_receipt() {
         let mut state = reviewed(Kind::Unstaged);
@@ -865,6 +921,7 @@ mod tests {
         assert!(state.receipt.is_none());
         assert!(state.patch.is_empty());
     }
+
     #[test]
     fn small_layouts_preserve_diff_and_reset_hidden_hit_targets() {
         let mut state = reviewed(Kind::Checkpoint);

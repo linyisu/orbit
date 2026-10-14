@@ -69,7 +69,9 @@ impl Questions {
     }
 
     pub fn follow_up_index(&self) -> Option<usize> {
-        self.dialog.as_ref().map(|dialog| dialog.index)
+        self.dialog
+            .as_ref()
+            .map(|dialog| dialog.index)
     }
 
     pub fn take_cancel(&mut self) -> Option<usize> {
@@ -138,7 +140,9 @@ impl Questions {
             }
         }
 
-        dialog.view.block_submission(self.running);
+        dialog
+            .view
+            .block_submission(self.running);
         dialog.view.ui.status = match record.status.as_str() {
             "running" => RunStatus::Running,
             "completed" => RunStatus::Completed,
@@ -167,9 +171,16 @@ impl Questions {
             && key.kind != KeyEventKind::Release
         {
             if key.code == KeyCode::Char('c')
-                && key.modifiers.contains(KeyModifiers::CONTROL)
+                && key
+                    .modifiers
+                    .contains(KeyModifiers::CONTROL)
                 && !dialog.view.ui.selection.active()
-                && dialog.view.ui.input.selection().is_none()
+                && dialog
+                    .view
+                    .ui
+                    .input
+                    .selection()
+                    .is_none()
                 && self.running
             {
                 self.cancel_request = Some(dialog.index);
@@ -183,7 +194,11 @@ impl Questions {
                 let position = heads
                     .iter()
                     .position(|index| {
-                        Some(*index) == self.dialog.as_ref().map(|dialog| dialog.index)
+                        Some(*index)
+                            == self
+                                .dialog
+                                .as_ref()
+                                .map(|dialog| dialog.index)
                     })
                     .unwrap_or(0);
                 let next = if key.code == KeyCode::Left {

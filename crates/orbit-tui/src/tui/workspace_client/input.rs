@@ -57,7 +57,16 @@ impl Tab {
             return Ok(Action::Redraw);
         }
         if (self.connecting.is_some() || self.reconnect_at.is_some())
-            && matches!(&event, Event::Key(key) if key.kind != KeyEventKind::Release && (key.code == KeyCode::Esc || (key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL))))
+            && matches!(
+                &event,
+                Event::Key(key)
+                    if key.kind != KeyEventKind::Release
+                        && (key.code == KeyCode::Esc
+                            || (key.code == KeyCode::Char('c')
+                                && key
+                                    .modifiers
+                                    .contains(KeyModifiers::CONTROL)))
+            )
         {
             self.cancel_connect();
             return Ok(Action::Redraw);
@@ -187,7 +196,11 @@ impl Tab {
             }
             let plugin_action = if let Some(action) = self.state.pending_plugin_action.take() {
                 Some(action)
-            } else if let Some(source) = self.state.pending_marketplace_source.take() {
+            } else if let Some(source) = self
+                .state
+                .pending_marketplace_source
+                .take()
+            {
                 Some(orbit_protocol::plugins::Action::Add { source })
             } else {
                 self.state
@@ -324,8 +337,10 @@ impl Tab {
                 return Ok(Action::Redraw);
             }
         }
-        if matches!(&event, Event::Mouse(mouse) if mouse.kind == MouseEventKind::Moved)
-            || tui::handle_input_mouse(&mut self.state, &event)
+        if matches!(
+            &event,
+            Event::Mouse(mouse) if mouse.kind == MouseEventKind::Moved
+        ) || tui::handle_input_mouse(&mut self.state, &event)
         {
             return Ok(if footer_changed {
                 Action::Redraw
@@ -335,9 +350,14 @@ impl Tab {
         }
         if let Event::Mouse(mouse) = &event
             && mouse.kind == MouseEventKind::Down(MouseButton::Left)
-            && mouse.modifiers.contains(KeyModifiers::CONTROL)
+            && mouse
+                .modifiers
+                .contains(KeyModifiers::CONTROL)
         {
-            let offset = self.state.max_scroll.saturating_sub(self.state.scroll);
+            let offset = self
+                .state
+                .max_scroll
+                .saturating_sub(self.state.scroll);
             if let Some(link) = self
                 .state
                 .transcript_layout
@@ -391,8 +411,14 @@ impl Tab {
         }
         if let Event::Key(key) = &event
             && (key.code == KeyCode::BackTab
-                || (key.code == KeyCode::Tab && key.modifiers.contains(KeyModifiers::SHIFT)))
-            && key.modifiers.difference(KeyModifiers::SHIFT).is_empty()
+                || (key.code == KeyCode::Tab
+                    && key
+                        .modifiers
+                        .contains(KeyModifiers::SHIFT)))
+            && key
+                .modifiers
+                .difference(KeyModifiers::SHIFT)
+                .is_empty()
         {
             if key.kind == KeyEventKind::Press {
                 self.set_mode(self.state.permissions.next());
@@ -455,9 +481,10 @@ impl Tab {
 
     fn attach(&mut self, paths: Vec<std::path::PathBuf>) {
         if !self.state.supports_vision || self.attachment_task.is_some() {
-            self.state.report_local(TranscriptItem::Error(
-                "当前模型不支持图片，或上一批图片尚在读取。".into(),
-            ));
+            self.state
+                .report_local(TranscriptItem::Error(
+                    "当前模型不支持图片，或上一批图片尚在读取。".into(),
+                ));
             return;
         }
         self.attachment_task = Some(AbortOnDropHandle::new(tokio::task::spawn_blocking(
@@ -494,9 +521,10 @@ impl Tab {
                             move || workspace::attachments::rgba(width, height, bytes),
                         )));
                 } else {
-                    self.state.report_local(TranscriptItem::Error(
-                        "当前模型不支持图片，或上一批图片尚在读取。".into(),
-                    ));
+                    self.state
+                        .report_local(TranscriptItem::Error(
+                            "当前模型不支持图片，或上一批图片尚在读取。".into(),
+                        ));
                 }
             }
             ClipboardPayload::Files(paths) => {
@@ -667,12 +695,19 @@ impl Tab {
                 let qualified = if requested.contains("::") {
                     requested.to_owned()
                 } else {
-                    self.state.model.split_once("::").map_or_else(
-                        || requested.to_owned(),
-                        |(provider, _)| format!("{provider}::{requested}"),
-                    )
+                    self.state
+                        .model
+                        .split_once("::")
+                        .map_or_else(
+                            || requested.to_owned(),
+                            |(provider, _)| format!("{provider}::{requested}"),
+                        )
                 };
-                if self.state.model_completions.contains(&qualified) {
+                if self
+                    .state
+                    .model_completions
+                    .contains(&qualified)
+                {
                     let model = qualified.as_str();
                     self.submit_with_receipt(
                         Request::SetModel {
@@ -683,12 +718,16 @@ impl Tab {
                         submissions::Draft::Model(model.into()),
                     );
                 } else {
-                    self.state.report_local(TranscriptItem::Error(
-                        "模型未配置；用 /model 查看目标环境的模型。".into(),
-                    ));
+                    self.state
+                        .report_local(TranscriptItem::Error(
+                            "模型未配置；用 /model 查看目标环境的模型。".into(),
+                        ));
                 }
             }
-            "/reasoning" => self.state.input.set("/reasoning ".into()),
+            "/reasoning" => self
+                .state
+                .input
+                .set("/reasoning ".into()),
             text if text.starts_with("/reasoning ") => {
                 self.send(Request::SetModel {
                     session: session.clone(),
@@ -702,7 +741,13 @@ impl Tab {
                         session: session.clone(),
                         action: orbit_protocol::plan::Action::Enter,
                     });
-                } else if self.state.planning.snapshot.plan.is_some() {
+                } else if self
+                    .state
+                    .planning
+                    .snapshot
+                    .plan
+                    .is_some()
+                {
                     self.state.planning.open();
                 }
             }
@@ -714,11 +759,23 @@ impl Tab {
                 });
             }
             "/mode" => {
-                self.state.show_output("工作模式", format!("当前：{}\n/plan 只读规划 · /build 返回执行模式（不会批准或自动执行计划）\n/plan view 查看计划 · /permissions 管理执行审批", self.state.planning.mode().label()));
+                self.state.show_output("工作模式", format!("当前：{}\n/plan 只读规划 · /build \
+                    返回执行模式（不会批准或自动执行计划）\n/plan view 查看计划 · /permissions 管理执行审批",
+                        self
+                        .state
+                        .planning
+                        .mode()
+                        .label()));
             }
             "/permissions" => {
-                self.state
-                    .show_output("审批模式", self.state.permissions.mode.description().into());
+                self.state.show_output(
+                    "审批模式",
+                    self.state
+                        .permissions
+                        .mode
+                        .description()
+                        .into(),
+                );
             }
             _ if matches!(name, "/mode" | "/permissions") && !argument.trim().is_empty() => {
                 match tui::permissions::Mode::parse(argument.trim()) {
@@ -728,23 +785,24 @@ impl Tab {
                         .report_local(TranscriptItem::CommandError("模式：auto、ask、yolo".into())),
                 }
             }
-            text if tui::commands::is_command_input(text) && text != "/compact" => {
-                self.state.report_local(TranscriptItem::CommandError(
+            text if tui::commands::is_command_input(text) && text != "/compact" => self
+                .state
+                .report_local(TranscriptItem::CommandError(
                     tui::commands::suggestion(text).map_or_else(
                         || "未知命令；输入 / 查看可用命令。".into(),
                         |command| format!("是否想输入 {}？", command.name),
                     ),
-                ))
-            }
+                )),
             _ if self.busy
                 || self.starting.is_some()
                 || self.commands.is_none()
                 || self.attachment_task.is_some() =>
             {
                 self.state.input.set(prompt);
-                self.state.report_local(TranscriptItem::Notice(
-                    "连接尚未就绪或任务仍在执行，输入已保留。".into(),
-                ));
+                self.state
+                    .report_local(TranscriptItem::Notice(
+                        "连接尚未就绪或任务仍在执行，输入已保留。".into(),
+                    ));
             }
             _ => {
                 let compact = command == "/compact";

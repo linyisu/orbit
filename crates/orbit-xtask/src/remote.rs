@@ -24,7 +24,10 @@ fn find_certificates(
     explicit: Option<PathBuf>,
     candidates: impl IntoIterator<Item = PathBuf>,
 ) -> Result<PathBuf> {
-    let candidates: Vec<_> = explicit.into_iter().chain(candidates).collect();
+    let candidates: Vec<_> = explicit
+        .into_iter()
+        .chain(candidates)
+        .collect();
     for path in &candidates {
         if path
             .metadata()
@@ -34,7 +37,8 @@ fn find_certificates(
         }
     }
     anyhow::bail!(
-        "No system CA bundle found (checked: {candidates:?}); install ca-certificates or set SSL_CERT_FILE to a PEM bundle"
+        "No system CA bundle found (checked: {candidates:?}); install ca-certificates or set \
+            SSL_CERT_FILE to a PEM bundle"
     )
 }
 
@@ -61,7 +65,9 @@ pub async fn transport() -> Result<()> {
 
 fn docker(container: &str, args: &[&str]) -> Command {
     let mut command = Command::new("docker");
-    command.args(["exec", container]).args(args);
+    command
+        .args(["exec", container])
+        .args(args);
     command
 }
 
@@ -74,11 +80,20 @@ async fn request(
     request: Request,
 ) -> Result<Response<Value, Value>> {
     orbit_protocol::write(
-        child.stdin.as_mut().context("missing server stdin")?,
+        child
+            .stdin
+            .as_mut()
+            .context("missing server stdin")?,
         &request,
     )
     .await?;
-    Ok(orbit_protocol::read(child.stdout.as_mut().context("missing server stdout")?).await?)
+    Ok(orbit_protocol::read(
+        child
+            .stdout
+            .as_mut()
+            .context("missing server stdout")?,
+    )
+    .await?)
 }
 
 async fn unconfigured_workspace(container: &str, executable: &str) -> Result<()> {
@@ -142,7 +157,10 @@ async fn unconfigured_workspace(container: &str, executable: &str) -> Result<()>
         )
         .await?;
         ensure!(
-            matches!(opened, Response::Opened(ref info) if info.model == "test::local-model"),
+            matches!(
+                opened,
+                Response::Opened(ref info) if info.model == "test::local-model"
+            ),
             "session did not open with local configuration: {opened:?}"
         );
         ensure!(
@@ -231,7 +249,8 @@ async fn in_container(bundle: &Path, container: &str) -> Result<()> {
     let digest = sha256(&deployed)?;
     ensure!(
         *executable == format!("/root/.cache/orbit/servers/{digest}/orbit"),
-        "deployed file digest does not match its cache path: {executable}; downloaded SHA-256: {digest}"
+        "deployed file digest does not match its cache path: {executable}; downloaded SHA-256: \
+            {digest}"
     );
     orbit_build::verify_static_server(&deployed).map_err(anyhow::Error::msg)?;
     ensure!(
@@ -252,7 +271,8 @@ async fn in_container(bundle: &Path, container: &str) -> Result<()> {
     );
     unconfigured_workspace(container, executable).await?;
     println!(
-        "PASS: standalone client, static deployment, local configuration, session opening and cache reuse on Ubuntu 20.04"
+        "PASS: standalone client, static deployment, local configuration, session opening and \
+            cache reuse on Ubuntu 20.04"
     );
     Ok(())
 }

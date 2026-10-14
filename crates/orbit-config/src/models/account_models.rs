@@ -41,7 +41,10 @@ pub(crate) async fn refresh_connections(
         }
     }
 
-    stream::iter(jobs).buffer_unordered(4).collect().await
+    stream::iter(jobs)
+        .buffer_unordered(4)
+        .collect()
+        .await
 }
 
 async fn refresh_connection(
@@ -92,26 +95,45 @@ async fn refresh_provider(
             std::fs::metadata(directory.join(format!("{}.json", reference.name)))
                 .ok()
                 .and_then(|metadata| metadata.modified().ok())
-                .and_then(|time| time.duration_since(SystemTime::UNIX_EPOCH).ok())
+                .and_then(|time| {
+                    time.duration_since(SystemTime::UNIX_EPOCH)
+                        .ok()
+                })
                 .map(|duration| duration.as_nanos().to_string())
         } else {
             None
         };
-        json!({ "name": reference.name, "kind": info.kind, "endpoint": info.endpoint,
-            "account": info.account, "account_id": info.account_id, "project": info.project_id,
-            "revision": revision })
+        json!({
+            "name": reference.name,
+            "kind": info.kind,
+            "endpoint": info.endpoint,
+            "account": info.account,
+            "account_id": info.account_id,
+            "project": info.project_id,
+            "revision": revision
+        })
     } else {
-        json!({ "key_fingerprint": fingerprint(&provider.api_key) })
+        json!({
+            "key_fingerprint": fingerprint(&provider.api_key)
+        })
     };
-    let binding = json!({ "version": 2, "identity": identity,
-        "format": provider.api_format, "endpoint": provider.base_url.trim_end_matches('/') });
+    let binding = json!({
+        "version": 2,
+        "identity": identity,
+        "format": provider.api_format,
+        "endpoint": provider.base_url.trim_end_matches('/')
+    });
     let cache_dir = directory.join("model-catalog");
     let path = cache_dir.join(format!("{}.json", fingerprint(name)));
     let cached = read_cache(&path, &binding);
     let fresh = std::fs::metadata(&path)
         .ok()
         .and_then(|metadata| metadata.modified().ok())
-        .and_then(|time| SystemTime::now().duration_since(time).ok())
+        .and_then(|time| {
+            SystemTime::now()
+                .duration_since(time)
+                .ok()
+        })
         .is_some_and(|age| age < Duration::from_secs(900));
     let payload = if let Some(cached) = cached
         .as_ref()
@@ -127,7 +149,9 @@ async fn refresh_provider(
                 ApiFormat::GoogleCodeAssist | ApiFormat::ChatgptCodex
             ) {
                 orbit_model::discovery::discover(
-                    reference.as_ref().context("套餐账号需要已保存的认证")?,
+                    reference
+                        .as_ref()
+                        .context("套餐账号需要已保存的认证")?,
                     provider.api_format,
                     &provider.base_url,
                 )
@@ -167,8 +191,11 @@ async fn refresh_provider(
                     let mut file = tempfile::NamedTempFile::new_in(&cache_dir)?;
                     use std::io::Write;
                     file.write_all(
-                        serde_json::to_string(&json!({ "binding": binding, "payload": payload }))?
-                            .as_bytes(),
+                        serde_json::to_string(&json!({
+                            "binding": binding,
+                            "payload": payload
+                        }))?
+                        .as_bytes(),
                     )?;
                     file.as_file().sync_all()?;
                     file.persist(&path)?;
@@ -194,8 +221,8 @@ async fn refresh_provider(
     Ok(())
 }
 
+/// A quota response is partial: exhausted/unreported models are not retired.
 fn merge_discovered_models(provider: &mut ProviderConfig, models: Vec<ModelProfile>) {
-    // A quota response is partial: exhausted/unreported models are not retired.
     if provider.api_format == ApiFormat::GoogleCodeAssist
         && provider.base_url.trim_end_matches('/') == "https://cloudcode-pa.googleapis.com"
     {
@@ -204,7 +231,10 @@ fn merge_discovered_models(provider: &mut ProviderConfig, models: Vec<ModelProfi
         }
         let discovered = provider.discovered.as_mut().unwrap();
         for model in models {
-            if let Some(existing) = discovered.iter_mut().find(|m| m.id == model.id) {
+            if let Some(existing) = discovered
+                .iter_mut()
+                .find(|m| m.id == model.id)
+            {
                 *existing = model;
             } else {
                 discovered.push(model);
@@ -240,7 +270,7 @@ fn fingerprint(value: &str) -> String {
 }
 
 fn read_cache(path: &Path, binding: &Value) -> Option<Value> {
-    if std::fs::metadata(path).ok()?.len() > 4 * 1024 * 1024 {
+    if std::fs::metadata(path).ok()?.len() > 4 * 1_024 * 1_024 {
         return None;
     }
     let data: Value = serde_json::from_slice(&std::fs::read(path).ok()?).ok()?;
@@ -284,7 +314,9 @@ pub fn normalize(format: ApiFormat, payload: &Value) -> Result<(Vec<ModelProfile
                     && model
                         .input_context_tokens
                         .is_none_or(|tokens| tokens >= MIN_CONTEXT_TOKENS)
-                    && model.max_output_tokens.is_none_or(|tokens| tokens > 0),
+                    && model
+                        .max_output_tokens
+                        .is_none_or(|tokens| tokens > 0),
                 "模型容量无效：{}",
                 model.id
             );
@@ -296,7 +328,10 @@ pub fn normalize(format: ApiFormat, payload: &Value) -> Result<(Vec<ModelProfile
                 };
 
                 ensure!(
-                    reasoning.adapter == adapter && reasoning.efforts.contains(&reasoning.default),
+                    reasoning.adapter == adapter
+                        && reasoning
+                            .efforts
+                            .contains(&reasoning.default),
                     "模型思考能力无效：{}",
                     model.id
                 );
@@ -331,29 +366,51 @@ pub fn normalize(format: ApiFormat, payload: &Value) -> Result<(Vec<ModelProfile
                 .as_array()
                 .into_iter()
                 .flatten()
-                .filter_map(|level| level.get("effort").unwrap_or(level).as_str())
+                .filter_map(|level| {
+                    level
+                        .get("effort")
+                        .unwrap_or(level)
+                        .as_str()
+                })
                 .filter(|level| serde_json::from_value::<ReasoningEffort>(json!(level)).is_ok())
                 .collect::<Vec<_>>();
             let default = entry["default_reasoning_level"]
                 .as_str()
                 .filter(|level| efforts.contains(level))
                 .or_else(|| efforts.last().copied());
-            models.push(profile(id, entry["context_window"].as_u64().unwrap_or(272000) as usize,
-                entry["input_modalities"].as_array().is_some_and(|m| m.iter().any(|v| v == "image")),
-                default.map(|default| json!({ "adapter": "openai_responses", "efforts": efforts, "default": default })))?);
+            models.push(profile(
+                id,
+                entry["context_window"]
+                    .as_u64()
+                    .unwrap_or(272_000) as usize,
+                entry["input_modalities"]
+                    .as_array()
+                    .is_some_and(|m| m.iter().any(|v| v == "image")),
+                default.map(|default| {
+                    json!({
+                        "adapter": "openai_responses",
+                        "efforts": efforts,
+                        "default": default
+                    })
+                }),
+            )?);
         }
     } else if let Some(buckets) = payload["buckets"].as_array() {
         // Quota buckets identify models, but omission or zero quota does not retire them.
         // https://github.com/google-gemini/gemini-cli/blob/main/packages/core/src/code_assist/types.ts
         for bucket in buckets {
             if let Some(id) = bucket["modelId"].as_str()
-                && !models.iter().any(|model| model.id == id)
+                && !models
+                    .iter()
+                    .any(|model| model.id == id)
             {
                 ensure!(
                     !id.trim().is_empty() && id.len() <= 256 && !id.chars().any(char::is_control),
                     "模型 ID 无效"
                 );
-                models.push(serde_json::from_value(json!({ "id": id }))?);
+                models.push(serde_json::from_value(json!({
+                    "id": id
+                }))?);
             }
         }
 
@@ -429,10 +486,12 @@ fn profile(
         "无效模型 ID"
     );
     ensure!(context >= MIN_CONTEXT_TOKENS, "模型上下文容量过小：{id}");
-    Ok(serde_json::from_value(
-        json!({ "id": id, "context_tokens": context,
-        "supports_vision": vision, "reasoning": reasoning }),
-    )?)
+    Ok(serde_json::from_value(json!({
+        "id": id,
+        "context_tokens": context,
+        "supports_vision": vision,
+        "reasoning": reasoning
+    }))?)
 }
 
 /// Official capability metadata absent from the provider's ID-only model list.

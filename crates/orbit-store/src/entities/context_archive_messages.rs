@@ -9,6 +9,7 @@ pub struct Model {
     pub ordinal: i64,
     pub payload: String,
 }
+
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
 pub enum Relation {
     #[sea_orm(
@@ -18,6 +19,7 @@ pub enum Relation {
     )]
     Archive,
 }
+
 impl ActiveModelBehavior for ActiveModel {}
 
 impl Related<super::context_archives::Entity> for Entity {

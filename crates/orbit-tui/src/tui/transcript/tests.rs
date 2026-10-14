@@ -16,7 +16,11 @@ fn footnote_targets_follow_streaming_definitions_wrapping_and_message_scope() {
             layout.entries[0]
                 .rows
                 .iter()
-                .flat_map(|row| row.wrapped.iter().map(ToString::to_string))
+                .flat_map(|row| {
+                    row.wrapped
+                        .iter()
+                        .map(ToString::to_string)
+                })
                 .collect::<Vec<_>>()
         };
 
@@ -62,7 +66,9 @@ fn footnote_targets_follow_streaming_definitions_wrapping_and_message_scope() {
 
 #[test]
 fn html_details_toggle_independently_and_survive_streaming_and_resize() {
-    let source = "<details>\n<summary>折叠内容</summary>\n\n**正文** [链接](https://orbit.example)\n<details open><summary>子块</summary>嵌套内容</details>\n</details>\n后文";
+    let source = "<details>\n<summary>折叠内容</summary>\n\n**正文** \
+        [链接](https://orbit.example)\n<details open><summary>子块</summary>嵌套内容</details>\n</details>\
+        \n后文";
     let mut layout = TranscriptLayout::default();
     let items = [TranscriptItem::Assistant(source.to_owned())];
     layout.update(&items, None, 80);
@@ -77,7 +83,9 @@ fn html_details_toggle_independently_and_survive_streaming_and_resize() {
 
     assert!(!visible(&layout).contains("正文"));
     let area = Rect::new(0, 0, 80, 40);
-    let (index, outer) = layout.html_disclosure_at(area, 0, (3, 0)).unwrap();
+    let (index, outer) = layout
+        .html_disclosure_at(area, 0, (3, 0))
+        .unwrap();
     layout.toggle_html(index, outer.clone());
     layout.update(&items, None, 80);
     assert!(visible(&layout).contains("正文"));
@@ -85,7 +93,11 @@ fn html_details_toggle_independently_and_survive_streaming_and_resize() {
     let inner = layout.entries[0]
         .rows
         .iter()
-        .find_map(|row| row.html_disclosure.as_ref().filter(|id| **id != outer))
+        .find_map(|row| {
+            row.html_disclosure
+                .as_ref()
+                .filter(|id| **id != outer)
+        })
         .unwrap()
         .clone();
 
@@ -166,7 +178,10 @@ fn collapsed_disclosures_use_text_width_and_expanded_thinking_uses_the_full_area
     let tool = TranscriptItem::Tool(super::super::app::ToolRow {
         id: "tool_1".into(),
         name: "read_file".into(),
-        arguments: serde_json::json!({ "path": "src/main.rs" }).to_string(),
+        arguments: serde_json::json!({
+            "path": "src/main.rs"
+        })
+        .to_string(),
         status: super::super::app::ToolStatus::Finished,
         output: "done".into(),
     });
@@ -222,7 +237,10 @@ fn tool_title_and_output_are_clickable() {
     let items = vec![TranscriptItem::Tool(super::super::app::ToolRow {
         id: "web".into(),
         name: "web_search".into(),
-        arguments: serde_json::json!({ "query": "papers" }).to_string(),
+        arguments: serde_json::json!({
+            "query": "papers"
+        })
+        .to_string(),
         status: super::super::app::ToolStatus::Failed,
         output: "first\nsecond\nthird\nfourth".into(),
     })];
@@ -278,13 +296,25 @@ fn paragraph_continuations_keep_their_left_margin() {
     let mut layout = TranscriptLayout::default();
     layout.update(&[TranscriptItem::Assistant(text.into())], None, 24);
 
-    for row in layout.entries[0].rows.iter().filter(|row| row.height > 1) {
-        let gutter = row.gutter.as_ref().expect("wrapped prose retains a margin");
+    for row in layout.entries[0]
+        .rows
+        .iter()
+        .filter(|row| row.height > 1)
+    {
+        let gutter = row
+            .gutter
+            .as_ref()
+            .expect("wrapped prose retains a margin");
         assert!(gutter.width >= 2);
         assert_eq!(gutter.first.width(), gutter.continuation.width());
     }
 
-    assert!(layout.entries[0].rows.iter().any(|row| row.height > 1));
+    assert!(
+        layout.entries[0]
+            .rows
+            .iter()
+            .any(|row| row.height > 1)
+    );
 }
 
 #[test]
@@ -294,10 +324,18 @@ fn wrapped_lists_keep_markers_with_content_and_use_hanging_indents() {
     layout.update(&[TranscriptItem::Assistant(answer.into())], None, 24);
     let rows = &layout.entries[0].rows;
 
-    for (index, marker) in ["1. ", "2. ", "• "].into_iter().enumerate() {
+    for (index, marker) in ["1. ", "2. ", "• "]
+        .into_iter()
+        .enumerate()
+    {
         let gutter = rows[index].gutter.as_ref().unwrap();
 
-        assert!(gutter.first.to_string().contains(marker));
+        assert!(
+            gutter
+                .first
+                .to_string()
+                .contains(marker)
+        );
         assert_eq!(gutter.first.width(), gutter.continuation.width());
         assert!(!rows[index].line.to_string().is_empty());
     }
@@ -327,10 +365,25 @@ fn task_list_checkbox_keeps_a_hanging_indent() {
     );
     let row = &layout.entries[0].rows[0];
 
-    assert_eq!(row.gutter.as_ref().unwrap().first.to_string(), "  󰄱 ");
     assert_eq!(
-        row.gutter.as_ref().unwrap().first.width(),
-        row.gutter.as_ref().unwrap().continuation.width()
+        row.gutter
+            .as_ref()
+            .unwrap()
+            .first
+            .to_string(),
+        "  󰄱 "
+    );
+    assert_eq!(
+        row.gutter
+            .as_ref()
+            .unwrap()
+            .first
+            .width(),
+        row.gutter
+            .as_ref()
+            .unwrap()
+            .continuation
+            .width()
     );
 }
 
@@ -354,7 +407,9 @@ fn ctrl_click_targets_link_labels_and_urls_in_code_source() {
     });
 
     assert_eq!(
-        target.as_ref().map(|(_, _, url)| url.as_str()),
+        target
+            .as_ref()
+            .map(|(_, _, url)| url.as_str()),
         Some("https://example.com/orbit")
     );
 
@@ -383,14 +438,21 @@ fn ctrl_click_targets_link_labels_and_urls_in_code_source() {
 fn plain_output_and_wrapped_table_cells_keep_their_own_link_targets() {
     use super::super::app::{ToolRow, ToolStatus};
     let items = [
-            TranscriptItem::User("中文 https://example.com/user".into()),
-            TranscriptItem::Notice("结果 https://example.com/command".into()),
-            TranscriptItem::Tool(ToolRow {
-                id: "tool".into(), name: "run_command".into(), arguments: "{}".into(),
-                status: ToolStatus::Finished, output: "地址 https://example.com/tool".into(),
-            }),
-            TranscriptItem::Assistant("| 名称 | 地址 |\n| --- | --- |\n| [中文链接](https://example.com/one) | [中文链接](https://example.com/two) |\n".into()),
-        ];
+        TranscriptItem::User("中文 https://example.com/user".into()),
+        TranscriptItem::Notice("结果 https://example.com/command".into()),
+        TranscriptItem::Tool(ToolRow {
+            id: "tool".into(),
+            name: "run_command".into(),
+            arguments: "{}".into(),
+            status: ToolStatus::Finished,
+            output: "地址 https://example.com/tool".into(),
+        }),
+        TranscriptItem::Assistant(
+            "| 名称 | 地址 |\n| --- | --- |\n| [中文链接](https://example.com/one\
+                ) | [中文链接](https://example.com/two) |\n"
+                .into(),
+        ),
+    ];
 
     for width in [10, 26, 80] {
         let mut layout = TranscriptLayout::default();
@@ -426,15 +488,18 @@ fn plain_output_and_wrapped_table_cells_keep_their_own_link_targets() {
 fn markdown_file_links_remain_actionable_after_resize_and_scroll() {
     use super::super::app::{ToolRow, ToolStatus};
     let items = [TranscriptItem::Tool(ToolRow {
-            id: "orbit-doc".into(),
-            name: "read_file".into(),
-            arguments: r#"{"path":"docs/Orbit Guide.md"}"#.into(),
-            status: ToolStatus::Finished,
-            output: serde_json::json!({
-                "path": "docs/Orbit Guide.md",
-                "content": "1: # Orbit\n2: \n3: | 名称 | 链接 |\n4: | --- | --- |\n5: | [Orbit](https://orbit.example/first) | [Orbit](https://orbit.example/second) |\n6: \n7: ```markdown\n8: [Orbit](https://orbit.example/code)\n9: ```\n"
-            }).to_string(),
-        })];
+        id: "orbit-doc".into(),
+        name: "read_file".into(),
+        arguments: r#"{"path":"docs/Orbit Guide.md"}"#.into(),
+        status: ToolStatus::Finished,
+        output: serde_json::json!({
+            "path": "docs/Orbit Guide.md",
+            "content": "1: # Orbit\n2: \n3: | 名称 | 链接 |\n4: | --- | --- |\n5: | \
+                [Orbit](https://orbit.example/first) | [Orbit](https://orbit.example/second) \
+                |\n6: \n7: ```markdown\n8: [Orbit](https://orbit.example/code)\n9: ```\n"
+        })
+        .to_string(),
+    })];
     let mut layout = TranscriptLayout::default();
     for width in [80, 16, 32, 10, 80] {
         layout.update(&items, Some(0), width);
@@ -492,7 +557,11 @@ fn streamed_reference_definitions_update_prior_labels_without_reparsing_on_scrol
     let text = format!("{initial}[docs]: https://orbit.example/docs/ \"Orbit\"\n");
     let mut items = [TranscriptItem::Assistant(initial.into())];
     layout.update(&items, None, 24);
-    assert!(layout.entries[0].rows[0].links.is_empty());
+    assert!(
+        layout.entries[0].rows[0]
+            .links
+            .is_empty()
+    );
     for end in initial.len()..=text.len() {
         if !text.is_char_boundary(end) {
             continue;
@@ -512,7 +581,11 @@ fn streamed_reference_definitions_update_prior_labels_without_reparsing_on_scrol
     let mut fresh = TranscriptLayout::default();
     fresh.update(&items, None, 24);
     assert_eq!(layout.height(), fresh.height());
-    for (cached, rebuilt) in layout.entries[0].rows.iter().zip(&fresh.entries[0].rows) {
+    for (cached, rebuilt) in layout.entries[0]
+        .rows
+        .iter()
+        .zip(&fresh.entries[0].rows)
+    {
         assert_eq!(cached.line, rebuilt.line);
         assert_eq!(cached.links, rebuilt.links);
     }
@@ -544,9 +617,29 @@ fn thinking_keeps_one_row_before_the_following_answer() {
     );
     let thinking = &layout.entries[0];
 
-    assert!(thinking.rows.last().unwrap().line.to_string().is_empty());
-    assert_eq!(layout.entries[1].rows[0].line.to_string(), "final answer");
-    assert_eq!(layout.entries[1].rows[0].gutter.as_ref().unwrap().width, 2);
+    assert!(
+        thinking
+            .rows
+            .last()
+            .unwrap()
+            .line
+            .to_string()
+            .is_empty()
+    );
+    assert_eq!(
+        layout.entries[1].rows[0]
+            .line
+            .to_string(),
+        "final answer"
+    );
+    assert_eq!(
+        layout.entries[1].rows[0]
+            .gutter
+            .as_ref()
+            .unwrap()
+            .width,
+        2
+    );
 }
 
 #[test]
@@ -617,7 +710,8 @@ fn unicode_line_breaks_fill_cjk_rows_and_quotes_keep_a_continuous_rail() {
 
 #[test]
 fn table_streaming_one_character_at_a_time_matches_complete_render() {
-    let source = "| # | 语言 | 特性 |\n|---|---|---|\n| 1 | **Python** | `complex` |\n| 2 | C | restrict |\n| 3 | C++ | 模板 |\n\n后文\n";
+    let source = "| # | 语言 | 特性 |\n|---|---|---|\n| 1 | **Python** | `complex` |\n| 2 | C | \
+        restrict |\n| 3 | C++ | 模板 |\n\n后文\n";
     let mut text = String::new();
     let mut layout = TranscriptLayout::default();
 
@@ -664,8 +758,16 @@ fn streamed_tables_match_fresh_layout_through_split_delimiters_and_resize() {
 
         assert_eq!(layout.height(), fresh.height());
 
-        let actual: Vec<_> = layout.entries[0].rows.iter().map(|r| &r.line).collect();
-        let expected: Vec<_> = fresh.entries[0].rows.iter().map(|r| &r.line).collect();
+        let actual: Vec<_> = layout.entries[0]
+            .rows
+            .iter()
+            .map(|r| &r.line)
+            .collect();
+        let expected: Vec<_> = fresh.entries[0]
+            .rows
+            .iter()
+            .map(|r| &r.line)
+            .collect();
 
         assert_eq!(actual, expected, "source: {text}");
     }
@@ -694,7 +796,9 @@ fn batched_assistant_completion_matches_fresh_layout_after_trimming() {
             let mut state = UiState::new("orbit-test");
             state.submit("检查 Orbit".into());
             state.apply(AgentEvent::Model(StreamEvent::TextDelta(initial.into())));
-            state.transcript_layout.update(&state.transcript, None, 24);
+            state
+                .transcript_layout
+                .update(&state.transcript, None, 24);
             if !delta.is_empty() {
                 state.apply(AgentEvent::Model(StreamEvent::TextDelta(delta.into())));
             }
@@ -718,7 +822,9 @@ fn batched_assistant_completion_matches_fresh_layout_after_trimming() {
                 }
             });
 
-            state.transcript_layout.update(&state.transcript, None, 24);
+            state
+                .transcript_layout
+                .update(&state.transcript, None, 24);
             let mut fresh = TranscriptLayout::default();
             fresh.update(&state.transcript, None, 24);
 
@@ -727,7 +833,11 @@ fn batched_assistant_completion_matches_fresh_layout_after_trimming() {
             for offset in 0..fresh.height() {
                 let mut actual = Terminal::new(TestBackend::new(24, 5)).unwrap();
                 actual
-                    .draw(|frame| state.transcript_layout.draw(frame, frame.area(), offset))
+                    .draw(|frame| {
+                        state
+                            .transcript_layout
+                            .draw(frame, frame.area(), offset)
+                    })
                     .unwrap();
                 let mut expected = Terminal::new(TestBackend::new(24, 5)).unwrap();
                 expected
@@ -737,7 +847,8 @@ fn batched_assistant_completion_matches_fresh_layout_after_trimming() {
                 assert_eq!(
                     actual.backend().buffer(),
                     expected.backend().buffer(),
-                    "tool_started {tool_started}, initial {initial:?}, delta {delta:?}, offset {offset}"
+                    "tool_started {tool_started}, initial {initial:?}, delta {delta:?}, offset \
+                        {offset}"
                 );
             }
         }
@@ -757,20 +868,29 @@ fn removed_empty_assistant_is_replaced_before_the_next_frame() {
         let mut state = UiState::new("orbit-test");
         state.submit("检查 Orbit".into());
         state.apply(AgentEvent::Model(StreamEvent::TextDelta("\n\n".into())));
-        state.transcript_layout.update(&state.transcript, None, 24);
+        state
+            .transcript_layout
+            .update(&state.transcript, None, 24);
         state.apply(AgentEvent::Completed {
             turns: 1,
             tool_calls: 0,
         });
         state.apply(AgentEvent::Model(event));
-        state.transcript_layout.update(&state.transcript, None, 24);
+        state
+            .transcript_layout
+            .update(&state.transcript, None, 24);
         let mut fresh = TranscriptLayout::default();
         fresh.update(&state.transcript, None, 24);
         let lines = |layout: &TranscriptLayout| {
             layout
                 .entries
                 .iter()
-                .flat_map(|entry| entry.rows.iter().map(|row| row.line.clone()))
+                .flat_map(|entry| {
+                    entry
+                        .rows
+                        .iter()
+                        .map(|row| row.line.clone())
+                })
                 .collect::<Vec<_>>()
         };
 
@@ -781,7 +901,8 @@ fn removed_empty_assistant_is_replaced_before_the_next_frame() {
 
 #[test]
 fn streamed_math_matches_fresh_parser_at_every_character_boundary() {
-    let source = "先看 $x^2$\n\n$$\n\\begin{pmatrix}a&b\\\\c&d\\end{pmatrix}\n$$\n后文 $\\frac{a}{b}$\n```latex\n$x$\n```\n";
+    let source = "先看 $x^2$\n\n$$\n\\begin{pmatrix}a&b\\\\c&d\\end{pmatrix}\n$$\n后文 \
+        $\\frac{a}{b}$\n```latex\n$x$\n```\n";
     let mut incremental = TranscriptLayout::default();
     let mut items = vec![TranscriptItem::Assistant(String::new())];
     for ch in source.chars() {
@@ -856,7 +977,9 @@ fn incremental_layout_matches_fresh_layout_for_unicode_wrapping_and_split_fences
 
             for offset in 0..layout.height() {
                 let mut actual = Terminal::new(TestBackend::new(width, 5)).unwrap();
-                actual.draw(|f| layout.draw(f, f.area(), offset)).unwrap();
+                actual
+                    .draw(|f| layout.draw(f, f.area(), offset))
+                    .unwrap();
                 let mut expected = Terminal::new(TestBackend::new(width, 5)).unwrap();
                 expected
                     .draw(|f| reference.draw(f, f.area(), offset))
@@ -874,7 +997,8 @@ fn incremental_layout_matches_fresh_layout_for_unicode_wrapping_and_split_fences
 
 #[test]
 fn streamed_html_preserves_open_frames_breaks_and_click_targets_after_resize() {
-    let source = "<a href='https://orbit.example'><b>\n中文 H<sub>2</sub>O<br/>x<sup>2</sup>\n最后一行</b></a> 正常\n";
+    let source = "<a href='https://orbit.example'><b>\n中文 \
+        H<sub>2</sub>O<br/>x<sup>2</sup>\n最后一行</b></a> 正常\n";
     let mut entry = Entry::default();
     for end in source
         .char_indices()
@@ -961,7 +1085,12 @@ fn user_turns_use_a_framed_bubble_and_wrap_inside_its_side_rails() {
     let rows = &layout.entries[0].rows;
 
     assert_eq!(
-        rows.first().unwrap().line.to_string().chars().next(),
+        rows.first()
+            .unwrap()
+            .line
+            .to_string()
+            .chars()
+            .next(),
         Some('╭')
     );
     assert_eq!(rows.last().unwrap().line.to_string(), "");
@@ -970,8 +1099,14 @@ fn user_turns_use_a_framed_bubble_and_wrap_inside_its_side_rails() {
             .as_ref()
             .is_some_and(|gutter| gutter.first.to_string() == "│ ")
     }));
-    assert!(rows.iter().any(|row| row.line.to_string().starts_with('╰')));
-    assert!(rows.iter().all(|row| row.line.width() <= 24));
+    assert!(
+        rows.iter()
+            .any(|row| row.line.to_string().starts_with('╰'))
+    );
+    assert!(
+        rows.iter()
+            .all(|row| row.line.width() <= 24)
+    );
 }
 
 #[test]
@@ -1005,7 +1140,9 @@ fn user_wrap_consumes_overflowing_spaces_and_keeps_fitting_whitespace() {
         layout.update(&items, None, width);
         let lines = body(&layout);
         assert!(
-            lines.iter().any(|line| line.starts_with("如果")),
+            lines
+                .iter()
+                .any(|line| line.starts_with("如果")),
             "{lines:?}"
         );
         assert!(
@@ -1026,11 +1163,17 @@ fn user_wrap_consumes_overflowing_spaces_and_keeps_fitting_whitespace() {
     // model and stored in history is never rewritten by the layout.
     layout.update(&items, None, source.width() as u16 + 4);
     assert_eq!(body(&layout).as_slice(), std::slice::from_ref(&source));
-    assert!(matches!(&items[0], TranscriptItem::User(text) if text == &source));
+    assert!(matches!(
+        &items[0],
+        TranscriptItem::User(text) if text == &source
+    ));
 
     let verbatim = wrap_line(&Line::from(source.clone()), 40).0;
     assert_eq!(
-        verbatim.iter().map(Line::to_string).collect::<String>(),
+        verbatim
+            .iter()
+            .map(Line::to_string)
+            .collect::<String>(),
         source
     );
     let source = "    缩进  与列对齐\n\nword\u{a0}word";
@@ -1052,7 +1195,11 @@ fn user_links_remain_clickable_after_consuming_a_wrap_separator() {
         let area = Rect::new(3, 2, width, layout.height() as u16);
         let mut found = false;
         for y in area.y..area.bottom() {
-            assert!(layout.link_at(area, 0, (area.x, y)).is_none());
+            assert!(
+                layout
+                    .link_at(area, 0, (area.x, y))
+                    .is_none()
+            );
             for x in area.x..area.right() {
                 if let Some(target) = layout.link_at(area, 0, (x, y)) {
                     assert_eq!(target, url);
@@ -1067,10 +1214,12 @@ fn user_links_remain_clickable_after_consuming_a_wrap_separator() {
 
 #[test]
 fn streaming_keeps_completed_lines_and_scrolling_reuses_layout() {
-    let mut items = vec![TranscriptItem::Assistant("history line\n".repeat(10000))];
+    let mut items = vec![TranscriptItem::Assistant("history line\n".repeat(10_000))];
     let mut layout = TranscriptLayout::default();
     layout.update(&items, None, 100);
-    let stable = layout.entries[0].rows[500].line.spans[0].content.as_ptr();
+    let stable = layout.entries[0].rows[500].line.spans[0]
+        .content
+        .as_ptr();
 
     for _ in 0..30 {
         let TranscriptItem::Assistant(text) = &mut items[0] else {
@@ -1083,16 +1232,20 @@ fn streaming_keeps_completed_lines_and_scrolling_reuses_layout() {
 
         assert_eq!(
             stable,
-            layout.entries[0].rows[500].line.spans[0].content.as_ptr()
+            layout.entries[0].rows[500].line.spans[0]
+                .content
+                .as_ptr()
         );
     }
 
     let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
     let started = std::time::Instant::now();
 
-    for offset in (0..10000).step_by(100) {
+    for offset in (0..10_000).step_by(100) {
         layout.update(&items, None, 100);
-        terminal.draw(|f| layout.draw(f, f.area(), offset)).unwrap();
+        terminal
+            .draw(|f| layout.draw(f, f.area(), offset))
+            .unwrap();
     }
 
     eprintln!(
@@ -1102,20 +1255,29 @@ fn streaming_keeps_completed_lines_and_scrolling_reuses_layout() {
 
     assert_eq!(
         stable,
-        layout.entries[0].rows[500].line.spans[0].content.as_ptr()
+        layout.entries[0].rows[500].line.spans[0]
+            .content
+            .as_ptr()
     );
 }
 
 #[test]
 fn wrapped_indented_code_blocks_keep_rails_on_continuation_lines() {
-    let text = "代码片段:\n  ```rust\n  const FRAME_DEADLINE: std::time::Duration = std::time::Duration::from_secs(10);\n  ```";
+    let text = "代码片段:\n  ```rust\n  const FRAME_DEADLINE: std::time::Duration = \
+        std::time::Duration::from_secs(10);\n  ```";
     let mut layout = TranscriptLayout::default();
     layout.update(&[TranscriptItem::Assistant(text.into())], None, 45);
 
     let code_row = layout.entries[0]
         .rows
         .iter()
-        .find(|row| row.height > 1 && row.line.to_string().contains("FRAME_DEADLINE"))
+        .find(|row| {
+            row.height > 1
+                && row
+                    .line
+                    .to_string()
+                    .contains("FRAME_DEADLINE")
+        })
         .expect("code line should wrap into multiple rows");
 
     let gutter = code_row
@@ -1124,7 +1286,12 @@ fn wrapped_indented_code_blocks_keep_rails_on_continuation_lines() {
         .expect("indented code block retains gutter");
     assert!(gutter.width >= 4);
     assert_eq!(gutter.first.to_string(), gutter.continuation.to_string());
-    assert!(gutter.continuation.to_string().contains('│'));
+    assert!(
+        gutter
+            .continuation
+            .to_string()
+            .contains('│')
+    );
 
     let mut terminal = Terminal::new(TestBackend::new(45, 6)).unwrap();
     terminal
@@ -1132,7 +1299,11 @@ fn wrapped_indented_code_blocks_keep_rails_on_continuation_lines() {
         .unwrap();
     let buffer = terminal.backend().buffer();
 
-    let rail_col = gutter.continuation.to_string().find('│').unwrap();
+    let rail_col = gutter
+        .continuation
+        .to_string()
+        .find('│')
+        .unwrap();
     assert_eq!(buffer[(rail_col as u16, 2)].symbol(), "│");
     assert_eq!(buffer[(rail_col as u16, 3)].symbol(), "│");
 }

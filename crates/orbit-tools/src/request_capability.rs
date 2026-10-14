@@ -43,7 +43,15 @@ impl Tool for RequestCapability {
 
     fn definition(&self) -> ToolDefinition {
         let description = format!(
-            "Request session permission for an existing file or directory outside the workspace. Only eligible paths prompt the user for approval. Existing workspace access needs no request. To create external files, request read_write for an existing eligible parent directory. Policy denials are permanent and never open an approval dialog: workspace ancestors, protected files/directories and these exact host paths: {}; these host directories and all descendants: {}. The whole host /tmp is reserved, but an existing specific /tmp child may be eligible. File-tool grants do not isolate shell commands; run_command uses real host paths. Approved grants last for this session.",
+            "Request session permission for an existing file or directory outside the workspace. \
+                Only eligible paths prompt the user for approval. Existing workspace access needs \
+                no request. To create external files, request read_write for an existing eligible \
+                parent directory. Policy denials are permanent and never open an approval dialog: \
+                workspace ancestors, protected files/directories and these exact host paths: {}; \
+                these host directories and all descendants: {}. The whole host /tmp is reserved, \
+                but an existing specific /tmp child may be eligible. File-tool grants do not \
+                isolate shell commands; run_command uses real host paths. Approved grants last \
+                for this session.",
             RESERVED_CAPABILITY_PATHS.join(", "),
             RESERVED_CAPABILITY_TREES.join(", ")
         );
@@ -54,13 +62,21 @@ impl Tool for RequestCapability {
             json!({
                 "type": "object",
                 "properties": {
-                    "path": { "type": "string", "description": "Path outside the workspace (e.g. '~/.cargo' or '/tmp/build')" },
+                    "path": {
+                        "type": "string",
+                        "description": "Path outside the workspace (e.g. '~/.cargo' or \
+                            '/tmp/build')"
+                    },
                     "access": {
                         "type": "string",
                         "enum": ["read", "read_write"],
-                        "description": "Requested access level: 'read' for read-only, 'read_write' for read and write"
+                        "description": "Requested access level: 'read' for read-only, 'read_write' \
+                            for read and write"
                     },
-                    "reason": { "type": "string", "description": "Explanation to the user for why this access is necessary" }
+                    "reason": {
+                        "type": "string",
+                        "description": "Explanation to the user for why this access is necessary"
+                    }
                 },
                 "required": ["path", "access", "reason"],
                 "additionalProperties": false
@@ -98,30 +114,38 @@ impl Tool for RequestCapability {
                 })?;
 
             if !resolved.canonical().exists() {
-                let parent = resolved.canonical().ancestors().skip(1).find(|parent| {
-                    parent.is_dir()
-                        && !matches!(
-                            self.workspace
-                                .policy()
-                                .check_filesystem(&FilesystemCapability {
-                                    environment: EnvironmentId::Local,
-                                    path: parent.to_path_buf(),
-                                    access,
-                                }),
-                            PolicyDecision::Denied(_)
-                        )
-                });
+                let parent = resolved
+                    .canonical()
+                    .ancestors()
+                    .skip(1)
+                    .find(|parent| {
+                        parent.is_dir()
+                            && !matches!(
+                                self.workspace
+                                    .policy()
+                                    .check_filesystem(&FilesystemCapability {
+                                        environment: EnvironmentId::Local,
+                                        path: parent.to_path_buf(),
+                                        access,
+                                    }),
+                                PolicyDecision::Denied(_)
+                            )
+                    });
                 let guidance = match parent {
                     Some(parent) => format!(
-                        "to create external files, request read_write permission for the existing eligible parent '{}'",
+                        "to create external files, request read_write permission for the existing \
+                            eligible parent '{}'",
                         parent.display()
                     ),
 
-                    None => "no existing eligible parent is available; use the workspace or an existing temporary directory".into(),
+                    None => "no existing eligible parent is available; use the workspace or an \
+                        existing temporary directory"
+                        .into(),
                 };
 
                 return Err(ToolError::ExecutionFailed(format!(
-                    "path '{expanded_path}' does not exist. Capability mounts require existing resources; {guidance}"
+                    "path '{expanded_path}' does not exist. Capability mounts require existing \
+                        resources; {guidance}"
                 )));
             }
 
@@ -131,11 +155,18 @@ impl Tool for RequestCapability {
                 access,
             };
 
-            match self.workspace.policy().check_filesystem(&capability) {
+            match self
+                .workspace
+                .policy()
+                .check_filesystem(&capability)
+            {
                 PolicyDecision::Granted => Ok(ToolOutput::text(
                     json!({
                         "status": "granted",
-                        "path": resolved.canonical().display().to_string(),
+                        "path": resolved
+                            .canonical()
+                            .display()
+                            .to_string(),
                         "access": capability.access.description(),
                         "message": "Capability is already granted"
                     })
@@ -143,7 +174,10 @@ impl Tool for RequestCapability {
                 )),
 
                 PolicyDecision::Denied(reason) => Err(ToolError::ExecutionFailed(format!(
-                    "permission permanently denied: {reason}. This policy denial cannot be overridden by user approval; do not retry the same request. Use an eligible external path, the workspace, or run_command's isolated temporary directories."
+                    "permission permanently denied: {reason}. This policy denial cannot be \
+                        overridden by user approval; do not retry the same request. Use an \
+                        eligible external path, the workspace, or run_command's isolated \
+                        temporary directories."
                 ))),
 
                 PolicyDecision::NeedsApproval(caps) => {
@@ -166,7 +200,9 @@ impl Tool for RequestCapability {
                         biased;
                         _ = cancellation.cancelled() => return Err(ToolError::Cancelled),
                         sent = self.approvals.send(request) => {
-                            sent.map_err(|_| ToolError::ExecutionFailed("approval channel closed".into()))?;
+                            sent.map_err(|_| {
+                                ToolError::ExecutionFailed("approval channel closed".into())
+                            })?;
                         }
                     }
 
@@ -194,11 +230,20 @@ impl Tool for RequestCapability {
                             write: cap.access.allows_write(),
                         };
 
-                        self.workspace.policy().record_grant(grant);
+                        self.workspace
+                            .policy()
+                            .record_grant(grant);
                     }
 
                     Ok(ToolOutput::text(
-                        json!({ "status": "granted", "path": resolved.canonical().display().to_string(), "access": capability.access.description() })
+                        json!({
+                            "status": "granted",
+                            "path": resolved
+                                .canonical()
+                                .display()
+                                .to_string(),
+                            "access": capability.access.description()
+                        })
                         .to_string(),
                     ))
                 }

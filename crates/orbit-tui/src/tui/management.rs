@@ -92,10 +92,16 @@ impl Store {
     }
 
     pub fn get_mut(&mut self, id: &str) -> Option<&mut State> {
-        if self.active.as_ref().is_some_and(|state| state.id == id) {
+        if self
+            .active
+            .as_ref()
+            .is_some_and(|state| state.id == id)
+        {
             self.active.as_mut()
         } else {
-            self.hidden.iter_mut().find(|state| state.id == id)
+            self.hidden
+                .iter_mut()
+                .find(|state| state.id == id)
         }
     }
 
@@ -111,7 +117,10 @@ impl Store {
             }
         } else if let Some(id) = self.approval_suspended.take()
             && self.active.is_none()
-            && let Some(index) = self.hidden.iter().position(|state| state.id == id)
+            && let Some(index) = self
+                .hidden
+                .iter()
+                .position(|state| state.id == id)
         {
             self.active = Some(self.hidden.remove(index));
         }

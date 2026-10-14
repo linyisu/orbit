@@ -130,7 +130,10 @@ fn manifest(path: &Path) -> Result<Value> {
 fn dependencies(value: &Value, kinds: &[&str]) -> BTreeSet<String> {
     let mut result = BTreeSet::new();
     for kind in kinds {
-        if let Some(table) = value.get(kind).and_then(Value::as_table) {
+        if let Some(table) = value
+            .get(kind)
+            .and_then(Value::as_table)
+        {
             // Honor renamed dependencies as well as their local alias.
             for (name, definition) in table {
                 result.insert(
@@ -143,7 +146,10 @@ fn dependencies(value: &Value, kinds: &[&str]) -> BTreeSet<String> {
             }
         }
     }
-    if let Some(targets) = value.get("target").and_then(Value::as_table) {
+    if let Some(targets) = value
+        .get("target")
+        .and_then(Value::as_table)
+    {
         for target in targets.values() {
             result.extend(dependencies(target, kinds));
         }
@@ -195,7 +201,9 @@ pub fn check(root: &Path) -> Result<Vec<String>> {
     let mut packages = BTreeSet::new();
     let mut errors = Vec::new();
     for member in members {
-        let member = member.as_str().context("workspace member must be a path")?;
+        let member = member
+            .as_str()
+            .context("workspace member must be a path")?;
         let config = manifest(&root.join(member).join("Cargo.toml"))?;
         let name = config
             .get("package")
@@ -236,7 +244,10 @@ pub fn check(root: &Path) -> Result<Vec<String>> {
         } else {
             normal.clone()
         };
-        let Some((_, allowed)) = DEPENDENCIES.iter().find(|(package, _)| *package == name) else {
+        let Some((_, allowed)) = DEPENDENCIES
+            .iter()
+            .find(|(package, _)| *package == name)
+        else {
             errors.push(format!("{name}: define its dependency boundary"));
             continue;
         };
@@ -269,7 +280,13 @@ pub fn check(root: &Path) -> Result<Vec<String>> {
     let execution =
         Regex::new(r"\b(?:Agent::new|run_with_agent_events|compact_configured|workspace_tools)\b")?;
     for package in ["orbit-cli", "orbit-tui", "orbit-gui"] {
-        for source in sources(&root.join("crates").join(package).join("src"), "rs")? {
+        for source in sources(
+            &root
+                .join("crates")
+                .join(package)
+                .join("src"),
+            "rs",
+        )? {
             inspect(
                 root,
                 &source,
@@ -298,7 +315,8 @@ pub fn check(root: &Path) -> Result<Vec<String>> {
             root,
             &source,
             &migration_pattern,
-            "migrations must use Rust schema/query builders; SQLite connection controls belong to database/sqlite.rs",
+            "migrations must use Rust schema/query builders; SQLite connection controls belong to \
+                database/sqlite.rs",
             &mut errors,
         )?;
     }
@@ -359,7 +377,9 @@ mod tests {
     #[test]
     fn tui_tests_cannot_bypass_service_ownership_with_target_or_renamed_dependencies() {
         let dir = workspace();
-        let manifest = dir.path().join("crates/orbit-tui/Cargo.toml");
+        let manifest = dir
+            .path()
+            .join("crates/orbit-tui/Cargo.toml");
         for section in ["dev-dependencies", "target.'cfg(unix)'.dev-dependencies"] {
             for dependency in [
                 "orbit-client",
@@ -367,7 +387,14 @@ mod tests {
                 "orbit-service",
                 "orbit-store",
             ] {
-                fs::write(&manifest, format!("[package]\nname = 'orbit-tui'\n[{section}]\nlocal = {{ package = {dependency:?}, version = '*' }}\n")).unwrap();
+                fs::write(
+                    &manifest,
+                    format!(
+                        "[package]\nname = 'orbit-tui'\n[{section}]\nlocal = \
+                    {{ package = {dependency:?}, version = '*' }}\n"
+                    ),
+                )
+                .unwrap();
                 let errors = check(dir.path()).unwrap();
                 if ["orbit-client", "orbit-protocol"].contains(&dependency) {
                     assert!(errors.is_empty(), "{errors:?}");

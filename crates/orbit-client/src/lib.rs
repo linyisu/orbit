@@ -1,3 +1,6 @@
+//! Local, SSH and WSL workspace transports and client-owned preferences.
+//! Protocol and service operations remain independent of the presentation layer.
+
 pub mod attachments;
 mod bootstrap;
 mod local_server;

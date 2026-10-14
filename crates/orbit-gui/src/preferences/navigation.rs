@@ -116,7 +116,8 @@ impl Organization {
             .iter_mut()
             .find(|host| host.options.same_host(options))
         {
-            host.sessions.insert(id.to_owned(), placement);
+            host.sessions
+                .insert(id.to_owned(), placement);
         } else {
             self.hosts.push(Host {
                 options: host_options(options),
@@ -170,7 +171,9 @@ mod tests {
         let placement = organization.placement(&options, "one");
         assert!(!placement.is_pinned());
         assert_eq!(placement.category(), Some("学习"));
-        organization.set_category(&options, "one", None).unwrap();
+        organization
+            .set_category(&options, "one", None)
+            .unwrap();
         assert!(organization.is_empty());
     }
 
@@ -190,7 +193,9 @@ mod tests {
             .set_category(&options, "three", Some(maximum.clone()))
             .unwrap();
         assert_eq!(
-            organization.placement(&options, "three").category(),
+            organization
+                .placement(&options, "three")
+                .category(),
             Some(maximum.as_str())
         );
         for category in [
@@ -205,7 +210,9 @@ mod tests {
                     .is_err()
             );
             assert_eq!(
-                organization.placement(&options, "one").category(),
+                organization
+                    .placement(&options, "one")
+                    .category(),
                 Some("学习")
             );
         }
@@ -238,7 +245,11 @@ mod tests {
         options.workspace = Some("/project/two".into());
         options.resume = Some("other-tab".into());
         options.model = None;
-        assert!(restored.placement(&options, "one").is_pinned());
+        assert!(
+            restored
+                .placement(&options, "one")
+                .is_pinned()
+        );
         assert_eq!(restored.hosts.len(), 1);
     }
 
@@ -265,7 +276,9 @@ mod tests {
         for (ix, options) in hosts.iter().enumerate() {
             assert_eq!(organization.categories(options), [format!("host-{ix}")]);
             assert_eq!(
-                organization.placement(options, "same-id").category(),
+                organization
+                    .placement(options, "same-id")
+                    .category(),
                 Some(format!("host-{ix}").as_str())
             );
         }
@@ -282,14 +295,31 @@ mod tests {
             second.workspace = Some("/work/two".into());
             let mut organization = Organization::default();
             organization.set_pin(&first, "one", true);
-            assert!(organization.placement(&first, "one").is_pinned());
-            assert!(!organization.placement(&second, "one").is_pinned());
+            assert!(
+                organization
+                    .placement(&first, "one")
+                    .is_pinned()
+            );
+            assert!(
+                !organization
+                    .placement(&second, "one")
+                    .is_pinned()
+            );
             assert_eq!(organization.hosts[0].options.workspace, first.workspace);
             first.database = Some("~/.local/share/orbit.db".into());
             second.database = first.database.clone();
             organization.set_pin(&first, "home-store", true);
-            assert!(organization.placement(&second, "home-store").is_pinned());
-            assert!(organization.hosts[1].options.workspace.is_none());
+            assert!(
+                organization
+                    .placement(&second, "home-store")
+                    .is_pinned()
+            );
+            assert!(
+                organization.hosts[1]
+                    .options
+                    .workspace
+                    .is_none()
+            );
         }
     }
 
@@ -309,14 +339,24 @@ mod tests {
         organization.forget(&local, "one");
         assert_eq!(organization.placement(&local, "one"), Placement::default());
         assert_eq!(organization.categories(&local), ["学习"]);
-        assert!(organization.placement(&ssh, "one").is_pinned());
+        assert!(
+            organization
+                .placement(&ssh, "one")
+                .is_pinned()
+        );
         organization.forget(&local, "two");
-        assert!(organization.categories(&local).is_empty());
+        assert!(
+            organization
+                .categories(&local)
+                .is_empty()
+        );
         assert_eq!(organization.hosts.len(), 1);
         organization.forget(&ssh, "one");
         assert!(organization.is_empty());
         organization.set_pin(&local, "unknown", false);
-        organization.set_category(&local, "unknown", None).unwrap();
+        organization
+            .set_category(&local, "unknown", None)
+            .unwrap();
         assert!(organization.is_empty());
     }
 }

@@ -22,15 +22,26 @@ impl Import {
         result: oneshot::Sender<Result<Snapshot>>,
     ) -> Result<Self> {
         ensure!(
-            !setup.resources.policy.disabled(Capability::Mcp),
+            !setup
+                .resources
+                .policy
+                .disabled(Capability::Mcp),
             "MCP 工具已禁用"
         );
         ensure!(
             !setup.resources.policy.read_only
-                && !setup.resources.policy.disabled(Capability::Write),
+                && !setup
+                    .resources
+                    .policy
+                    .disabled(Capability::Write),
             "只读会话或禁用写入时不能导入 MCP 服务器"
         );
-        let workspace = setup.session.snapshot.session.workspace.clone();
+        let workspace = setup
+            .session
+            .snapshot
+            .session
+            .workspace
+            .clone();
         let directory = std::path::PathBuf::from(&workspace);
         let session = setup.session.id().to_owned();
         let home = setup.resources.options.home.clone();

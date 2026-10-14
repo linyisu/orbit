@@ -32,11 +32,16 @@ pub(super) async fn execute(
                     .home
                     .as_ref()
                     .context("目标环境没有 HOME")?
-                    .join(path.trim_start_matches('~').trim_start_matches('/'))
+                    .join(
+                        path.trim_start_matches('~')
+                            .trim_start_matches('/'),
+                    )
             } else {
                 root.join(path)
             };
-            let directory = path.canonicalize().context("目标目录不存在")?;
+            let directory = path
+                .canonicalize()
+                .context("目标目录不存在")?;
             ensure!(directory.is_dir(), "目标路径必须是目录");
             let mut options = setup.resources.options.clone();
             options.initial_directory = directory.clone();
@@ -51,7 +56,11 @@ pub(super) async fn execute(
             super::profile::apply(
                 &mut resources,
                 &setup.resources.model_name,
-                setup.resources.model.config().reasoning_effort,
+                setup
+                    .resources
+                    .model
+                    .config()
+                    .reasoning_effort,
             )?;
             setup
                 .session
@@ -63,7 +72,12 @@ pub(super) async fn execute(
             resources.mode = setup.resources.mode;
             resources.mode_revision = setup.resources.mode_revision;
             if !setup.session.is_persisted()
-                && setup.resources.planning.snapshot().await.mode
+                && setup
+                    .resources
+                    .planning
+                    .snapshot()
+                    .await
+                    .mode
                     == orbit_protocol::plan::WorkMode::Plan
             {
                 resources.planning.enter().await?;
@@ -82,7 +96,13 @@ pub(super) async fn execute(
                 .project_at(&setup.session.snapshot.session.workspace)
                 .await?
             {
-                Some(project) => setup.session.store.project_plugins(&project.id).await?,
+                Some(project) => {
+                    setup
+                        .session
+                        .store
+                        .project_plugins(&project.id)
+                        .await?
+                }
                 None => Vec::new(),
             };
             let roots = crate::marketplaces::enabled_skill_roots(&enabled);
@@ -107,7 +127,10 @@ pub(super) async fn execute(
                 &setup.resources.disabled_tools,
             );
             setup.resources.budget.skills = skills;
-            setup.resources.budget.plugin_skill_diagnostics = roots.diagnostics;
+            setup
+                .resources
+                .budget
+                .plugin_skill_diagnostics = roots.diagnostics;
             Ok(report("Skills", setup.resources.budget.skills.render()))
         }
         SessionAction::Task { task } => {
@@ -140,7 +163,10 @@ pub(super) async fn execute(
                 !title.trim().is_empty() && title.chars().count() <= 120,
                 "会话标题应为 1–120 个字符"
             );
-            setup.session.rename(title.clone()).await?;
+            setup
+                .session
+                .rename(title.clone())
+                .await?;
             Ok(report("会话标题", title))
         }
         SessionAction::LoadSkill { name } => {
@@ -157,7 +183,10 @@ pub(super) async fn execute(
                 "请在后续工作中使用已载入的 Skill /{}：\n{content}",
                 skill.command
             ));
-            setup.session.append_context(message).await?;
+            setup
+                .session
+                .append_context(message)
+                .await?;
             Ok(report("Skill", format!("已载入 /{command}。")))
         }
     }
@@ -181,7 +210,11 @@ mod tests {
         let root = directory.path();
         std::fs::create_dir(root.join(".git")).unwrap();
         TestConfig::new()
-            .provider(TestProvider::new("test").key("test").models(["mock"]))
+            .provider(
+                TestProvider::new("test")
+                    .key("test")
+                    .models(["mock"]),
+            )
             .write(root.join("config.toml"))
             .unwrap();
         let options = crate::WorkspaceOptions {
@@ -200,8 +233,19 @@ mod tests {
             .await
             .unwrap();
         assert!(!setup.session.is_persisted());
-        assert!(setup.resources.budget.plugin_skill_diagnostics.is_empty());
-        let project = setup.session.store.resolve_project(root).await.unwrap();
+        assert!(
+            setup
+                .resources
+                .budget
+                .plugin_skill_diagnostics
+                .is_empty()
+        );
+        let project = setup
+            .session
+            .store
+            .resolve_project(root)
+            .await
+            .unwrap();
         setup
             .session
             .store
@@ -221,7 +265,14 @@ mod tests {
             .unwrap();
         // Even the unavailable source must be found in the new project: an
         // empty draft's stale project ID previously lost this plugin entirely.
-        assert_eq!(setup.resources.budget.plugin_skill_diagnostics.len(), 1);
+        assert_eq!(
+            setup
+                .resources
+                .budget
+                .plugin_skill_diagnostics
+                .len(),
+            1
+        );
         assert!(!setup.session.is_persisted());
     }
 
@@ -238,7 +289,11 @@ mod tests {
         )
         .unwrap();
         TestConfig::new()
-            .provider(TestProvider::new("test").key("test").models(["mock"]))
+            .provider(
+                TestProvider::new("test")
+                    .key("test")
+                    .models(["mock"]),
+            )
             .write(root.join("config.toml"))
             .unwrap();
         let options = crate::WorkspaceOptions {
@@ -315,7 +370,14 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(setup.session.snapshot.session.title, "review");
-        assert!(setup.session.store.session(&id).await.is_err());
+        assert!(
+            setup
+                .session
+                .store
+                .session(&id)
+                .await
+                .is_err()
+        );
         assert!(
             execute(
                 &mut setup,
@@ -336,13 +398,24 @@ mod tests {
         )
         .await
         .unwrap();
-        assert!(setup.session.store.session(&id).await.is_err());
+        assert!(
+            setup
+                .session
+                .store
+                .session(&id)
+                .await
+                .is_err()
+        );
         setup
             .session
             .begin("use this skill".into(), "test::mock".into())
             .await
             .unwrap();
-        setup.session.finish("cancelled", None).await.unwrap();
+        setup
+            .session
+            .finish("cancelled", None)
+            .await
+            .unwrap();
         drop(setup);
         let reopened = super::super::setup::prepare_service(&options, Some(id))
             .await

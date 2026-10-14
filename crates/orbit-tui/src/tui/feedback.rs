@@ -55,12 +55,15 @@ impl Feedback {
     }
 
     fn push(&mut self, title: &str, text: &str, error: bool) {
-        const MAX_CHARS: usize = 8192;
+        const MAX_CHARS: usize = 8_192;
         let now = Instant::now();
         self.expire(now);
         let title = safe_output(title);
         let mut chars = text.chars();
-        let prefix = chars.by_ref().take(MAX_CHARS).collect::<String>();
+        let prefix = chars
+            .by_ref()
+            .take(MAX_CHARS)
+            .collect::<String>();
         let mut text = prefix
             .split('\n')
             .map(safe_output)
@@ -91,7 +94,8 @@ impl Feedback {
 
     pub fn expire(&mut self, now: Instant) -> bool {
         let previous = self.notices.len();
-        self.notices.retain(|notice| notice.expires_at > now);
+        self.notices
+            .retain(|notice| notice.expires_at > now);
         if self.notices.len() == previous {
             return false;
         }
@@ -153,7 +157,9 @@ impl Feedback {
             inner.height,
         );
         self.close = Rect::new(
-            content.right().saturating_sub(3.min(content.width)),
+            content
+                .right()
+                .saturating_sub(3.min(content.width)),
             content.y,
             3.min(content.width),
             1,
@@ -163,7 +169,9 @@ impl Feedback {
         } else {
             title
         };
-        let title_width = content.width.saturating_sub(self.close.width) as usize;
+        let title_width = content
+            .width
+            .saturating_sub(self.close.width) as usize;
         let hint = if !compact && title_width >= 18 {
             " · 详情"
         } else {
@@ -208,17 +216,27 @@ impl Feedback {
         let Event::Mouse(mouse) = event else {
             return Action::None;
         };
-        let inside = self.area.contains((mouse.column, mouse.row).into());
+        let inside = self
+            .area
+            .contains((mouse.column, mouse.row).into());
         match mouse.kind {
             // A passive notice must not block scrolling the surface beneath it.
             MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => Action::None,
             MouseEventKind::Down(MouseButton::Left) if inside => {
-                self.pressed = Some(self.close.contains((mouse.column, mouse.row).into()));
+                self.pressed = Some(
+                    self.close
+                        .contains((mouse.column, mouse.row).into()),
+                );
                 Action::Redraw
             }
             MouseEventKind::Up(MouseButton::Left) if self.pressed.is_some() => {
                 let close = self.pressed.take().unwrap();
-                if !inside || close != self.close.contains((mouse.column, mouse.row).into()) {
+                if !inside
+                    || close
+                        != self
+                            .close
+                            .contains((mouse.column, mouse.row).into())
+                {
                     return Action::Redraw;
                 }
                 let notice = self.notices.pop_front().unwrap();

@@ -3,7 +3,22 @@ use crossterm::event::{KeyEvent, MouseEvent};
 use ratatui::{Terminal, backend::TestBackend};
 fn fixture() -> State {
     let mut state = State::default();
-    state.sync(serde_json::from_value(serde_json::json!({"generation":3,"mode":"plan","plan":{"id":"test","workspace":"/workspace","revision":1,"title":"方案","markdown":"## 目标\n保持一致的交互。","steps":["实现","验证"],"status":"review"}})).unwrap());
+    state.sync(
+        serde_json::from_value(serde_json::json!({
+            "generation": 3,
+            "mode": "plan",
+            "plan": {
+                "id": "test",
+                "workspace": "/workspace",
+                "revision": 1,
+                "title": "方案",
+                "markdown": "## 目标\n保持一致的交互。",
+                "steps": ["实现", "验证"],
+                "status": "review"
+            }
+        }))
+        .unwrap(),
+    );
     state.open();
     state
 }
@@ -32,9 +47,11 @@ fn feedback_caret_and_mouse_edit_use_the_same_multiline_coordinates() {
     state.handle(&Event::Paste("Z".into()));
     assert_eq!(state.draft.text, "alpha\n中Z文x");
 }
+
 fn key(code: KeyCode, modifiers: KeyModifiers) -> Event {
     Event::Key(KeyEvent::new(code, modifiers))
 }
+
 fn mouse(kind: MouseEventKind, x: u16, y: u16) -> Event {
     Event::Mouse(MouseEvent {
         kind,
@@ -43,6 +60,7 @@ fn mouse(kind: MouseEventKind, x: u16, y: u16) -> Event {
         modifiers: KeyModifiers::NONE,
     })
 }
+
 fn draw(state: &mut State) {
     Terminal::new(TestBackend::new(100, 35))
         .unwrap()
@@ -51,6 +69,7 @@ fn draw(state: &mut State) {
         })
         .unwrap();
 }
+
 #[test]
 fn plan_review_requires_focused_execution_button_and_ignores_press_repeat() {
     let mut state = fixture();
@@ -78,7 +97,11 @@ fn plan_review_requires_focused_execution_button_and_ignores_press_repeat() {
     assert_eq!(state.focus, Some(Focus::Approve));
     let mut repeat = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
     repeat.kind = KeyEventKind::Repeat;
-    assert!(state.handle(&Event::Key(repeat)).is_none());
+    assert!(
+        state
+            .handle(&Event::Key(repeat))
+            .is_none()
+    );
     assert_eq!(
         state.handle(&key(KeyCode::Enter, KeyModifiers::NONE)),
         Some(Action::Approve { generation: 3 })
@@ -96,6 +119,7 @@ fn plan_review_requires_focused_execution_button_and_ignores_press_repeat() {
     state.succeeded();
     assert!(!state.visible());
 }
+
 #[test]
 fn plan_feedback_focus_is_editor_mouse_geometry_does_not_leak_and_submit_closes_on_ack() {
     let mut state = fixture();
@@ -135,6 +159,7 @@ fn plan_feedback_focus_is_editor_mouse_geometry_does_not_leak_and_submit_closes_
     assert!(!state.visible());
     assert!(state.draft.text.is_empty());
 }
+
 #[test]
 fn plan_remote_updates_do_not_steal_focus_or_accept_stale_state() {
     let mut state = fixture();
@@ -152,10 +177,16 @@ fn plan_remote_updates_do_not_steal_focus_or_accept_stale_state() {
     state.sync(approved);
     assert!(!state.visible());
 }
+
 #[test]
 fn plan_review_handles_small_windows_and_caches_long_markdown() {
     let mut state = fixture();
-    state.snapshot.plan.as_mut().unwrap().markdown = "中文 English\n\n".repeat(1000);
+    state
+        .snapshot
+        .plan
+        .as_mut()
+        .unwrap()
+        .markdown = "中文 English\n\n".repeat(1_000);
     for (width, height) in [(20, 5), (40, 15), (100, 35)] {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         terminal

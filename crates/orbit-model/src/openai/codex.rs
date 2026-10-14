@@ -14,7 +14,9 @@ pub(crate) fn encode(
 ) -> Result<(Value, HeaderMap), ModelError> {
     let (mut body, mut headers) = super::responses::encode(model, request, adapter, extra, true)?;
     // Subscription Responses is SSE-only and rejects API sampling/output limits.
-    let object = body.as_object_mut().expect("Responses body is an object");
+    let object = body
+        .as_object_mut()
+        .expect("Responses body is an object");
     object.remove("max_output_tokens");
     object.remove("temperature");
     body["store"] = json!(false);

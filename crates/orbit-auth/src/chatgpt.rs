@@ -29,7 +29,10 @@ pub(crate) async fn exchange(code: &str, verifier: &str, redirect: &Url) -> Resu
 }
 
 pub(crate) async fn refresh(previous: &Credential) -> Result<Credential> {
-    let token = previous.refresh.as_ref().ok_or(AuthError::LoginRequired)?;
+    let token = previous
+        .refresh
+        .as_ref()
+        .ok_or(AuthError::LoginRequired)?;
     let value = form_token(
         TOKEN_URL,
         &[
@@ -57,7 +60,11 @@ fn parse_tokens(value: Value, previous: Option<&Credential>) -> Result<Credentia
         .or_else(|| account_id(&identity))
         .or_else(|| previous.and_then(|credential| credential.account_id.as_deref()))
         .filter(|id| {
-            !id.is_empty() && id.len() <= 256 && id.bytes().all(|byte| byte.is_ascii_graphic())
+            !id.is_empty()
+                && id.len() <= 256
+                && id
+                    .bytes()
+                    .all(|byte| byte.is_ascii_graphic())
         })
         .ok_or(AuthError::InvalidToken)?
         .to_owned();
@@ -114,11 +121,18 @@ mod tests {
     use super::*;
 
     fn response(account: &str, refresh: Option<&str>) -> Value {
-        let claims = json!({ "https://api.openai.com/auth": { "chatgpt_account_id": account } });
+        let claims = json!({
+            "https://api.openai.com/auth": {
+                "chatgpt_account_id": account
+            }
+        });
         json!({
-            "access_token": format!("header.{}.signature", URL_SAFE_NO_PAD.encode(serde_json::to_vec(&claims).unwrap())),
+            "access_token": format!(
+                "header.{}.signature",
+                URL_SAFE_NO_PAD.encode(serde_json::to_vec(&claims).unwrap())
+            ),
             "refresh_token": refresh,
-            "expires_in": 3600
+            "expires_in": 3_600
         })
     }
 
@@ -134,7 +148,17 @@ mod tests {
             parse_tokens(response("other-account", Some("refresh-two")), Some(&first)),
             Err(AuthError::LoginRequired)
         ));
-        assert!(parse_tokens(json!({ "access_token": "not-a-jwt", "refresh_token": "refresh", "expires_in": 3600 }), None).is_err());
+        assert!(
+            parse_tokens(
+                json!({
+                    "access_token": "not-a-jwt",
+                    "refresh_token": "refresh",
+                    "expires_in": 3_600
+                }),
+                None
+            )
+            .is_err()
+        );
         assert!(parse_tokens(response("test-account", None), None).is_err());
     }
 }

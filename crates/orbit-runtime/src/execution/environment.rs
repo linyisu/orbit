@@ -16,12 +16,14 @@ pub struct ExecutionEnvironment {
 impl ExecutionEnvironment {
     /// Canonicalize paths and inherit the target shell environment.
     pub fn new(workspace_root: &Path, cwd: &Path) -> Result<Self, RuntimeError> {
-        let canonical_ws = workspace_root.canonicalize().map_err(|e| {
-            failed(format!(
-                "workspace root '{}' must exist: {e}",
-                workspace_root.display()
-            ))
-        })?;
+        let canonical_ws = workspace_root
+            .canonicalize()
+            .map_err(|e| {
+                failed(format!(
+                    "workspace root '{}' must exist: {e}",
+                    workspace_root.display()
+                ))
+            })?;
 
         let canonical_cwd = if cwd.is_absolute() {
             cwd.to_path_buf()
@@ -29,12 +31,14 @@ impl ExecutionEnvironment {
             canonical_ws.join(cwd)
         };
 
-        let canonical_cwd = canonical_cwd.canonicalize().map_err(|e| {
-            failed(format!(
-                "working directory '{}' must exist: {e}",
-                canonical_cwd.display()
-            ))
-        })?;
+        let canonical_cwd = canonical_cwd
+            .canonicalize()
+            .map_err(|e| {
+                failed(format!(
+                    "working directory '{}' must exist: {e}",
+                    canonical_cwd.display()
+                ))
+            })?;
 
         let env_vars = super::shell_environment::snapshot();
 

@@ -5,9 +5,12 @@ use tokio::io::{AsyncRead, AsyncReadExt};
 pub(super) async fn read_request(reader: &mut (impl AsyncRead + Unpin)) -> Vec<u8> {
     tokio::time::timeout(Duration::from_secs(30), async {
         let mut bytes = Vec::new();
-        let mut buffer = [0; 4096];
+        let mut buffer = [0; 4_096];
         while !request_complete(&bytes).expect("valid test HTTP request") {
-            let count = reader.read(&mut buffer).await.expect("read request");
+            let count = reader
+                .read(&mut buffer)
+                .await
+                .expect("read request");
             assert_ne!(
                 count, 0,
                 "connection closed before the request was complete"
@@ -21,14 +24,19 @@ pub(super) async fn read_request(reader: &mut (impl AsyncRead + Unpin)) -> Vec<u
 }
 
 fn request_complete(bytes: &[u8]) -> Result<bool, &'static str> {
-    let Some(header_end) = bytes.windows(4).position(|window| window == b"\r\n\r\n") else {
+    let Some(header_end) = bytes
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+    else {
         return Ok(false);
     };
     let headers = std::str::from_utf8(&bytes[..header_end]).map_err(|_| "invalid headers")?;
     let mut length = None;
     let mut chunked = false;
     for header in headers.lines().skip(1) {
-        let (name, value) = header.split_once(':').ok_or("invalid header field")?;
+        let (name, value) = header
+            .split_once(':')
+            .ok_or("invalid header field")?;
         if name.eq_ignore_ascii_case("content-length") {
             let value = value
                 .trim()
@@ -38,7 +46,11 @@ fn request_complete(bytes: &[u8]) -> Result<bool, &'static str> {
                 return Err("duplicate content length");
             }
         } else if name.eq_ignore_ascii_case("transfer-encoding") {
-            if chunked || !value.trim().eq_ignore_ascii_case("chunked") {
+            if chunked
+                || !value
+                    .trim()
+                    .eq_ignore_ascii_case("chunked")
+            {
                 return Err("unsupported transfer encoding");
             }
             chunked = true;
@@ -60,11 +72,18 @@ fn chunks_complete(mut bytes: &[u8]) -> Result<bool, &'static str> {
         let Some(line) = take_line(&mut bytes) else {
             return Ok(false);
         };
-        let size = line.split(|byte| *byte == b';').next().unwrap();
+        let size = line
+            .split(|byte| *byte == b';')
+            .next()
+            .unwrap();
         let size = std::str::from_utf8(size)
             .map_err(|_| "invalid chunk size")?
             .trim();
-        if size.is_empty() || !size.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        if size.is_empty()
+            || !size
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit())
+        {
             return Err("invalid chunk size");
         }
         let size = usize::from_str_radix(size, 16).map_err(|_| "invalid chunk size")?;
@@ -79,7 +98,9 @@ fn chunks_complete(mut bytes: &[u8]) -> Result<bool, &'static str> {
             }
             return Ok(false);
         }
-        let end = size.checked_add(2).ok_or("chunk size overflow")?;
+        let end = size
+            .checked_add(2)
+            .ok_or("chunk size overflow")?;
         if bytes.len() < end {
             return Ok(false);
         }
@@ -91,7 +112,9 @@ fn chunks_complete(mut bytes: &[u8]) -> Result<bool, &'static str> {
 }
 
 fn take_line<'a>(bytes: &mut &'a [u8]) -> Option<&'a [u8]> {
-    let end = bytes.windows(2).position(|window| window == b"\r\n")?;
+    let end = bytes
+        .windows(2)
+        .position(|window| window == b"\r\n")?;
     let line = &bytes[..end];
     *bytes = &bytes[end + 2..];
     Some(line)
@@ -104,7 +127,8 @@ fn every_prefix_waits_for_complete_request_framing() {
         b"POST / HTTP/1.1\r\ncOnTeNt-LeNgTh: 5\r\n\r\nhello",
         b"POST / HTTP/1.1\r\nContent-Length: 0\r\n\r\n",
         b"POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n5\r\n0\r\n\r\n\r\n0\r\n\r\n",
-        b"POST / HTTP/1.1\r\nTransfer-Encoding: Chunked\r\n\r\n2;foo=bar\r\nhe\r\n3\r\nllo\r\n0;done=yes\r\nX-Result: ok\r\n\r\n",
+        b"POST / HTTP/1.1\r\nTransfer-Encoding: Chunked\r\n\r\n2;foo=bar\r\nhe\r\n3\r\nllo\r\n0;don\
+            e=yes\r\nX-Result: ok\r\n\r\n",
     ] {
         for end in 0..request.len() {
             assert_eq!(request_complete(&request[..end]), Ok(false), "prefix {end}: {request:?}");
@@ -165,7 +189,10 @@ async fn both_servers_wait_for_headers_and_body_sent_separately() {
             } else {
                 &[b"he", b"ll", b"o"]
             };
-            socket.write_all(header.as_bytes()).await.unwrap();
+            socket
+                .write_all(header.as_bytes())
+                .await
+                .unwrap();
             for fragment in fragments {
                 let mut byte = [0];
                 assert!(
@@ -174,7 +201,10 @@ async fn both_servers_wait_for_headers_and_body_sent_separately() {
                         .is_err(),
                     "server replied before the whole body arrived (held={held}, chunked={chunked})"
                 );
-                socket.write_all(fragment).await.unwrap();
+                socket
+                    .write_all(fragment)
+                    .await
+                    .unwrap();
             }
             let mut received = Vec::new();
             timeout(Duration::from_secs(5), socket.read_to_end(&mut received))

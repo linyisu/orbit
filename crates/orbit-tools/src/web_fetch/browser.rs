@@ -20,7 +20,11 @@ pub(super) struct BrowserPage {
 pub(super) fn is_browser_challenge(headers: &header::HeaderMap) -> bool {
     headers
         .get("cf-mitigated")
-        .is_some_and(|value| value.as_bytes().eq_ignore_ascii_case(b"challenge"))
+        .is_some_and(|value| {
+            value
+                .as_bytes()
+                .eq_ignore_ascii_case(b"challenge")
+        })
 }
 
 pub(super) async fn fetch(url: &Url, proxy: &Url) -> Result<BrowserPage, ToolError> {
@@ -49,7 +53,9 @@ pub(super) async fn fetch(url: &Url, proxy: &Url) -> Result<BrowserPage, ToolErr
     let mut file = tokio::fs::File::create(profile.path().join("user.js"))
         .await
         .map_err(failed)?;
-    file.write_all(prefs.as_bytes()).await.map_err(failed)?;
+    file.write_all(prefs.as_bytes())
+        .await
+        .map_err(failed)?;
     file.flush().await.map_err(failed)?;
     drop(file);
 
@@ -76,60 +82,117 @@ pub(super) async fn fetch(url: &Url, proxy: &Url) -> Result<BrowserPage, ToolErr
         })?;
 
     let result = async {
-        let stderr = child.stderr.take().ok_or_else(|| failed("Firefox stderr unavailable"))?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| failed("Firefox stderr unavailable"))?;
         let mut lines = BufReader::new(stderr).lines();
         let endpoint = tokio::time::timeout(Duration::from_secs(20), async {
-            while let Some(line) = lines.next_line().await.map_err(failed)? {
+            while let Some(line) = lines
+                .next_line()
+                .await
+                .map_err(failed)?
+            {
                 if let Some(endpoint) = line.strip_prefix("WebDriver BiDi listening on ") {
                     return Ok::<String, ToolError>(endpoint.to_owned());
                 }
             }
 
             Err(failed("Firefox exited before WebDriver BiDi started"))
-        }).await.map_err(|_| failed("Firefox browser startup timed out"))??;
+        })
+        .await
+        .map_err(|_| failed("Firefox browser startup timed out"))??;
 
         if !endpoint.starts_with("ws://127.0.0.1:") && !endpoint.starts_with("ws://[::1]:") {
             return Err(failed("Firefox reported a non-local WebDriver endpoint"));
         }
 
         let (mut socket, _) = connect_async(format!("{endpoint}/session"))
-            .await.map_err(|error| failed(format!("Firefox WebDriver connection failed: {error}")))?;
-        command(&mut socket, 1, "session.new", json!({
-            "capabilities": {
-                "alwaysMatch": { "browserName": "firefox" }
-            }
-        })).await?;
-        let created = command(&mut socket, 2, "browsingContext.create", json!({ "type": "tab" })).await?;
-        let context = created["context"].as_str().ok_or_else(|| failed("Firefox did not create a tab"))?;
-        command(&mut socket, 3, "browsingContext.navigate", json!({ "context": context, "url": url.as_str(), "wait": "complete" })).await?;
+            .await
+            .map_err(|error| failed(format!("Firefox WebDriver connection failed: {error}")))?;
+        command(
+            &mut socket,
+            1,
+            "session.new",
+            json!({
+                "capabilities": {
+                    "alwaysMatch": { "browserName": "firefox" }
+                }
+            }),
+        )
+        .await?;
+        let created = command(
+            &mut socket,
+            2,
+            "browsingContext.create",
+            json!({ "type": "tab" }),
+        )
+        .await?;
+        let context = created["context"]
+            .as_str()
+            .ok_or_else(|| failed("Firefox did not create a tab"))?;
+        command(
+            &mut socket,
+            3,
+            "browsingContext.navigate",
+            json!({
+                "context": context,
+                "url": url.as_str(),
+                "wait": "complete"
+            }),
+        )
+        .await?;
         let evaluated = command(&mut socket, 4, "script.evaluate", json!({
-            "expression": "JSON.stringify({title:document.title,text:(document.body?.innerText||'').slice(0,2097153),url:location.href})",
-            "target": { "context": context },
+            "expression": "JSON.stringify({title:document.title,text:(document.body?.innerText||'')\
+                .slice(0,2097153),url:location.href})",
+            "target": {
+                "context": context
+            },
             "awaitPromise": false
         })).await?;
-        let value = evaluated["result"]["value"].as_str()
+        let value = evaluated["result"]["value"]
+            .as_str()
             .ok_or_else(|| failed("Firefox returned no readable page text"))?;
         let data: Value = serde_json::from_str(value).map_err(failed)?;
-        let final_url = checked_url(data["url"].as_str().ok_or_else(|| failed("Firefox returned no final URL"))?)?;
+        let final_url = checked_url(
+            data["url"]
+                .as_str()
+                .ok_or_else(|| failed("Firefox returned no final URL"))?,
+        )?;
 
         if final_url.origin() != url.origin() {
-            return Err(failed("browser verification redirected to a different origin"));
+            return Err(failed(
+                "browser verification redirected to a different origin",
+            ));
         }
 
-        let title = data["title"].as_str().unwrap_or("").to_owned();
-        let text = data["text"].as_str().ok_or_else(|| failed("Firefox returned no page body"))?.to_owned();
+        let title = data["title"]
+            .as_str()
+            .unwrap_or("")
+            .to_owned();
+        let text = data["text"]
+            .as_str()
+            .ok_or_else(|| failed("Firefox returned no page body"))?
+            .to_owned();
 
         if text.len() > MAX_BODY_BYTES {
             return Err(failed("browser page exceeds 2 MiB text limit"));
         }
         if title.contains("请稍候") || title.contains("Just a moment") {
-            return Err(failed("Firefox could not complete the site's browser challenge"));
+            return Err(failed(
+                "Firefox could not complete the site's browser challenge",
+            ));
         }
 
         let _ = socket.close(None).await;
 
-        Ok(BrowserPage { url: final_url, title, text })
-    }.await;
+        Ok(BrowserPage {
+            url: final_url,
+            title,
+            text,
+        })
+    }
+    .await;
     let _ = child.kill().await;
 
     result
@@ -145,9 +208,13 @@ async fn command(
 ) -> Result<Value, ToolError> {
     socket
         .send(Message::Text(
-            json!({ "id": id, "method": method, "params": params })
-                .to_string()
-                .into(),
+            json!({
+                "id": id,
+                "method": method,
+                "params": params
+            })
+            .to_string()
+            .into(),
         ))
         .await
         .map_err(failed)?;
@@ -166,7 +233,9 @@ async fn command(
         if reply["type"] == "error" {
             return Err(failed(format!(
                 "Firefox {method} failed: {}",
-                reply["message"].as_str().unwrap_or("unknown error")
+                reply["message"]
+                    .as_str()
+                    .unwrap_or("unknown error")
             )));
         }
 

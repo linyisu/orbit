@@ -20,7 +20,9 @@ pub(super) async fn complete(
         })
         .await?;
     }
-    let words = input.split_whitespace().collect::<Vec<_>>();
+    let words = input
+        .split_whitespace()
+        .collect::<Vec<_>>();
     let prefix = match words.as_slice() {
         ["/diff" | "/undo" | "/resume", ..] => words[0].to_owned(),
         ["/tasks", "start" | "done" | "block" | "cancel", ..] => words[..2].join(" "),
@@ -42,7 +44,9 @@ pub(super) async fn complete(
             let Some(project) = store.project_at(workspace).await? else {
                 return Ok(Vec::new());
             };
-            let projects = store.equivalent_project_ids(&project.id).await?;
+            let projects = store
+                .equivalent_project_ids(&project.id)
+                .await?;
             store
                 .list_resumable()
                 .await?
@@ -94,7 +98,10 @@ pub(super) async fn complete(
 
 fn directories(workspace: &Path, home: Option<&Path>, argument: &str) -> Result<Vec<Completion>> {
     let typed = argument.trim_start();
-    let quote = typed.chars().next().filter(|ch| matches!(ch, '\'' | '"'));
+    let quote = typed
+        .chars()
+        .next()
+        .filter(|ch| matches!(ch, '\'' | '"'));
     let typed = if let Some(quote) = quote {
         typed.trim_matches(quote)
     } else {
@@ -198,10 +205,19 @@ mod tests {
                     .collect::<Vec<_>>(),
                 ["Tests/", "ATests/", "Templates/", "T_e_s/"]
             );
-            assert_eq!(shlex::split(&entries[0].name).unwrap().len(), 2);
+            assert_eq!(
+                shlex::split(&entries[0].name)
+                    .unwrap()
+                    .len(),
+                2
+            );
         }
         for index in 0..110 {
-            std::fs::create_dir(root.path().join(format!("ATests{index:03}"))).unwrap();
+            std::fs::create_dir(
+                root.path()
+                    .join(format!("ATests{index:03}")),
+            )
+            .unwrap();
         }
         let entries = directories(root.path(), None, "tes").unwrap();
         assert_eq!(entries.len(), 100);

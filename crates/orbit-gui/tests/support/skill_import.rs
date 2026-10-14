@@ -39,8 +39,14 @@ impl FixtureImports {
             .map_err(anyhow::Error::from)
             .and_then(|action| self.apply(session, workspace, action, installed));
         Some(match result {
-            Ok(snapshot) => json!({"type":"resources","value":snapshot}),
-            Err(error) => json!({"type":"error","value":error.to_string()}),
+            Ok(snapshot) => json!({
+                "type": "resources",
+                "value": snapshot
+            }),
+            Err(error) => json!({
+                "type": "error",
+                "value": error.to_string()
+            }),
         })
     }
 
@@ -129,10 +135,14 @@ impl FixtureImports {
                     })
                     .collect::<anyhow::Result<Vec<_>>>()?;
                 for skill in selected {
-                    installed.insert(skill.name.clone(), format!(
-                        "---\nname: {}\ndescription: {}\n---\n\nImported from {}.\nSee references/guide.md and scripts/check.sh.\n",
-                        skill.name, skill.description, skill.path,
-                    ));
+                    installed.insert(
+                        skill.name.clone(),
+                        format!(
+                            "---\nname: {}\ndescription: {}\n---\n\nImported from {}.\nSee \
+                            references/guide.md and scripts/check.sh.\n",
+                            skill.name, skill.description, skill.path,
+                        ),
+                    );
                 }
                 let mut names = installed.keys().collect::<Vec<_>>();
                 names.sort();

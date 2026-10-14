@@ -234,7 +234,9 @@ impl Selection {
             Event::Key(key) if key.kind != KeyEventKind::Release => {
                 if self.active()
                     && key.code == KeyCode::Char('c')
-                    && key.modifiers.contains(KeyModifiers::CONTROL)
+                    && key
+                        .modifiers
+                        .contains(KeyModifiers::CONTROL)
                 {
                     let text = self.text();
 
@@ -326,7 +328,12 @@ impl Selection {
         {
             self.decorations
                 .entry(row)
-                .or_insert_with(|| layout.selection_metadata(row).cloned().unwrap_or_default());
+                .or_insert_with(|| {
+                    layout
+                        .selection_metadata(row)
+                        .cloned()
+                        .unwrap_or_default()
+                });
         }
 
         if self.region != Some(Region::Transcript) {
@@ -351,7 +358,12 @@ impl Selection {
         for row in start.1..=end.1 {
             self.decorations
                 .entry(row)
-                .or_insert_with(|| layout.selection_metadata(row).cloned().unwrap_or_default());
+                .or_insert_with(|| {
+                    layout
+                        .selection_metadata(row)
+                        .cloned()
+                        .unwrap_or_default()
+                });
             self.rows.entry(row).or_insert_with(|| {
                 let area = Rect::new(0, 0, self.viewport.width, 1);
                 let mut buffer = Buffer::empty(area);
@@ -368,7 +380,11 @@ impl Selection {
         let media = self.selected_media();
         // A clipped picture can be selected while its text baseline is offscreen.
         // Keep copy order tied to that baseline and emit its source exactly once.
-        let mut rows = self.rows.keys().copied().collect::<BTreeSet<_>>();
+        let mut rows = self
+            .rows
+            .keys()
+            .copied()
+            .collect::<BTreeSet<_>>();
         rows.extend(media.iter().map(|m| m.baseline));
 
         for row in rows {
@@ -393,7 +409,10 @@ impl Selection {
             let mut x = 0;
 
             while x < len {
-                if let Some(copy) = copies.iter().find(|m| m.block.columns.start == x) {
+                if let Some(copy) = copies
+                    .iter()
+                    .find(|m| m.block.columns.start == x)
+                {
                     text.push_str(&copy.text);
                     x = copy.block.columns.end;
                     continue;
@@ -509,7 +528,10 @@ impl Selection {
         super::media::select(area, self.base(), &media);
         for block in &media {
             for row in block.rows.start.max(self.base())
-                ..block.rows.end.min(self.base() + usize::from(area.height))
+                ..block
+                    .rows
+                    .end
+                    .min(self.base() + usize::from(area.height))
             {
                 let y = area.y + (row - self.base()) as u16;
                 for x in block
@@ -539,7 +561,9 @@ impl Selection {
                 .map_or(&[][..], |metadata| metadata.ranges.as_slice());
             let is_content = |index: usize| {
                 !cells[index].symbol().trim().is_empty()
-                    && !decorations.iter().any(|range| range.contains(&index))
+                    && !decorations
+                        .iter()
+                        .any(|range| range.contains(&index))
             };
             let Some(start) = (0..cells.len()).find(|&index| is_content(index)) else {
                 continue;

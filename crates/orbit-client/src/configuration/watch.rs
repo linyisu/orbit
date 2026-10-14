@@ -4,8 +4,8 @@ use std::{
     time::{Duration, Instant, SystemTime},
 };
 
-const CHECK: Duration = Duration::from_secs(1);
-const REFRESH: Duration = Duration::from_secs(900);
+const CHECK_INTERVAL: Duration = Duration::from_secs(1);
+const REFRESH_INTERVAL: Duration = Duration::from_secs(900);
 type Stamp = Vec<(PathBuf, Option<(SystemTime, u64)>)>;
 
 /// Tracks the client's configuration and credential files without reading secrets.
@@ -20,7 +20,11 @@ pub struct Watcher {
 fn stamp(local: &Local) -> Stamp {
     let mut paths = vec![local.config.clone(), local.auth.clone()];
     if let Ok(entries) = std::fs::read_dir(&local.auth) {
-        paths.extend(entries.filter_map(Result::ok).map(|entry| entry.path()));
+        paths.extend(
+            entries
+                .filter_map(Result::ok)
+                .map(|entry| entry.path()),
+        );
     }
     paths.sort();
     paths
@@ -44,21 +48,24 @@ impl Watcher {
             refreshed: Instant::now(),
         }
     }
+
     pub fn due(&mut self) -> bool {
-        if self.checked.elapsed() < CHECK {
+        if self.checked.elapsed() < CHECK_INTERVAL {
             return false;
         }
         self.checked = Instant::now();
         let current = stamp(&self.local);
-        if current == self.stamp && self.refreshed.elapsed() < REFRESH {
+        if current == self.stamp && self.refreshed.elapsed() < REFRESH_INTERVAL {
             return false;
         }
         self.resynchronize();
         true
     }
+
     pub fn unchanged(&self) -> bool {
         self.stamp == stamp(&self.local)
     }
+
     pub fn resynchronize(&mut self) {
         self.stamp = stamp(&self.local);
         self.checked = Instant::now();
@@ -83,18 +90,18 @@ mod tests {
         assert!(!watcher.due());
         std::fs::write(config, "second configuration").unwrap();
         assert!(!watcher.unchanged());
-        watcher.checked -= CHECK;
+        watcher.checked -= CHECK_INTERVAL;
         assert!(watcher.due());
         assert!(watcher.unchanged());
-        watcher.checked -= CHECK;
+        watcher.checked -= CHECK_INTERVAL;
         assert!(!watcher.due());
         std::fs::create_dir(&auth).unwrap();
         std::fs::write(auth.join("test.json"), "credential-placeholder").unwrap();
         assert!(!watcher.unchanged());
-        watcher.checked -= CHECK;
+        watcher.checked -= CHECK_INTERVAL;
         assert!(watcher.due());
-        watcher.checked -= CHECK;
-        watcher.refreshed -= REFRESH;
+        watcher.checked -= CHECK_INTERVAL;
+        watcher.refreshed -= REFRESH_INTERVAL;
         assert!(watcher.due());
         assert!(watcher.unchanged());
     }

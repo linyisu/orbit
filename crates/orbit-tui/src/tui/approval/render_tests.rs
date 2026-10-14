@@ -15,12 +15,17 @@ fn approval_keeps_old_and_new_syntax_states_independent() {
         },
     ));
     let mut terminal = Terminal::new(TestBackend::new(100, 25)).unwrap();
-    terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+    terminal
+        .draw(|frame| draw(frame, &mut state))
+        .unwrap();
     let buffer = terminal.backend().buffer();
     let point = (0..25)
         .find_map(|y| {
-            let row: String = (0..100).map(|x| buffer[(x, y)].symbol()).collect();
-            row.find("fn orbit").map(|x| (row[..x].width() as u16, y))
+            let row: String = (0..100)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect();
+            row.find("fn orbit")
+                .map(|x| (row[..x].width() as u16, y))
         })
         .expect("unchanged source line is visible");
 
@@ -41,7 +46,9 @@ fn full_preview_scrolls_to_end_and_escapes_terminal_controls() {
         },
     ));
     let mut terminal = Terminal::new(TestBackend::new(60, 20)).unwrap();
-    terminal.draw(|f| draw(f, &mut state)).unwrap();
+    terminal
+        .draw(|f| draw(f, &mut state))
+        .unwrap();
 
     assert!(state.approval_shown);
 
@@ -52,13 +59,17 @@ fn full_preview_scrolls_to_end_and_escapes_terminal_controls() {
             KeyModifiers::NONE,
         )),
     );
-    terminal.draw(|f| draw(f, &mut state)).unwrap();
+    terminal
+        .draw(|f| draw(f, &mut state))
+        .unwrap();
 
     assert_eq!(state.approval_choice, 0);
     assert!(state.approval_max_scroll > 0);
 
     state.approval_scroll = state.approval_max_scroll;
-    terminal.draw(|f| draw(f, &mut state)).unwrap();
+    terminal
+        .draw(|f| draw(f, &mut state))
+        .unwrap();
     let text: String = terminal
         .backend()
         .buffer()
@@ -94,7 +105,9 @@ fn command_approval_card_renders_rounded_frame_and_buttons() {
     ));
 
     let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
-    terminal.draw(|f| draw(f, &mut state)).unwrap();
+    terminal
+        .draw(|f| draw(f, &mut state))
+        .unwrap();
 
     let text: String = terminal
         .backend()
@@ -160,7 +173,9 @@ fn git_dangerous_card_shows_risk_and_badges() {
     ));
 
     let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
-    terminal.draw(|f| draw(f, &mut state)).unwrap();
+    terminal
+        .draw(|f| draw(f, &mut state))
+        .unwrap();
 
     let text: String = terminal
         .backend()

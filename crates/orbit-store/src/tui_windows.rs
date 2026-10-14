@@ -73,7 +73,12 @@ fn reap(directory: &Path, registry: &mut Registry) -> Result<()> {
         }
     }
 
-    if !registry.windows.is_empty() && registry.windows.values().all(|window| window.closed) {
+    if !registry.windows.is_empty()
+        && registry
+            .windows
+            .values()
+            .all(|window| window.closed)
+    {
         let mut seen = std::collections::HashSet::new();
         registry.previous = registry
             .windows
@@ -93,7 +98,9 @@ fn reap(directory: &Path, registry: &mut Registry) -> Result<()> {
 
 impl Store {
     pub async fn previous_tui_tabs(&self) -> Result<Vec<String>> {
-        let directory = self.path().with_extension("tui-windows");
+        let directory = self
+            .path()
+            .with_extension("tui-windows");
         let legacy = self.all_tui_tabs().await?;
         tokio::task::spawn_blocking(move || {
             let _lock = registry_lock(&directory)?;
@@ -106,7 +113,9 @@ impl Store {
     }
 
     pub async fn open_tui_window(&self) -> Result<TuiWindow> {
-        let directory = self.path().with_extension("tui-windows");
+        let directory = self
+            .path()
+            .with_extension("tui-windows");
         let legacy = self.all_tui_tabs().await?;
         tokio::task::spawn_blocking(move || {
             let _lock = registry_lock(&directory)?;
@@ -124,7 +133,9 @@ impl Store {
             let lease = private_file(&directory.join(&id))?;
             lease.lock()?;
             let previous = registry.previous.clone();
-            registry.windows.insert(id.clone(), Window::default());
+            registry
+                .windows
+                .insert(id.clone(), Window::default());
             save(&directory, &registry)?;
             Ok(TuiWindow {
                 directory,
@@ -188,11 +199,17 @@ mod tests {
     #[tokio::test]
     async fn windows_merge_at_last_exit_and_next_generation_replaces_snapshot() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Store::open(dir.path().join("sessions.db")).await.unwrap();
+        let store = Store::open(dir.path().join("sessions.db"))
+            .await
+            .unwrap();
         let a = store.open_tui_window().await.unwrap();
         let b = store.open_tui_window().await.unwrap();
-        a.update(vec!["one".into(), "shared".into()]).await.unwrap();
-        b.update(vec!["shared".into(), "two".into()]).await.unwrap();
+        a.update(vec!["one".into(), "shared".into()])
+            .await
+            .unwrap();
+        b.update(vec!["shared".into(), "two".into()])
+            .await
+            .unwrap();
         a.close().await.unwrap();
         let c = store.open_tui_window().await.unwrap();
         assert!(c.previous().is_empty());
@@ -200,21 +217,35 @@ mod tests {
         b.close().await.unwrap();
         let next = store.open_tui_window().await.unwrap();
         assert_eq!(next.previous(), ["one", "shared", "two"]);
-        next.update(vec!["two".into()]).await.unwrap();
+        next.update(vec!["two".into()])
+            .await
+            .unwrap();
         next.close().await.unwrap();
         let last = store.open_tui_window().await.unwrap();
         assert_eq!(last.previous(), ["two"]);
         last.close().await.unwrap();
-        assert!(store.open_tui_window().await.unwrap().previous().is_empty());
+        assert!(
+            store
+                .open_tui_window()
+                .await
+                .unwrap()
+                .previous()
+                .is_empty()
+        );
     }
 
     #[tokio::test]
     async fn abandoned_window_recovers_latest_tabs_when_next_client_joins() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Store::open(dir.path().join("sessions.db")).await.unwrap();
+        let store = Store::open(dir.path().join("sessions.db"))
+            .await
+            .unwrap();
         let mut dead = store.open_tui_window().await.unwrap();
-        dead.update(vec!["saved".into()]).await.unwrap();
-        dead.lease.take(); // simulate process death without orderly close
+        dead.update(vec!["saved".into()])
+            .await
+            .unwrap();
+        // simulate process death without orderly close
+        dead.lease.take();
         drop(dead);
         let next = store.open_tui_window().await.unwrap();
         assert_eq!(next.previous(), ["saved"]);

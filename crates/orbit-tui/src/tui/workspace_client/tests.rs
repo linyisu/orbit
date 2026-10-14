@@ -38,14 +38,20 @@ async fn usage_entry_is_visible_before_query_and_only_click_opens_details() {
     tab.state
         .transcript
         .push(TranscriptItem::User("existing question".into()));
-    tab.state.input.set("keep this draft".into());
+    tab.state
+        .input
+        .set("keep this draft".into());
     for width in [30, 100] {
         let mut terminal =
             ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, 24)).unwrap();
         terminal
             .draw(|frame| crate::tui::render::draw_frame(frame, &mut tab.state))
             .unwrap();
-        assert!(!tab.state.usage_indicator_area.is_empty());
+        assert!(
+            !tab.state
+                .usage_indicator_area
+                .is_empty()
+        );
     }
     let anchor = tab.state.usage_indicator_area;
     let mouse = |kind| {
@@ -56,7 +62,8 @@ async fn usage_entry_is_visible_before_query_and_only_click_opens_details() {
             modifiers: KeyModifiers::NONE,
         })
     };
-    tab.handle(mouse(MouseEventKind::Moved)).unwrap();
+    tab.handle(mouse(MouseEventKind::Moved))
+        .unwrap();
     assert!(!render_screen(&mut tab.state).contains("/usage"));
     assert!(tab.state.info_dialog.is_none());
     assert!(tab.usage_task.is_none());
@@ -108,7 +115,9 @@ async fn usage_pages_scroll_during_a_run_and_closing_keeps_background_results() 
     use orbit_protocol::usage::{Account, Limit, Scope, Snapshot};
     let (mut tab, mut requests) = tab("本地");
     tab.state.submit("existing task".into());
-    tab.state.input.set("keep this draft".into());
+    tab.state
+        .input
+        .set("keep this draft".into());
     let history = tab.state.transcript.len();
     let snapshot = Snapshot {
         account: Account {
@@ -132,13 +141,28 @@ async fn usage_pages_scroll_during_a_run_and_closing_keeps_background_results() 
         },
         ..Default::default()
     };
-    tab.state.usage.receive(snapshot.clone());
+    tab.state
+        .usage
+        .receive(snapshot.clone());
     tab.submit("/usage".into()).unwrap();
     assert!(!render_screen(&mut tab.state).contains("model-00"));
-    let before = tab.state.info_dialog.as_ref().unwrap().content.clone();
-    tokio::time::sleep(Duration::from_millis(1100)).await;
+    let before = tab
+        .state
+        .info_dialog
+        .as_ref()
+        .unwrap()
+        .content
+        .clone();
+    tokio::time::sleep(Duration::from_millis(1_100)).await;
     assert!(tab.poll_usage().await);
-    assert_ne!(tab.state.info_dialog.as_ref().unwrap().content, before);
+    assert_ne!(
+        tab.state
+            .info_dialog
+            .as_ref()
+            .unwrap()
+            .content,
+        before
+    );
     assert_eq!(
         tab.state
             .usage
@@ -185,7 +209,13 @@ async fn usage_pages_scroll_during_a_run_and_closing_keeps_background_results() 
         KeyModifiers::NONE,
     )))
     .unwrap();
-    assert!(tab.state.info_dialog.as_ref().unwrap().refresh_requested);
+    assert!(
+        tab.state
+            .info_dialog
+            .as_ref()
+            .unwrap()
+            .refresh_requested
+    );
     let mut snapshot = snapshot;
     snapshot.model = "updated model".into();
     tab.usage_task = Some(AbortOnDropHandle::new(tokio::spawn(
@@ -198,7 +228,12 @@ async fn usage_pages_scroll_during_a_run_and_closing_keeps_background_results() 
     assert!(tab.state.info_dialog.is_none());
     assert!(tab.usage_task.is_none());
     assert_eq!(
-        tab.state.usage.snapshot.as_ref().unwrap().model,
+        tab.state
+            .usage
+            .snapshot
+            .as_ref()
+            .unwrap()
+            .model,
         "updated model"
     );
     assert_eq!(tab.state.input.text, "keep this draft");
@@ -255,12 +290,20 @@ fn help_is_discoverable_and_opens_the_same_dialog_on_home_and_during_a_run() {
         for running in [false, true] {
             let (mut tab, mut requests) = tab(label);
             if running {
-                tab.state.submit("existing conversation".into());
+                tab.state
+                    .submit("existing conversation".into());
             }
             let history_len = tab.state.transcript.len();
             tab.state.input.set("/he".into());
-            assert!(tab.state.menu().iter().any(|entry| entry.name == "/help"));
-            tab.state.input.set("keep this draft".into());
+            assert!(
+                tab.state
+                    .menu()
+                    .iter()
+                    .any(|entry| entry.name == "/help")
+            );
+            tab.state
+                .input
+                .set("keep this draft".into());
             tab.submit("/help".into()).unwrap();
             assert!(tab.state.show_help);
             assert!(!tab.state.help_keys);
@@ -297,7 +340,9 @@ fn target_completions_apply_only_to_the_input_that_requested_them() {
         }],
     });
     assert_eq!(tab.state.menu()[0].name, "/cd project/");
-    tab.state.input.set("/cd different".into());
+    tab.state
+        .input
+        .set("/cd different".into());
     assert!(
         tab.state
             .menu()
@@ -315,14 +360,25 @@ fn remote_subagent_view_links_open_a_modal_and_keep_parent_input_isolated() {
     let (mut tab, mut requests) = tab("SSH dev");
     let agent = "00000000000000000000000000000001";
     tab.state.submit("parent task".into());
-    tab.state.input.set("parent draft".into());
-    tab.state.transcript.push(TranscriptItem::Tool(ToolRow {
-        id: "spawn".into(),
-        name: "spawn_agent".into(),
-        status: ToolStatus::Finished,
-        arguments: serde_json::json!({"task":"child task"}).to_string(),
-        output: serde_json::json!({"agent_id":agent,"status":"completed"}).to_string(),
-    }));
+    tab.state
+        .input
+        .set("parent draft".into());
+    tab.state
+        .transcript
+        .push(TranscriptItem::Tool(ToolRow {
+            id: "spawn".into(),
+            name: "spawn_agent".into(),
+            status: ToolStatus::Finished,
+            arguments: serde_json::json!({
+                "task": "child task"
+            })
+            .to_string(),
+            output: serde_json::json!({
+                "agent_id": agent,
+                "status": "completed"
+            })
+            .to_string(),
+        }));
     let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
     terminal
         .draw(|frame| crate::tui::render::draw(frame, &mut tab.state))
@@ -355,9 +411,14 @@ fn remote_subagent_view_links_open_a_modal_and_keep_parent_input_isolated() {
     assert!(tab.state.expanded.is_empty());
     tab.poll_subagent();
     let call = requests.try_recv().unwrap();
-    assert!(
-        matches!(call.request, Request::ReadSubagent { agent: ref id, after:0, .. } if id == agent)
-    );
+    assert!(matches!(
+        call.request,
+        Request::ReadSubagent {
+            agent: ref id,
+            after: 0,
+            ..
+        } if id == agent
+    ));
     call.reply
         .unwrap()
         .send(Ok(Response::Subagent(Page {
@@ -386,7 +447,8 @@ fn remote_subagent_view_links_open_a_modal_and_keep_parent_input_isolated() {
         })))
         .unwrap();
     assert!(tab.poll_subagent());
-    tab.handle(Event::Paste("follow-up".into())).unwrap();
+    tab.handle(Event::Paste("follow-up".into()))
+        .unwrap();
     assert_eq!(tab.state.input.text, "parent draft");
     tab.handle(Event::Key(KeyEvent::new(
         KeyCode::Enter,
@@ -394,9 +456,10 @@ fn remote_subagent_view_links_open_a_modal_and_keep_parent_input_isolated() {
     )))
     .unwrap();
     let call = requests.try_recv().unwrap();
-    assert!(
-        matches!(call.request, Request::SendSubagent { ref message, .. } if message == "follow-up")
-    );
+    assert!(matches!(
+        call.request,
+        Request::SendSubagent { ref message, .. } if message == "follow-up"
+    ));
     call.reply
         .unwrap()
         .send(Ok(Response::Error("temporary send failure".into())))
@@ -409,10 +472,15 @@ fn remote_subagent_view_links_open_a_modal_and_keep_parent_input_isolated() {
     )))
     .unwrap();
     let retry = requests.try_recv().unwrap();
-    assert!(
-        matches!(retry.request, Request::SendSubagent { ref message, .. } if message == "follow-up")
-    );
-    retry.reply.unwrap().send(Ok(Response::Ok)).unwrap();
+    assert!(matches!(
+        retry.request,
+        Request::SendSubagent { ref message, .. } if message == "follow-up"
+    ));
+    retry
+        .reply
+        .unwrap()
+        .send(Ok(Response::Ok))
+        .unwrap();
     tab.poll_subagent();
     tab.handle(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)))
         .unwrap();
@@ -455,26 +523,50 @@ async fn concurrent_tabs_keep_drafts_events_models_and_requests_separate() {
     let (mut wsl, mut wsl_requests) = tab("WSL Ubuntu");
     ssh.state.model_completions = vec!["ssh-model".into()];
     wsl.state.model_completions = vec!["wsl-model".into()];
-    ssh.submit("/model ssh-model".into()).unwrap();
-    wsl.submit("/model wsl-model".into()).unwrap();
+    ssh.submit("/model ssh-model".into())
+        .unwrap();
+    wsl.submit("/model wsl-model".into())
+        .unwrap();
     let ssh_selection = ssh_requests.try_recv().unwrap();
-    assert!(
-        matches!(ssh_selection.request, Request::SetModel { model, .. } if model == "ssh-model")
-    );
-    ssh_selection.reply.unwrap().send(Ok(Response::Ok)).unwrap();
+    assert!(matches!(
+        ssh_selection.request,
+        Request::SetModel { model, .. } if model == "ssh-model"
+    ));
+    ssh_selection
+        .reply
+        .unwrap()
+        .send(Ok(Response::Ok))
+        .unwrap();
     let wsl_selection = wsl_requests.try_recv().unwrap();
-    assert!(
-        matches!(wsl_selection.request, Request::SetModel { model, .. } if model == "wsl-model")
-    );
-    wsl_selection.reply.unwrap().send(Ok(Response::Ok)).unwrap();
-    ssh.submit("first target".into()).unwrap();
-    wsl.submit("second target".into()).unwrap();
-    assert!(
-        matches!(ssh_requests.try_recv().unwrap().request, Request::Start { prompt, model: None, .. } if prompt == "first target")
-    );
-    assert!(
-        matches!(wsl_requests.try_recv().unwrap().request, Request::Start { prompt, model: None, .. } if prompt == "second target")
-    );
+    assert!(matches!(
+        wsl_selection.request,
+        Request::SetModel { model, .. } if model == "wsl-model"
+    ));
+    wsl_selection
+        .reply
+        .unwrap()
+        .send(Ok(Response::Ok))
+        .unwrap();
+    ssh.submit("first target".into())
+        .unwrap();
+    wsl.submit("second target".into())
+        .unwrap();
+    assert!(matches!(
+        ssh_requests.try_recv().unwrap().request,
+        Request::Start {
+            prompt,
+            model: None,
+            ..
+        } if prompt == "first target"
+    ));
+    assert!(matches!(
+        wsl_requests.try_recv().unwrap().request,
+        Request::Start {
+            prompt,
+            model: None,
+            ..
+        } if prompt == "second target"
+    ));
     ssh.state.input.set("ssh draft".into());
     wsl.state.input.set("wsl draft".into());
     let (sender, incoming) = mpsc::channel(CHANNEL_CAPACITY);
@@ -501,7 +593,10 @@ async fn concurrent_tabs_keep_drafts_events_models_and_requests_separate() {
             .state
             .transcript
             .iter()
-            .any(|item| matches!(item, TranscriptItem::User(text) if text == "first target"))
+            .any(|item| matches!(
+                item,
+                TranscriptItem::User(text) if text == "first target"
+            ))
     );
     assert!(
         !tabs.remote[&wsl_id]
@@ -538,7 +633,8 @@ fn approval_keeps_composer_editable_and_enter_sends_steering() {
     tab.apply(page(vec![], vec![approval(7)]));
     tab.busy = true;
     tab.state.approval_shown = true;
-    tab.handle(Event::Paste("draft".into())).unwrap();
+    tab.handle(Event::Paste("draft".into()))
+        .unwrap();
     tab.handle(Event::Key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE)))
         .unwrap();
     tab.handle(Event::Key(KeyEvent::new(
@@ -565,9 +661,10 @@ fn approval_keeps_composer_editable_and_enter_sends_steering() {
         KeyModifiers::NONE,
     )))
     .unwrap();
-    assert!(
-        matches!(requests.try_recv().unwrap().request, Request::Steer { message, .. } if message == "use read_document")
-    );
+    assert!(matches!(
+        requests.try_recv().unwrap().request,
+        Request::Steer { message, .. } if message == "use read_document"
+    ));
     assert!(requests.try_recv().is_err());
     assert_eq!(tab.approval_id, Some(7));
 }
@@ -586,7 +683,10 @@ fn approvals_and_cancellation_only_reach_the_selected_target() {
         )))
         .unwrap();
     assert!(matches!(
-        second_requests.try_recv().unwrap().request,
+        second_requests
+            .try_recv()
+            .unwrap()
+            .request,
         Request::Approve {
             approval: 7,
             allow: true,
@@ -601,7 +701,10 @@ fn approvals_and_cancellation_only_reach_the_selected_target() {
         )))
         .unwrap();
     assert!(matches!(
-        first_requests.try_recv().unwrap().request,
+        first_requests
+            .try_recv()
+            .unwrap()
+            .request,
         Request::Cancel { .. }
     ));
     assert!(second_requests.try_recv().is_err());
@@ -623,7 +726,8 @@ fn workspace_completion_offers_shared_commands_without_local_directory_reads() {
         "/undo",
     ] {
         assert!(
-            menu.iter().any(|candidate| candidate.name == command),
+            menu.iter()
+                .any(|candidate| candidate.name == command),
             "{command}"
         );
     }
@@ -635,7 +739,10 @@ fn workspace_completion_offers_shared_commands_without_local_directory_reads() {
 fn mixed_tabs_close_to_the_left_and_preserve_sibling_drafts() {
     let mut tabs = Tabs::default();
     let (mut local, mut local_requests) = tab("本地");
-    local.state.input.set("local draft".into());
+    local
+        .state
+        .input
+        .set("local draft".into());
     local
         .state
         .transcript
@@ -653,9 +760,10 @@ fn mixed_tabs_close_to_the_left_and_preserve_sibling_drafts() {
     standalone::close(&mut tabs, &ssh_id);
     assert_eq!(tabs.active_remote.as_deref(), Some(local_id.as_str()));
     assert_eq!(tabs.remote[&local_id].state.input.text, "local draft");
-    assert!(
-        matches!(&tabs.remote[&local_id].state.transcript[0], TranscriptItem::User(text) if text == "local history")
-    );
+    assert!(matches!(
+        &tabs.remote[&local_id].state.transcript[0],
+        TranscriptItem::User(text) if text == "local history"
+    ));
     assert!(local_requests.try_recv().is_err());
     assert!(ssh_requests.try_recv().is_err());
     assert!(wsl_requests.try_recv().is_err());
@@ -683,9 +791,23 @@ async fn cancelling_authentication_closes_only_its_own_prompt() {
         .unwrap();
     assert!(first_answer.await.is_err());
     assert!(first.state.ssh_prompt.is_none());
-    assert!(first.state.workspace_wizard.as_ref().unwrap().failed);
+    assert!(
+        first
+            .state
+            .workspace_wizard
+            .as_ref()
+            .unwrap()
+            .failed
+    );
     assert!(second_answer.try_recv().is_err());
-    assert!(!second.state.ssh_prompt.as_ref().unwrap().closed());
+    assert!(
+        !second
+            .state
+            .ssh_prompt
+            .as_ref()
+            .unwrap()
+            .closed()
+    );
     assert!(!second.offline);
 }
 
@@ -754,7 +876,11 @@ fn failed_setup_retains_the_last_diagnostic_without_duplicating_it() {
     progress.log("loader diagnostic");
     tab.updates = Some(updates);
     tab.disconnected("target cannot run the executable".into());
-    let wizard = tab.state.workspace_wizard.as_ref().unwrap();
+    let wizard = tab
+        .state
+        .workspace_wizard
+        .as_ref()
+        .unwrap();
     assert_eq!(wizard.logs, ["loader diagnostic"]);
     assert_eq!(wizard.status, "target cannot run the executable");
     assert_eq!(tab.state.model, "连接失败");
@@ -804,9 +930,14 @@ fn compaction_and_images_use_the_same_request_for_every_target() {
     for target in ["本地", "SSH dev", "WSL Ubuntu"] {
         let (mut tab, mut requests) = tab(target);
         tab.submit("/compact".into()).unwrap();
-        assert!(
-            matches!(requests.try_recv().unwrap().request, Request::Start { compact: true, images, .. } if images.is_empty())
-        );
+        assert!(matches!(
+            requests.try_recv().unwrap().request,
+            Request::Start {
+                compact: true,
+                images,
+                ..
+            } if images.is_empty()
+        ));
     }
 }
 
@@ -816,13 +947,16 @@ fn steering_is_visible_before_receipt_and_is_reconciled_by_message_id() {
     use orbit_model::types::StreamEvent;
     for receipt_first in [true, false] {
         let (mut tab, mut requests) = tab("local");
-        tab.state.submit("initial question".into());
+        tab.state
+            .submit("initial question".into());
         tab.busy = true;
         tab.state
             .apply(AgentEvent::Model(StreamEvent::TextDelta("before ".into())));
         let mut replies = Vec::new();
         for _ in 0..2 {
-            tab.state.input.set("same message".into());
+            tab.state
+                .input
+                .set("same message".into());
             assert!(matches!(
                 tab.handle(Event::Key(KeyEvent::new(
                     KeyCode::Enter,
@@ -831,18 +965,33 @@ fn steering_is_visible_before_receipt_and_is_reconciled_by_message_id() {
                 .unwrap(),
                 Action::Redraw
             ));
-            replies.push(requests.try_recv().unwrap().reply.unwrap());
+            replies.push(
+                requests
+                    .try_recv()
+                    .unwrap()
+                    .reply
+                    .unwrap(),
+            );
         }
         let screen = render_screen(&mut tab.state);
-        assert!(screen.contains("same message") && screen.replace(' ', "").contains("发送中"));
+        assert!(
+            screen.contains("same message")
+                && screen
+                    .replace(' ', "")
+                    .contains("发送中")
+        );
         assert_eq!(tab.state.pending_input.count(), 2);
         tab.state
             .apply(AgentEvent::Model(StreamEvent::TextDelta("after".into())));
-        assert!(
-            matches!(tab.state.transcript.last(), Some(TranscriptItem::Assistant(text)) if text == "before after")
-        );
+        assert!(matches!(
+            tab.state.transcript.last(),
+            Some(TranscriptItem::Assistant(text)) if text == "before after"
+        ));
         if receipt_first {
-            for (id, reply) in [10, 11].into_iter().zip(replies.drain(..)) {
+            for (id, reply) in [10, 11]
+                .into_iter()
+                .zip(replies.drain(..))
+            {
                 reply
                     .send(Ok(Response::InputQueued { message_id: id }))
                     .unwrap();
@@ -855,18 +1004,20 @@ fn steering_is_visible_before_receipt_and_is_reconciled_by_message_id() {
             );
         }
         // Another client can submit identical text; it must not consume our pending rows.
-        tab.state.apply(AgentEvent::InputReceived {
-            attachments: vec![],
-            message_id: 20,
-            content: "same message".into(),
-        });
-        assert_eq!(tab.state.pending_input.count(), 2);
-        for id in [10, 11] {
-            tab.state.apply(AgentEvent::InputReceived {
+        tab.state
+            .apply(AgentEvent::InputReceived {
                 attachments: vec![],
-                message_id: id,
+                message_id: 20,
                 content: "same message".into(),
             });
+        assert_eq!(tab.state.pending_input.count(), 2);
+        for id in [10, 11] {
+            tab.state
+                .apply(AgentEvent::InputReceived {
+                    attachments: vec![],
+                    message_id: id,
+                    content: "same message".into(),
+                });
         }
         if !receipt_first {
             for (id, reply) in [10, 11].into_iter().zip(replies) {
@@ -881,7 +1032,10 @@ fn steering_is_visible_before_receipt_and_is_reconciled_by_message_id() {
             tab.state
                 .transcript
                 .iter()
-                .filter(|item| matches!(item, TranscriptItem::User(text) if text == "same message"))
+                .filter(|item| matches!(
+                    item,
+                    TranscriptItem::User(text) if text == "same message"
+                ))
                 .count(),
             3
         );
@@ -1020,7 +1174,11 @@ async fn restore_reuses_home_immediately_and_preserves_the_other_restored_tabs()
         tabs.restore_tabs(&source, &saved[..count]);
         assert_eq!(tabs.remote.len(), count);
         assert_eq!(tabs.target(0), Some(source.as_str()));
-        assert!(tabs.remote[&source].connecting.is_some());
+        assert!(
+            tabs.remote[&source]
+                .connecting
+                .is_some()
+        );
         assert_eq!(tabs.remote[&source].state.workspace, first.workspace);
         tabs.sync_remote_ui();
         let active = tabs.active_remote.clone().unwrap();
@@ -1035,7 +1193,8 @@ async fn restore_reuses_home_immediately_and_preserves_the_other_restored_tabs()
             .state
             .transcript
             .push(TranscriptItem::User("saved conversation".into()));
-        tabs.remote.insert(source.clone(), restored);
+        tabs.remote
+            .insert(source.clone(), restored);
         tabs.poll_remote().await;
         assert_eq!(tabs.active_remote.as_ref(), Some(&active));
         assert_eq!(tabs.remote.len(), count);
@@ -1069,13 +1228,21 @@ async fn restore_failures_can_retry_in_the_same_tab() {
         .disconnected("connection failed".into());
     tabs.poll_remote().await;
     assert_eq!(tabs.remote.len(), 1);
-    tabs.remote.get_mut(&restored).unwrap().reconnect();
-    assert!(tabs.remote[&restored].connecting.is_some());
+    tabs.remote
+        .get_mut(&restored)
+        .unwrap()
+        .reconnect();
+    assert!(
+        tabs.remote[&restored]
+            .connecting
+            .is_some()
+    );
     assert_eq!(tabs.remote[&restored].state.workspace, saved.workspace);
 
     let mut retried = connected_tab(Target::Local);
     retried.id = Some(saved.id);
-    tabs.remote.insert(restored.clone(), retried);
+    tabs.remote
+        .insert(restored.clone(), retried);
     tabs.poll_remote().await;
     assert_eq!(tabs.remote.len(), 1);
     assert_eq!(tabs.active_remote.as_ref(), Some(&restored));
@@ -1088,7 +1255,10 @@ async fn restore_keeps_drafts_and_reuses_already_open_sessions() {
         let mut tabs = crate::tui::tabs::live::Tabs::default();
         let mut source = connected_tab(Target::Local);
         if has_draft {
-            source.state.input.set("keep draft".into());
+            source
+                .state
+                .input
+                .set("keep draft".into());
         }
         let source = tabs.add_remote(source);
         let saved = saved_local("saved");
@@ -1098,7 +1268,8 @@ async fn restore_keeps_drafts_and_reuses_already_open_sessions() {
         assert_eq!(restored == source, !has_draft);
         let mut ready = connected_tab(Target::Local);
         ready.id = Some(saved.id.clone());
-        tabs.remote.insert(restored.clone(), ready);
+        tabs.remote
+            .insert(restored.clone(), ready);
         tabs.poll_remote().await;
         if has_draft {
             assert_eq!(tabs.remote[&source].state.input.text, "keep draft");
@@ -1164,7 +1335,10 @@ fn tab_titles_show_targets_only_while_different_environments_are_open() {
         assert_eq!(tabs.remote[&active].state.tabs[0].title, "first");
         assert_eq!(tabs.remote[&active].title, format!("{label} · second"));
         assert_eq!(
-            tabs.remote[&active].state.connection_label.as_deref(),
+            tabs.remote[&active]
+                .state
+                .connection_label
+                .as_deref(),
             Some(label.as_str())
         );
     }
@@ -1211,7 +1385,11 @@ async fn resume_reuses_empty_tab_in_place_for_every_target() {
         assert_eq!(tabs.remote.len(), 1);
         assert_eq!(tabs.target(0), Some(source.as_str()));
         assert_eq!(tabs.active_remote.as_deref(), Some(source.as_str()));
-        assert!(tabs.remote[&source].connecting.is_some());
+        assert!(
+            tabs.remote[&source]
+                .connecting
+                .is_some()
+        );
     }
 }
 
@@ -1219,7 +1397,11 @@ async fn resume_reuses_empty_tab_in_place_for_every_target() {
 async fn resume_preserves_nonempty_tabs_and_new_always_adds_a_tab() {
     use workspace::transport::Target;
     let changes: [fn(&mut Tab); 6] = [
-        |tab| tab.state.input.set("unsent draft".into()),
+        |tab| {
+            tab.state
+                .input
+                .set("unsent draft".into())
+        },
         |tab| {
             tab.state
                 .attachments
@@ -1281,9 +1463,17 @@ fn resume_focuses_open_conversation_and_removes_only_empty_source() {
 fn directory_profile_updates_workspace_media_connection_and_empty_tab_title() {
     let mut tab = connected_tab(workspace::transport::Target::Local);
     let info: SessionInfo = serde_json::from_value(serde_json::json!({
-        "id":"same-session", "title":"", "workspace":"/next/project", "model":"mock", "models":[],
-        "supports_vision":false, "reasoning_effort":null, "reasoning_efforts":[],
-        "context_tokens":1000, "input_context_tokens":900, "max_output_tokens":100
+        "id": "same-session",
+        "title": "",
+        "workspace": "/next/project",
+        "model": "mock",
+        "models": [],
+        "supports_vision": false,
+        "reasoning_effort": null,
+        "reasoning_efforts": [],
+        "context_tokens": 1_000,
+        "input_context_tokens": 900,
+        "max_output_tokens": 100
     }))
     .unwrap();
     tab.apply(Response::Ok);
@@ -1304,7 +1494,13 @@ fn directory_profile_updates_workspace_media_connection_and_empty_tab_title() {
         tab.state.media.workspace,
         std::path::Path::new("/next/project")
     );
-    assert_eq!(tab.connection.as_ref().unwrap().workspace, "/next/project");
+    assert_eq!(
+        tab.connection
+            .as_ref()
+            .unwrap()
+            .workspace,
+        "/next/project"
+    );
     assert_eq!(tab.title, "本地 · project");
     assert!(tab.state.info_dialog.is_none());
     let mut info = info;
@@ -1317,7 +1513,9 @@ fn directory_profile_updates_workspace_media_connection_and_empty_tab_title() {
 fn directory_enter_keeps_completed_path_instead_of_choosing_its_first_child() {
     for label in ["本地", "SSH dev", "WSL Ubuntu"] {
         let (mut tab, mut requests) = tab(label);
-        tab.state.input.set("/cd ~/Tests/TC_learn/".into());
+        tab.state
+            .input
+            .set("/cd ~/Tests/TC_learn/".into());
         tab.apply(Response::Completions {
             input: tab.state.input.text.clone(),
             entries: vec![crate::tui::completion::Candidate {
@@ -1333,9 +1531,13 @@ fn directory_enter_keeps_completed_path_instead_of_choosing_its_first_child() {
         )))
         .unwrap();
         let call = requests.try_recv().unwrap();
-        assert!(
-            matches!(call.request, Request::SessionAction { action: orbit_protocol::SessionAction::ChangeDirectory { path }, .. } if path == "~/Tests/TC_learn/")
-        );
+        assert!(matches!(
+            call.request,
+            Request::SessionAction {
+                action: orbit_protocol::SessionAction::ChangeDirectory { path },
+                ..
+            } if path == "~/Tests/TC_learn/"
+        ));
         assert!(tab.state.info_dialog.is_none());
     }
 }
@@ -1350,14 +1552,17 @@ fn model_preference_changes_only_after_successful_selection() {
         auth: root.path().join("auth"),
         model: None,
     };
-    local.remember_model("old::model").unwrap();
+    local
+        .remember_model("old::model")
+        .unwrap();
     let mut tab = connected_tab(workspace::transport::Target::Local);
     Arc::make_mut(tab.connection.as_mut().unwrap()).local_configuration = Some(local.clone());
     let (commands, mut requests) = mpsc::channel(CHANNEL_CAPACITY);
     tab.commands = Some(Arc::new(commands));
     tab.state.model_completions = vec!["new::model".into()];
     for accepted in [false, true] {
-        tab.submit("/model new::model".into()).unwrap();
+        tab.submit("/model new::model".into())
+            .unwrap();
         assert_eq!(local.last_model().unwrap().as_deref(), Some("old::model"));
         let call = requests.try_recv().unwrap();
         call.reply
@@ -1450,7 +1655,10 @@ async fn directory_menu_stays_visible_while_refining_and_waiting_for_the_service
                 .iter()
                 .map(|entry| &entry.name)
                 .collect::<Vec<_>>(),
-            before.iter().map(|entry| &entry.name).collect::<Vec<_>>()
+            before
+                .iter()
+                .map(|entry| &entry.name)
+                .collect::<Vec<_>>()
         );
         terminal
             .draw(|frame| crate::tui::render::draw(frame, &mut tab.state))
@@ -1458,12 +1666,16 @@ async fn directory_menu_stays_visible_while_refining_and_waiting_for_the_service
         assert!(!tab.state.menu_rows.is_empty());
         let mut requested = false;
         while let Ok(call) = requests.try_recv() {
-            requested |=
-                matches!(call.request, Request::Complete { ref input, .. } if input == query);
+            requested |= matches!(
+                call.request,
+                Request::Complete { ref input, .. } if input == query
+            );
         }
         assert!(requested);
     }
-    tab.state.input.set("/cd ~/Tests/".into());
+    tab.state
+        .input
+        .set("/cd ~/Tests/".into());
     assert!(tab.state.menu().is_empty());
     terminal
         .draw(|frame| crate::tui::render::draw(frame, &mut tab.state))
@@ -1483,7 +1695,9 @@ async fn directory_menu_stays_visible_while_refining_and_waiting_for_the_service
             .iter()
             .all(|entry| !entry.name.starts_with("/cd "))
     );
-    tab.state.input.set("/cd ~/Tests/".into());
+    tab.state
+        .input
+        .set("/cd ~/Tests/".into());
     let entry = crate::tui::completion::Candidate {
         name: "/cd ~/Tests/src/".into(),
         display: Some("src/".into()),
@@ -1511,16 +1725,30 @@ mod regressions;
 fn user_input_submission_uses_each_target_connection_and_preserves_composer() {
     for label in ["本地", "SSH test-host", "WSL Test"] {
         let (mut tab, mut requests) = tab(label);
-        tab.state.input.set("尚未发送的消息".into());
+        tab.state
+            .input
+            .set("尚未发送的消息".into());
         let record: orbit_protocol::user_input::Record =
             serde_json::from_value(serde_json::json!({
-                "id":"request","call_id":"tool-call","source":null,"status":"pending","answers":[],
-                "form":{"questions":[{"id":"q","title":"要求","prompt":"需要什么？","kind":"text"}]}
+                "id": "request",
+                "call_id": "tool-call",
+                "source": null,
+                "status": "pending",
+                "answers": [],
+                "form": {
+                    "questions": [{
+                        "id": "q",
+                        "title": "要求",
+                        "prompt": "需要什么？",
+                        "kind": "text"
+                    }]
+                }
             }))
             .unwrap();
         tab.state.user_input.sync(vec![record]);
         tab.state.user_input.open_next();
-        tab.handle(Event::Paste("用户填写".into())).unwrap();
+        tab.handle(Event::Paste("用户填写".into()))
+            .unwrap();
         tab.handle(Event::Key(KeyEvent::new(
             KeyCode::Enter,
             KeyModifiers::NONE,
@@ -1557,7 +1785,11 @@ fn user_input_submission_uses_each_target_connection_and_preserves_composer() {
         .unwrap();
         let retry = requests.try_recv().unwrap();
         assert!(matches!(retry.request, Request::AnswerUserInput { .. }));
-        retry.reply.unwrap().send(Ok(Response::Ok)).unwrap();
+        retry
+            .reply
+            .unwrap()
+            .send(Ok(Response::Ok))
+            .unwrap();
         assert!(tab.poll_submissions());
         assert!(!tab.state.user_input.visible());
         tab.state.user_input.open_next();
@@ -1586,7 +1818,22 @@ fn planning_commands_and_review_decisions_use_each_tabs_connection() {
         ));
         // The client never grants a mode transition optimistically.
         assert_eq!(tab.state.planning.mode(), WorkMode::Build);
-        tab.state.planning.sync(serde_json::from_value(serde_json::json!({"generation":3,"mode":"plan","plan":{"id":"plan","workspace":"/project","revision":1,"title":"Plan","markdown":"Implement and test.","steps":["Implement"],"status":"review"}})).unwrap());
+        tab.state.planning.sync(
+            serde_json::from_value(serde_json::json!({
+                "generation": 3,
+                "mode": "plan",
+                "plan": {
+                    "id": "plan",
+                    "workspace": "/project",
+                    "revision": 1,
+                    "title": "Plan",
+                    "markdown": "Implement and test.",
+                    "steps": ["Implement"],
+                    "status": "review"
+                }
+            }))
+            .unwrap(),
+        );
         tab.busy = true;
         tab.submit("/plan".into()).unwrap();
         assert!(requests.try_recv().is_err());
@@ -1614,7 +1861,10 @@ fn planning_commands_and_review_decisions_use_each_tabs_connection() {
                 ..
             }
         ));
-        call.reply.unwrap().send(Ok(Response::Ok)).unwrap();
+        call.reply
+            .unwrap()
+            .send(Ok(Response::Ok))
+            .unwrap();
         assert!(tab.poll_submissions());
         assert!(!tab.state.planning.visible());
         tab.submit("/build".into()).unwrap();
@@ -1679,7 +1929,11 @@ fn local_commands_and_service_reports_do_not_create_a_conversation_on_home() {
 fn closing_btw_drops_late_receipts_and_retries_a_full_transport_queue() {
     let (mut tab, mut requests) = tab("本地");
     tab.ask("follow-up".into(), Some(0));
-    let late_reply = requests.try_recv().unwrap().reply.unwrap();
+    let late_reply = requests
+        .try_recv()
+        .unwrap()
+        .reply
+        .unwrap();
     tab.poll_questions();
     // Fill the actual transport queue: closing must eventually reach the server.
     for _ in 0..CHANNEL_CAPACITY {
@@ -1766,10 +2020,19 @@ async fn switching_antigravity_models_replaces_the_footer_pool() {
         ("gemini-3.8-pro", ["77%", "0%"], "93%"),
     ] {
         let info: SessionInfo = serde_json::from_value(serde_json::json!({
-            "id":"same-session", "title":"", "workspace":"/project", "model":format!("antigravity::{model}"), "models":[],
-            "supports_vision":false, "reasoning_effort":null, "reasoning_efforts":[],
-            "context_tokens":1000, "input_context_tokens":900, "max_output_tokens":100
-        })).unwrap();
+            "id": "same-session",
+            "title": "",
+            "workspace": "/project",
+            "model": format!("antigravity::{model}"),
+            "models": [],
+            "supports_vision": false,
+            "reasoning_effort": null,
+            "reasoning_efforts": [],
+            "context_tokens": 1_000,
+            "input_context_tokens": 900,
+            "max_output_tokens": 100
+        }))
+        .unwrap();
         tab.profile(&info);
         assert!(tab.state.usage.snapshot.is_none());
         let snapshot = Snapshot {
@@ -1782,7 +2045,9 @@ async fn switching_antigravity_models_replaces_the_footer_pool() {
         tab.poll_usage().await;
         let screen = render_screen(&mut tab.state);
         assert!(
-            expected.iter().all(|value| screen.contains(value)),
+            expected
+                .iter()
+                .all(|value| screen.contains(value)),
             "{model}: {screen}"
         );
         assert!(!screen.contains(excluded));
@@ -1818,7 +2083,7 @@ fn compact_run_presentation_sets_activity_before_any_model_event() {
         assert_eq!(tab.state.activity.label(), "正在压缩上下文");
         tab.apply(page(
             vec![Update::agent(AgentEvent::ContextUsage {
-                estimated_input: 50000,
+                estimated_input: 50_000,
             })],
             vec![],
         ));

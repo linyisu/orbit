@@ -151,14 +151,18 @@ impl Clock {
             pauses: std::time::Duration::ZERO,
         }
     }
+
     fn pause(&mut self) {
-        self.paused.get_or_insert_with(std::time::Instant::now);
+        self.paused
+            .get_or_insert_with(std::time::Instant::now);
     }
+
     fn resume(&mut self) {
         if let Some(since) = self.paused.take() {
             self.pauses += since.elapsed();
         }
     }
+
     fn snapshot(&self) -> orbit_protocol::RunTiming {
         let elapsed = self
             .paused
@@ -166,7 +170,9 @@ impl Clock {
             .duration_since(self.started)
             .saturating_sub(self.pauses);
         orbit_protocol::RunTiming {
-            elapsed_ms: elapsed.as_millis().min(u64::MAX as u128) as u64,
+            elapsed_ms: elapsed
+                .as_millis()
+                .min(u64::MAX as u128) as u64,
             paused: self.paused.is_some(),
         }
     }
@@ -176,7 +182,11 @@ impl Clock {
 fn presentation(run: &orbit_store::types::Run) -> orbit_protocol::RunPresentation {
     orbit_protocol::RunPresentation {
         replayed: true,
-        images: run.images.iter().map(|image| image.name.clone()).collect(),
+        images: run
+            .images
+            .iter()
+            .map(|image| image.name.clone())
+            .collect(),
         image_assets: run.images.clone(),
         compact: run.prompt == "/compact",
         queued_input: run
@@ -203,13 +213,16 @@ impl View {
                 .map(|image| image.path.clone())
                 .collect();
         }
-        self.updates.push(update, self.published);
+        self.updates
+            .push(update, self.published);
     }
 
     #[cfg(test)]
     pub fn page(&mut self, after: usize) -> Result<Page> {
         let updates = self.updates.page(after)?;
-        self.published = self.published.max(after + updates.len());
+        self.published = self
+            .published
+            .max(after + updates.len());
         Ok(self.page_state(after, updates, self.updates.len()))
     }
 
@@ -253,7 +266,10 @@ impl View {
 
 impl Handle {
     pub async fn page(&self, viewer: u64, after: usize) -> Result<Page> {
-        let prefix = self.history.last().map_or(0, |run| run.end());
+        let prefix = self
+            .history
+            .last()
+            .map_or(0, |run| run.end());
         let updates = if after < prefix {
             history_page(&self.store, &self.info.id, &self.history, after).await?
         } else {
@@ -278,16 +294,24 @@ impl Handle {
 
     pub async fn release_viewer(&self, viewer: u64) {
         self.questions.release(viewer).await;
-        self.reset_progress_delivery(viewer).await;
+        self.reset_progress_delivery(viewer)
+            .await;
     }
 
     pub(super) async fn reset_progress_delivery(&self, viewer: u64) {
-        self.progress_delivery.lock().await.forget(viewer);
+        self.progress_delivery
+            .lock()
+            .await
+            .forget(viewer);
     }
 
     pub async fn running(&self) -> bool {
         let (result, response) = oneshot::channel();
-        if self.command(Command::Activity { result }).await.is_err() {
+        if self
+            .command(Command::Activity { result })
+            .await
+            .is_err()
+        {
             return false;
         }
         response.await.unwrap_or(false)
@@ -295,8 +319,13 @@ impl Handle {
 
     pub async fn subagent_page(&self, agent: &str, after: usize) -> Result<Page> {
         self.authorize_subagent(agent).await?;
-        let history = self.store.transcript_index(agent).await?;
-        let total = history.last().map_or(0, |run| run.end());
+        let history = self
+            .store
+            .transcript_index(agent)
+            .await?;
+        let total = history
+            .last()
+            .map_or(0, |run| run.end());
         ensure!(
             after <= total,
             "event cursor no longer exists; reopen the session"
@@ -307,7 +336,9 @@ impl Handle {
             published: 0,
             profile: None,
             images: Default::default(),
-            busy: history.last().is_some_and(|run| !run.finished),
+            busy: history
+                .last()
+                .is_some_and(|run| !run.finished),
             model: self.store.session(agent).await?.model,
             approvals: BTreeMap::new(),
             clock: None,
@@ -320,11 +351,17 @@ impl Handle {
 
     pub async fn authorize_subagent(&self, agent: &str) -> Result<()> {
         ensure!(
-            !self.policy.disabled(orbit_protocol::Capability::Subagents),
+            !self
+                .policy
+                .disabled(orbit_protocol::Capability::Subagents),
             "子 Agent 功能已禁用"
         );
         ensure!(
-            self.store.subagent_parent(agent).await?.as_deref() == Some(&self.info.id),
+            self.store
+                .subagent_parent(agent)
+                .await?
+                .as_deref()
+                == Some(&self.info.id),
             "该记录不是当前会话的子代理。"
         );
         Ok(())
@@ -392,7 +429,13 @@ impl Handle {
 
     /// Only expose attachments published in this session's transcript.
     pub async fn has_image(&self, path: &str) -> bool {
-        if self.view.lock().await.images.contains(path) {
+        if self
+            .view
+            .lock()
+            .await
+            .images
+            .contains(path)
+        {
             return true;
         }
         self.store
@@ -415,13 +458,15 @@ impl Handle {
         action: orbit_protocol::SessionAction,
     ) -> Result<orbit_protocol::Report> {
         let (result, response) = oneshot::channel();
-        self.command(Command::Action { action, result }).await?;
+        self.command(Command::Action { action, result })
+            .await?;
         response.await?
     }
 
     pub async fn usage_context(&self) -> Result<(orbit_model::types::ModelConfig, bool)> {
         let (result, response) = oneshot::channel();
-        self.command(Command::UsageContext { result }).await?;
+        self.command(Command::UsageContext { result })
+            .await?;
         Ok(response.await?)
     }
 
@@ -437,7 +482,9 @@ impl Handle {
             result,
         })
         .await?;
-        response.await.context("subagent request was interrupted")?
+        response
+            .await
+            .context("subagent request was interrupted")?
     }
 
     pub async fn input_queue(
@@ -484,7 +531,9 @@ impl Handle {
             result,
         })
         .await?;
-        response.await.context("file request was interrupted")?
+        response
+            .await
+            .context("file request was interrupted")?
     }
 
     pub async fn review(
@@ -499,7 +548,9 @@ impl Handle {
             result,
         })
         .await?;
-        response.await.context("review request was interrupted")?
+        response
+            .await
+            .context("review request was interrupted")?
     }
 
     pub async fn tasks(

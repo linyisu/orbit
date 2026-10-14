@@ -43,7 +43,9 @@ pub(super) async fn authorize(
     if let TaskActor::Session(session) = actor {
         session_in_project(conn, project, session).await?;
         ensure!(
-            owner.as_deref().is_none_or(|owner| owner == session),
+            owner
+                .as_deref()
+                .is_none_or(|owner| owner == session),
             "task is claimed by another session; only its owner or the user may update/release it"
         );
     }
@@ -93,7 +95,10 @@ pub(super) async fn hydrate(
         .order_by_asc(deps::Column::DependsOnId)
         .all(conn)
         .await?;
-    let targets: Vec<_> = edges.iter().map(|r| r.depends_on_id).collect();
+    let targets: Vec<_> = edges
+        .iter()
+        .map(|r| r.depends_on_id)
+        .collect();
     let completed: BTreeSet<_> = tasks::Entity::find()
         .filter(tasks::Column::Id.is_in(targets))
         .filter(tasks::Column::Status.eq("completed"))
@@ -111,7 +116,9 @@ pub(super) async fn hydrate(
     }
     rows.into_iter()
         .map(|row| {
-            let depends_on = dependencies.remove(&row.id).unwrap_or_default();
+            let depends_on = dependencies
+                .remove(&row.id)
+                .unwrap_or_default();
             Ok(ProjectTask {
                 owner_session_id: owners.get(&row.id).cloned(),
                 blocked_by: depends_on
@@ -148,7 +155,7 @@ pub(super) async fn one(
 pub(super) fn validate(title: &str, details: &str, priority: i64) -> Result<()> {
     ensure!(!title.trim().is_empty(), "task title must not be empty");
     ensure!(title.len() <= 512, "task title exceeds 512 bytes");
-    ensure!(details.len() <= 8192, "task details exceed 8192 bytes");
+    ensure!(details.len() <= 8_192, "task details exceed 8192 bytes");
     ensure!(
         (-100..=100).contains(&priority),
         "task priority must be between -100 and 100"
@@ -177,7 +184,9 @@ pub(crate) async fn release_unfinished(
         query = query.filter(tasks::Column::ProjectId.ne(project));
     }
     for task in query.all(conn).await? {
-        claims::Entity::delete_by_id(task.id).exec(conn).await?;
+        claims::Entity::delete_by_id(task.id)
+            .exec(conn)
+            .await?;
         if task.status == "in_progress" {
             tasks::ActiveModel {
                 id: Set(task.id),

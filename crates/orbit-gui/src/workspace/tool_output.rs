@@ -65,7 +65,9 @@ impl ToolOutput {
         };
         let displayed = content(&tool, stream);
         let args = serde_json::from_str::<serde_json::Value>(&tool.arguments).ok();
-        let command = args.as_ref().and_then(|args| args["command"].as_str());
+        let command = args
+            .as_ref()
+            .and_then(|args| args["command"].as_str());
         let command = command.unwrap_or(&tool.name).to_owned();
         Self {
             owner,
@@ -100,6 +102,8 @@ impl ToolOutput {
             && self.tool.arguments == tool.arguments
     }
 
+    /// Replayed events have new observer generations. A restored call can be opened explicitly, but
+    /// cannot take ownership of an older viewer.
     pub(super) fn sync(
         &mut self,
         tool: &ToolRun,
@@ -107,8 +111,6 @@ impl ToolOutput {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        // Replayed events have new observer generations. A restored call can
-        // be opened explicitly, but cannot take ownership of an older viewer.
         if self.disconnected || !self.matches(tool) || restoring {
             return;
         }
@@ -246,7 +248,11 @@ impl Render for ToolOutput {
                                     .text_ellipsis()
                                     .child(self.tool.name.clone()),
                             )
-                            .child(div().text_sm().child(status(&self.tool))),
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .child(status(&self.tool)),
+                            ),
                     )
                     .when(self.tool.name == "run_command", |view| {
                         view.child(
@@ -391,7 +397,11 @@ fn content(tool: &ToolRun, stream: Stream) -> String {
     if stream == Stream::Command {
         return serde_json::from_str::<serde_json::Value>(&tool.arguments)
             .ok()
-            .and_then(|args| args["command"].as_str().map(str::to_owned))
+            .and_then(|args| {
+                args["command"]
+                    .as_str()
+                    .map(str::to_owned)
+            })
             .unwrap_or_default();
     }
     if stream == Stream::Arguments {
@@ -405,7 +415,10 @@ fn content(tool: &ToolRun, stream: Stream) -> String {
         }
     }
     if stream == Stream::Stdout {
-        return tool.stdout_preview.clone().unwrap_or_default();
+        return tool
+            .stdout_preview
+            .clone()
+            .unwrap_or_default();
     }
     if stream == Stream::Stderr {
         return String::new();
@@ -479,7 +492,9 @@ fn note(tool: &ToolRun, stream: Stream) -> String {
     {
         return format!(
             "{} 单页快照 · 字节 {}–{} / 已保留 {}{}",
-            value["stream"].as_str().unwrap_or("输出"),
+            value["stream"]
+                .as_str()
+                .unwrap_or("输出"),
             value["offset"],
             value["next_offset"],
             value["total_retained_bytes"],

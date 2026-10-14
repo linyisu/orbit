@@ -36,12 +36,17 @@ impl<B: ModelBackend> Agent<B> {
             if cancellation.is_cancelled() {
                 return Err(AgentError::Cancelled);
             }
-            let parallel = self.tools.call_capabilities(&first).parallel_read();
+            let parallel = self
+                .tools
+                .call_capabilities(&first)
+                .parallel_read();
             let mut batch = vec![first];
             while parallel && batch.len() < MAX_PARALLEL_READS {
-                let Some(next) =
-                    calls.next_if(|call| self.tools.call_capabilities(call).parallel_read())
-                else {
+                let Some(next) = calls.next_if(|call| {
+                    self.tools
+                        .call_capabilities(call)
+                        .parallel_read()
+                }) else {
                     break;
                 };
                 batch.push(next);

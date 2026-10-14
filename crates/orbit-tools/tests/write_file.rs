@@ -52,7 +52,10 @@ fn call(path: &str, content: &str) -> ToolCall {
     ToolCall::function(
         "write-1",
         "write_file",
-        json!({ "path": path, "content": content }),
+        json!({
+            "path": path,
+            "content": content
+        }),
     )
 }
 
@@ -107,7 +110,9 @@ async fn requires_approval_then_creates_and_replaces_exact_utf8_with_mode_preser
         assert_eq!(preview.before.as_deref(), before);
         assert_eq!(preview.after, after);
         assert_eq!(
-            fs::read_to_string(root.0.join("file")).ok().as_deref(),
+            fs::read_to_string(root.0.join("file"))
+                .ok()
+                .as_deref(),
             before
         );
 
@@ -205,7 +210,12 @@ async fn restore_requires_a_matching_checkpoint_and_can_remove_created_files() {
 
     approval.decision.send(true).unwrap();
 
-    assert!(task.await.unwrap().unwrap().contains("\"restored\":true"));
+    assert!(
+        task.await
+            .unwrap()
+            .unwrap()
+            .contains("\"restored\":true")
+    );
     assert_eq!(
         fs::read_to_string(root.0.join("existing")).unwrap(),
         "original"
@@ -323,7 +333,12 @@ async fn refuses_changes_and_file_replacements_during_approval() {
         approval.decision.send(true).unwrap();
 
         assert!(task.await.unwrap().is_err());
-        assert_ne!(fs::read_to_string(&path).ok().as_deref(), Some("after"));
+        assert_ne!(
+            fs::read_to_string(&path)
+                .ok()
+                .as_deref(),
+            Some("after")
+        );
 
         no_temp(&root);
     }
@@ -333,7 +348,7 @@ async fn refuses_changes_and_file_replacements_during_approval() {
 async fn rejects_unsafe_paths_links_binary_large_files_and_missing_parents_before_asking() {
     let root = Fixture::new();
     fs::write(root.0.join("binary"), [0, 1, 2]).unwrap();
-    fs::write(root.0.join("large"), vec![b'x'; 1048577]).unwrap();
+    fs::write(root.0.join("large"), vec![b'x'; 1_048_577]).unwrap();
     fs::write(root.0.join("original"), "text").unwrap();
     fs::hard_link(root.0.join("original"), root.0.join("hard")).unwrap();
     symlink("original", root.0.join("symlink")).unwrap();
@@ -372,9 +387,12 @@ async fn rejects_unsafe_paths_links_binary_large_files_and_missing_parents_befor
     let (tool, _) = root.tool();
 
     assert!(
-        tool.execute(call("file", &"x".repeat(1048577)), CancellationToken::new())
-            .await
-            .is_err()
+        tool.execute(
+            call("file", &"x".repeat(1_048_577)),
+            CancellationToken::new()
+        )
+        .await
+        .is_err()
     );
     assert!(
         tool.execute(call("file", "a\0b"), CancellationToken::new())
@@ -396,7 +414,11 @@ async fn ordinary_config_filename_requires_approval_instead_of_a_blanket_ban() {
         CancellationToken::new(),
     );
 
-    request(&mut approvals).await.decision.send(false).unwrap();
+    request(&mut approvals)
+        .await
+        .decision
+        .send(false)
+        .unwrap();
 
     assert!(task.await.unwrap().is_err());
     assert!(!root.0.join("config.toml").exists());
@@ -406,7 +428,9 @@ async fn ordinary_config_filename_requires_approval_instead_of_a_blanket_ban() {
 async fn protected_custom_files_and_parent_replacement_cannot_be_written() {
     let root = Fixture::new();
     let mut workspace = Workspace::new(&root.0).unwrap();
-    workspace.protect(root.0.join("private.db")).unwrap();
+    workspace
+        .protect(root.0.join("private.db"))
+        .unwrap();
     let (sender, mut receiver) = approval::channel();
     let tool = WriteFile::new(workspace, sender);
 
@@ -436,7 +460,9 @@ async fn protects_descendants_of_session_lock_directory() {
     fs::create_dir(root.0.join("session-locks")).unwrap();
     fs::write(root.0.join("session-locks/id"), "").unwrap();
     let mut workspace = Workspace::new(&root.0).unwrap();
-    workspace.protect(root.0.join("session-locks")).unwrap();
+    workspace
+        .protect(root.0.join("session-locks"))
+        .unwrap();
     let (sender, mut receiver) = approval::channel();
     let tool = WriteFile::new(workspace, sender);
 

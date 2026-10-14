@@ -5,7 +5,9 @@ use orbit_store::store::Store;
 #[tokio::test]
 async fn current_context_includes_streaming_text_and_unresolved_tools_without_recovery() {
     let dir = tempfile::tempdir().unwrap();
-    let store = Store::open(dir.path().join("orbit.db")).await.unwrap();
+    let store = Store::open(dir.path().join("orbit.db"))
+        .await
+        .unwrap();
     let mut writer = store
         .create(dir.path().display().to_string(), "orbit-fast".into())
         .await
@@ -18,7 +20,9 @@ async fn current_context_includes_streaming_text_and_unresolved_tools_without_re
     let call = ToolCall::function(
         "orbit-call",
         "read_file",
-        serde_json::json!({"path":"orbit.rs"}),
+        serde_json::json!({
+            "path": "orbit.rs"
+        }),
     );
     let history = vec![
         ChatMessage::user("检查 Orbit"),
@@ -43,7 +47,10 @@ async fn current_context_includes_streaming_text_and_unresolved_tools_without_re
         "你好，正在检查".into(),
     )));
     journal.flush().await.unwrap();
-    let context = store.live_context(writer.id()).await.unwrap();
+    let context = store
+        .live_context(writer.id())
+        .await
+        .unwrap();
     assert_eq!(&context[..history.len()], &history);
     assert_eq!(
         context.last(),
@@ -68,13 +75,21 @@ async fn current_context_includes_streaming_text_and_unresolved_tools_without_re
         )
         .await
         .unwrap();
-    assert_eq!(store.live_context(writer.id()).await.unwrap(), saved);
+    assert_eq!(
+        store
+            .live_context(writer.id())
+            .await
+            .unwrap(),
+        saved
+    );
     let pending = vec![
         ChatMessage::user("检查 Orbit"),
         ChatMessage::assistant_tool_calls(vec![ToolCall::function(
             "pending",
             "read_file",
-            serde_json::json!({"path":"orbit.rs"}),
+            serde_json::json!({
+                "path": "orbit.rs"
+            }),
         )]),
     ];
 
@@ -91,9 +106,20 @@ async fn current_context_includes_streaming_text_and_unresolved_tools_without_re
         )
         .await
         .unwrap();
-    assert_eq!(store.live_context(writer.id()).await.unwrap(), pending);
     assert_eq!(
-        store.load(writer.id()).await.unwrap().runs[0].status,
+        store
+            .live_context(writer.id())
+            .await
+            .unwrap(),
+        pending
+    );
+    assert_eq!(
+        store
+            .load(writer.id())
+            .await
+            .unwrap()
+            .runs[0]
+            .status,
         "running"
     );
 }
@@ -101,7 +127,9 @@ async fn current_context_includes_streaming_text_and_unresolved_tools_without_re
 #[tokio::test]
 async fn context_handles_the_gap_before_checkpoint_and_failed_partial_answers() {
     let dir = tempfile::tempdir().unwrap();
-    let store = Store::open(dir.path().join("orbit.db")).await.unwrap();
+    let store = Store::open(dir.path().join("orbit.db"))
+        .await
+        .unwrap();
     let mut writer = store
         .create(dir.path().display().to_string(), "orbit-fast".into())
         .await
@@ -111,7 +139,10 @@ async fn context_handles_the_gap_before_checkpoint_and_failed_partial_answers() 
         .await
         .unwrap();
     assert_eq!(
-        store.live_context(writer.id()).await.unwrap(),
+        store
+            .live_context(writer.id())
+            .await
+            .unwrap(),
         vec![ChatMessage::user("Orbit 问题")]
     );
     writer
@@ -127,9 +158,13 @@ async fn context_handles_the_gap_before_checkpoint_and_failed_partial_answers() 
         )
         .await
         .unwrap();
-    let context = store.live_context(writer.id()).await.unwrap();
+    let context = store
+        .live_context(writer.id())
+        .await
+        .unwrap();
     assert!(context.contains(&ChatMessage::assistant("部分回答")));
-    assert!(context.iter().any(
-        |m| matches!(m, ChatMessage::User { content, .. } if content.contains("Orbit 请求失败"))
-    ));
+    assert!(context.iter().any(|m| matches!(
+        m,
+        ChatMessage::User { content, .. } if content.contains("Orbit 请求失败")
+    )));
 }

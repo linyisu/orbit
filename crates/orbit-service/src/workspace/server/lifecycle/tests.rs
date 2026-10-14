@@ -21,7 +21,10 @@ async fn equal_build_clients_reuse_the_same_database_endpoint() {
     let socket = root.path().join("service.sock");
     let listener = UnixListener::bind(&socket).unwrap();
     let args = ServiceOptions {
-        workspace: root.path().to_string_lossy().into_owned(),
+        workspace: root
+            .path()
+            .to_string_lossy()
+            .into_owned(),
         daemon: false,
         allow_mcp_start: false,
     };
@@ -54,16 +57,23 @@ async fn service_handover_respects_busy_refusal_and_uses_orderly_shutdown() {
     for (generation, busy) in [(0, false), (0, true), (u64::MAX, false)] {
         let root = tempfile::tempdir().unwrap();
         let args = ServiceOptions {
-            workspace: root.path().to_string_lossy().into_owned(),
+            workspace: root
+                .path()
+                .to_string_lossy()
+                .into_owned(),
             daemon: false,
             allow_mcp_start: false,
         };
         let (mut proxy, mut daemon) = UnixStream::pair().unwrap();
         let fake = tokio::spawn(async move {
-            let context: ConnectionContext = protocol::read(&mut daemon).await.unwrap();
+            let context: ConnectionContext = protocol::read(&mut daemon)
+                .await
+                .unwrap();
             assert!(!context.allow_mcp_start);
             assert!(matches!(
-                protocol::read::<Request>(&mut daemon).await.unwrap(),
+                protocol::read::<Request>(&mut daemon)
+                    .await
+                    .unwrap(),
                 Request::Hello {
                     version: protocol::VERSION,
                     ..
@@ -74,7 +84,10 @@ async fn service_handover_respects_busy_refusal_and_uses_orderly_shutdown() {
                 &Response::Hello {
                     version: protocol::VERSION,
                     build_generation: generation,
-                    workspace: context.workspace.to_string_lossy().into_owned(),
+                    workspace: context
+                        .workspace
+                        .to_string_lossy()
+                        .into_owned(),
                     capabilities: orbit_protocol::Capabilities {
                         system: "Linux".into(),
                         architecture: "x86_64".into(),
@@ -95,7 +108,9 @@ async fn service_handover_respects_busy_refusal_and_uses_orderly_shutdown() {
                 return;
             }
             assert!(matches!(
-                protocol::read::<Request>(&mut daemon).await.unwrap(),
+                protocol::read::<Request>(&mut daemon)
+                    .await
+                    .unwrap(),
                 Request::Shutdown
             ));
             let response = if busy {
@@ -103,7 +118,9 @@ async fn service_handover_respects_busy_refusal_and_uses_orderly_shutdown() {
             } else {
                 Response::Ok
             };
-            protocol::write(&mut daemon, &response).await.unwrap();
+            protocol::write(&mut daemon, &response)
+                .await
+                .unwrap();
         });
         let outcome = retire(
             &mut proxy,
@@ -134,12 +151,18 @@ async fn handover_negotiates_the_running_daemon_version_without_forcing_busy_shu
         let root = tempfile::tempdir().unwrap();
         let socket = root.path().join("service.sock");
         let listener = UnixListener::bind(&socket).unwrap();
-        let mut client = UnixStream::connect(&socket).await.unwrap();
+        let mut client = UnixStream::connect(&socket)
+            .await
+            .unwrap();
         let fake = tokio::spawn(async move {
             let (mut daemon, _) = listener.accept().await.unwrap();
-            let _: ConnectionContext = protocol::read(&mut daemon).await.unwrap();
+            let _: ConnectionContext = protocol::read(&mut daemon)
+                .await
+                .unwrap();
             assert!(matches!(
-                protocol::read::<Request>(&mut daemon).await.unwrap(),
+                protocol::read::<Request>(&mut daemon)
+                    .await
+                    .unwrap(),
                 Request::Hello {
                     version: protocol::VERSION,
                     ..
@@ -153,7 +176,9 @@ async fn handover_negotiates_the_running_daemon_version_without_forcing_busy_shu
             .unwrap();
             drop(daemon);
             let (mut daemon, _) = listener.accept().await.unwrap();
-            let context: ConnectionContext = protocol::read(&mut daemon).await.unwrap();
+            let context: ConnectionContext = protocol::read(&mut daemon)
+                .await
+                .unwrap();
             assert!(
                 matches!(protocol::read::<Request>(&mut daemon).await.unwrap(),
                 Request::Hello { version: requested, .. } if requested == version)
@@ -163,7 +188,10 @@ async fn handover_negotiates_the_running_daemon_version_without_forcing_busy_shu
                 &Response::Hello {
                     version,
                     build_generation: generation,
-                    workspace: context.workspace.to_string_lossy().into_owned(),
+                    workspace: context
+                        .workspace
+                        .to_string_lossy()
+                        .into_owned(),
                     capabilities: orbit_protocol::Capabilities {
                         system: "Linux".into(),
                         architecture: "x86_64".into(),
@@ -185,7 +213,9 @@ async fn handover_negotiates_the_running_daemon_version_without_forcing_busy_shu
                 );
             } else {
                 assert!(matches!(
-                    protocol::read::<Request>(&mut daemon).await.unwrap(),
+                    protocol::read::<Request>(&mut daemon)
+                        .await
+                        .unwrap(),
                     Request::Shutdown
                 ));
                 protocol::write(
@@ -205,7 +235,10 @@ async fn handover_negotiates_the_running_daemon_version_without_forcing_busy_shu
             retire(
                 &mut client,
                 &ServiceOptions {
-                    workspace: root.path().to_string_lossy().into_owned(),
+                    workspace: root
+                        .path()
+                        .to_string_lossy()
+                        .into_owned(),
                     daemon: false,
                     allow_mcp_start: false,
                 },
@@ -216,9 +249,19 @@ async fn handover_negotiates_the_running_daemon_version_without_forcing_busy_shu
         .await
         .unwrap();
         if busy {
-            assert!(result.unwrap_err().to_string().contains("active tasks"));
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("active tasks")
+            );
         } else if generation == u64::MAX {
-            assert!(result.unwrap_err().to_string().contains("请更新客户端"));
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("请更新客户端")
+            );
         } else {
             assert!(result.unwrap());
         }
@@ -266,11 +309,17 @@ async fn legacy_protocol_endpoints_retire_before_connecting_to_shared_service() 
             old_lock.try_lock().unwrap();
             let daemon = tokio::spawn(async move {
                 let (mut stream, _) = old_listener.accept().await.unwrap();
-                let _: ConnectionContext = protocol::read(&mut stream).await.unwrap();
-                assert!(
-                    matches!(protocol::read::<Request>(&mut stream).await.unwrap(),
-                    Request::Hello { version: received, .. } if received == version)
-                );
+                let _: ConnectionContext = protocol::read(&mut stream)
+                    .await
+                    .unwrap();
+                assert!(matches!(
+                    protocol::read::<Request>(&mut stream)
+                        .await
+                        .unwrap(),
+                    Request::Hello {
+                        version: received, ..
+                    } if received == version
+                ));
                 protocol::write(
                     &mut stream,
                     &Response::Hello {
@@ -290,7 +339,9 @@ async fn legacy_protocol_endpoints_retire_before_connecting_to_shared_service() 
                 .await
                 .unwrap();
                 assert!(matches!(
-                    protocol::read::<Request>(&mut stream).await.unwrap(),
+                    protocol::read::<Request>(&mut stream)
+                        .await
+                        .unwrap(),
                     Request::Shutdown
                 ));
                 protocol::write(
@@ -312,7 +363,10 @@ async fn legacy_protocol_endpoints_retire_before_connecting_to_shared_service() 
             let result = connect_or_start(
                 &socket,
                 &ServiceOptions {
-                    workspace: root.path().to_string_lossy().into_owned(),
+                    workspace: root
+                        .path()
+                        .to_string_lossy()
+                        .into_owned(),
                     daemon: false,
                     allow_mcp_start: false,
                 },
@@ -322,7 +376,12 @@ async fn legacy_protocol_endpoints_retire_before_connecting_to_shared_service() 
             )
             .await;
             if busy {
-                assert!(result.unwrap_err().to_string().contains("active tasks"));
+                assert!(
+                    result
+                        .unwrap_err()
+                        .to_string()
+                        .contains("active tasks")
+                );
                 assert!(
                     tokio::time::timeout(Duration::from_millis(30), listener.accept())
                         .await
@@ -331,7 +390,11 @@ async fn legacy_protocol_endpoints_retire_before_connecting_to_shared_service() 
             } else {
                 let connected = result.unwrap();
                 let _accepted = listener.accept().await.unwrap();
-                assert!(same_executable(&connected).await.unwrap());
+                assert!(
+                    same_executable(&connected)
+                        .await
+                        .unwrap()
+                );
             }
             daemon.await.unwrap();
         }
@@ -354,7 +417,9 @@ async fn legacy_aliases_share_one_listener_and_block_competing_daemons() {
             competing.try_lock(),
             Err(std::fs::TryLockError::WouldBlock)
         ));
-        let client = UnixStream::connect(alias).await.unwrap();
+        let client = UnixStream::connect(alias)
+            .await
+            .unwrap();
         let _accepted = listener.accept().await.unwrap();
         assert!(same_executable(&client).await.unwrap());
     }
@@ -396,10 +461,13 @@ async fn shared_server_negotiates_released_clients_and_rejects_unknown_versions(
             stop: tokio_util::sync::CancellationToken::new(),
             closing: AtomicBool::new(false),
         };
-        let (mut client, server) = tokio::io::duplex(8192);
+        let (mut client, server) = tokio::io::duplex(8_192);
         let worker = tokio::spawn(async move {
             let (reader, writer) = tokio::io::split(server);
-            service.client(reader, writer).await.unwrap();
+            service
+                .client(reader, writer)
+                .await
+                .unwrap();
         });
         protocol::write(
             &mut client,
@@ -421,22 +489,31 @@ async fn shared_server_negotiates_released_clients_and_rejects_unknown_versions(
         )
         .await
         .unwrap();
-        let response: Response = protocol::read(&mut client).await.unwrap();
+        let response: Response = protocol::read(&mut client)
+            .await
+            .unwrap();
         if compatible {
-            assert!(
-                matches!(response, Response::Hello { version: negotiated, .. } if negotiated == version)
-            );
+            assert!(matches!(
+                response,
+                Response::Hello {
+                    version: negotiated,
+                    ..
+                } if negotiated == version
+            ));
             protocol::write(&mut client, &Request::Shutdown)
                 .await
                 .unwrap();
             assert!(matches!(
-                protocol::read::<Response>(&mut client).await.unwrap(),
+                protocol::read::<Response>(&mut client)
+                    .await
+                    .unwrap(),
                 Response::Ok
             ));
         } else {
-            assert!(
-                matches!(response, Response::Error(error) if error.contains("protocol mismatch"))
-            );
+            assert!(matches!(
+                response,
+                Response::Error(error) if error.contains("protocol mismatch")
+            ));
         }
         worker.await.unwrap();
     }

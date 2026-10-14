@@ -36,7 +36,7 @@ impl Default for WorkspaceScanLimits {
 
 impl WorkspaceScanLimits {
     pub fn validate(&self) -> Result<(), &'static str> {
-        if !(1..=1024).contains(&self.max_scan_mib)
+        if !(1..=1_024).contains(&self.max_scan_mib)
             || !(1..=100_000).contains(&self.max_scan_entries)
         {
             return Err("max_scan_mib must be 1..1024 and max_scan_entries 1..100000");
@@ -107,7 +107,10 @@ impl WorkspaceScan {
             return Err(failed("workspace scan exceeds 64 directory levels"));
         }
 
-        for name in workspace.directory_entries(relative).map_err(failed)? {
+        for name in workspace
+            .directory_entries(relative)
+            .map_err(failed)?
+        {
             self.visited += 1;
 
             if self.visited > self.limits.max_scan_entries {
@@ -134,8 +137,13 @@ impl WorkspaceScan {
                 Ok(file) => {
                     use std::os::unix::fs::PermissionsExt;
 
-                    let executable =
-                        file.metadata().map_err(failed)?.permissions().mode() & 0o111 != 0;
+                    let executable = file
+                        .metadata()
+                        .map_err(failed)?
+                        .permissions()
+                        .mode()
+                        & 0o111
+                        != 0;
                     let available = (self.limits.max_scan_mib * MIB).saturating_sub(self.bytes);
                     let mut content = Vec::new();
                     file.take(available as u64 + 1)
@@ -151,9 +159,14 @@ impl WorkspaceScan {
 
                     self.bytes += content.len();
                     self.fingerprint.files.insert(
-                        path.to_str().ok_or_else(|| {
-                            failed("workspace scan paths must be valid UTF-8; no command was started")
-                        })?.to_owned(),
+                        path.to_str()
+                            .ok_or_else(|| {
+                                failed(
+                                    "workspace scan paths must be valid UTF-8; no command was \
+                                started",
+                                )
+                            })?
+                            .to_owned(),
                         FileFingerprint {
                             sha256: content_hash(&content),
                             executable,
@@ -164,11 +177,19 @@ impl WorkspaceScan {
                 }
 
                 Err(WorkspaceError::NotFile) => {
-                    if workspace.directory_entries(&path).is_ok() {
+                    if workspace
+                        .directory_entries(&path)
+                        .is_ok()
+                    {
                         self.fingerprint.directories.push(
-                            path.to_str().ok_or_else(|| {
-                                failed("workspace scan paths must be valid UTF-8; no command was started")
-                            })?.to_owned(),
+                            path.to_str()
+                                .ok_or_else(|| {
+                                    failed(
+                                        "workspace scan paths must be valid UTF-8; no command was \
+                                    started",
+                                    )
+                                })?
+                                .to_owned(),
                         );
 
                         self.scan_directory(workspace, &path, token, depth + 1)?;

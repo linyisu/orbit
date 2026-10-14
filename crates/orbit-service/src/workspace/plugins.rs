@@ -21,7 +21,11 @@ pub(super) async fn execute(
     // Capture the project once: another client moving this session later must
     // not redirect a plugin operation into its new workspace.
     let project_id = if matches!(&action, Action::Enable { .. }) {
-        handle.store.resolve_project(&info.workspace).await?.id
+        handle
+            .store
+            .resolve_project(&info.workspace)
+            .await?
+            .id
     } else {
         handle
             .store
@@ -64,7 +68,10 @@ pub(super) async fn execute(
                 "插件版本已变更，请重新检查后启用"
             );
             plugin.project_id = project.clone();
-            handle.store.enable_project_plugin(plugin).await?;
+            handle
+                .store
+                .enable_project_plugin(plugin)
+                .await?;
         }
         Action::Disable {
             marketplace_source,
@@ -80,25 +87,33 @@ pub(super) async fn execute(
     let inspections = marketplaces
         .iter()
         .flat_map(|market| {
-            market.plugins.iter().map(|plugin| Inspection {
-                source: market.source.clone(),
-                name: plugin.name.clone(),
-                package: crate::marketplaces::inspect_plugin(market, plugin)
-                    .map_err(|error| error.to_string()),
-            })
+            market
+                .plugins
+                .iter()
+                .map(|plugin| Inspection {
+                    source: market.source.clone(),
+                    name: plugin.name.clone(),
+                    package: crate::marketplaces::inspect_plugin(market, plugin)
+                        .map_err(|error| error.to_string()),
+                })
         })
         .collect();
     Ok(Catalog {
         marketplaces,
         project_id: project.clone(),
-        enabled: handle.store.project_plugins(project).await?,
+        enabled: handle
+            .store
+            .project_plugins(project)
+            .await?,
         inspections,
     })
 }
 
 async fn require_unused_source(store: &orbit_store::store::Store, source: &str) -> Result<()> {
     ensure!(
-        !store.marketplace_is_enabled(source).await?,
+        !store
+            .marketplace_is_enabled(source)
+            .await?,
         "该市场仍有插件被项目启用，请先在相关项目中停用插件，再刷新或移除市场"
     );
     Ok(())
@@ -119,7 +134,10 @@ mod tests {
         for name in ["first", "second"] {
             let root = directory.path().join(name);
             std::fs::create_dir(&root).unwrap();
-            let project = store.resolve_project(&root).await.unwrap();
+            let project = store
+                .resolve_project(&root)
+                .await
+                .unwrap();
             store
                 .enable_project_plugin(orbit_store::types::ProjectPlugin {
                     project_id: project.id.clone(),
@@ -135,17 +153,33 @@ mod tests {
             projects.push(project);
         }
 
-        assert!(require_unused_source(&store, "other/market").await.is_ok());
-        assert!(require_unused_source(&store, source).await.is_err());
+        assert!(
+            require_unused_source(&store, "other/market")
+                .await
+                .is_ok()
+        );
+        assert!(
+            require_unused_source(&store, source)
+                .await
+                .is_err()
+        );
         store
             .disable_project_plugin(&projects[0].id, source, "review")
             .await
             .unwrap();
-        assert!(require_unused_source(&store, source).await.is_err());
+        assert!(
+            require_unused_source(&store, source)
+                .await
+                .is_err()
+        );
         store
             .disable_project_plugin(&projects[1].id, source, "review")
             .await
             .unwrap();
-        assert!(require_unused_source(&store, source).await.is_ok());
+        assert!(
+            require_unused_source(&store, source)
+                .await
+                .is_ok()
+        );
     }
 }

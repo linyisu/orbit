@@ -61,7 +61,11 @@ impl Workspace {
         };
         panel.update(cx, |panel, _| panel.open = true);
         present(panel.clone(), window, cx);
-        panel.read(cx).list.focus_handle(cx).focus(window, cx);
+        panel
+            .read(cx)
+            .list
+            .focus_handle(cx)
+            .focus(window, cx);
         let panel = panel.downgrade();
         // Workspace is leased by this action; requests must start after it is
         // released so their scope checks cannot reenter the owner.
@@ -122,14 +126,22 @@ impl ChildAgents {
         self.poll = Task::ready(());
         match pending {
             Some(Operation::Send { id, .. }) => {
-                if let Some(row) = self.rows.iter_mut().find(|row| row.agent.id == id) {
+                if let Some(row) = self
+                    .rows
+                    .iter_mut()
+                    .find(|row| row.agent.id == id)
+                {
                     row.uncertain_send = true;
                     row.error = None;
                     row.receipt = None;
                 }
             }
             Some(Operation::Cancel { id, run }) => {
-                if let Some(row) = self.rows.iter_mut().find(|row| row.agent.id == id) {
+                if let Some(row) = self
+                    .rows
+                    .iter_mut()
+                    .find(|row| row.agent.id == id)
+                {
                     row.uncertain_cancel = Some(run);
                     row.error = None;
                     row.receipt = None;
@@ -176,17 +188,23 @@ impl ChildAgents {
 
     fn current_scope(&self, cx: &App) -> bool {
         self.requests.connected
-            && self.owner.upgrade().is_some_and(|owner| {
-                let workspace = owner.read(cx);
-                workspace.connected
-                    && workspace
-                        .child_agents
-                        .as_ref()
-                        .is_some_and(|panel| panel.entity_id() == self.id)
-                    && workspace.info.as_ref().is_some_and(|info| {
-                        self.belongs_to(&info.id, &info.workspace, &workspace.options)
-                    })
-            })
+            && self
+                .owner
+                .upgrade()
+                .is_some_and(|owner| {
+                    let workspace = owner.read(cx);
+                    workspace.connected
+                        && workspace
+                            .child_agents
+                            .as_ref()
+                            .is_some_and(|panel| panel.entity_id() == self.id)
+                        && workspace
+                            .info
+                            .as_ref()
+                            .is_some_and(|info| {
+                                self.belongs_to(&info.id, &info.workspace, &workspace.options)
+                            })
+                })
     }
 
     fn dispatch(
@@ -206,9 +224,14 @@ impl ChildAgents {
         let sent = self
             .owner
             .update(cx, |workspace, _| {
-                workspace.backend.as_ref().is_some_and(|backend| {
-                    backend.send(Command::Settings { request, result }).is_ok()
-                })
+                workspace
+                    .backend
+                    .as_ref()
+                    .is_some_and(|backend| {
+                        backend
+                            .send(Command::Settings { request, result })
+                            .is_ok()
+                    })
             })
             .unwrap_or(false);
         if !sent {
@@ -279,7 +302,11 @@ impl ChildAgents {
             .map(|row| (row.agent.id.clone(), row))
             .collect();
         for agent in agents {
-            if self.rows.iter().any(|row| row.agent.id == agent.id) {
+            if self
+                .rows
+                .iter()
+                .any(|row| row.agent.id == agent.id)
+            {
                 continue;
             }
             let row = if let Some(mut row) = old.remove(&agent.id) {
@@ -323,7 +350,10 @@ impl ChildAgents {
                     window,
                     move |panel, _, event, window, cx| match event {
                         InputEvent::Change => {
-                            if let Some(row) = panel.rows.iter_mut().find(|row| row.agent.id == id)
+                            if let Some(row) = panel
+                                .rows
+                                .iter_mut()
+                                .find(|row| row.agent.id == id)
                             {
                                 row.error = None;
                                 row.receipt = None;
@@ -364,7 +394,10 @@ impl ChildAgents {
             .iter()
             .any(|row| Some(&row.agent.id) == self.selected.as_ref())
         {
-            self.selected = self.rows.first().map(|row| row.agent.id.clone());
+            self.selected = self
+                .rows
+                .first()
+                .map(|row| row.agent.id.clone());
         }
         let selected = self
             .rows
@@ -398,13 +431,22 @@ impl ChildAgents {
         if !self.requests.can_mutate() {
             return;
         }
-        let Some(row) = self.rows.iter_mut().find(|row| row.agent.id == id) else {
+        let Some(row) = self
+            .rows
+            .iter_mut()
+            .find(|row| row.agent.id == id)
+        else {
             return;
         };
         if row.stopping.is_some() {
             return;
         }
-        let message = row.draft.read(cx).value().trim().to_owned();
+        let message = row
+            .draft
+            .read(cx)
+            .value()
+            .trim()
+            .to_owned();
         if message.is_empty() || message.len() > 32_768 {
             row.error = Some("消息需要 1–32768 字节。".into());
             cx.notify();
@@ -426,7 +468,11 @@ impl ChildAgents {
         if !self.requests.can_mutate() {
             return;
         }
-        let Some(row) = self.rows.iter().find(|row| row.agent.id == id) else {
+        let Some(row) = self
+            .rows
+            .iter()
+            .find(|row| row.agent.id == id)
+        else {
             return;
         };
         if row.stopping.is_some() || row.agent.run != run || row.agent.status != "running" {
@@ -534,14 +580,22 @@ impl ChildAgents {
             Ok(response) => response,
             Err(error) => {
                 self.requests.finish(serial);
-                if let Some(row) = self.rows.iter_mut().find(|row| row.agent.id == id) {
+                if let Some(row) = self
+                    .rows
+                    .iter_mut()
+                    .find(|row| row.agent.id == id)
+                {
                     row.error = Some(error);
                 }
                 cx.notify();
                 return;
             }
         };
-        if let Some(row) = self.rows.iter_mut().find(|row| row.agent.id == id) {
+        if let Some(row) = self
+            .rows
+            .iter_mut()
+            .find(|row| row.agent.id == id)
+        {
             row.error = None;
             row.receipt = None;
         }
@@ -554,7 +608,11 @@ impl ChildAgents {
                     return;
                 }
                 panel.requests.finish(serial);
-                let Some(row) = panel.rows.iter_mut().find(|row| row.agent.id == id) else {
+                let Some(row) = panel
+                    .rows
+                    .iter_mut()
+                    .find(|row| row.agent.id == id)
+                else {
                     return;
                 };
                 match (&operation, result) {
@@ -615,7 +673,12 @@ impl ChildAgents {
     }
 
     fn inspect(&mut self, id: &str, cx: &mut Context<Self>) {
-        if !self.current_scope(cx) || !self.rows.iter().any(|row| row.agent.id == id) {
+        if !self.current_scope(cx)
+            || !self
+                .rows
+                .iter()
+                .any(|row| row.agent.id == id)
+        {
             return;
         }
         let session = self.session.clone();
@@ -635,7 +698,9 @@ impl ChildAgents {
     fn start_poll(&mut self, cx: &mut Context<Self>) {
         self.poll = cx.spawn(async move |panel, cx| {
             loop {
-                cx.background_executor().timer(Duration::from_secs(2)).await;
+                cx.background_executor()
+                    .timer(Duration::from_secs(2))
+                    .await;
                 let keep = panel
                     .update(cx, |panel, cx| {
                         if !panel.current_scope(cx) {
@@ -674,10 +739,21 @@ impl ChildAgents {
         let inspect_id = id.clone();
         let stop_id = id.clone();
         let run = row.agent.run;
-        let sending = matches!(&self.requests.pending, Some(Operation::Send { id: target, .. }) if target == &id);
+        let sending = matches!(
+            &self.requests.pending,
+            Some(Operation::Send { id: target, .. }) if target == &id
+        );
         let stopping = row.stopping.is_some()
-            || matches!(&self.requests.pending, Some(Operation::Cancel { id: target, .. }) if target == &id);
-        let ready = !row.draft.read(cx).value().trim().is_empty();
+            || matches!(
+                &self.requests.pending,
+                Some(Operation::Cancel { id: target, .. }) if target == &id
+            );
+        let ready = !row
+            .draft
+            .read(cx)
+            .value()
+            .trim()
+            .is_empty();
         let can_mutate = self.requests.can_mutate();
         Some(
             v_flex()
@@ -944,11 +1020,13 @@ struct AgentList {
     items: Vec<AgentSummary>,
     selected: Option<IndexPath>,
 }
+
 impl ListDelegate for AgentList {
     type Item = ListItem;
     fn items_count(&self, _: usize, _: &App) -> usize {
         self.items.len()
     }
+
     fn render_item(
         &mut self,
         index: IndexPath,
@@ -967,7 +1045,12 @@ impl ListDelegate for AgentList {
                         .min_w_0()
                         .w_full()
                         .gap_1()
-                        .child(div().text_sm().text_ellipsis().child(item.task.clone()))
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_ellipsis()
+                                .child(item.task.clone()),
+                        )
                         .child(
                             div()
                                 .text_xs()
@@ -977,6 +1060,7 @@ impl ListDelegate for AgentList {
                 ),
         )
     }
+
     fn set_selected_index(
         &mut self,
         selected: Option<IndexPath>,
@@ -1011,6 +1095,7 @@ impl ListDelegate for AgentList {
 fn terminal(status: &str) -> bool {
     matches!(status, "completed" | "failed" | "cancelled" | "interrupted")
 }
+
 fn status_label(status: &str) -> &'static str {
     match status {
         "running" => "运行中",
@@ -1022,6 +1107,7 @@ fn status_label(status: &str) -> &'static str {
         _ => "状态未知",
     }
 }
+
 fn role_label(role: &str) -> &str {
     match role {
         "explore" => "探索",

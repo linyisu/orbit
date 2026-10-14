@@ -19,7 +19,9 @@ pub(super) fn draw(
         inner.height.saturating_sub(5),
     );
     let rows = panel.rows();
-    let max_offset = rows.len().saturating_sub(viewport.height as usize);
+    let max_offset = rows
+        .len()
+        .saturating_sub(viewport.height as usize);
     panel.offset = panel.offset.min(max_offset);
     let mut hits = Vec::new();
     for (index, row) in rows
@@ -31,7 +33,9 @@ pub(super) fn draw(
         let rect = Rect::new(
             viewport.x + row.indent,
             viewport.y + (index - panel.offset) as u16,
-            viewport.width.saturating_sub(row.indent),
+            viewport
+                .width
+                .saturating_sub(row.indent),
             1,
         );
 
@@ -59,7 +63,10 @@ pub(super) fn draw(
                     button,
                 );
                 hits.push((button, target));
-                x = button.right().saturating_add(2).min(rect.right());
+                x = button
+                    .right()
+                    .saturating_add(2)
+                    .min(rect.right());
             }
         } else if let Some(Target::Action(Action::Effort(i, 1))) = row.target {
             frame.render_widget(
@@ -91,7 +98,10 @@ pub(super) fn draw(
             let field = panel.field(id);
             let focused = !field.readonly
                 && (panel.focus == Target::Field(id)
-                    || matches!(panel.focus, Target::Choice(field_id, _) if field_id == id));
+                    || matches!(
+                        panel.focus,
+                        Target::Choice(field_id, _) if field_id == id
+                    ));
             let label_width = 20.min(rect.width);
             frame.render_widget(
                 Paragraph::new(field.label.clone()).style(Style::default().fg(if focused {
@@ -143,7 +153,10 @@ pub(super) fn draw(
                         button,
                     );
                     hits.push((button, target));
-                    x = button.right().saturating_add(1).min(rect.right());
+                    x = button
+                        .right()
+                        .saturating_add(1)
+                        .min(rect.right());
                 }
             } else {
                 let line = form::input_line(
@@ -180,7 +193,9 @@ pub(super) fn draw(
                 crate::tui::render::fit_label(&row.label, width as usize, false)
             };
             let hit = Rect::new(rect.x, rect.y, label.width() as u16, 1);
-            let hover = panel.pointer.is_some_and(|p| hit.contains(p));
+            let hover = panel
+                .pointer
+                .is_some_and(|p| hit.contains(p));
             let active = row.target.is_some()
                 && (hover || panel.pointer.is_none() && row.target == Some(panel.focus));
             frame.render_widget(
@@ -207,7 +222,9 @@ pub(super) fn draw(
                 .intersection(rect);
                 let label = crate::tui::render::padded_label("设置", button.width as usize, 1);
                 button.width = label.width() as u16;
-                let active = panel.pointer.is_some_and(|p| button.contains(p))
+                let active = panel
+                    .pointer
+                    .is_some_and(|p| button.contains(p))
                     || panel.pointer.is_none() && panel.focus == Target::Action(action);
                 frame.render_widget(
                     Paragraph::new(label).style(if active {
@@ -232,7 +249,11 @@ pub(super) fn draw(
         format!(
             "{} 个模型 · 已启用 {} 个",
             panel.models.len(),
-            panel.models.iter().filter(|m| m.entry.enabled).count()
+            panel
+                .models
+                .iter()
+                .filter(|m| m.entry.enabled)
+                .count()
         )
     };
 
@@ -250,7 +271,9 @@ pub(super) fn draw(
         (" 取消 ", Action::Cancel, viewport.x + 10),
     ] {
         let rect = Rect::new(x, inner.bottom().saturating_sub(1), label.width() as u16, 1);
-        let active = panel.pointer.is_some_and(|p| rect.contains(p))
+        let active = panel
+            .pointer
+            .is_some_and(|p| rect.contains(p))
             || panel.pointer.is_none() && panel.focus == Target::Action(action);
         frame.render_widget(
             Paragraph::new(label).style(if active {
@@ -269,7 +292,9 @@ pub(super) fn draw(
 }
 
 fn button_style(panel: &Panel, rect: Rect, target: Target, selected: bool) -> Style {
-    let hovered = panel.pointer.is_some_and(|p| rect.contains(p))
+    let hovered = panel
+        .pointer
+        .is_some_and(|p| rect.contains(p))
         || panel.pointer.is_none() && panel.focus == target;
     let mut style = if selected {
         Style::default()

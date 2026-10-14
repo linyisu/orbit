@@ -32,7 +32,9 @@ fn undo(run_id: i64, call_id: &str) -> Action {
 
 async fn request(backend: &Backend, request: Request) -> Result<Response, String> {
     let (result, receiver) = tokio::sync::oneshot::channel();
-    backend.send(Command::Settings { request, result }).unwrap();
+    backend
+        .send(Command::Settings { request, result })
+        .unwrap();
     tokio::time::timeout(Duration::from_secs(10), receiver)
         .await
         .expect("review request timed out")
@@ -42,8 +44,13 @@ async fn request(backend: &Backend, request: Request) -> Result<Response, String
 #[test]
 fn review_transport_validates_scope_and_receipt_before_completing_undo() {
     let directory = tempfile::tempdir().unwrap();
-    let workspace = directory.path().to_string_lossy().into_owned();
-    let marker = directory.path().join(".fixture-review-undone");
+    let workspace = directory
+        .path()
+        .to_string_lossy()
+        .into_owned();
+    let marker = directory
+        .path()
+        .join(".fixture-review-undone");
     let runtime = tokio::runtime::Runtime::new().unwrap();
     let (backend, mut events) = Backend::start(options(directory.path()), &runtime);
     runtime.block_on(async {
@@ -168,45 +175,93 @@ fn review_transport_validates_scope_and_receipt_before_completing_undo() {
 fn review_undo_uses_an_independent_handshake_and_keeps_the_main_connection_available() {
     let directory = tempfile::tempdir().unwrap();
     // Enable the fixture's append-only request log without changing its protocol behavior.
-    std::fs::write(directory.path().join(".fixture-recovery"), "").unwrap();
-    let workspace = directory.path().to_string_lossy().into_owned();
+    std::fs::write(
+        directory
+            .path()
+            .join(".fixture-recovery"),
+        "",
+    )
+    .unwrap();
+    let workspace = directory
+        .path()
+        .to_string_lossy()
+        .into_owned();
     let runtime = tokio::runtime::Runtime::new().unwrap();
     let (backend, mut events) = Backend::start(options(directory.path()), &runtime);
     runtime.block_on(async {
         let Event::Response(Response::Opened(info)) = until(&mut events, |event| {
             matches!(event, Event::Response(Response::Opened(_)))
-        }).await else { unreachable!() };
+        })
+        .await
+        else {
+            unreachable!()
+        };
         assert_eq!(info.id, "demo");
-        until(&mut events, |event| matches!(event, Event::Response(Response::Page(page)) if !page.more)).await;
+        until(&mut events, |event| {
+            matches!(
+                event,
+                Event::Response(Response::Page(page)) if !page.more
+            )
+        })
+        .await;
 
         let (result, receiver) = tokio::sync::oneshot::channel();
-        backend.send(Command::Settings {
-            request: review(&info.id, &workspace, undo(7, "fixture-write")),
-            result,
-        }).unwrap();
-        backend.send(Command::Request(Request::Poll { session: info.id.clone(), after: 0 })).unwrap();
+        backend
+            .send(Command::Settings {
+                request: review(&info.id, &workspace, undo(7, "fixture-write")),
+                result,
+            })
+            .unwrap();
+        backend
+            .send(Command::Request(Request::Poll {
+                session: info.id.clone(),
+                after: 0,
+            }))
+            .unwrap();
         let (completion, page) = tokio::join!(
             tokio::time::timeout(Duration::from_secs(10), receiver),
-            until(&mut events, |event| matches!(event, Event::Response(Response::Page(page)) if !page.updates.is_empty())),
+            until(&mut events, |event| matches!(
+                event,
+                Event::Response(Response::Page(page)) if !page.updates.is_empty()
+            )),
         );
-        assert!(matches!(completion.unwrap().unwrap().unwrap(), Response::Review(Snapshot::Undone { path, .. }) if path == "src/main.rs"));
-        let Event::Response(Response::Page(page)) = page else { unreachable!() };
+        assert!(matches!(
+            completion.unwrap().unwrap().unwrap(),
+            Response::Review(Snapshot::Undone { path, .. }) if path == "src/main.rs"
+        ));
+        let Event::Response(Response::Page(page)) = page else {
+            unreachable!()
+        };
         assert_eq!(page.model, "fixture::local");
         assert_eq!(page.next, 3);
         assert_eq!(page.updates.len(), 3);
         assert!(!page.busy);
 
         // This explicit poll occurs after the independent request has completed.
-        backend.send(Command::Request(Request::Poll { session: info.id.clone(), after: 0 })).unwrap();
-        until(&mut events, |event| matches!(event, Event::Response(Response::Page(page)) if page.updates.len() == 3)).await;
+        backend
+            .send(Command::Request(Request::Poll {
+                session: info.id.clone(),
+                after: 0,
+            }))
+            .unwrap();
+        until(&mut events, |event| {
+            matches!(
+                event,
+                Event::Response(Response::Page(page)) if page.updates.len() == 3
+            )
+        })
+        .await;
     });
     drop(backend);
-    let requests: Vec<serde_json::Value> =
-        std::fs::read_to_string(directory.path().join(".fixture-requests"))
-            .unwrap()
-            .lines()
-            .map(|line| serde_json::from_str(line).unwrap())
-            .collect();
+    let requests: Vec<serde_json::Value> = std::fs::read_to_string(
+        directory
+            .path()
+            .join(".fixture-requests"),
+    )
+    .unwrap()
+    .lines()
+    .map(|line| serde_json::from_str(line).unwrap())
+    .collect();
     let hellos: Vec<_> = requests
         .iter()
         .enumerate()
@@ -396,7 +451,11 @@ fn review_stage_and_unstage_transport_preserve_files_and_reject_stale_receipts()
         .unwrap() else {
             panic!("staged list expected")
         };
-        assert!(entries.iter().all(|entry| entry.path != "tracked.txt"));
+        assert!(
+            entries
+                .iter()
+                .all(|entry| entry.path != "tracked.txt")
+        );
     });
     let output = std::process::Command::new("git")
         .arg("-C")
@@ -407,7 +466,9 @@ fn review_stage_and_unstage_transport_preserve_files_and_reject_stale_receipts()
     assert!(output.status.success());
     assert_eq!(output.stdout, b"base\n");
     assert!(
-        !root.join(".fixture-review-undone").exists(),
+        !root
+            .join(".fixture-review-undone")
+            .exists(),
         "index updates must not use Orbit checkpoint undo"
     );
 }

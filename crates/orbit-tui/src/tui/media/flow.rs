@@ -51,7 +51,12 @@ fn layout_with_margin(
     }
     let mut flow = Flow {
         margin,
-        width: width.saturating_sub(bounds.suffix.as_ref().map_or(0, |s| s.width() as u16)),
+        width: width.saturating_sub(
+            bounds
+                .suffix
+                .as_ref()
+                .map_or(0, |s| s.width() as u16),
+        ),
         suffix: bounds.suffix,
         template: linked.clone(),
         prefix,
@@ -140,9 +145,11 @@ fn height(source: &Source) -> u16 {
 
 fn picture_bounds(linked: &LinkedLine, source: &Source, width: u16) -> (u16, u16) {
     let height = height(source);
-    linked.media_max_size.map_or((width, height), |size| {
-        (width.min(size.width), height.min(size.height))
-    })
+    linked
+        .media_max_size
+        .map_or((width, height), |size| {
+            (width.min(size.width), height.min(size.height))
+        })
 }
 
 pub(in crate::tui) fn requests(linked: &LinkedLine, width: u16) -> Vec<Request> {
@@ -194,7 +201,12 @@ impl Bounds {
                     .decorations
                     .iter()
                     .any(|range| range.start <= prefix_bytes && range.end >= end);
-            if !rail && !span.content.chars().all(char::is_whitespace) {
+            if !rail
+                && !span
+                    .content
+                    .chars()
+                    .all(char::is_whitespace)
+            {
                 break;
             }
             prefix_bytes = end;
@@ -212,7 +224,10 @@ impl Bounds {
             .last()
             .filter(|s| {
                 matches!(s.content.as_ref(), " │" | "│")
-                    && linked.decorations.iter().any(|r| r.end == bytes)
+                    && linked
+                        .decorations
+                        .iter()
+                        .any(|r| r.end == bytes)
             })
             .cloned();
         let padding = if suffix.is_some() {
@@ -222,7 +237,9 @@ impl Bounds {
                 .iter()
                 .rev()
                 .take_while(|s| {
-                    s.content.chars().all(char::is_whitespace)
+                    s.content
+                        .chars()
+                        .all(char::is_whitespace)
                         || matches!(s.content.as_ref(), " │" | "│")
                 })
                 .map(|s| s.content.len())
@@ -317,7 +334,13 @@ impl Flow {
         self.current.folds = self.template.folds.clone();
         self.current.disclosure = self.template.disclosure.clone();
         self.current.line.style = self.template.line.style;
-        self.bytes = self.prefix.line.spans.iter().map(|s| s.content.len()).sum();
+        self.bytes = self
+            .prefix
+            .line
+            .spans
+            .iter()
+            .map(|s| s.content.len())
+            .sum();
         self.columns = self.prefix.line.width() as u16;
         self.has_content = false;
     }
@@ -332,9 +355,14 @@ impl Flow {
             .map(|s| s.content.len())
             .sum::<usize>();
         self.columns += part.line.width() as u16;
-        self.current.line.spans.extend(part.line.spans);
+        self.current
+            .line
+            .spans
+            .extend(part.line.spans);
         self.current.links.extend(part.links);
-        self.current.decorations.extend(part.decorations);
+        self.current
+            .decorations
+            .extend(part.decorations);
         self.current.media.extend(part.media);
     }
 
@@ -342,7 +370,9 @@ impl Flow {
         let source = part.text();
         let mut start = 0;
         for chunk in source.split_inclusive('\n') {
-            let line = chunk.strip_suffix('\n').unwrap_or(chunk);
+            let line = chunk
+                .strip_suffix('\n')
+                .unwrap_or(chunk);
             self.text_row(slice(&part, start..start + line.len()));
             if chunk.ends_with('\n') {
                 self.flush();
@@ -358,7 +388,8 @@ impl Flow {
         }
         let ranges = crate::tui::transcript::wrap_ranges_from(
             &source,
-            self.width.saturating_sub(self.prefix.line.width() as u16),
+            self.width
+                .saturating_sub(self.prefix.line.width() as u16),
             self.width.saturating_sub(self.columns),
         );
 
@@ -425,7 +456,12 @@ impl Flow {
         let depth = self
             .boxes
             .iter()
-            .map(|b| b.picture.size.height.saturating_sub(b.picture.baseline + 1))
+            .map(|b| {
+                b.picture
+                    .size
+                    .height
+                    .saturating_sub(b.picture.baseline + 1)
+            })
             .max()
             .unwrap_or(0);
         let height = baseline + depth + 1;

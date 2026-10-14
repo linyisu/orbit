@@ -23,22 +23,28 @@ fn assistant_text(text: &str) -> ChatCompletion {
 async fn calibrated_budget_stops_request_and_reports_real_configured_limit() {
     let backend = MockModel::new(vec![]);
     let mut calibration = crate::calibration::TokenCalibration::default();
-    calibration.observe(1, Some(10000));
+    calibration.observe(1, Some(10_000));
     let agent = Agent::new(
         backend.clone(),
         ToolRegistry::new(),
         AgentConfig {
-            context_tokens: 8192,
+            context_tokens: 8_192,
             auto_compact: false,
             ..Default::default()
         },
     )
     .with_calibration("provider::model".into(), calibration);
-    let result = agent.run(request(), CancellationToken::new()).await;
+    let result = agent
+        .run(request(), CancellationToken::new())
+        .await;
 
-    assert!(
-        matches!(result,Err(AgentError::ContextBudget {estimated,limit:8192}) if estimated>8192)
-    );
+    assert!(matches!(
+        result,
+        Err(AgentError::ContextBudget {
+            estimated,
+            limit: 8_192,
+        }) if estimated > 8_192
+    ));
     assert!(backend.requests().is_empty());
 }
 
@@ -54,7 +60,7 @@ async fn compaction_without_an_archive_keeps_the_original_history() {
         MockModel::new(vec![]),
         ToolRegistry::new(),
         AgentConfig {
-            context_tokens: 8192,
+            context_tokens: 8_192,
             ..Default::default()
         },
     );
@@ -72,7 +78,7 @@ async fn compaction_without_an_archive_keeps_the_original_history() {
     agent
         .prepare_context(
             &mut automatic,
-            (128, 8192, false),
+            (128, 8_192, false),
             &mut thresholds,
             &Default::default(),
             CancellationToken::new(),
@@ -85,7 +91,7 @@ async fn compaction_without_an_archive_keeps_the_original_history() {
     let error = agent
         .prepare_context(
             &mut manual,
-            (128, 8192, true),
+            (128, 8_192, true),
             &mut thresholds,
             &Default::default(),
             CancellationToken::new(),
@@ -123,7 +129,10 @@ impl crate::checkpoint::ExecutionJournal for FailingJournal {
             {
                 Err(AgentError::Checkpoint("disk unavailable".into()))
             } else {
-                self.checkpoints.lock().unwrap().push(checkpoint);
+                self.checkpoints
+                    .lock()
+                    .unwrap()
+                    .push(checkpoint);
                 Ok(())
             }
         })
@@ -157,7 +166,7 @@ async fn cancellation_after_compaction_saves_the_published_context() {
     let history = vec![
         ChatMessage::system("coding rules"),
         ChatMessage::user("fix parser, preserve API"),
-        ChatMessage::assistant("investigation ".repeat(4000)),
+        ChatMessage::assistant("investigation ".repeat(4_000)),
         ChatMessage::user("continue"),
     ];
     let journal = Arc::new(FailingJournal {
@@ -169,7 +178,7 @@ async fn cancellation_after_compaction_saves_the_published_context() {
         MockModel::new(vec![response; 16]),
         ToolRegistry::new(),
         AgentConfig {
-            context_tokens: 16000,
+            context_tokens: 16_000,
             ..Default::default()
         },
     )
@@ -234,7 +243,11 @@ async fn durability_failure_stops_before_next_side_effect_on_all_adapters() {
                 checkpoints: Default::default(),
             }));
             let result = match adapter {
-                0 => agent.run(request(), CancellationToken::new()).await,
+                0 => {
+                    agent
+                        .run(request(), CancellationToken::new())
+                        .await
+                }
                 1 => {
                     agent
                         .run_with_events(request(), CancellationToken::new(), |_| {})
@@ -422,9 +435,12 @@ async fn document_vision_respects_model_and_image_capability_and_reaches_next_re
         assert_eq!(attachments, usize::from(supports_vision && image_enabled));
         assert_eq!(result.turns, 2);
         if attachments > 0 {
-            assert!(
-                matches!(requests[1].messages.last(), Some(ChatMessage::User { content, .. }) if content.contains("page 3.png") && !content.contains("read_image tool"))
-            );
+            assert!(matches!(
+                requests[1].messages.last(),
+                Some(ChatMessage::User { content, .. })
+                    if content.contains("page 3.png")
+                        && !content.contains("read_image tool")
+            ));
         }
     }
 }
@@ -576,12 +592,18 @@ async fn scenario_1_text_only_model_removes_read_image_and_fails_fast_on_invocat
     assert_eq!(requests.len(), 2);
     assert!(matches!(
         &requests[1].messages[2],
-        ChatMessage::Tool { content, .. } if content.contains("current model does not support image input")
+        ChatMessage::Tool { content, .. }
+            if content.contains("current model does not support image input")
     ));
-    assert!(!requests[1].messages.iter().any(|m| match m {
-        ChatMessage::User { attachments, .. } => !attachments.is_empty(),
-        _ => false,
-    }));
+    assert!(
+        !requests[1]
+            .messages
+            .iter()
+            .any(|m| match m {
+                ChatMessage::User { attachments, .. } => !attachments.is_empty(),
+                _ => false,
+            })
+    );
 }
 
 #[tokio::test]
@@ -604,16 +626,23 @@ async fn scenario_2_model_failure_preserves_attachments_in_checkpoint_losslessly
     tools.register(ImageTool);
     let agent = Agent::new(backend.clone(), tools, AgentConfig::default())
         .with_execution_journal(journal.clone());
-    let result = agent.run(request(), CancellationToken::new()).await;
+    let result = agent
+        .run(request(), CancellationToken::new())
+        .await;
 
     assert!(result.is_err());
 
     let checkpoints = journal.checkpoints.lock().unwrap();
-    let last_checkpoint = checkpoints.last().expect("saved checkpoint");
-    let has_raw_attachments = last_checkpoint.history.iter().any(|m| match m {
-        ChatMessage::User { attachments, .. } => !attachments.is_empty(),
-        _ => false,
-    });
+    let last_checkpoint = checkpoints
+        .last()
+        .expect("saved checkpoint");
+    let has_raw_attachments = last_checkpoint
+        .history
+        .iter()
+        .any(|m| match m {
+            ChatMessage::User { attachments, .. } => !attachments.is_empty(),
+            _ => false,
+        });
 
     assert!(
         has_raw_attachments,
@@ -641,17 +670,27 @@ async fn scenario_3_retry_after_model_failure_retains_image_attachment() {
     tools.register(ImageTool);
     let agent = Agent::new(backend.clone(), tools.clone(), AgentConfig::default())
         .with_execution_journal(journal.clone());
-    let _ = agent.run(request(), CancellationToken::new()).await;
+    let _ = agent
+        .run(request(), CancellationToken::new())
+        .await;
 
     let restored_history = {
         let checkpoints = journal.checkpoints.lock().unwrap();
-        checkpoints.last().unwrap().history.clone()
+        checkpoints
+            .last()
+            .unwrap()
+            .history
+            .clone()
     };
 
-    assert!(restored_history.iter().any(|m| match m {
-        ChatMessage::User { attachments, .. } => !attachments.is_empty(),
-        _ => false,
-    }));
+    assert!(
+        restored_history
+            .iter()
+            .any(|m| match m {
+                ChatMessage::User { attachments, .. } => !attachments.is_empty(),
+                _ => false,
+            })
+    );
 
     let follow_up_backend =
         MockModel::new(vec![assistant_text("I see the image and help you")]).with_vision(true);
@@ -666,10 +705,15 @@ async fn scenario_3_retry_after_model_failure_retains_image_attachment() {
     let requests = follow_up_backend.requests();
 
     assert_eq!(requests.len(), 1);
-    assert!(requests[0].messages.iter().any(|m| match m {
-        ChatMessage::User { attachments, .. } => !attachments.is_empty(),
-        _ => false,
-    }));
+    assert!(
+        requests[0]
+            .messages
+            .iter()
+            .any(|m| match m {
+                ChatMessage::User { attachments, .. } => !attachments.is_empty(),
+                _ => false,
+            })
+    );
 }
 
 #[tokio::test]
@@ -678,7 +722,8 @@ async fn scenario_4_resuming_failed_conversation_with_text_only_model() {
         ChatMessage::system("system"),
         ChatMessage::user("look at 1.jpg"),
         ChatMessage::user_with_attachments(
-            "The read_image tool loaded the following local image into this model request: 1.jpg. Analyze the actual image content directly.",
+            "The read_image tool loaded the following local image into this model request: 1.jpg. \
+                Analyze the actual image content directly.",
             vec![Attachment::Image {
                 lease: None,
                 name: "1.jpg".into(),
@@ -719,12 +764,14 @@ async fn scenario_4_resuming_failed_conversation_with_text_only_model() {
         }
     }
 
-    let recovered_image_msg = requests[0].messages.iter().find(|m| match m {
-        ChatMessage::User { content, .. } => {
-            content.contains("[Image omitted: current model does not support image input: 1.jpg]")
-        }
-        _ => false,
-    });
+    let recovered_image_msg = requests[0]
+        .messages
+        .iter()
+        .find(|m| match m {
+            ChatMessage::User { content, .. } => content
+                .contains("[Image omitted: current model does not support image input: 1.jpg]"),
+            _ => false,
+        });
 
     assert!(
         recovered_image_msg.is_some(),
@@ -808,10 +855,13 @@ async fn scenario_5_switching_conversation_with_historical_images_to_text_only_a
 
     assert_eq!(requests2.len(), 1);
     assert!(
-        requests2[0].messages.iter().any(|m| match m {
-            ChatMessage::User { attachments, .. } => !attachments.is_empty(),
-            _ => false,
-        }),
+        requests2[0]
+            .messages
+            .iter()
+            .any(|m| match m {
+                ChatMessage::User { attachments, .. } => !attachments.is_empty(),
+                _ => false,
+            }),
         "vision model must receive restored raw image attachment"
     );
 }
@@ -840,14 +890,16 @@ async fn token_exhaustion_does_not_retry_or_execute_partial_tools() {
             }));
             let agent = Agent::new(backend.clone(), tools, AgentConfig::default());
             let mut req = request();
-            req.max_tokens = Some(16384);
+            req.max_tokens = Some(16_384);
             let result = if streaming {
                 let (tx, _rx) = mpsc::channel(64);
                 agent
                     .run_with_agent_events(req, CancellationToken::new(), tx)
                     .await
             } else {
-                agent.run(req, CancellationToken::new()).await
+                agent
+                    .run(req, CancellationToken::new())
+                    .await
             };
 
             let error = result.unwrap_err().to_string();
@@ -857,7 +909,7 @@ async fn token_exhaustion_does_not_retry_or_execute_partial_tools() {
                 "{error}"
             );
             assert_eq!(backend.requests().len(), 1);
-            assert_eq!(backend.requests()[0].max_tokens, Some(16384));
+            assert_eq!(backend.requests()[0].max_tokens, Some(16_384));
         }
     }
 }
@@ -916,7 +968,11 @@ async fn usage_only_tail_does_not_hide_a_truncated_stream_reason() {
                 .unwrap_err()
         };
 
-        assert!(error.to_string().contains("输出达到上限"));
+        assert!(
+            error
+                .to_string()
+                .contains("输出达到上限")
+        );
     }
 }
 
@@ -957,8 +1013,20 @@ impl ModelBackend for SparseToolModel {
 async fn sparse_content_indices_execute_only_real_tools_in_both_stream_paths() {
     for channel in [false, true] {
         let calls = vec![
-            ToolCall::function("first", "echo", json!({ "text": "one" })),
-            ToolCall::function("second", "echo", json!({ "text": "two" })),
+            ToolCall::function(
+                "first",
+                "echo",
+                json!({
+                    "text": "one"
+                }),
+            ),
+            ToolCall::function(
+                "second",
+                "echo",
+                json!({
+                    "text": "two"
+                }),
+            ),
         ];
         let mock = MockModel::new(vec![
             ChatCompletion {
@@ -977,7 +1045,9 @@ async fn sparse_content_indices_execute_only_real_tools_in_both_stream_paths() {
         tools.register(ClosureTool::new(
             "echo",
             "echo",
-            json!({ "type": "object" }),
+            json!({
+                "type": "object"
+            }),
             |args, _| async move { Ok(args.to_string()) },
         ));
         let agent = Agent::new(SparseToolModel(mock.clone()), tools, AgentConfig::default());
@@ -1005,12 +1075,14 @@ async fn sparse_content_indices_execute_only_real_tools_in_both_stream_paths() {
         };
 
         assert_eq!(tool_calls, &calls);
-        assert!(
-            matches!(&sent[1].messages[2], ChatMessage::Tool { tool_call_id, .. } if tool_call_id == "first")
-        );
-        assert!(
-            matches!(&sent[1].messages[3], ChatMessage::Tool { tool_call_id, .. } if tool_call_id == "second")
-        );
+        assert!(matches!(
+            &sent[1].messages[2],
+            ChatMessage::Tool { tool_call_id, .. } if tool_call_id == "first"
+        ));
+        assert!(matches!(
+            &sent[1].messages[3],
+            ChatMessage::Tool { tool_call_id, .. } if tool_call_id == "second"
+        ));
     }
 }
 
@@ -1114,11 +1186,17 @@ async fn malformed_ids_stop_before_tools_or_a_followup_request() {
                     .run_with_agent_events(request(), CancellationToken::new(), tx)
                     .await
             } else {
-                agent.run(request(), CancellationToken::new()).await
+                agent
+                    .run(request(), CancellationToken::new())
+                    .await
             }
             .unwrap_err();
 
-            assert!(error.to_string().contains("empty or duplicate"));
+            assert!(
+                error
+                    .to_string()
+                    .contains("empty or duplicate")
+            );
             assert_eq!(mock.requests().len(), 1);
         }
     }
@@ -1252,11 +1330,16 @@ async fn executes_tool_and_sends_result_back_to_model() {
         json!({
             "type": "object",
             "properties": {
-                "value": { "type": "string" }
+                "value": {
+                    "type": "string"
+                }
             }
         }),
         |arguments, _cancellation| async move {
-            Ok(arguments["value"].as_str().unwrap_or_default().to_owned())
+            Ok(arguments["value"]
+                .as_str()
+                .unwrap_or_default()
+                .to_owned())
         },
     ));
     let agent = Agent::new(model.clone(), tools, AgentConfig::default());
@@ -1318,7 +1401,9 @@ async fn invalid_tool_arguments_are_returned_to_model() {
     tools.register(ClosureTool::new(
         "echo",
         "Echo a value",
-        json!({ "type": "object" }),
+        json!({
+            "type": "object"
+        }),
         |_arguments, _cancellation| async {
             Err(ToolError::ExecutionFailed("should not execute".to_owned()))
         },
@@ -1353,7 +1438,9 @@ async fn default_budget_allows_long_tasks() {
                 .run_with_events(request(), CancellationToken::new(), |_| {})
                 .await
         } else {
-            agent.run(request(), CancellationToken::new()).await
+            agent
+                .run(request(), CancellationToken::new())
+                .await
         }
         .unwrap();
 
@@ -1441,9 +1528,15 @@ async fn max_tool_calls_stops_tool_execution() {
             .unwrap()
             .iter()
             .all(|checkpoint| {
-                !checkpoint.history.iter().any(|message| {
-            matches!(message, ChatMessage::Assistant { tool_calls, .. } if !tool_calls.is_empty())
-        })
+                !checkpoint
+                    .history
+                    .iter()
+                    .any(|message| {
+                        matches!(
+                            message,
+                            ChatMessage::Assistant { tool_calls, .. } if !tool_calls.is_empty()
+                        )
+                    })
             })
     );
 }
@@ -1516,7 +1609,7 @@ fn usage_events_combine_input_and_output_counts() {
         &mut usage,
         Some(Usage {
             prompt_tokens: None,
-            completion_tokens: Some(16384),
+            completion_tokens: Some(16_384),
             total_tokens: None,
             ..Default::default()
         }),
@@ -1526,7 +1619,7 @@ fn usage_events_combine_input_and_output_counts() {
         usage,
         Some(Usage {
             prompt_tokens: Some(321),
-            completion_tokens: Some(16384),
+            completion_tokens: Some(16_384),
             total_tokens: None,
             ..Default::default()
         })

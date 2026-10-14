@@ -194,7 +194,8 @@ mod auth_tests {
         std::fs::create_dir(&project).unwrap();
 
         for auth in [
-            root.path().join("home/.config/orbit/auth"),
+            root.path()
+                .join("home/.config/orbit/auth"),
             project.join("private/config/orbit/auth"),
         ] {
             let workspace = protected_workspace(
@@ -216,10 +217,22 @@ mod auth_tests {
             std::fs::create_dir_all(&auth).unwrap();
             std::fs::write(auth.join("test.json"), "secret").unwrap();
 
-            assert!(workspace.authorize_read(&auth.join("test.json")).is_err());
+            assert!(
+                workspace
+                    .authorize_read(&auth.join("test.json"))
+                    .is_err()
+            );
             if let Ok(relative) = auth.strip_prefix(&project) {
-                assert!(workspace.open_read(&relative.join("test.json")).is_err());
-                assert!(workspace.write_parent(&relative.join("test.json")).is_err());
+                assert!(
+                    workspace
+                        .open_read(&relative.join("test.json"))
+                        .is_err()
+                );
+                assert!(
+                    workspace
+                        .write_parent(&relative.join("test.json"))
+                        .is_err()
+                );
             }
         }
     }

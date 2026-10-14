@@ -18,9 +18,9 @@ use std::{
 const MAX_ENTRIES: usize = 10_000;
 const MAX_SKILLS: usize = 128;
 const MAX_DEPTH: usize = 12;
-const MAX_FILE_BYTES: u64 = 8 * 1024 * 1024;
-const MAX_PACKAGE_BYTES: u64 = 32 * 1024 * 1024;
-const MAX_SNAPSHOT_BYTES: u64 = 128 * 1024 * 1024;
+const MAX_FILE_BYTES: u64 = 8 * 1_024 * 1_024;
+const MAX_PACKAGE_BYTES: u64 = 32 * 1_024 * 1_024;
+const MAX_SNAPSHOT_BYTES: u64 = 128 * 1_024 * 1_024;
 const LIFETIME: Duration = Duration::from_secs(15 * 60);
 
 pub(super) struct Scan {
@@ -42,8 +42,10 @@ impl Scan {
         existing: HashSet<String>,
     ) -> Result<Self> {
         ensure!(!source.trim().is_empty(), "请输入技能来源");
-        ensure!(source.len() <= 4096, "技能来源地址过长");
-        let storage = tempfile::Builder::new().prefix("orbit-skills-").tempdir()?;
+        ensure!(source.len() <= 4_096, "技能来源地址过长");
+        let storage = tempfile::Builder::new()
+            .prefix("orbit-skills-")
+            .tempdir()?;
         let root =
             source::acquire(source.trim(), &workspace, home.as_deref(), storage.path()).await?;
         // Keeping all copies under a private temporary directory makes the selected
@@ -83,10 +85,13 @@ impl Scan {
         let root = fs::canonicalize(root).context("无法读取技能来源")?;
         let root = if root.is_file() {
             ensure!(
-                root.file_name().is_some_and(|name| name == "SKILL.md"),
+                root.file_name()
+                    .is_some_and(|name| name == "SKILL.md"),
                 "请选择 SKILL.md 文件或技能目录"
             );
-            root.parent().context("技能目录无效")?.to_path_buf()
+            root.parent()
+                .context("技能目录无效")?
+                .to_path_buf()
         } else {
             root
         };
@@ -132,12 +137,17 @@ impl Scan {
                     "技能 {} 缺少说明或正文，无法加载；请补全 SKILL.md 后重新扫描",
                     directory.display()
                 );
-                let title = fields.get("name").cloned().unwrap_or_else(|| name.clone());
+                let title = fields
+                    .get("name")
+                    .cloned()
+                    .unwrap_or_else(|| name.clone());
                 let relative = directory.strip_prefix(&root)?;
                 let path = if relative.as_os_str().is_empty() {
                     ".".into()
                 } else {
-                    let relative = relative.to_str().context("技能目录名称必须为 UTF-8")?;
+                    let relative = relative
+                        .to_str()
+                        .context("技能目录名称必须为 UTF-8")?;
                     #[cfg(unix)]
                     ensure!(!relative.contains('\\'), "技能目录名称不能包含反斜线");
                     relative.replace('\\', "/")
@@ -201,7 +211,9 @@ impl Scan {
             .candidates
             .iter()
             .fold(HashMap::new(), |mut counts, candidate| {
-                *counts.entry(candidate.name.clone()).or_insert(0) += 1;
+                *counts
+                    .entry(candidate.name.clone())
+                    .or_insert(0) += 1;
                 counts
             });
         for candidate in &mut self.candidates {
@@ -264,7 +276,10 @@ impl Scan {
             .tempdir_in(&target)?;
         for (index, _) in &selected {
             copy_directory(
-                &self.storage.path().join(format!("package-{index}")),
+                &self
+                    .storage
+                    .path()
+                    .join(format!("package-{index}")),
                 &staging.path().join(index.to_string()),
                 0,
                 &mut 0,
@@ -303,9 +318,11 @@ impl Scan {
 fn project_root(workspace: &Path) -> PathBuf {
     crate::instructions::project_root(workspace).unwrap_or_else(|| workspace.to_path_buf())
 }
+
 fn ignored(name: &std::ffi::OsStr) -> bool {
     name == ".git" || name == "node_modules" || name == "target" || name == ".venv"
 }
+
 fn validate_relative(path: &str) -> Result<()> {
     ensure!(
         !path.is_empty()
@@ -318,6 +335,7 @@ fn validate_relative(path: &str) -> Result<()> {
     );
     Ok(())
 }
+
 fn reject_symlink_ancestors(path: &Path) -> Result<()> {
     for part in path.ancestors() {
         match fs::symlink_metadata(part) {
@@ -332,6 +350,7 @@ fn reject_symlink_ancestors(path: &Path) -> Result<()> {
     }
     Ok(())
 }
+
 fn copy_directory(
     source: &Path,
     destination: &Path,
@@ -378,7 +397,9 @@ fn copy_directory(
                 use std::os::unix::fs::OpenOptionsExt;
                 options.custom_flags(libc::O_NOFOLLOW);
             }
-            let mut input = options.open(entry.path())?.take(MAX_FILE_BYTES + 1);
+            let mut input = options
+                .open(entry.path())?
+                .take(MAX_FILE_BYTES + 1);
             let mut content = Vec::new();
             input.read_to_end(&mut content)?;
             ensure!(

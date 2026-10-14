@@ -64,12 +64,26 @@ impl Tool for ReadCommandOutput {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition::function(
             "read_command_output",
-            "Read one page of a run_command stdout or stderr log from the CURRENT task. run_command returns an opaque output_id; never guess file paths. offset and max_bytes are byte counts; use next_offset to continue across UTF-8 boundaries. Logs are private temporary files under /tmp, capped at 16 MiB per stream and 128 MiB per task, and may be evicted when newer logs need space. They are deleted when the task finishes, fails or is cancelled, and are unavailable after restart or in a later task. Do not retry expired IDs; use the bounded result already in history or ask before rerunning a command.",
+            "Read one page of a run_command stdout or stderr log from the CURRENT task. \
+                run_command returns an opaque output_id; never guess file paths. offset and \
+                max_bytes are byte counts; use next_offset to continue across UTF-8 boundaries. \
+                Logs are private temporary files under /tmp, capped at 16 MiB per stream and 128 \
+                MiB per task, and may be evicted when newer logs need space. They are deleted \
+                when the task finishes, fails or is cancelled, and are unavailable after restart \
+                or in a later task. Do not retry expired IDs; use the bounded result already in \
+                history or ask before rerunning a command.",
             json!({
                 "type": "object",
                 "properties": {
-                    "output_id": { "type": "string", "description": "Opaque output_id from run_command" },
-                    "stream": { "type": "string", "enum": ["stdout", "stderr"], "default": "stdout" },
+                    "output_id": {
+                        "type": "string",
+                        "description": "Opaque output_id from run_command"
+                    },
+                    "stream": {
+                        "type": "string",
+                        "enum": ["stdout", "stderr"],
+                        "default": "stdout"
+                    },
                     "offset": {
                         "type": "integer",
                         "minimum": 0,
@@ -77,7 +91,12 @@ impl Tool for ReadCommandOutput {
                         "default": 0,
                         "description": "Zero-based byte offset"
                     },
-                    "max_bytes": { "type": "integer", "minimum": 1, "maximum": MAX_TEXT_OUTPUT_BYTES, "default": MAX_TEXT_OUTPUT_BYTES }
+                    "max_bytes": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": MAX_TEXT_OUTPUT_BYTES,
+                        "default": MAX_TEXT_OUTPUT_BYTES
+                    }
                 },
                 "required": ["output_id"],
                 "additionalProperties": false
@@ -95,9 +114,12 @@ impl Tool for ReadCommandOutput {
                 return Err(ToolError::Cancelled);
             }
 
-            let lease = self.outputs.lease().ok_or_else(|| failed(
-                "command output is unavailable or expired; raw logs exist only during their originating task",
-            ))?;
+            let lease = self.outputs.lease().ok_or_else(|| {
+                failed(
+                    "command output is unavailable or expired; raw logs exist only during their \
+                    originating task",
+                )
+            })?;
             let token = cancellation.clone();
             let task = tokio::task::spawn_blocking(move || {
                 read(lease.path().to_owned(), arguments, token)
@@ -105,7 +127,9 @@ impl Tool for ReadCommandOutput {
 
             tokio::select! {
                 _ = cancellation.cancelled() => Err(ToolError::Cancelled),
-                result = task => result.map_err(|error| ToolError::ExecutionFailed(error.to_string()))?,
+                result = task => {
+                    result.map_err(|error| ToolError::ExecutionFailed(error.to_string()))?
+                }
             }
             .map(ToolOutput::text)
         })
@@ -123,7 +147,8 @@ fn validate(arguments: &Arguments) -> Result<(), ToolError> {
         || !(1..=MAX_TEXT_OUTPUT_BYTES).contains(&arguments.max_bytes)
     {
         return Err(invalid(
-            "output_id must be an Orbit command id; offset must be 0..16777216 and max_bytes 1..32768",
+            "output_id must be an Orbit command id; offset must be 0..16777216 and max_bytes \
+                1..32768",
         ));
     }
 
@@ -149,7 +174,9 @@ fn read(
     let path = directory.join(name);
     let metadata = std::fs::symlink_metadata(&path).map_err(|_| {
         ToolError::ExecutionFailed(
-            "command output was not found in the current task; it may have expired, been evicted or was not retained. Do not automatically rerun the command".into(),
+            "command output was not found in the current task; it may have expired, been evicted \
+                or was not retained. Do not automatically rerun the command"
+                .into(),
         )
     })?;
 
@@ -176,7 +203,8 @@ fn read(
         .map_err(failed)?;
     let remaining = total_bytes.saturating_sub(arguments.offset);
     let mut bytes = vec![0; remaining.min(arguments.max_bytes.saturating_add(3) as u64) as usize];
-    file.read_exact(&mut bytes).map_err(failed)?;
+    file.read_exact(&mut bytes)
+        .map_err(failed)?;
 
     if cancellation.is_cancelled() {
         return Err(ToolError::Cancelled);
@@ -250,7 +278,11 @@ mod tests {
         let task = outputs.begin_run().unwrap();
         let log = outputs.create_log().await.unwrap();
         let id = log.id().to_owned();
-        let path = outputs.lease().unwrap().path().to_owned();
+        let path = outputs
+            .lease()
+            .unwrap()
+            .path()
+            .to_owned();
         std::fs::write(path.join(format!("{id}.stdout")), "甲乙丙").unwrap();
         drop(log);
         let call = |offset| {
@@ -258,7 +290,9 @@ mod tests {
                 "page",
                 "read_command_output",
                 json!({
-                    "output_id":id,"offset":offset,"max_bytes":4
+                    "output_id": id,
+                    "offset": offset,
+                    "max_bytes": 4
                 }),
             )
         };

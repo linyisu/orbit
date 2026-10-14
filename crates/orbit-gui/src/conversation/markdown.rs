@@ -56,7 +56,13 @@ fn repair(source: &str, text: &[Range<usize>], edits: &mut Vec<(usize, &'static 
             let after = &source[offset + 2..];
             if before.ends_with('*')
                 || after.starts_with('*')
-                || before.bytes().rev().take_while(|ch| *ch == b'\\').count() % 2 != 0
+                || before
+                    .bytes()
+                    .rev()
+                    .take_while(|ch| *ch == b'\\')
+                    .count()
+                    % 2
+                    != 0
             {
                 continue;
             }
@@ -79,7 +85,10 @@ fn repair(source: &str, text: &[Range<usize>], edits: &mut Vec<(usize, &'static 
 }
 
 fn is_cjk(ch: char) -> bool {
-    matches!(ch, '\u{2e80}'..='\u{9fff}' | '\u{f900}'..='\u{faff}' | '\u{20000}'..='\u{323af}')
+    matches!(
+        ch,
+        '\u{2e80}'..='\u{9fff}' | '\u{f900}'..='\u{faff}' | '\u{20000}'..='\u{323af}'
+    )
 }
 
 #[cfg(test)]

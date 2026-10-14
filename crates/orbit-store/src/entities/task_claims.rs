@@ -6,6 +6,7 @@ pub struct Model {
     pub task_id: i64,
     pub session_id: String,
 }
+
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
 pub enum Relation {}
 impl ActiveModelBehavior for ActiveModel {}

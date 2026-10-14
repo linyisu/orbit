@@ -27,13 +27,21 @@ pub async fn connect(path: impl AsRef<Path>) -> DatabaseConnection {
                 .create_if_missing(true)
                 .foreign_keys(false)
         });
-    sea_orm::Database::connect(options).await.unwrap()
+    sea_orm::Database::connect(options)
+        .await
+        .unwrap()
 }
 
 pub async fn legacy_schema(db: &DatabaseConnection, version: usize) {
     assert!(version <= 27);
-    for migration in Migrator::migrations().into_iter().take(version) {
-        migration.up(&SchemaManager::new(db)).await.unwrap();
+    for migration in Migrator::migrations()
+        .into_iter()
+        .take(version)
+    {
+        migration
+            .up(&SchemaManager::new(db))
+            .await
+            .unwrap();
     }
     sqlite::set_schema_version(db, version.try_into().unwrap())
         .await
@@ -54,10 +62,19 @@ pub async fn insert(
 ) -> Result<ExecResult, DbErr> {
     let query = Query::insert()
         .into_table(id(table))
-        .columns(values.iter().map(|(column, _)| id(column)))
-        .values_panic(values.iter().map(|(_, value)| value.clone().into()))
+        .columns(
+            values
+                .iter()
+                .map(|(column, _)| id(column)),
+        )
+        .values_panic(
+            values
+                .iter()
+                .map(|(_, value)| value.clone().into()),
+        )
         .to_owned();
-    db.execute(db.get_database_backend().build(&query)).await
+    db.execute(db.get_database_backend().build(&query))
+        .await
 }
 
 pub async fn count(db: &DatabaseConnection, table: &str) -> i64 {
@@ -74,7 +91,10 @@ pub async fn count(db: &DatabaseConnection, table: &str) -> i64 {
 }
 
 pub async fn table_exists(db: &DatabaseConnection, table: &str) -> bool {
-    SchemaManager::new(db).has_table(table).await.unwrap()
+    SchemaManager::new(db)
+        .has_table(table)
+        .await
+        .unwrap()
 }
 
 /// Inject a real SQLite constraint failure after events/status writes, without trigger SQL.
@@ -95,11 +115,17 @@ pub async fn restrict_history(db: &DatabaseConnection, restricted: bool) {
             .await
             .unwrap()
             .into_iter()
-            .map(|row| row.try_get::<String>("", "history").unwrap())
+            .map(|row| {
+                row.try_get::<String>("", "history")
+                    .unwrap()
+            })
             .collect::<Vec<_>>();
         table.check(Expr::col(sessions::Column::History).is_in(values));
     }
-    manager.create_table(table).await.unwrap();
+    manager
+        .create_table(table)
+        .await
+        .unwrap();
     let selection = Query::select()
         .columns(sessions::Column::iter())
         .from(sessions::Entity)
@@ -110,9 +136,15 @@ pub async fn restrict_history(db: &DatabaseConnection, restricted: bool) {
         .select_from(selection)
         .unwrap()
         .to_owned();
-    db.execute(backend.build(&insert)).await.unwrap();
+    db.execute(backend.build(&insert))
+        .await
+        .unwrap();
     manager
-        .drop_table(Table::drop().table(sessions::Entity).to_owned())
+        .drop_table(
+            Table::drop()
+                .table(sessions::Entity)
+                .to_owned(),
+        )
         .await
         .unwrap();
     manager

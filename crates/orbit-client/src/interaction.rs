@@ -21,7 +21,7 @@ use tokio_util::task::AbortOnDropHandle;
 
 use super::protocol;
 
-const PROMPT_LIMIT: usize = 16 * 1024;
+const MAX_PROMPT_BYTES: usize = 16 * 1_024;
 const RESPONSE_TIMEOUT: Duration = Duration::from_secs(300);
 const SOCKET_ENV: &str = "ORBIT_SSH_ASKPASS_SOCKET";
 
@@ -77,7 +77,7 @@ impl Progress {
         if let Ok(mut logs) = self.logs.lock() {
             for line in text.lines() {
                 if !line.trim().is_empty() {
-                    logs.push_back(line.chars().take(2048).collect());
+                    logs.push_back(line.chars().take(2_048).collect());
                 }
             }
             while logs.len() > 200 {
@@ -104,8 +104,8 @@ impl Control {
 }
 
 impl Drop for Control {
+    /// The private master expires after 60 seconds even if cleanup cannot run.
     fn drop(&mut self) {
-        // The private master expires after 60 seconds even if cleanup cannot run.
         let _ = std::process::Command::new("ssh")
             .arg("-S")
             .arg(self.path())
@@ -151,7 +151,9 @@ impl Interaction {
             &wrapper,
             format!(
                 "#!/bin/sh\nexec '{}' --internal-ssh-askpass \"$@\"\n",
-                executable.to_string_lossy().replace('\'', "'\\''")
+                executable
+                    .to_string_lossy()
+                    .replace('\'', "'\\''")
             ),
         )?;
         std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o700))?;
@@ -163,7 +165,10 @@ impl Interaction {
                 let sender = sender.clone();
                 let exchange = async {
                     let prompt: Prompt = protocol::read(&mut stream).await?;
-                    ensure!(prompt.text.len() <= PROMPT_LIMIT, "SSH prompt is too long");
+                    ensure!(
+                        prompt.text.len() <= MAX_PROMPT_BYTES,
+                        "SSH prompt is too long"
+                    );
                     if prompt.notification {
                         logs.log(&prompt.text);
                         protocol::write(&mut stream, &Some(String::new())).await?;
@@ -213,8 +218,10 @@ impl Interaction {
 
 pub fn askpass() -> Result<()> {
     let path = std::env::var_os(SOCKET_ENV).context("missing SSH prompt channel")?;
-    let text = std::env::args().nth(2).unwrap_or_default();
-    ensure!(text.len() <= PROMPT_LIMIT, "SSH prompt is too long");
+    let text = std::env::args()
+        .nth(2)
+        .unwrap_or_default();
+    ensure!(text.len() <= MAX_PROMPT_BYTES, "SSH prompt is too long");
     let hint = std::env::var("SSH_ASKPASS_PROMPT").unwrap_or_default();
     let prompt = Prompt {
         confirm: hint == "confirm" || text.contains("(yes/no"),
@@ -230,7 +237,7 @@ pub fn askpass() -> Result<()> {
     let mut size = [0; 4];
     socket.read_exact(&mut size)?;
     let size = u32::from_be_bytes(size) as usize;
-    ensure!(size <= PROMPT_LIMIT * 6, "SSH answer is too long");
+    ensure!(size <= MAX_PROMPT_BYTES * 6, "SSH answer is too long");
     let mut bytes = vec![0; size];
     socket.read_exact(&mut bytes)?;
     let answer: Option<String> = serde_json::from_slice(&bytes)?;
@@ -269,9 +276,14 @@ pub async fn timeout<T>(
             result = &mut future => return result,
             _ = tick.tick() => {
                 let now = std::time::Instant::now();
-                if progress.is_none_or(|progress| progress.waiting.load(Ordering::Relaxed) == 0) { remaining = remaining.saturating_sub(now.duration_since(previous)); }
+                if progress.is_none_or(|progress| progress.waiting.load(Ordering::Relaxed) == 0) {
+                    remaining = remaining.saturating_sub(now.duration_since(previous));
+                }
                 previous = now;
-                ensure!(!remaining.is_zero(), "连接阶段超时，请检查主机地址、端口和目标环境；可重试或修改配置");
+                ensure!(
+                    !remaining.is_zero(),
+                    "连接阶段超时，请检查主机地址、端口和目标环境；可重试或修改配置"
+                );
             }
         }
     }
@@ -282,10 +294,14 @@ mod tests {
     use super::*;
 
     async fn prompt(interaction: &Interaction, text: &str) -> tokio::net::UnixStream {
-        let mut stream =
-            tokio::net::UnixStream::connect(interaction.directory.path().join("prompt"))
-                .await
-                .unwrap();
+        let mut stream = tokio::net::UnixStream::connect(
+            interaction
+                .directory
+                .path()
+                .join("prompt"),
+        )
+        .await
+        .unwrap();
         protocol::write(
             &mut stream,
             &Prompt {
@@ -302,7 +318,9 @@ mod tests {
     #[tokio::test]
     async fn authentication_channels_are_private_and_isolated_when_reusing_transport() {
         let (first, mut first_updates) = channel();
-        let first = Interaction::new(first, None).await.unwrap();
+        let first = Interaction::new(first, None)
+            .await
+            .unwrap();
         let (second, mut second_updates) = channel();
         let second = Interaction::new(second, Some(first.control.clone()))
             .await
@@ -319,8 +337,16 @@ mod tests {
         );
         let mut one = prompt(&first, "first password").await;
         let mut two = prompt(&second, "second password").await;
-        let first_prompt = first_updates.prompts.recv().await.unwrap();
-        let second_prompt = second_updates.prompts.recv().await.unwrap();
+        let first_prompt = first_updates
+            .prompts
+            .recv()
+            .await
+            .unwrap();
+        let second_prompt = second_updates
+            .prompts
+            .recv()
+            .await
+            .unwrap();
         second_prompt
             .reply
             .send(Some("second-secret".into()))
@@ -330,8 +356,20 @@ mod tests {
         first_prompt.reply.send(None).unwrap();
         let answer: Option<String> = protocol::read(&mut one).await.unwrap();
         assert!(answer.is_none());
-        assert!(first_updates.logs.lock().unwrap().is_empty());
-        assert!(second_updates.logs.lock().unwrap().is_empty());
+        assert!(
+            first_updates
+                .logs
+                .lock()
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            second_updates
+                .logs
+                .lock()
+                .unwrap()
+                .is_empty()
+        );
         let mut command = Command::new("ssh");
         second.configure(&mut command);
         let debug = format!("{command:?}");
@@ -365,11 +403,17 @@ mod tests {
     #[tokio::test]
     async fn ssh_notifications_do_not_request_a_password() {
         let (progress, mut updates) = channel();
-        let interaction = Interaction::new(progress, None).await.unwrap();
-        let mut stream =
-            tokio::net::UnixStream::connect(interaction.directory.path().join("prompt"))
-                .await
-                .unwrap();
+        let interaction = Interaction::new(progress, None)
+            .await
+            .unwrap();
+        let mut stream = tokio::net::UnixStream::connect(
+            interaction
+                .directory
+                .path()
+                .join("prompt"),
+        )
+        .await
+        .unwrap();
         protocol::write(
             &mut stream,
             &Prompt {
@@ -380,11 +424,18 @@ mod tests {
         )
         .await
         .unwrap();
-        let answer: Option<String> = protocol::read(&mut stream).await.unwrap();
+        let answer: Option<String> = protocol::read(&mut stream)
+            .await
+            .unwrap();
         assert_eq!(answer.as_deref(), Some(""));
         assert!(updates.prompts.try_recv().is_err());
         assert_eq!(
-            updates.logs.lock().unwrap().back().unwrap(),
+            updates
+                .logs
+                .lock()
+                .unwrap()
+                .back()
+                .unwrap(),
             "Touch your security key"
         );
     }

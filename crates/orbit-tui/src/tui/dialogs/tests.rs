@@ -63,7 +63,14 @@ fn home_output_scrolls_in_a_temporary_dialog_without_changing_the_draft() {
         .draw(|frame| super::super::render::draw(frame, &mut state))
         .unwrap();
     assert!(state.ime_cursor.is_none());
-    assert!(state.info_dialog.as_ref().unwrap().max_scroll > 0);
+    assert!(
+        state
+            .info_dialog
+            .as_ref()
+            .unwrap()
+            .max_scroll
+            > 0
+    );
     assert_eq!(
         scrollbar(terminal.backend().buffer())
             .first()
@@ -107,16 +114,20 @@ fn home_output_scrolls_in_a_temporary_dialog_without_changing_the_draft() {
     assert!(state.ime_cursor.is_some());
 
     state.info_dialog = Some(InfoDialog::new("简短报告", String::new()));
-    state.info_dialog.as_mut().unwrap().pages(vec![ReportPage {
-        label: "概要".into(),
-        content: Text::from(Line::from(vec![
-            Span::styled(
-                "████",
-                Style::default().fg(super::super::theme::THEME.success),
-            ),
-            Span::raw(" 剩余 100%\x1b[31m"),
-        ])),
-    }]);
+    state
+        .info_dialog
+        .as_mut()
+        .unwrap()
+        .pages(vec![ReportPage {
+            label: "概要".into(),
+            content: Text::from(Line::from(vec![
+                Span::styled(
+                    "████",
+                    Style::default().fg(super::super::theme::THEME.success),
+                ),
+                Span::raw(" 剩余 100%\x1b[31m"),
+            ])),
+        }]);
     terminal
         .draw(|frame| super::super::render::draw(frame, &mut state))
         .unwrap();
@@ -126,8 +137,16 @@ fn home_output_scrolls_in_a_temporary_dialog_without_changing_the_draft() {
         .iter()
         .map(|cell| cell.symbol())
         .collect::<String>();
-    assert!(screen.replace(' ', "").contains("剩余100%"));
-    assert!(!screen.replace(' ', "").contains("滚轮/↑↓"));
+    assert!(
+        screen
+            .replace(' ', "")
+            .contains("剩余100%")
+    );
+    assert!(
+        !screen
+            .replace(' ', "")
+            .contains("滚轮/↑↓")
+    );
     assert!(!screen.contains('\x1b'));
     assert!(
         buffer
@@ -138,23 +157,40 @@ fn home_output_scrolls_in_a_temporary_dialog_without_changing_the_draft() {
 
     // A report just one line taller than its viewport must have a nearly full
     // thumb, with its one-cell gap moving from bottom to top when scrolled.
-    let visible = state.info_dialog.as_ref().unwrap().page_rows;
-    state.info_dialog.as_mut().unwrap().pages(vec![ReportPage {
-        label: "概要".into(),
-        content: Text::from(
-            (0..=visible)
-                .map(|n| Line::from(format!("line {n}")))
-                .collect::<Vec<_>>(),
-        ),
-    }]);
+    let visible = state
+        .info_dialog
+        .as_ref()
+        .unwrap()
+        .page_rows;
+    state
+        .info_dialog
+        .as_mut()
+        .unwrap()
+        .pages(vec![ReportPage {
+            label: "概要".into(),
+            content: Text::from(
+                (0..=visible)
+                    .map(|n| Line::from(format!("line {n}")))
+                    .collect::<Vec<_>>(),
+            ),
+        }]);
     terminal
         .draw(|frame| super::super::render::draw(frame, &mut state))
         .unwrap();
-    assert_eq!(state.info_dialog.as_ref().unwrap().max_scroll, 1);
+    assert_eq!(
+        state
+            .info_dialog
+            .as_ref()
+            .unwrap()
+            .max_scroll,
+        1
+    );
     let top = scrollbar(terminal.backend().buffer());
     assert_eq!(top.len(), visible);
     assert_eq!(
-        top.iter().filter(|symbol| symbol.as_str() == "█").count(),
+        top.iter()
+            .filter(|symbol| symbol.as_str() == "█")
+            .count(),
         visible - 1
     );
     assert_eq!(top.first().map(String::as_str), Some("█"));
@@ -184,7 +220,12 @@ fn delete_requires_two_presses_to_confirm_and_any_other_key_cancels() {
 
     handle(&mut state, del_key.clone());
     assert_eq!(
-        state.picker.as_ref().unwrap().pending_delete.as_deref(),
+        state
+            .picker
+            .as_ref()
+            .unwrap()
+            .pending_delete
+            .as_deref(),
         Some("del")
     );
     assert!(state.delete_request.is_none());
@@ -193,16 +234,30 @@ fn delete_requires_two_presses_to_confirm_and_any_other_key_cancels() {
         &mut state,
         Event::Key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE)),
     );
-    assert!(state.picker.as_ref().unwrap().pending_delete.is_none());
+    assert!(
+        state
+            .picker
+            .as_ref()
+            .unwrap()
+            .pending_delete
+            .is_none()
+    );
 
     handle(
         &mut state,
         Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)),
     );
-    handle(&mut state, del_key.clone()); // first press
-    handle(&mut state, del_key.clone()); // second press confirms
+    handle(&mut state, del_key.clone());
+    handle(&mut state, del_key.clone());
     assert_eq!(state.delete_request.as_deref(), Some("del"));
-    assert!(state.picker.as_ref().unwrap().pending_delete.is_none());
+    assert!(
+        state
+            .picker
+            .as_ref()
+            .unwrap()
+            .pending_delete
+            .is_none()
+    );
 }
 
 #[test]
@@ -214,22 +269,36 @@ fn delete_confirmed_with_enter_after_first_del_press() {
         &mut state,
         Event::Key(KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE)),
     );
-    assert!(state.picker.as_ref().unwrap().pending_delete.is_some());
+    assert!(
+        state
+            .picker
+            .as_ref()
+            .unwrap()
+            .pending_delete
+            .is_some()
+    );
 
     handle(
         &mut state,
         Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
     );
     assert_eq!(state.delete_request.as_deref(), Some("abc"));
-    assert!(state.picker.as_ref().unwrap().pending_delete.is_none());
+    assert!(
+        state
+            .picker
+            .as_ref()
+            .unwrap()
+            .pending_delete
+            .is_none()
+    );
 }
 
 #[test]
 fn calendar_year_changes_only_once_for_january_and_february() {
-    assert_eq!(days_to_ymd(19722), (2023, 12, 31));
-    assert_eq!(days_to_ymd(19723), (2024, 1, 1));
-    assert_eq!(days_to_ymd(19782), (2024, 2, 29));
-    assert_eq!(days_to_ymd(19783), (2024, 3, 1));
+    assert_eq!(days_to_ymd(19_722), (2_023, 12, 31));
+    assert_eq!(days_to_ymd(19_723), (2_024, 1, 1));
+    assert_eq!(days_to_ymd(19_782), (2_024, 2, 29));
+    assert_eq!(days_to_ymd(19_783), (2_024, 3, 1));
 }
 
 #[test]
@@ -334,11 +403,23 @@ fn selected_session_title_scrolls_and_resets_for_selection_search_and_width() {
     picker.title_scroll.as_mut().unwrap().2 = Instant::now() - Duration::from_secs(1);
     picker.prepare_title_scroll(14);
     assert_eq!(picker.title_scroll_tick, 0);
-    assert!(picker.title_scroll.as_ref().unwrap().2.elapsed() < Duration::from_secs(1));
+    assert!(
+        picker
+            .title_scroll
+            .as_ref()
+            .unwrap()
+            .2
+            .elapsed()
+            < Duration::from_secs(1)
+    );
 
     picker.query = "短标题".into();
     picker.selected = 0;
-    assert!(picker.prepare_title_scroll(12).is_none());
+    assert!(
+        picker
+            .prepare_title_scroll(12)
+            .is_none()
+    );
     assert!(!picker.advance_title_scroll());
 }
 
@@ -370,7 +451,9 @@ fn model_picker_draws_on_a_terminal_too_short_for_body_rows() {
     ));
     let mut terminal = Terminal::new(TestBackend::new(12, 6)).unwrap();
 
-    terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+    terminal
+        .draw(|frame| draw(frame, &mut state))
+        .unwrap();
 }
 
 #[test]
@@ -382,7 +465,9 @@ fn model_refresh_button_and_f5_request_an_update_without_selecting_a_model() {
         None,
     ));
     let mut terminal = Terminal::new(TestBackend::new(90, 25)).unwrap();
-    terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+    terminal
+        .draw(|frame| draw(frame, &mut state))
+        .unwrap();
     assert!(
         handle(
             &mut state,
@@ -420,7 +505,9 @@ fn models_keep_current_row_visible_and_support_mouse_selection() {
     handle(&mut state, key(KeyCode::Enter));
     let mut terminal = Terminal::new(TestBackend::new(100, 20)).unwrap();
 
-    terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+    terminal
+        .draw(|frame| draw(frame, &mut state))
+        .unwrap();
 
     let (last, _) = state
         .dialog_rows
@@ -443,9 +530,18 @@ fn models_keep_current_row_visible_and_support_mouse_selection() {
         &mut state,
         &mouse(MouseEventKind::Moved)
     ));
-    terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+    terminal
+        .draw(|frame| draw(frame, &mut state))
+        .unwrap();
 
-    assert_eq!(state.model_picker.as_ref().unwrap().selected, index);
+    assert_eq!(
+        state
+            .model_picker
+            .as_ref()
+            .unwrap()
+            .selected,
+        index
+    );
     assert_eq!(state.dialog_rows[0], (area, index));
     assert_eq!(
         terminal.backend().buffer()[(area.x, area.y)].bg,
@@ -454,11 +550,26 @@ fn models_keep_current_row_visible_and_support_mouse_selection() {
     assert!(state.chosen_model.is_none());
 
     handle(&mut state, mouse(MouseEventKind::ScrollUp));
-    assert_eq!(state.model_picker.as_ref().unwrap().selected, index);
-    terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+    assert_eq!(
+        state
+            .model_picker
+            .as_ref()
+            .unwrap()
+            .selected,
+        index
+    );
+    terminal
+        .draw(|frame| draw(frame, &mut state))
+        .unwrap();
     assert!(state.dialog_rows[0].1 < index);
-    state.model_picker.as_mut().unwrap().offset = index;
-    terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+    state
+        .model_picker
+        .as_mut()
+        .unwrap()
+        .offset = index;
+    terminal
+        .draw(|frame| draw(frame, &mut state))
+        .unwrap();
     let blank = Event::Mouse(crossterm::event::MouseEvent {
         kind: MouseEventKind::Moved,
         column: area.right() + 1,
@@ -467,7 +578,14 @@ fn models_keep_current_row_visible_and_support_mouse_selection() {
     });
 
     assert!(!super::super::handle_list_hover(&mut state, &blank));
-    assert_eq!(state.model_picker.as_ref().unwrap().selected, index);
+    assert_eq!(
+        state
+            .model_picker
+            .as_ref()
+            .unwrap()
+            .selected,
+        index
+    );
 
     handle(
         &mut state,
@@ -515,7 +633,14 @@ fn scrolling_recomputes_hover_from_the_new_rows_without_pointer_motion() {
         .1;
 
     assert!(after > before);
-    assert_eq!(state.model_picker.as_ref().unwrap().selected, after);
+    assert_eq!(
+        state
+            .model_picker
+            .as_ref()
+            .unwrap()
+            .selected,
+        after
+    );
     assert!(state.pending_list_hover.is_none());
     assert!(state.chosen_model.is_none());
     assert_eq!(
@@ -730,11 +855,24 @@ fn marketplace_dialog_collects_source_before_starting_download() {
     handle(&mut state, Event::Paste("owner/catalog".into()));
     handle(&mut state, key(KeyCode::Enter));
 
-    assert!(state.marketplace_dialog.as_ref().unwrap().pending());
     assert!(
-        matches!(state.pending_plugin_action.as_ref(), Some(orbit_protocol::plugins::Action::Add { source }) if source == "owner/catalog")
+        state
+            .marketplace_dialog
+            .as_ref()
+            .unwrap()
+            .pending()
     );
-    assert!(state.pending_marketplace_source.is_none());
+    assert!(matches!(state
+            .pending_plugin_action
+            .as_ref(),
+            Some(orbit_protocol::plugins::Action::Add {
+            source
+        }) if source == "owner/catalog"));
+    assert!(
+        state
+            .pending_marketplace_source
+            .is_none()
+    );
 }
 
 fn plugin_marketplace() -> Marketplace {
@@ -792,9 +930,11 @@ fn marketplace_refresh_and_remove_use_exact_source_and_require_confirmation() {
     ));
     handle(&mut state, key(KeyCode::Down));
     handle(&mut state, key(KeyCode::Char('r')));
-    assert!(
-        matches!(state.pending_plugin_action.take(), Some(orbit_protocol::plugins::Action::Refresh { source: selected }) if selected == source)
-    );
+    assert!(matches!(
+        state.pending_plugin_action.take(),
+        Some(orbit_protocol::plugins::Action::Refresh { source: selected })
+            if selected == source
+    ));
     state
         .marketplace_dialog
         .as_mut()
@@ -813,10 +953,18 @@ fn marketplace_refresh_and_remove_use_exact_source_and_require_confirmation() {
     );
     handle(&mut state, key(KeyCode::Up));
     handle(&mut state, key(KeyCode::Enter));
+    assert!(matches!(
+        state.pending_plugin_action.as_ref(),
+        Some(orbit_protocol::plugins::Action::Remove { source: selected })
+            if selected == &source
+    ));
     assert!(
-        matches!(state.pending_plugin_action.as_ref(), Some(orbit_protocol::plugins::Action::Remove { source: selected }) if selected == &source)
+        state
+            .marketplace_dialog
+            .as_ref()
+            .unwrap()
+            .pending()
     );
-    assert!(state.marketplace_dialog.as_ref().unwrap().pending());
 }
 
 #[test]
@@ -845,7 +993,14 @@ fn marketplace_remove_cancel_and_pending_guard_do_not_queue_another_action() {
     handle(&mut state, key(KeyCode::Delete));
     handle(&mut state, key(KeyCode::Enter));
     assert!(state.pending_plugin_action.is_none());
-    assert!(state.marketplace_dialog.as_ref().unwrap().source.is_empty());
+    assert!(
+        state
+            .marketplace_dialog
+            .as_ref()
+            .unwrap()
+            .source
+            .is_empty()
+    );
     handle(&mut state, key(KeyCode::Esc));
     assert!(state.marketplace_dialog.is_none());
 }
@@ -853,11 +1008,13 @@ fn marketplace_remove_cancel_and_pending_guard_do_not_queue_another_action() {
 #[test]
 fn marketplace_search_and_enabled_filter_never_inspect_hidden_plugins() {
     let mut market = plugin_marketplace();
-    market.plugins.push(crate::marketplaces::Plugin {
-        name: "docs".into(),
-        description: "中文 文档".into(),
-        source: Some("plugins/docs".into()),
-    });
+    market
+        .plugins
+        .push(crate::marketplaces::Plugin {
+            name: "docs".into(),
+            description: "中文 文档".into(),
+            source: Some("plugins/docs".into()),
+        });
     let configured = ProjectPlugin {
         project_id: "project".into(),
         marketplace_source: market.source.clone(),
@@ -875,21 +1032,31 @@ fn marketplace_search_and_enabled_filter_never_inspect_hidden_plugins() {
     ));
     handle(&mut state, key(KeyCode::Enter));
     handle(&mut state, key(KeyCode::F(2)));
-    let dialog = state.marketplace_dialog.as_ref().unwrap();
+    let dialog = state
+        .marketplace_dialog
+        .as_ref()
+        .unwrap();
     assert_eq!(dialog.plugin_indices(), vec![1]);
     assert_eq!(dialog.selected_plugin().unwrap().1.name, "docs");
     handle(&mut state, key(KeyCode::Char('/')));
     handle(&mut state, Event::Paste("文档".into()));
     handle(&mut state, key(KeyCode::Enter));
     assert_eq!(
-        state.marketplace_dialog.as_ref().unwrap().plugin_indices(),
+        state
+            .marketplace_dialog
+            .as_ref()
+            .unwrap()
+            .plugin_indices(),
         vec![1]
     );
     handle(&mut state, key(KeyCode::Char('/')));
     handle(&mut state, Event::Paste("missing".into()));
     handle(&mut state, key(KeyCode::Enter));
     handle(&mut state, key(KeyCode::Enter));
-    let dialog = state.marketplace_dialog.as_ref().unwrap();
+    let dialog = state
+        .marketplace_dialog
+        .as_ref()
+        .unwrap();
     assert!(dialog.plugin_indices().is_empty());
     assert!(dialog.selected_plugin().is_none());
     assert!(dialog.inspection.is_none());
@@ -947,21 +1114,31 @@ fn marketplace_failed_add_preserves_source_for_retry() {
         .as_mut()
         .unwrap()
         .failed("Network unavailable".into());
-    assert!(state.marketplace_dialog.as_ref().unwrap().adding);
-    handle(&mut state, key(KeyCode::Enter));
     assert!(
-        matches!(state.pending_plugin_action.as_ref(), Some(orbit_protocol::plugins::Action::Add { source }) if source == "owner/catalog")
+        state
+            .marketplace_dialog
+            .as_ref()
+            .unwrap()
+            .adding
     );
+    handle(&mut state, key(KeyCode::Enter));
+    assert!(matches!(
+        state.pending_plugin_action.as_ref(),
+        Some(orbit_protocol::plugins::Action::Add { source })
+            if source == "owner/catalog"
+    ));
 }
 
 #[test]
 fn marketplace_filtered_rows_keep_original_plugin_identity() {
     let mut market = plugin_marketplace();
-    market.plugins.push(crate::marketplaces::Plugin {
-        name: "docs".into(),
-        description: "Write documentation".into(),
-        source: Some("plugins/docs".into()),
-    });
+    market
+        .plugins
+        .push(crate::marketplaces::Plugin {
+            name: "docs".into(),
+            description: "Write documentation".into(),
+            source: Some("plugins/docs".into()),
+        });
     let mut state = UiState::new("model");
     let mut dialog = MarketplaceDialog::new(vec![market], "project".into(), Vec::new());
     dialog.viewing_plugins = true;
@@ -1005,13 +1182,22 @@ fn marketplace_dialog_enables_inspected_plugin_for_current_project() {
         "project".into(),
         Vec::new(),
     ));
-    let dialog = state.marketplace_dialog.as_mut().unwrap();
+    let dialog = state
+        .marketplace_dialog
+        .as_mut()
+        .unwrap();
     dialog.viewing_plugins = true;
     dialog.inspection = Some(Ok(inspected_plugin()));
 
     handle(&mut state, key(KeyCode::Char('e')));
 
-    assert!(state.marketplace_dialog.as_ref().unwrap().pending());
+    assert!(
+        state
+            .marketplace_dialog
+            .as_ref()
+            .unwrap()
+            .pending()
+    );
     let Some(orbit_protocol::plugins::Action::Enable { plugin }) =
         state.pending_plugin_action.as_ref()
     else {
@@ -1048,16 +1234,29 @@ fn marketplace_dialog_disables_already_enabled_plugin() {
         "project".into(),
         vec![enabled],
     ));
-    let dialog = state.marketplace_dialog.as_mut().unwrap();
+    let dialog = state
+        .marketplace_dialog
+        .as_mut()
+        .unwrap();
     dialog.viewing_plugins = true;
     dialog.inspection = Some(Ok(inspected_plugin()));
 
     handle(&mut state, key(KeyCode::Char('e')));
 
-    assert!(state.marketplace_dialog.as_ref().unwrap().pending());
     assert!(
-        matches!(state.pending_plugin_action.as_ref(), Some(orbit_protocol::plugins::Action::Disable { marketplace_source, plugin_name }) if marketplace_source == "owner/catalog" && plugin_name == "review")
+        state
+            .marketplace_dialog
+            .as_ref()
+            .unwrap()
+            .pending()
     );
+    assert!(matches!(
+        state.pending_plugin_action.as_ref(),
+        Some(orbit_protocol::plugins::Action::Disable {
+            marketplace_source,
+            plugin_name,
+        }) if marketplace_source == "owner/catalog" && plugin_name == "review"
+    ));
 }
 
 #[test]
@@ -1067,7 +1266,9 @@ fn help_has_its_own_panel_and_all_shortcuts_are_reachable() {
 
     for (width, height) in [(80, 24), (40, 14), (24, 10)] {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-        terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+        terminal
+            .draw(|frame| draw(frame, &mut state))
+            .unwrap();
         let text: String = terminal
             .backend()
             .buffer()
@@ -1088,7 +1289,9 @@ fn help_has_its_own_panel_and_all_shortcuts_are_reachable() {
     }
 
     let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
-    terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+    terminal
+        .draw(|frame| draw(frame, &mut state))
+        .unwrap();
     let text: String = terminal
         .backend()
         .buffer()
@@ -1114,7 +1317,9 @@ fn locked_session_error_is_visible_above_the_list_in_error_color() {
 
     for width in [40, 80, 120] {
         let mut terminal = Terminal::new(TestBackend::new(width, 24)).unwrap();
-        terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+        terminal
+            .draw(|frame| draw(frame, &mut state))
+            .unwrap();
         let buffer = terminal.backend().buffer();
         let error_cells: Vec<_> = buffer
             .content()
@@ -1126,7 +1331,11 @@ fn locked_session_error_is_visible_above_the_list_in_error_color() {
             .collect();
 
         assert!(!error_cells.is_empty());
-        assert!(error_cells.iter().all(|(i, _)| i / usize::from(width) < 8));
+        assert!(
+            error_cells
+                .iter()
+                .all(|(i, _)| i / usize::from(width) < 8)
+        );
 
         let text = error_cells
             .iter()
@@ -1144,7 +1353,9 @@ fn panel_title_uses_the_inner_header_not_the_border() {
     state.picker = Some(SessionPicker::new(vec![session("abc", "a session")]));
     let width = 80;
     let mut terminal = Terminal::new(TestBackend::new(width, 24)).unwrap();
-    terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+    terminal
+        .draw(|frame| draw(frame, &mut state))
+        .unwrap();
     let buffer = terminal.backend().buffer();
     let text_at = |row: u16| {
         (0..width)
@@ -1308,20 +1519,56 @@ fn model_picker_enters_connections_before_models_and_supports_back_navigation() 
         None,
     ));
     let mut terminal = Terminal::new(TestBackend::new(96, 24)).unwrap();
-    terminal.draw(|frame| draw(frame, &mut state)).unwrap();
+    terminal
+        .draw(|frame| draw(frame, &mut state))
+        .unwrap();
     assert_eq!(state.dialog_rows.len(), 2);
-    assert_eq!(state.model_picker.as_ref().unwrap().selected, 1);
+    assert_eq!(
+        state
+            .model_picker
+            .as_ref()
+            .unwrap()
+            .selected,
+        1
+    );
     handle(&mut state, Event::Paste("shared".into()));
-    assert_eq!(state.model_picker.as_ref().unwrap().row_count(), 2);
+    assert_eq!(
+        state
+            .model_picker
+            .as_ref()
+            .unwrap()
+            .row_count(),
+        2
+    );
     handle(&mut state, key(KeyCode::Enter));
     assert_eq!(
-        state.model_picker.as_ref().unwrap().provider.as_deref(),
+        state
+            .model_picker
+            .as_ref()
+            .unwrap()
+            .provider
+            .as_deref(),
         Some("alpha")
     );
-    assert_eq!(state.model_picker.as_ref().unwrap().matches().len(), 1);
+    assert_eq!(
+        state
+            .model_picker
+            .as_ref()
+            .unwrap()
+            .matches()
+            .len(),
+        1
+    );
     assert!(state.chosen_model.is_none());
-    terminal.draw(|frame| draw(frame, &mut state)).unwrap();
-    let back = state.model_picker.as_ref().unwrap().back_area.unwrap();
+    terminal
+        .draw(|frame| draw(frame, &mut state))
+        .unwrap();
+    let back = state
+        .model_picker
+        .as_ref()
+        .unwrap()
+        .back_area
+        .unwrap();
     handle(
         &mut state,
         Event::Mouse(crossterm::event::MouseEvent {
@@ -1331,15 +1578,34 @@ fn model_picker_enters_connections_before_models_and_supports_back_navigation() 
             modifiers: KeyModifiers::NONE,
         }),
     );
-    assert!(state.model_picker.as_ref().unwrap().provider.is_none());
+    assert!(
+        state
+            .model_picker
+            .as_ref()
+            .unwrap()
+            .provider
+            .is_none()
+    );
     handle(&mut state, key(KeyCode::Down));
     handle(&mut state, key(KeyCode::Right));
     assert_eq!(
-        state.model_picker.as_ref().unwrap().provider.as_deref(),
+        state
+            .model_picker
+            .as_ref()
+            .unwrap()
+            .provider
+            .as_deref(),
         Some("beta")
     );
     handle(&mut state, key(KeyCode::Esc));
-    assert!(state.model_picker.as_ref().unwrap().provider.is_none());
+    assert!(
+        state
+            .model_picker
+            .as_ref()
+            .unwrap()
+            .provider
+            .is_none()
+    );
     handle(&mut state, key(KeyCode::Enter));
     handle(&mut state, key(KeyCode::Enter));
     assert_eq!(state.chosen_model.as_deref(), Some("beta::shared"));

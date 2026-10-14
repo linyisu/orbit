@@ -13,7 +13,13 @@ fn batch(calls: Vec<ToolCall>) -> ChatCompletion {
 }
 
 fn call(id: usize, name: &str) -> ToolCall {
-    ToolCall::function(id.to_string(), name, json!({"index":id}))
+    ToolCall::function(
+        id.to_string(),
+        name,
+        json!({
+            "index": id
+        }),
+    )
 }
 
 #[tokio::test]
@@ -49,7 +55,9 @@ async fn reads_overlap_with_a_bound_and_preserve_write_barriers_and_result_order
         stage.store(1, Ordering::SeqCst);
         async { Ok("written".into()) }
     }));
-    let mut calls: Vec<_> = (0..4).map(|i| call(i, "observe")).collect();
+    let mut calls: Vec<_> = (0..4)
+        .map(|i| call(i, "observe"))
+        .collect();
     calls.push(call(4, "mutate"));
     // Eight contiguous reads exercise the concurrency limit, not just overlap.
     calls.extend((5..13).map(|i| call(i, "observe")));
@@ -74,7 +82,12 @@ async fn reads_overlap_with_a_bound_and_preserve_write_barriers_and_result_order
             _ => None,
         })
         .collect();
-    assert_eq!(ids, (0..13).map(|i| i.to_string()).collect::<Vec<_>>());
+    assert_eq!(
+        ids,
+        (0..13)
+            .map(|i| i.to_string())
+            .collect::<Vec<_>>()
+    );
 }
 
 #[tokio::test]
@@ -109,7 +122,9 @@ async fn failed_parallel_receipt_preserves_all_uncertain_calls_and_stops_before_
     )
     .with_execution_journal(journal.clone());
     assert!(matches!(
-        agent.run(request(), CancellationToken::new()).await,
+        agent
+            .run(request(), CancellationToken::new())
+            .await,
         Err(AgentError::Checkpoint(_))
     ));
     assert_eq!(writes.load(Ordering::SeqCst), 0);

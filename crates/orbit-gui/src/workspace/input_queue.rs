@@ -310,23 +310,32 @@ impl InputQueue {
 
     fn current_scope(&self, cx: &App) -> bool {
         self.requests.connected
-            && self.owner.upgrade().is_some_and(|owner| {
-                let workspace = owner.read(cx);
-                workspace.connected
-                    && workspace
-                        .input_queue
-                        .as_ref()
-                        .is_some_and(|panel| panel.entity_id() == self.id)
-                    && workspace.info.as_ref().is_some_and(|info| {
-                        self.belongs_to(&info.id, &info.workspace, &workspace.options)
-                    })
-            })
+            && self
+                .owner
+                .upgrade()
+                .is_some_and(|owner| {
+                    let workspace = owner.read(cx);
+                    workspace.connected
+                        && workspace
+                            .input_queue
+                            .as_ref()
+                            .is_some_and(|panel| panel.entity_id() == self.id)
+                        && workspace
+                            .info
+                            .as_ref()
+                            .is_some_and(|info| {
+                                self.belongs_to(&info.id, &info.workspace, &workspace.options)
+                            })
+                })
     }
 
     pub(super) fn disconnected(&mut self, cx: &mut Context<Self>) {
         if let Some(operation) = self.requests.disconnected()
             && let Some(id) = operation.id()
-            && let Some(row) = self.rows.iter_mut().find(|row| row.entry.id == id)
+            && let Some(row) = self
+                .rows
+                .iter_mut()
+                .find(|row| row.entry.id == id)
         {
             row.uncertain = true;
             row.error = Some("操作结果尚未确认；草稿已保留，重连后先刷新真实状态。".into());
@@ -384,9 +393,14 @@ impl InputQueue {
         let sent = self
             .owner
             .update(cx, |workspace, _| {
-                workspace.backend.as_ref().is_some_and(|backend| {
-                    backend.send(Command::Settings { request, result }).is_ok()
-                })
+                workspace
+                    .backend
+                    .as_ref()
+                    .is_some_and(|backend| {
+                        backend
+                            .send(Command::Settings { request, result })
+                            .is_ok()
+                    })
             })
             .unwrap_or(false);
         if !sent {
@@ -408,7 +422,10 @@ impl InputQueue {
         };
         self.error = None;
         if let Some(id) = operation.id()
-            && let Some(row) = self.rows.iter_mut().find(|row| row.entry.id == id)
+            && let Some(row) = self
+                .rows
+                .iter_mut()
+                .find(|row| row.entry.id == id)
         {
             row.error = None;
         }
@@ -474,7 +491,9 @@ impl InputQueue {
                 Operation::List { after },
                 Ok(Response::InputQueue(Snapshot::List { entries, next, run })),
             ) if valid_page(*after, &entries, next)
-                && entries.iter().all(|entry| valid_entry(entry, run))
+                && entries
+                    .iter()
+                    .all(|entry| valid_entry(entry, run))
                 && run.is_none_or(|run| run > 0)
                 && (after.is_none() || self.run == run) =>
             {
@@ -520,7 +539,11 @@ impl InputQueue {
                 // Only a confirmed withdrawal makes this safe to edit locally.
                 // Preserve any text typed while the withdrawal was in flight.
                 let _ = self.owner.update(cx, |workspace, cx| {
-                    let current = workspace.input.read(cx).value().to_string();
+                    let current = workspace
+                        .input
+                        .read(cx)
+                        .value()
+                        .to_string();
                     let restored = restored_text(content, &current);
                     workspace
                         .input
@@ -534,11 +557,15 @@ impl InputQueue {
                             workspace.paths.push(path);
                         }
                     }
-                    workspace.input.focus_handle(cx).focus(window, cx);
+                    workspace
+                        .input
+                        .focus_handle(cx)
+                        .focus(window, cx);
                     cx.emit(WorkspaceEvent::DraftChanged);
                     cx.notify();
                 });
-                self.rows.retain(|row| row.entry.id != *id);
+                self.rows
+                    .retain(|row| row.entry.id != *id);
                 self.selected = None;
                 self.sync_list(window, cx);
                 self.refresh_after_mutation(cx);
@@ -547,7 +574,8 @@ impl InputQueue {
                 Operation::Remove { id, .. },
                 Ok(Response::InputQueue(Snapshot::Removed { id: received })),
             ) if received == *id => {
-                self.rows.retain(|row| row.entry.id != *id);
+                self.rows
+                    .retain(|row| row.entry.id != *id);
                 if self.selected == Some(*id) {
                     self.selected = None;
                 }
@@ -563,7 +591,10 @@ impl InputQueue {
                 // and failed mutations may have reached the service already.
                 self.requests.needs_refresh = true;
                 if let Some(id) = operation.id()
-                    && let Some(row) = self.rows.iter_mut().find(|row| row.entry.id == id)
+                    && let Some(row) = self
+                        .rows
+                        .iter_mut()
+                        .find(|row| row.entry.id == id)
                 {
                     row.uncertain = true;
                     row.error = Some(error.clone());
@@ -581,7 +612,9 @@ impl InputQueue {
             } else if self.rows.is_empty() {
                 window.push_notification("暂无待处理消息", cx);
             } else {
-                self.list.focus_handle(cx).focus(window, cx);
+                self.list
+                    .focus_handle(cx)
+                    .focus(window, cx);
             }
         }
     }
@@ -596,7 +629,11 @@ impl InputQueue {
 
     fn merge(&mut self, entries: Vec<Entry>, window: &mut Window, cx: &mut Context<Self>) {
         for entry in entries {
-            if let Some(row) = self.rows.iter_mut().find(|row| row.entry.id == entry.id) {
+            if let Some(row) = self
+                .rows
+                .iter_mut()
+                .find(|row| row.entry.id == entry.id)
+            {
                 let refresh = refresh_draft(
                     &row.draft.read(cx).value(),
                     &row.entry.content,
@@ -626,7 +663,10 @@ impl InputQueue {
             let id = entry.id;
             let subscription = cx.subscribe_in(&draft, window, move |panel, _, event, _, cx| {
                 if matches!(event, InputEvent::Change) {
-                    if let Some(row) = panel.rows.iter_mut().find(|row| row.entry.id == id)
+                    if let Some(row) = panel
+                        .rows
+                        .iter_mut()
+                        .find(|row| row.entry.id == id)
                         && !row.uncertain
                     {
                         row.error = None;
@@ -643,7 +683,8 @@ impl InputQueue {
                 _subscription: subscription,
             });
         }
-        self.rows.sort_by_key(|row| row.entry.id);
+        self.rows
+            .sort_by_key(|row| row.entry.id);
     }
 
     fn sync_list(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -651,7 +692,13 @@ impl InputQueue {
             .list
             .read(cx)
             .selected_index()
-            .and_then(|index| self.list.read(cx).delegate().items.get(index.row))
+            .and_then(|index| {
+                self.list
+                    .read(cx)
+                    .delegate()
+                    .items
+                    .get(index.row)
+            })
             .map(|item| item.id);
         if !self
             .rows
@@ -701,7 +748,11 @@ impl InputQueue {
         if !self.requests.ready() {
             return;
         }
-        let Some(row) = self.rows.iter_mut().find(|row| row.entry.id == id) else {
+        let Some(row) = self
+            .rows
+            .iter_mut()
+            .find(|row| row.entry.id == id)
+        else {
             return;
         };
         if !row.confirmed || !row.entry.editable() || row.uncertain {
@@ -727,7 +778,11 @@ impl InputQueue {
         if !self.requests.ready() {
             return;
         }
-        let Some(row) = self.rows.iter().find(|row| row.entry.id == id) else {
+        let Some(row) = self
+            .rows
+            .iter()
+            .find(|row| row.entry.id == id)
+        else {
             return;
         };
         if !row.confirmed || !row.entry.editable() || row.uncertain {
@@ -746,13 +801,22 @@ impl InputQueue {
     fn select(&mut self, id: Option<i64>, window: &mut Window, cx: &mut Context<Self>) {
         self.selected = id;
         self.sync_list(window, cx);
-        if let Some(row) = self.rows.iter().find(|row| Some(row.entry.id) == id) {
-            row.draft.focus_handle(cx).focus(window, cx);
+        if let Some(row) = self
+            .rows
+            .iter()
+            .find(|row| Some(row.entry.id) == id)
+        {
+            row.draft
+                .focus_handle(cx)
+                .focus(window, cx);
         } else {
             let owner = self.owner.clone();
             cx.defer_in(window, move |_, window, cx| {
                 let _ = owner.update(cx, |workspace, cx| {
-                    workspace.input.focus_handle(cx).focus(window, cx);
+                    workspace
+                        .input
+                        .focus_handle(cx)
+                        .focus(window, cx);
                 });
             });
         }
@@ -901,6 +965,7 @@ impl ListDelegate for QueueList {
     fn items_count(&self, _: usize, _: &App) -> usize {
         self.items.len()
     }
+
     fn render_item(
         &mut self,
         index: IndexPath,
@@ -936,6 +1001,7 @@ impl ListDelegate for QueueList {
                 ),
         )
     }
+
     fn set_selected_index(
         &mut self,
         selected: Option<IndexPath>,
@@ -952,17 +1018,26 @@ impl ListDelegate for QueueList {
         let owner = self.owner.clone();
         cx.defer(move |cx| {
             let _ = owner.update(cx, |panel, cx| {
-                let actual = panel.list.read(cx).selected_index().and_then(|index| {
-                    panel
-                        .list
-                        .read(cx)
-                        .delegate()
-                        .items
-                        .get(index.row)
-                        .map(|item| item.id)
-                });
+                let actual = panel
+                    .list
+                    .read(cx)
+                    .selected_index()
+                    .and_then(|index| {
+                        panel
+                            .list
+                            .read(cx)
+                            .delegate()
+                            .items
+                            .get(index.row)
+                            .map(|item| item.id)
+                    });
                 if actual != id
-                    || id.is_some_and(|id| !panel.rows.iter().any(|row| row.entry.id == id))
+                    || id.is_some_and(|id| {
+                        !panel
+                            .rows
+                            .iter()
+                            .any(|row| row.entry.id == id)
+                    })
                 {
                     return;
                 }
@@ -983,7 +1058,9 @@ mod tests {
 
     fn ready() -> Requests {
         let mut requests = Requests::new();
-        let serial = requests.begin(Operation::List { after: None }).unwrap();
+        let serial = requests
+            .begin(Operation::List { after: None })
+            .unwrap();
         requests.finish(serial);
         requests.needs_refresh = false;
         requests
@@ -1004,7 +1081,9 @@ mod tests {
         requests.connected = true;
         assert!(requests.pending.is_none());
         assert!(requests.begin(edit).is_none());
-        let current = requests.begin(Operation::List { after: None }).unwrap();
+        let current = requests
+            .begin(Operation::List { after: None })
+            .unwrap();
         assert!(!requests.finish(old));
         assert!(requests.accepts(current));
         assert!(requests.finish(current));
@@ -1022,7 +1101,9 @@ mod tests {
             .unwrap();
         requests.disconnected();
         requests.connected = true;
-        let new = requests.begin(Operation::List { after: None }).unwrap();
+        let new = requests
+            .begin(Operation::List { after: None })
+            .unwrap();
         assert!(!requests.finish(old));
         assert!(matches!(
             requests.pending,

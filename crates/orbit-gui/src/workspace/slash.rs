@@ -217,6 +217,7 @@ fn query(draft: &str) -> Option<&str> {
         .all(|ch| ch.is_alphabetic() || matches!(ch, '-' | '_'))
         .then_some(query)
 }
+
 fn command_character(ch: char) -> bool {
     ch.is_ascii_alphabetic() || matches!(ch, '-' | '_')
 }
@@ -250,6 +251,7 @@ pub(super) fn workspace_action(name: &str, argument: &str) -> Option<Command> {
         _ => return None,
     })
 }
+
 fn matches(draft: &str) -> Vec<&'static Entry> {
     let Some(query) = query(draft) else {
         return Vec::new();
@@ -259,11 +261,18 @@ fn matches(draft: &str) -> Vec<&'static Entry> {
         .iter()
         .filter(|entry| {
             entry.name.contains(&query)
-                || entry.label.to_lowercase().contains(&query)
-                || entry.description.to_lowercase().contains(&query)
+                || entry
+                    .label
+                    .to_lowercase()
+                    .contains(&query)
+                || entry
+                    .description
+                    .to_lowercase()
+                    .contains(&query)
         })
         .collect()
 }
+
 #[derive(Default)]
 pub(super) struct Arguments {
     input: String,
@@ -272,6 +281,7 @@ pub(super) struct Arguments {
     error: Option<String>,
     dismissed: Option<String>,
 }
+
 impl Arguments {
     fn accept(
         &mut self,
@@ -295,8 +305,9 @@ impl Arguments {
         true
     }
 }
+
 fn remote_arguments(input: &str) -> bool {
-    if input.len() > 4096 || input.contains(['\n', '\r']) {
+    if input.len() > 4_096 || input.contains(['\n', '\r']) {
         return false;
     }
     [
@@ -374,7 +385,8 @@ impl Workspace {
                                     })
                                 });
                             if let Err(error) = result {
-                                view.arguments.accept(&input, Err(error.to_string()));
+                                view.arguments
+                                    .accept(&input, Err(error.to_string()));
                                 cx.notify();
                             }
                         });
@@ -385,19 +397,22 @@ impl Workspace {
         } else {
             self.command_open = false;
         }
-        self.command_search.update(cx, |state, cx| {
-            state.set_query(draft.to_owned(), window, cx);
-            if state.matched_count() > 0 {
-                state.set_selected_index(Some(IndexPath::default().row(0)), window, cx);
-            }
-        });
+        self.command_search
+            .update(cx, |state, cx| {
+                state.set_query(draft.to_owned(), window, cx);
+                if state.matched_count() > 0 {
+                    state.set_selected_index(Some(IndexPath::default().row(0)), window, cx);
+                }
+            });
     }
+
     pub(super) fn dismiss_completions(&mut self, cx: &mut Context<Self>) {
         self.arguments.dismissed = Some(self.input.read(cx).value().to_string());
         self.completion_task = Task::ready(());
         self.command_open = false;
         cx.notify();
     }
+
     pub(super) fn argument_completions(
         &mut self,
         session: &str,
@@ -406,7 +421,10 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !self.info.as_ref().is_some_and(|info| info.id == session)
+        if !self
+            .info
+            .as_ref()
+            .is_some_and(|info| info.id == session)
             || self.input.read(cx).value().as_str() != input
         {
             return;
@@ -414,14 +432,16 @@ impl Workspace {
         if self.arguments.accept(input, result) {
             self.command_open =
                 !self.arguments.entries.is_empty() || self.arguments.error.is_some();
-            self.command_search.update(cx, |state, cx| {
-                if state.matched_count() > 0 {
-                    state.set_selected_index(Some(IndexPath::default().row(0)), window, cx);
-                }
-            });
+            self.command_search
+                .update(cx, |state, cx| {
+                    if state.matched_count() > 0 {
+                        state.set_selected_index(Some(IndexPath::default().row(0)), window, cx);
+                    }
+                });
             cx.notify();
         }
     }
+
     pub(super) fn move_completion(
         &mut self,
         step: isize,
@@ -437,17 +457,25 @@ impl Workspace {
         if count == 0 {
             return;
         }
-        self.command_search.update(cx, |state, cx| {
-            let selected = state.selected_index().map(|index| index.row).unwrap_or(0);
-            let next = (selected as isize + step).rem_euclid(count as isize) as usize;
-            state.set_selected_index(Some(IndexPath::default().row(next)), window, cx);
-        });
+        self.command_search
+            .update(cx, |state, cx| {
+                let selected = state
+                    .selected_index()
+                    .map(|index| index.row)
+                    .unwrap_or(0);
+                let next = (selected as isize + step).rem_euclid(count as isize) as usize;
+                state.set_selected_index(Some(IndexPath::default().row(next)), window, cx);
+            });
     }
+
     pub(super) fn submit_completion(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let draft = self.input.read(cx).value();
         if draft
             .strip_prefix("/cd ")
-            .is_some_and(|path| path.trim_end_matches(['\'', '"']).ends_with('/'))
+            .is_some_and(|path| {
+                path.trim_end_matches(['\'', '"'])
+                    .ends_with('/')
+            })
         {
             self.dismiss_completions(cx);
             self.dispatch_slash(window, cx);
@@ -455,6 +483,7 @@ impl Workspace {
             self.confirm_completion(window, cx);
         }
     }
+
     pub(super) fn confirm_completion(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let index = self
             .command_search
@@ -464,9 +493,15 @@ impl Workspace {
             .unwrap_or(0);
         self.choose_completion(index, window, cx);
     }
+
     fn choose_completion(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
         if query(&self.input.read(cx).value()).is_none() {
-            let Some(entry) = self.arguments.entries.get(index).cloned() else {
+            let Some(entry) = self
+                .arguments
+                .entries
+                .get(index)
+                .cloned()
+            else {
                 return;
             };
             let value = if entry.continue_input
@@ -513,6 +548,7 @@ impl Workspace {
         }
         cx.notify();
     }
+
     pub(super) fn completion_menu(
         &self,
         window: &Window,
@@ -538,13 +574,16 @@ impl Workspace {
                 .iter()
                 .map(|entry| {
                     (
-                        entry.display.clone().unwrap_or_else(|| {
-                            entry
-                                .name
-                                .split_once(' ')
-                                .map_or(entry.name.as_str(), |(_, argument)| argument)
-                                .to_owned()
-                        }),
+                        entry
+                            .display
+                            .clone()
+                            .unwrap_or_else(|| {
+                                entry
+                                    .name
+                                    .split_once(' ')
+                                    .map_or(entry.name.as_str(), |(_, argument)| argument)
+                                    .to_owned()
+                            }),
                         entry.description.clone(),
                         String::new(),
                         IconName::ChevronRight,
@@ -587,34 +626,44 @@ impl Workspace {
                     .filterable(false)
                     .bordered(false)
                     .max_h((window.viewport_size().height * 0.3).min(window.rem_size() * 18.))
-                    .items(entries.into_iter().map(|(label, description, name, icon)| {
-                        CommandItem::new().label(label.clone()).child(move |_, cx| {
-                            h_flex()
-                                .w_full()
-                                .min_w_0()
-                                .gap_3()
-                                .child(
-                                    Icon::new(icon)
-                                        .size_4()
-                                        .text_color(cx.theme().muted_foreground),
-                                )
-                                .child(div().flex_shrink_0().child(label.clone()))
-                                .child(
-                                    div()
-                                        .flex_1()
-                                        .min_w_0()
-                                        .truncate()
-                                        .text_color(cx.theme().muted_foreground)
-                                        .child(description.clone()),
-                                )
-                                .child(
-                                    div()
-                                        .text_sm()
-                                        .text_color(cx.theme().muted_foreground)
-                                        .child(name.clone()),
-                                )
-                        })
-                    }))
+                    .items(
+                        entries
+                            .into_iter()
+                            .map(|(label, description, name, icon)| {
+                                CommandItem::new()
+                                    .label(label.clone())
+                                    .child(move |_, cx| {
+                                        h_flex()
+                                            .w_full()
+                                            .min_w_0()
+                                            .gap_3()
+                                            .child(
+                                                Icon::new(icon)
+                                                    .size_4()
+                                                    .text_color(cx.theme().muted_foreground),
+                                            )
+                                            .child(
+                                                div()
+                                                    .flex_shrink_0()
+                                                    .child(label.clone()),
+                                            )
+                                            .child(
+                                                div()
+                                                    .flex_1()
+                                                    .min_w_0()
+                                                    .truncate()
+                                                    .text_color(cx.theme().muted_foreground)
+                                                    .child(description.clone()),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_sm()
+                                                    .text_color(cx.theme().muted_foreground)
+                                                    .child(name.clone()),
+                                            )
+                                    })
+                            }),
+                    )
                     .empty(move |_, _, cx| {
                         div()
                             .p_3()
@@ -647,6 +696,7 @@ mod tests {
             assert_eq!(query(draft), None);
         }
     }
+
     #[test]
     fn absolute_paths_and_multiline_path_notes_are_chat_messages() {
         for draft in [
@@ -663,6 +713,7 @@ mod tests {
             assert!(is_command_input(draft), "{draft}");
         }
     }
+
     #[test]
     fn planning_aliases_and_bare_resume_route_to_the_same_visible_commands() {
         assert_eq!(workspace_action("/plan", ""), Some(Command::EnterPlan));
@@ -677,6 +728,7 @@ mod tests {
         assert_eq!(workspace_action("/plan", "unknown"), None);
         assert_eq!(workspace_action("/build", "unexpected"), None);
     }
+
     #[test]
     fn filters_by_command_name_and_localized_purpose() {
         assert_eq!(matches("/MCP")[0].name, "mcp");
@@ -711,6 +763,7 @@ mod argument_tests {
             assert!(!remote_arguments(input), "{input}");
         }
     }
+
     #[test]
     fn delayed_results_never_replace_a_new_query_or_reopen_a_dismissed_menu() {
         let mut arguments = Arguments {

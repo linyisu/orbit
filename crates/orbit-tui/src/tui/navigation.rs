@@ -54,7 +54,11 @@ impl Navigation {
         let Some((_, _, since)) = &self.preview_scroll else {
             return false;
         };
-        let tick = since.elapsed().as_millis().saturating_sub(100) / 120;
+        let tick = since
+            .elapsed()
+            .as_millis()
+            .saturating_sub(100)
+            / 120;
         let changed = tick != self.preview_tick;
         self.preview_tick = tick;
         changed
@@ -92,7 +96,12 @@ pub(super) fn handle(state: &mut UiState, event: &Event) -> Option<bool> {
         Some(Target::Current)
     } else if inside_rail && hit_bottom {
         Some(Target::Latest)
-    } else if inside_rail && nav.targets.iter().any(|(row, _, _)| *row == mouse.row) {
+    } else if inside_rail
+        && nav
+            .targets
+            .iter()
+            .any(|(row, _, _)| *row == mouse.row)
+    {
         Some(Target::Round(mouse.row))
     } else {
         None
@@ -130,8 +139,10 @@ pub(super) fn handle(state: &mut UiState, event: &Event) -> Option<bool> {
                         state.scroll = state.max_scroll.saturating_sub(*offset);
                     }
                 }
-            } else if let Some((_, offset, _)) =
-                nav.targets.iter().find(|(row, _, _)| *row == mouse.row)
+            } else if let Some((_, offset, _)) = nav
+                .targets
+                .iter()
+                .find(|(row, _, _)| *row == mouse.row)
             {
                 state.selection.clear();
                 state.follow_bottom = false;
@@ -202,7 +213,9 @@ pub(super) fn draw(frame: &mut Frame<'_>, state: &mut UiState, area: Rect, offse
             .min(anchors.len().saturating_sub(slots));
     }
 
-    nav.first = nav.first.min(anchors.len().saturating_sub(slots));
+    nav.first = nav
+        .first
+        .min(anchors.len().saturating_sub(slots));
     let shown = (anchors.len() - nav.first).min(slots);
     let first_row = area.y + ((slots - shown) / 2) as u16;
 
@@ -224,7 +237,12 @@ pub(super) fn draw(frame: &mut Frame<'_>, state: &mut UiState, area: Rect, offse
         }
     }
 
-    for (j, (start, text)) in anchors.iter().skip(nav.first).take(slots).enumerate() {
+    for (j, (start, text)) in anchors
+        .iter()
+        .skip(nav.first)
+        .take(slots)
+        .enumerate()
+    {
         let index = nav.first + j;
         let y = first_row + j as u16;
         let hovered = nav.hovered == Some(Target::Round(y));
@@ -267,7 +285,9 @@ pub(super) fn draw(frame: &mut Frame<'_>, state: &mut UiState, area: Rect, offse
 
     let current = format!("当前 {}/{}", active + 1, anchors.len());
     let range = format!("{}–{} · ", nav.first + 1, nav.first + shown);
-    let available = area.width.saturating_sub(rail_width + 4) as usize;
+    let available = area
+        .width
+        .saturating_sub(rail_width + 4) as usize;
     let label = if range.width() + current.width() <= available {
         Line::from(vec![
             Span::styled(range, Style::default().fg(THEME.navigation_muted)),
@@ -312,7 +332,9 @@ pub(super) fn draw(frame: &mut Frame<'_>, state: &mut UiState, area: Rect, offse
             bottom - 1,
             format!(
                 "下方还有 {} 轮对话 · 点击向下滚动",
-                anchors.len().saturating_sub(nav.first + slots)
+                anchors
+                    .len()
+                    .saturating_sub(nav.first + slots)
             ),
         ))
     } else {

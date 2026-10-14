@@ -8,6 +8,7 @@ pub(super) struct Recovery {
     active: bool,
     healthy_since: Option<Instant>,
 }
+
 impl Recovery {
     pub(super) fn disconnected(&mut self, now: Instant) -> Option<Duration> {
         if self

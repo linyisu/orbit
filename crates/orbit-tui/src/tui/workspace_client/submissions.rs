@@ -41,12 +41,20 @@ impl Tab {
                 .clone()
                 .ok_or_else(|| anyhow::anyhow!("工作区尚未连接"))?;
             let (reply, response) = oneshot::channel();
-            self.independent_requests.spawn(async move {
-                // Approval and Cancel travel on the main pump while this
-                // independent handshake waits for the reviewed write result.
-                let result = async { connection.connect().await?.request(request).await }.await;
-                let _ = reply.send(result);
-            });
+            self.independent_requests
+                .spawn(async move {
+                    // Approval and Cancel travel on the main pump while this
+                    // independent handshake waits for the reviewed write result.
+                    let result = async {
+                        connection
+                            .connect()
+                            .await?
+                            .request(request)
+                            .await
+                    }
+                    .await;
+                    let _ = reply.send(result);
+                });
             return Ok(response);
         }
         let commands = self
@@ -67,7 +75,11 @@ impl Tab {
             Ok(response) => {
                 let pending_input = if steering && let Draft::Composer(text) = &draft {
                     self.state.selection.clear();
-                    Some(self.state.pending_input.sending(text.clone()))
+                    Some(
+                        self.state
+                            .pending_input
+                            .sending(text.clone()),
+                    )
                 } else {
                     None
                 };
@@ -84,7 +96,11 @@ impl Tab {
 
     pub(super) fn ask(&mut self, question: String, follow_up: Option<usize>) {
         let question = question.trim().to_owned();
-        let draft = Draft::Question(follow_up.is_none().then(|| format!("/btw {question}")));
+        let draft = Draft::Question(
+            follow_up
+                .is_none()
+                .then(|| format!("/btw {question}")),
+        );
         self.flush_question_close();
         if self.question_closing {
             self.rejected(
@@ -152,7 +168,10 @@ impl Tab {
                     panel.panel.error(error.to_string());
                 }
             }
-            Draft::Plan => self.state.planning.failed(error.to_string()),
+            Draft::Plan => self
+                .state
+                .planning
+                .failed(error.to_string()),
             Draft::Model(_) | Draft::Permissions(_) => self
                 .state
                 .report_local(TranscriptItem::Error(error.to_string())),
@@ -169,17 +188,25 @@ impl Tab {
                 } else {
                     format!("{error}\n尚未确认的输入：{text}")
                 };
-                self.state.report_local(TranscriptItem::Error(message));
+                self.state
+                    .report_local(TranscriptItem::Error(message));
             }
         }
     }
 
     pub(super) fn poll_submissions(&mut self) -> bool {
-        while self.independent_requests.try_join_next().is_some() {}
+        while self
+            .independent_requests
+            .try_join_next()
+            .is_some()
+        {}
         let mut changed = false;
         let mut index = 0;
         while index < self.submissions.len() {
-            let result = match self.submissions[index].response.try_recv() {
+            let result = match self.submissions[index]
+                .response
+                .try_recv()
+            {
                 Ok(result) => result,
                 Err(oneshot::error::TryRecvError::Empty) => {
                     index += 1;
@@ -218,7 +245,9 @@ impl Tab {
             }
             if let Some(ticket) = submission.pending_input {
                 if let Ok(Response::InputQueued { message_id }) = &result {
-                    self.state.pending_input.queued(ticket, *message_id);
+                    self.state
+                        .pending_input
+                        .queued(ticket, *message_id);
                     continue;
                 }
                 self.state.pending_input.reject(ticket);
@@ -234,14 +263,18 @@ impl Tab {
                 Ok(Response::Profile(info))
                     if matches!(submission.draft, Draft::Permissions(_)) =>
                 {
-                    self.state.permissions.apply(info.mode, info.mode_revision);
+                    self.state
+                        .permissions
+                        .apply(info.mode, info.mode_revision);
                 }
                 Ok(Response::Ok) if !matches!(submission.draft, Draft::Permissions(_)) => {
                     if matches!(submission.draft, Draft::Plan) {
                         self.state.planning.succeeded();
                     }
                     if let Draft::UserInput(id) = &submission.draft {
-                        self.state.user_input.submission_succeeded(id);
+                        self.state
+                            .user_input
+                            .submission_succeeded(id);
                         self.send(Request::UserInputHistory {
                             session: self.id.clone().unwrap_or_default(),
                             before: None,
@@ -254,9 +287,10 @@ impl Tab {
                             .and_then(|c| c.local_configuration.as_ref())
                         && let Err(error) = local.remember_model(&model)
                     {
-                        self.state.report_local(TranscriptItem::Error(format!(
-                            "模型已切换，但未能记住选择：{error}"
-                        )));
+                        self.state
+                            .report_local(TranscriptItem::Error(format!(
+                                "模型已切换，但未能记住选择：{error}"
+                            )));
                     }
                 }
                 Ok(response @ Response::Questions(_)) => self.apply(response),
@@ -287,14 +321,14 @@ impl Tab {
     }
 
     fn sync_pending_permissions(&mut self) {
-        self.state.permissions.pending =
-            self.submissions
-                .iter()
-                .rev()
-                .find_map(|submission| match submission.draft {
-                    Draft::Permissions(mode) => Some(mode),
-                    _ => None,
-                });
+        self.state.permissions.pending = self
+            .submissions
+            .iter()
+            .rev()
+            .find_map(|submission| match submission.draft {
+                Draft::Permissions(mode) => Some(mode),
+                _ => None,
+            });
     }
 
     pub(super) fn poll_questions(&mut self) -> bool {

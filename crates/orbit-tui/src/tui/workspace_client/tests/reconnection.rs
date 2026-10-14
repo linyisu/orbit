@@ -93,7 +93,9 @@ fn disconnected_draft_is_discarded_but_an_unconfirmed_first_message_keeps_its_id
     assert!(draft.reconnect_at.is_none());
 
     let (mut configuring, _requests) = tab("本地");
-    configuring.submit("/permissions yolo".into()).unwrap();
+    configuring
+        .submit("/permissions yolo".into())
+        .unwrap();
     configuring.disconnected("configuration acknowledgement lost".into());
     assert!(configuring.id.is_none());
 

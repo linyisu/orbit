@@ -15,7 +15,9 @@ use sha2::{Digest, Sha256};
 use crate::store::Store;
 
 fn journal_lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
+    mutex
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
 }
 
 pub(crate) struct Journal {
@@ -128,8 +130,9 @@ impl Journal {
                             ) =>
                         {
                             if let Ok(value) = serde_json::from_str::<serde_json::Value>(content)
-                                && let Some(id) =
-                                    value.get("invocation_id").and_then(|id| id.as_i64())
+                                && let Some(id) = value
+                                    .get("invocation_id")
+                                    .and_then(|id| id.as_i64())
                             {
                                 agent_invocations::Entity::update_many()
                                     .col_expr(
@@ -160,9 +163,9 @@ impl Journal {
 }
 
 impl ExecutionJournal for Journal {
+    /// These receipts were already committed together with their context before emission. All other
+    /// events retain their original stream order.
     fn record(&self, event: AgentEvent) {
-        // These receipts were already committed together with their context
-        // before emission. All other events retain their original stream order.
         if !matches!(
             event,
             AgentEvent::ToolStarted { .. }

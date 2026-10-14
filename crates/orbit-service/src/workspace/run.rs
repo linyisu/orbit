@@ -37,7 +37,10 @@ pub(super) async fn start(
     session
         .set_model_profile(
             resources.model_name.clone(),
-            resources.model.config().reasoning_effort,
+            resources
+                .model
+                .config()
+                .reasoning_effort,
         )
         .await?;
     let mut tools = resources.tools.clone();
@@ -51,7 +54,9 @@ pub(super) async fn start(
     let attachments = import_images(
         session.store.path(),
         resources.model.supports_vision(),
-        resources.policy.disabled(orbit_protocol::Capability::Image),
+        resources
+            .policy
+            .disabled(orbit_protocol::Capability::Image),
         uploads,
     )
     .await?;
@@ -59,7 +64,10 @@ pub(super) async fn start(
         .iter()
         .map(|attachment| orbit_protocol::MessageImage {
             name: attachment.name().to_owned(),
-            path: attachment.path().to_string_lossy().into_owned(),
+            path: attachment
+                .path()
+                .to_string_lossy()
+                .into_owned(),
         })
         .collect();
     let started = crate::execution::start(
@@ -99,7 +107,11 @@ pub(super) async fn context_messages(
 ) -> Result<Vec<orbit_model::types::ChatMessage>> {
     let mut messages = setup.session.snapshot.history.clone();
     crate::instructions::inject(&mut messages, &setup.resources.budget.instructions);
-    setup.resources.budget.skills.inject(&mut messages);
+    setup
+        .resources
+        .budget
+        .skills
+        .inject(&mut messages);
     if !setup
         .resources
         .policy
@@ -108,7 +120,11 @@ pub(super) async fn context_messages(
         crate::project_state::inject(
             &mut messages,
             &setup.session.store,
-            &setup.session.snapshot.session.project_id,
+            &setup
+                .session
+                .snapshot
+                .session
+                .project_id,
             setup.session.id(),
         )
         .await?;
@@ -122,7 +138,13 @@ pub(super) async fn context_messages(
 }
 
 pub(super) async fn needs_compaction(setup: &crate::PreparedWorkspace) -> Result<bool> {
-    if !setup.resources.budget.auto_compact || setup.session.snapshot.history.is_empty() {
+    if !setup.resources.budget.auto_compact
+        || setup
+            .session
+            .snapshot
+            .history
+            .is_empty()
+    {
         return Ok(false);
     }
     let messages = context_messages(setup).await?;

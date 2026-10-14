@@ -21,6 +21,7 @@ pub struct NewTask {
     pub priority: i64,
     pub depends_on: Vec<i64>,
 }
+
 impl NewTask {
     pub fn new(title: impl Into<String>) -> Self {
         Self {
@@ -209,7 +210,9 @@ impl Store {
             let tx = conn.begin().await?;
             let row = state::row(&tx, project, id).await?;
             state::authorize(&tx, project, id, actor).await?;
-            claims::Entity::delete_by_id(id).exec(&tx).await?;
+            claims::Entity::delete_by_id(id)
+                .exec(&tx)
+                .await?;
             if row.status == "in_progress" {
                 tasks::ActiveModel {
                     id: Set(id),

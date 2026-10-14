@@ -42,24 +42,29 @@ pub(crate) fn collect_dir_inodes(
 
             if visited > MAX_PROTECTED_DIR_ENTRIES {
                 return Err(failed(format!(
-                    "protected directory '{}' exceeds maximum scan limit of {MAX_PROTECTED_DIR_ENTRIES} entries",
+                    "protected directory '{}' exceeds maximum scan limit of \
+                        {MAX_PROTECTED_DIR_ENTRIES} entries",
                     dir.display()
                 )));
             }
 
-            let meta = entry.path().symlink_metadata().map_err(|e| {
-                failed(format!(
-                    "failed to inspect protected entry '{}': {e}",
-                    entry.path().display()
-                ))
-            })?;
+            let meta = entry
+                .path()
+                .symlink_metadata()
+                .map_err(|e| {
+                    failed(format!(
+                        "failed to inspect protected entry '{}': {e}",
+                        entry.path().display()
+                    ))
+                })?;
 
             protected_inodes.insert((meta.dev(), meta.ino()));
 
             if meta.is_dir() && !meta.file_type().is_symlink() {
                 if depth >= MAX_PROTECTED_DIR_DEPTH {
                     return Err(failed(format!(
-                        "protected directory '{}' depth exceeds maximum limit of {MAX_PROTECTED_DIR_DEPTH} at '{}'",
+                        "protected directory '{}' depth exceeds maximum limit of \
+                            {MAX_PROTECTED_DIR_DEPTH} at '{}'",
                         dir.display(),
                         entry.path().display()
                     )));
@@ -88,7 +93,11 @@ pub(crate) fn is_reserved_workspace_inode_with_templates(
         std::sync::OnceLock::new();
     let cache = COMPLETE_ALIASES.get_or_init(Default::default);
     let key = (root.to_path_buf(), candidate);
-    let known = cache.lock().map_err(failed)?.get(&key).cloned();
+    let known = cache
+        .lock()
+        .map_err(failed)?
+        .get(&key)
+        .cloned();
     if let Some(aliases) = known
         && aliases.len() as u64 == link_count
         && aliases.iter().all(|path| {
@@ -100,7 +109,10 @@ pub(crate) fn is_reserved_workspace_inode_with_templates(
                 return false;
             }
 
-            for ancestor in path.ancestors().take_while(|path| *path != root) {
+            for ancestor in path
+                .ancestors()
+                .take_while(|path| *path != root)
+            {
                 if ancestor != path
                     && !std::fs::symlink_metadata(ancestor)
                         .is_ok_and(|meta| meta.is_dir() && !meta.file_type().is_symlink())
@@ -108,10 +120,17 @@ pub(crate) fn is_reserved_workspace_inode_with_templates(
                     return false;
                 }
 
-                if ancestor.file_name().is_some_and(|name| {
-                    super::path_security::is_protected_workspace_name(&name.to_string_lossy())
-                }) && !read.iter().any(|allowed| ancestor.starts_with(allowed))
-                    && !write.iter().any(|allowed| ancestor.starts_with(allowed))
+                if ancestor
+                    .file_name()
+                    .is_some_and(|name| {
+                        super::path_security::is_protected_workspace_name(&name.to_string_lossy())
+                    })
+                    && !read
+                        .iter()
+                        .any(|allowed| ancestor.starts_with(allowed))
+                    && !write
+                        .iter()
+                        .any(|allowed| ancestor.starts_with(allowed))
                 {
                     return false;
                 }

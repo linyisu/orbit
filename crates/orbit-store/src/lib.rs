@@ -1,3 +1,5 @@
+//! SQLite persistence and durable task, conversation and attachment ownership.
+
 pub mod compactions;
 pub mod context_archive;
 mod database;

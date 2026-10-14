@@ -271,7 +271,8 @@ impl UiState {
     }
 
     pub fn invalidate_transcript(&mut self, first: usize) {
-        self.transcript_layout.invalidate_from(first);
+        self.transcript_layout
+            .invalidate_from(first);
     }
 
     pub(super) fn start_remote(
@@ -287,7 +288,8 @@ impl UiState {
         if presentation.compact || prompt == "/compact" || presentation.queued_input {
             self.begin_run();
             if presentation.compact || prompt == "/compact" {
-                self.activity.apply(&AgentEvent::CompactionStarted);
+                self.activity
+                    .apply(&AgentEvent::CompactionStarted);
             }
             if presentation.replayed {
                 self.scroll = scroll;
@@ -356,26 +358,29 @@ impl UiState {
     pub(super) fn sync_clock(&mut self, timing: orbit_protocol::RunTiming) {
         let now = Instant::now();
         self.elapsed = std::time::Duration::from_millis(timing.elapsed_ms);
-        self.started_at = Some(now.checked_sub(self.elapsed).unwrap_or(now));
+        self.started_at = Some(
+            now.checked_sub(self.elapsed)
+                .unwrap_or(now),
+        );
         self.paused_at = timing.paused.then_some(now);
         self.paused_elapsed = std::time::Duration::ZERO;
     }
 
     pub(super) fn apply_tool_progress(&mut self, updates: Vec<orbit_protocol::ToolProgress>) {
         for update in updates {
-            let Some((index, tool)) =
-                self.transcript
-                    .iter_mut()
-                    .enumerate()
-                    .rev()
-                    .find_map(|(index, item)| match item {
-                        TranscriptItem::Tool(tool)
-                            if tool.id == update.call_id && tool.status == ToolStatus::Running =>
-                        {
-                            Some((index, tool))
-                        }
-                        _ => None,
-                    })
+            let Some((index, tool)) = self
+                .transcript
+                .iter_mut()
+                .enumerate()
+                .rev()
+                .find_map(|(index, item)| match item {
+                    TranscriptItem::Tool(tool)
+                        if tool.id == update.call_id && tool.status == ToolStatus::Running =>
+                    {
+                        Some((index, tool))
+                    }
+                    _ => None,
+                })
             else {
                 continue;
             };
@@ -388,12 +393,13 @@ impl UiState {
                 output["running"] = true.into();
             }
             if let Some(elapsed) = update.elapsed_ms {
-                output["elapsed_seconds"] = (elapsed / 1000).into();
+                output["elapsed_seconds"] = (elapsed / 1_000).into();
             }
             let output = output.to_string();
             if output != tool.output {
                 tool.output = output;
-                self.transcript_layout.invalidate_from(index);
+                self.transcript_layout
+                    .invalidate_from(index);
             }
         }
     }
@@ -551,7 +557,8 @@ impl UiState {
     }
 
     pub fn submit(&mut self, prompt: String) {
-        self.transcript.push(TranscriptItem::User(prompt));
+        self.transcript
+            .push(TranscriptItem::User(prompt));
         self.begin_run();
     }
 
@@ -594,7 +601,9 @@ impl UiState {
 
             AgentEvent::ContextUsage { estimated_input } => {
                 self.model_started_at = Some(Instant::now());
-                self.context_used_tokens = self.calibration().estimate(estimated_input);
+                self.context_used_tokens = self
+                    .calibration()
+                    .estimate(estimated_input);
             }
 
             AgentEvent::RequestMetrics {
@@ -603,7 +612,9 @@ impl UiState {
                 usage,
                 ..
             } => {
-                let reported_input = usage.as_ref().and_then(|usage| usage.prompt_tokens);
+                let reported_input = usage
+                    .as_ref()
+                    .and_then(|usage| usage.prompt_tokens);
                 self.calibrations
                     .entry(profile)
                     .or_default()
@@ -611,7 +622,10 @@ impl UiState {
                 self.context_used_tokens = reported_input
                     .and_then(|tokens| usize::try_from(tokens).ok())
                     .filter(|tokens| *tokens > 0)
-                    .unwrap_or_else(|| self.calibration().estimate(estimated_input));
+                    .unwrap_or_else(|| {
+                        self.calibration()
+                            .estimate(estimated_input)
+                    });
             }
 
             AgentEvent::CompactionRecorded { record } => {
@@ -627,7 +641,9 @@ impl UiState {
                 fallback,
                 ..
             } => {
-                self.context_used_tokens = self.calibration().estimate(after_tokens);
+                self.context_used_tokens = self
+                    .calibration()
+                    .estimate(after_tokens);
                 let detail = if fallback
                     && strategy != orbit_agent::memory::CompactionStrategy::ArchiveProjection
                 {
@@ -660,9 +676,10 @@ impl UiState {
                         String::new()
                     };
 
-                self.transcript.push(TranscriptItem::Maintenance(format!(
-                    "{action}  {before_tokens} → {after_tokens} tokens{detail}{archive_note}"
-                )));
+                self.transcript
+                    .push(TranscriptItem::Maintenance(format!(
+                        "{action}  {before_tokens} → {after_tokens} tokens{detail}{archive_note}"
+                    )));
             }
 
             AgentEvent::CompactionFailed { kind, error } => {
@@ -673,7 +690,8 @@ impl UiState {
                         }
                         None => "上下文整理未完成，原上下文已保留".into(),
                     };
-                    self.feedback.error(format!("{summary}\n\n{error}"));
+                    self.feedback
+                        .error(format!("{summary}\n\n{error}"));
                 }
             }
 
@@ -693,13 +711,14 @@ impl UiState {
                 self.finish_thinking();
                 self.finish_assistant();
                 self.tool_calls += 1;
-                self.transcript.push(TranscriptItem::Tool(ToolRow {
-                    id: call.id,
-                    name: call.function.name,
-                    arguments: call.function.arguments,
-                    status: ToolStatus::Running,
-                    output: String::new(),
-                }));
+                self.transcript
+                    .push(TranscriptItem::Tool(ToolRow {
+                        id: call.id,
+                        name: call.function.name,
+                        arguments: call.function.arguments,
+                        status: ToolStatus::Running,
+                        output: String::new(),
+                    }));
                 self.transcript_layout
                     .invalidate_from(self.transcript.len().saturating_sub(2));
             }
@@ -719,8 +738,10 @@ impl UiState {
                 self.finish_thinking();
                 self.finish_assistant();
                 let first = self.transcript.len();
-                self.transcript.push(TranscriptItem::User(content));
-                self.transcript_layout.invalidate_from(first);
+                self.transcript
+                    .push(TranscriptItem::User(content));
+                self.transcript_layout
+                    .invalidate_from(first);
             }
 
             AgentEvent::WaitingForCommands { .. } | AgentEvent::WaitingForTasks { .. } => {
@@ -770,7 +791,10 @@ impl UiState {
     }
 
     pub fn scroll_up(&mut self, amount: usize) {
-        self.scroll = self.scroll.saturating_add(amount).min(self.max_scroll);
+        self.scroll = self
+            .scroll
+            .saturating_add(amount)
+            .min(self.max_scroll);
         self.follow_bottom = false;
     }
 
@@ -810,9 +834,17 @@ impl UiState {
             return Vec::new();
         }
 
-        let command = self.input.text.split_whitespace().next().unwrap_or("");
+        let command = self
+            .input
+            .text
+            .split_whitespace()
+            .next()
+            .unwrap_or("");
         if self.running()
-            && self.input.text.contains(char::is_whitespace)
+            && self
+                .input
+                .text
+                .contains(char::is_whitespace)
             && !super::commands::available_while_running(command)
         {
             return Vec::new();
@@ -828,7 +860,11 @@ impl UiState {
             );
         }
 
-        if let Some(query) = self.input.text.strip_prefix("/reasoning ") {
+        if let Some(query) = self
+            .input
+            .text
+            .strip_prefix("/reasoning ")
+        {
             return super::search::ranked(self.reasoning_efforts.iter(), |effort| {
                 super::search::rank(effort.as_str(), query.trim())
             })
@@ -867,7 +903,11 @@ impl UiState {
         .filter(|candidate| {
             if self.connection_label.is_some() {
                 super::commands::available_in_workspace(
-                    candidate.name.split_whitespace().next().unwrap_or(""),
+                    candidate
+                        .name
+                        .split_whitespace()
+                        .next()
+                        .unwrap_or(""),
                 )
             } else {
                 candidate.name != "/reconnect"
@@ -876,7 +916,11 @@ impl UiState {
         .filter(|candidate| {
             !self.running()
                 || super::commands::available_while_running(
-                    candidate.name.split_whitespace().next().unwrap_or(""),
+                    candidate
+                        .name
+                        .split_whitespace()
+                        .next()
+                        .unwrap_or(""),
                 )
         })
         .collect()
@@ -945,15 +989,18 @@ impl UiState {
                 } else {
                     self.model_started_at = None;
                     self.active_thinking = Some(self.transcript.len());
-                    self.transcript.push(TranscriptItem::Thinking(ThinkingRow {
-                        // Replayed events carry recorded timings; replay speed is not model time.
-                        started_at: (!self.remote_replay).then(Instant::now),
-                        ..text.into()
-                    }));
+                    self.transcript
+                        .push(TranscriptItem::Thinking(ThinkingRow {
+                            // Replayed events carry recorded timings; replay speed is not model
+                            // time.
+                            started_at: (!self.remote_replay).then(Instant::now),
+                            ..text.into()
+                        }));
                 }
 
                 if let Some(index) = self.active_thinking {
-                    self.transcript_layout.invalidate_from(index);
+                    self.transcript_layout
+                        .invalidate_from(index);
                 }
             }
 
@@ -970,8 +1017,12 @@ impl UiState {
         };
 
         row.finished = true;
-        row.elapsed = row.started_at.take().map(|start| start.elapsed());
-        self.transcript_layout.invalidate_from(index);
+        row.elapsed = row
+            .started_at
+            .take()
+            .map(|start| start.elapsed());
+        self.transcript_layout
+            .invalidate_from(index);
     }
 
     fn finish_assistant(&mut self) {
@@ -1007,7 +1058,8 @@ impl UiState {
             .rev()
             .find(|(_, item)| matches!(item, TranscriptItem::Tool(row) if row.id == call.id))
         {
-            self.transcript_layout.invalidate_from(index);
+            self.transcript_layout
+                .invalidate_from(index);
             row.status = status;
             row.output = output;
         }
@@ -1020,7 +1072,8 @@ impl UiState {
             {
                 row.status = ToolStatus::Failed;
                 row.output = message.into();
-                self.transcript_layout.invalidate_from(index);
+                self.transcript_layout
+                    .invalidate_from(index);
             }
         }
     }

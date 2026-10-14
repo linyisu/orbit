@@ -43,7 +43,12 @@ pub(super) fn search_summary(arguments: &str) -> String {
         return String::new();
     };
 
-    let query = super::render::compact_preview(value["query"].as_str().unwrap_or_default(), 100);
+    let query = super::render::compact_preview(
+        value["query"]
+            .as_str()
+            .unwrap_or_default(),
+        100,
+    );
     let path = super::render::compact_preview(value["path"].as_str().unwrap_or("."), 100);
 
     format!("\"{}\"({path})", query)
@@ -68,11 +73,15 @@ pub(super) fn command_output_summary(arguments: &str) -> String {
     let Ok(value) = serde_json::from_str::<Value>(arguments) else {
         return String::new();
     };
-    let output_id = value["output_id"].as_str().unwrap_or_default();
+    let output_id = value["output_id"]
+        .as_str()
+        .unwrap_or_default();
     if output_id.is_empty() {
         return String::new();
     }
-    let stream = value["stream"].as_str().unwrap_or("stdout");
+    let stream = value["stream"]
+        .as_str()
+        .unwrap_or("stdout");
     let stream_suffix = if stream == "stderr" { " [stderr]" } else { "" };
 
     if let Some(seq_str) = output_id.rsplit('-').next()
@@ -86,7 +95,9 @@ pub(super) fn command_output_summary(arguments: &str) -> String {
 
 pub(super) fn web_search_summary(arguments: &str, output: Option<&str>) -> String {
     let args: Value = serde_json::from_str(arguments).unwrap_or_default();
-    let query = args["query"].as_str().unwrap_or_default();
+    let query = args["query"]
+        .as_str()
+        .unwrap_or_default();
     let query_preview = super::render::compact_preview(query, 60);
 
     if let Some(out_str) = output
@@ -102,7 +113,9 @@ pub(super) fn web_search_summary(arguments: &str, output: Option<&str>) -> Strin
 
 pub(super) fn document_summary(arguments: &str, output: Option<&str>) -> String {
     let args: Value = serde_json::from_str(arguments).unwrap_or_default();
-    let path = args["path"].as_str().unwrap_or_default();
+    let path = args["path"]
+        .as_str()
+        .unwrap_or_default();
     let path_preview = super::render::compact_preview(path, 60);
 
     if let Some(out_str) = output
@@ -124,8 +137,12 @@ pub(super) fn document_summary(arguments: &str, output: Option<&str>) -> String 
 
 pub(super) fn capability_summary(arguments: &str) -> String {
     let args: Value = serde_json::from_str(arguments).unwrap_or_default();
-    let path = args["path"].as_str().unwrap_or_default();
-    let access = args["access"].as_str().unwrap_or("read");
+    let path = args["path"]
+        .as_str()
+        .unwrap_or_default();
+    let access = args["access"]
+        .as_str()
+        .unwrap_or("read");
     let access_label = if access == "read_write" || access == "write" {
         "读写"
     } else {
@@ -136,7 +153,9 @@ pub(super) fn capability_summary(arguments: &str) -> String {
 
 pub(super) fn read_image_summary(arguments: &str) -> String {
     let args: Value = serde_json::from_str(arguments).unwrap_or_default();
-    let path = args["path"].as_str().unwrap_or_default();
+    let path = args["path"]
+        .as_str()
+        .unwrap_or_default();
     super::render::compact_preview(path, 60)
 }
 
@@ -146,7 +165,10 @@ fn summary_line(text: &str, limit: usize) -> String {
         .find(|line| !line.trim().is_empty())
         .unwrap_or_default();
     super::render::compact_preview(
-        &line.split_whitespace().collect::<Vec<_>>().join(" "),
+        &line
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" "),
         limit,
     )
 }
@@ -167,7 +189,9 @@ fn agent_read_detail(args: &Value, out: &Value) -> String {
             .unwrap_or_else(|| "子任务列表".into());
     }
 
-    let view = out["view"].as_str().or(args["view"].as_str());
+    let view = out["view"]
+        .as_str()
+        .or(args["view"].as_str());
     if out["result_available"] == false {
         return match out["status"].as_str() {
             Some("failed" | "cancelled" | "interrupted") => "任务未完成，没有最终结果",
@@ -176,7 +200,9 @@ fn agent_read_detail(args: &Value, out: &Value) -> String {
         .into();
     }
 
-    let content = out["content"].as_str().unwrap_or_default();
+    let content = out["content"]
+        .as_str()
+        .unwrap_or_default();
     if content.is_empty() {
         return if out.is_null() {
             "读取中"
@@ -200,9 +226,18 @@ fn agent_read_detail(args: &Value, out: &Value) -> String {
                 .filter_map(|call| {
                     let function = &call["function"];
                     let name = function["name"].as_str()?;
-                    let summary =
-                        tool_summary(name, function["arguments"].as_str().unwrap_or("{}"), "");
-                    Some(format!("{name} {summary}").trim_end().to_owned())
+                    let summary = tool_summary(
+                        name,
+                        function["arguments"]
+                            .as_str()
+                            .unwrap_or("{}"),
+                        "",
+                    );
+                    Some(
+                        format!("{name} {summary}")
+                            .trim_end()
+                            .to_owned(),
+                    )
                 })
                 .collect::<Vec<_>>()
                 .join("；");
@@ -218,7 +253,9 @@ fn agent_read_detail(args: &Value, out: &Value) -> String {
                 _ => "回答",
             };
             let result: Value = serde_json::from_str(text).unwrap_or_default();
-            let text = result["content"].as_str().unwrap_or(text);
+            let text = result["content"]
+                .as_str()
+                .unwrap_or(text);
             return format!("{label} · {}", summary_line(text, 100));
         }
     }
@@ -276,7 +313,9 @@ pub(super) fn command_preview(command: &str, width: usize) -> String {
 }
 
 fn is_shell_preamble(line: &str) -> bool {
-    let compact = line.split_whitespace().collect::<String>();
+    let compact = line
+        .split_whitespace()
+        .collect::<String>();
     compact.starts_with("set-")
         && compact[4..]
             .chars()
@@ -286,17 +325,28 @@ fn is_shell_preamble(line: &str) -> bool {
 pub(super) fn group_target_summary(row: &ToolRow, width: usize) -> String {
     let args: Value = serde_json::from_str(&row.arguments).unwrap_or_default();
     match row.name.as_str() {
-        "run_command" => command_preview(args["command"].as_str().unwrap_or_default(), width),
+        "run_command" => command_preview(
+            args["command"]
+                .as_str()
+                .unwrap_or_default(),
+            width,
+        ),
         "read_agent" if args["agent_id"].as_str().is_some() => {
             agent_read_target(&serde_json::from_str(&row.output).unwrap_or_default())
         }
         "read_agent" => "子任务列表".into(),
         "read_file" | "write_file" | "edit_file" | "read_image" | "read_document"
-        | "request_capability" => safe_output(args["path"].as_str().unwrap_or_default()),
+        | "request_capability" => safe_output(
+            args["path"]
+                .as_str()
+                .unwrap_or_default(),
+        ),
 
-        "list_files" | "project_overview" | "code_symbols" => {
-            safe_output(args["path"].as_str().unwrap_or("当前目录"))
-        }
+        "list_files" | "project_overview" | "code_symbols" => safe_output(
+            args["path"]
+                .as_str()
+                .unwrap_or("当前目录"),
+        ),
         _ => tool_summary(&row.name, &row.arguments, &row.output),
     }
 }
@@ -316,30 +366,35 @@ pub(super) fn tool_summary(name: &str, arguments: &str, output: &str) -> String 
     match name {
         "enter_plan" | "update_plan" | "submit_plan" => {
             let record = serde_json::from_str::<orbit_protocol::plan::State>(output).ok();
-            let status = record.as_ref().and_then(|s| s.plan.as_ref()).map_or(
-                if name == "submit_plan" {
-                    "待确认"
-                } else {
-                    "只读规划"
-                },
-                |p| match p.status {
-                    orbit_protocol::plan::Status::Draft => "草稿",
-                    orbit_protocol::plan::Status::Review => "待确认",
-                    orbit_protocol::plan::Status::Approved => "已批准",
-                },
-            );
+            let status = record
+                .as_ref()
+                .and_then(|s| s.plan.as_ref())
+                .map_or(
+                    if name == "submit_plan" {
+                        "待确认"
+                    } else {
+                        "只读规划"
+                    },
+                    |p| match p.status {
+                        orbit_protocol::plan::Status::Draft => "草稿",
+                        orbit_protocol::plan::Status::Review => "待确认",
+                        orbit_protocol::plan::Status::Approved => "已批准",
+                    },
+                );
             format!("{} · 查看当前计划", status)
         }
         "ask_user" => {
             let form = serde_json::from_str::<orbit_protocol::user_input::Form>(arguments).ok();
             let record = serde_json::from_str::<orbit_protocol::user_input::Record>(output).ok();
-            let status = record.as_ref().map_or("待回答", |r| match r.status {
-                orbit_protocol::user_input::Status::Pending => "待回答",
-                orbit_protocol::user_input::Status::Answered => "已回答",
-                orbit_protocol::user_input::Status::Declined => "已取消问答",
-                orbit_protocol::user_input::Status::Cancelled => "任务已取消",
-                orbit_protocol::user_input::Status::Interrupted => "任务已中断",
-            });
+            let status = record
+                .as_ref()
+                .map_or("待回答", |r| match r.status {
+                    orbit_protocol::user_input::Status::Pending => "待回答",
+                    orbit_protocol::user_input::Status::Answered => "已回答",
+                    orbit_protocol::user_input::Status::Declined => "已取消问答",
+                    orbit_protocol::user_input::Status::Cancelled => "任务已取消",
+                    orbit_protocol::user_input::Status::Interrupted => "任务已中断",
+                });
             format!(
                 "{} 个问题 · {} · 查看",
                 form.map_or(0, |f| f.questions.len()),
@@ -361,13 +416,20 @@ pub(super) fn tool_summary(name: &str, arguments: &str, output: &str) -> String 
 }
 
 pub(super) fn write_file_preview(arguments: &str, width: u16) -> Option<Vec<Line<'static>>> {
-    write_file_linked(arguments, width).map(|lines| lines.into_iter().map(Line::from).collect())
+    write_file_linked(arguments, width).map(|lines| {
+        lines
+            .into_iter()
+            .map(Line::from)
+            .collect()
+    })
 }
 
 fn write_file_linked(arguments: &str, width: u16) -> Option<Vec<LinkedLine>> {
     let value: Value = serde_json::from_str(arguments).ok()?;
     let content = value["content"].as_str()?;
-    let path = value["path"].as_str().unwrap_or_default();
+    let path = value["path"]
+        .as_str()
+        .unwrap_or_default();
     let lines: Vec<_> = content.lines().collect();
     let total_lines = lines.len();
     if total_lines == 0 {
@@ -377,7 +439,10 @@ fn write_file_linked(arguments: &str, width: u16) -> Option<Vec<LinkedLine>> {
         )))]);
     }
 
-    let digits = total_lines.to_string().len().max(MIN_LINE_NUMBER_WIDTH);
+    let digits = total_lines
+        .to_string()
+        .len()
+        .max(MIN_LINE_NUMBER_WIDTH);
     let mut renderer = Renderer::for_path(path);
     let mut out = Vec::new();
     for (index, line) in lines.into_iter().enumerate() {
@@ -401,7 +466,9 @@ pub(super) fn edit_file_preview(arguments: &str, width: u16) -> Option<Vec<Line<
     let value: Value = serde_json::from_str(arguments).ok()?;
     let old_text = value["old_text"].as_str()?;
     let new_text = value["new_text"].as_str()?;
-    let path = value["path"].as_str().unwrap_or_default();
+    let path = value["path"]
+        .as_str()
+        .unwrap_or_default();
     let digits = old_text
         .lines()
         .count()
@@ -463,7 +530,10 @@ fn inset_markdown(lines: Vec<LinkedLine>) -> Vec<LinkedLine> {
     lines
         .into_iter()
         .map(|mut linked| {
-            linked.line.spans.insert(0, Span::raw("  "));
+            linked
+                .line
+                .spans
+                .insert(0, Span::raw("  "));
             linked.shift_offsets(2);
             linked
         })
@@ -474,7 +544,10 @@ fn web_fetch_preview(output: &str, width: u16) -> Option<Vec<LinkedLine>> {
     let mut base = None;
     let mut references = BTreeMap::new();
     let (text, header_spans) = if let Ok(val) = serde_json::from_str::<Value>(output) {
-        let content = val["content"].as_str().unwrap_or(output).to_owned();
+        let content = val["content"]
+            .as_str()
+            .unwrap_or(output)
+            .to_owned();
         let url = val["url"]
             .as_str()
             .or_else(|| val["requested_url"].as_str())
@@ -559,7 +632,11 @@ fn web_fetch_preview(output: &str, width: u16) -> Option<Vec<LinkedLine>> {
 pub(super) fn agent_session_id(output: &str) -> Option<String> {
     let value: Value = serde_json::from_str(output).ok()?;
     let id = value["agent_id"].as_str()?;
-    (id.len() == 32 && id.bytes().all(|b| b.is_ascii_hexdigit())).then(|| id.to_owned())
+    (id.len() == 32
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_hexdigit()))
+    .then(|| id.to_owned())
 }
 
 pub(super) fn linked_lines(row: &ToolRow, expanded: bool, width: u16) -> Option<Vec<LinkedLine>> {
@@ -601,7 +678,12 @@ pub(super) fn linked_lines(row: &ToolRow, expanded: bool, width: u16) -> Option<
         _ => {}
     }
 
-    lines(row, expanded, width).map(|lines| lines.into_iter().map(LinkedLine::plain).collect())
+    lines(row, expanded, width).map(|lines| {
+        lines
+            .into_iter()
+            .map(LinkedLine::plain)
+            .collect()
+    })
 }
 
 pub(super) fn lines(row: &ToolRow, expanded: bool, width: u16) -> Option<Vec<Line<'static>>> {
@@ -638,8 +720,12 @@ pub(super) fn lines(row: &ToolRow, expanded: bool, width: u16) -> Option<Vec<Lin
             width,
         ),
 
-        "web_fetch" => web_fetch_preview(&row.output, width)
-            .map(|lines| lines.into_iter().map(|linked| linked.line).collect()),
+        "web_fetch" => web_fetch_preview(&row.output, width).map(|lines| {
+            lines
+                .into_iter()
+                .map(|linked| linked.line)
+                .collect()
+        }),
         "web_search" => structured::web_search(row, expanded, width),
         "read_command_output" => structured::command_output(row, expanded, width),
         "read_document" => structured::document(row, expanded, width),
@@ -664,7 +750,9 @@ fn overview(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'stati
         format!(
             "{} 个符号 · {} 处候选引用",
             value["symbols"].as_array()?.len(),
-            value["references"].as_array().map_or(0, Vec::len)
+            value["references"]
+                .as_array()
+                .map_or(0, Vec::len)
         )
     };
 
@@ -685,7 +773,9 @@ fn overview(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'stati
         note(&mut out, &format!("{heading}  {lang_summary}"), width);
         if let Some(manifests) = value["manifests"].as_array() {
             for manifest in manifests.iter().take(3) {
-                let path = manifest["path"].as_str().unwrap_or_default();
+                let path = manifest["path"]
+                    .as_str()
+                    .unwrap_or_default();
                 let pkg = manifest["package"]
                     .as_str()
                     .map(|n| format!("  {n}"))
@@ -694,14 +784,22 @@ fn overview(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'stati
             }
         }
         if inventory.is_none() {
-            for symbol in value["symbols"].as_array()?.iter().take(3) {
+            for symbol in value["symbols"]
+                .as_array()?
+                .iter()
+                .take(3)
+            {
                 note(
                     &mut out,
                     &format!(
                         "{}:{} · {}",
-                        symbol["path"].as_str().unwrap_or_default(),
+                        symbol["path"]
+                            .as_str()
+                            .unwrap_or_default(),
                         symbol["line"].as_u64().unwrap_or(0),
-                        symbol["name"].as_str().unwrap_or_default()
+                        symbol["name"]
+                            .as_str()
+                            .unwrap_or_default()
                     ),
                     width,
                 );
@@ -753,10 +851,15 @@ fn overview(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'stati
 
     push_line(&mut raw_lines, 0, header_spans);
 
-    if let Some(manifests) = value["manifests"].as_array().filter(|m| !m.is_empty()) {
+    if let Some(manifests) = value["manifests"]
+        .as_array()
+        .filter(|m| !m.is_empty())
+    {
         for manifest in manifests {
             push_blank(&mut raw_lines);
-            let path = manifest["path"].as_str().unwrap_or_default();
+            let path = manifest["path"]
+                .as_str()
+                .unwrap_or_default();
             let mut manifest_spans = vec![
                 Span::styled(
                     format!("{} ", icons::PACKAGE_VARIANT_CLOSED),
@@ -764,7 +867,10 @@ fn overview(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'stati
                 ),
                 Span::styled(path.to_owned(), strong_style),
             ];
-            if let Some(pkg) = manifest["package"].as_str().filter(|p| !p.is_empty()) {
+            if let Some(pkg) = manifest["package"]
+                .as_str()
+                .filter(|p| !p.is_empty())
+            {
                 manifest_spans.push(Span::styled(format!("  {pkg}"), accent_style));
             }
             if let Some(system) = manifest["build_system"]
@@ -803,7 +909,9 @@ fn overview(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'stati
                 }
             }
 
-            if let Some(scripts) = manifest.get("declared_scripts").and_then(|v| v.as_object())
+            if let Some(scripts) = manifest
+                .get("declared_scripts")
+                .and_then(|v| v.as_object())
                 && !scripts.is_empty()
             {
                 push_line(
@@ -826,7 +934,9 @@ fn overview(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'stati
                         ],
                     );
                 }
-            } else if let Some(scripts) = manifest.get("declared_scripts").filter(|v| !v.is_null())
+            } else if let Some(scripts) = manifest
+                .get("declared_scripts")
+                .filter(|v| !v.is_null())
             {
                 push_line(
                     &mut raw_lines,
@@ -841,7 +951,10 @@ fn overview(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'stati
             {
                 let mut candidate_cmds = Vec::new();
                 for cand in candidates {
-                    if let Some(argv) = cand.get("argv").and_then(|v| v.as_array()) {
+                    if let Some(argv) = cand
+                        .get("argv")
+                        .and_then(|v| v.as_array())
+                    {
                         let cmd = argv
                             .iter()
                             .filter_map(|s| s.as_str())
@@ -876,11 +989,17 @@ fn overview(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'stati
                 );
             }
 
-            if let Some(deps) = manifest.get("dependencies").and_then(|v| v.as_object())
+            if let Some(deps) = manifest
+                .get("dependencies")
+                .and_then(|v| v.as_object())
                 && !deps.is_empty()
             {
                 let total = deps.len();
-                let dep_names: Vec<_> = deps.keys().take(12).map(|s| s.as_str()).collect();
+                let dep_names: Vec<_> = deps
+                    .keys()
+                    .take(12)
+                    .map(|s| s.as_str())
+                    .collect();
                 let extra = if total > 12 {
                     format!(" (+{} 个)", total - 12)
                 } else {
@@ -1030,8 +1149,12 @@ fn overview(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'stati
             )],
         );
         for item in relevant.iter().take(6) {
-            let path = item["path"].as_str().unwrap_or_default();
-            let score = item.get("score").and_then(|s| s.as_u64());
+            let path = item["path"]
+                .as_str()
+                .unwrap_or_default();
+            let score = item
+                .get("score")
+                .and_then(|s| s.as_u64());
             let mut spans = vec![Span::styled(path.to_owned(), accent_style)];
             if let Some(s) = score {
                 spans.push(Span::styled(format!(" (匹配分 {s})"), detail_style));
@@ -1055,10 +1178,18 @@ fn overview(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'stati
             )],
         );
         for item in refs.iter().take(6) {
-            let path = item["path"].as_str().unwrap_or_default();
-            let line = item.get("line").and_then(|l| l.as_u64());
-            let name = item["name"].as_str().unwrap_or_default();
-            let loc = line.map(|l| format!(":{l}")).unwrap_or_default();
+            let path = item["path"]
+                .as_str()
+                .unwrap_or_default();
+            let line = item
+                .get("line")
+                .and_then(|l| l.as_u64());
+            let name = item["name"]
+                .as_str()
+                .unwrap_or_default();
+            let loc = line
+                .map(|l| format!(":{l}"))
+                .unwrap_or_default();
             push_line(
                 &mut raw_lines,
                 1,
@@ -1086,11 +1217,22 @@ fn overview(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'stati
         );
         let limit = 8;
         for symbol in symbols.iter().take(limit) {
-            let path = symbol["path"].as_str().unwrap_or_default();
-            let line = symbol.get("line").and_then(|l| l.as_u64()).unwrap_or(0);
-            let name = symbol["name"].as_str().unwrap_or_default();
-            let kind = symbol["kind"].as_str().unwrap_or_default();
-            let signature = symbol["signature"].as_str().unwrap_or_default();
+            let path = symbol["path"]
+                .as_str()
+                .unwrap_or_default();
+            let line = symbol
+                .get("line")
+                .and_then(|l| l.as_u64())
+                .unwrap_or(0);
+            let name = symbol["name"]
+                .as_str()
+                .unwrap_or_default();
+            let kind = symbol["kind"]
+                .as_str()
+                .unwrap_or_default();
+            let signature = symbol["signature"]
+                .as_str()
+                .unwrap_or_default();
 
             let mut spans = vec![
                 Span::styled(format!("{path}:{line}  "), detail_style),
@@ -1310,7 +1452,12 @@ fn source<T: From<LinkedLine>>(
 }
 
 fn search(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'static>>> {
-    search_linked(value, expanded, width).map(|lines| lines.into_iter().map(Line::from).collect())
+    search_linked(value, expanded, width).map(|lines| {
+        lines
+            .into_iter()
+            .map(Line::from)
+            .collect()
+    })
 }
 
 fn search_linked(value: &Value, expanded: bool, width: u16) -> Option<Vec<LinkedLine>> {
@@ -1350,7 +1497,10 @@ fn search_linked(value: &Value, expanded: bool, width: u16) -> Option<Vec<Linked
     let has_context = matches.iter().any(|hit| {
         hit["context"]
             .as_array()
-            .is_some_and(|rows| rows.iter().any(|row| row["line"] != hit["line"]))
+            .is_some_and(|rows| {
+                rows.iter()
+                    .any(|row| row["line"] != hit["line"])
+            })
     });
     let mut out = Vec::new();
     note(
@@ -1422,12 +1572,19 @@ fn search_linked(value: &Value, expanded: bool, width: u16) -> Option<Vec<Linked
 }
 
 fn read(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'static>>> {
-    read_linked(value, expanded, width).map(|lines| lines.into_iter().map(Line::from).collect())
+    read_linked(value, expanded, width).map(|lines| {
+        lines
+            .into_iter()
+            .map(Line::from)
+            .collect()
+    })
 }
 
 fn read_linked(value: &Value, expanded: bool, width: u16) -> Option<Vec<LinkedLine>> {
     let content = value["content"].as_str()?;
-    let path = value["path"].as_str().unwrap_or_default();
+    let path = value["path"]
+        .as_str()
+        .unwrap_or_default();
     let end = value["end_line"].as_u64().unwrap_or(1);
     let rows = read_rows(content)?;
     let mut out = Vec::new();
@@ -1437,10 +1594,16 @@ fn read_linked(value: &Value, expanded: bool, width: u16) -> Option<Vec<LinkedLi
         return Some(out);
     }
 
-    let digits = end.to_string().len().max(MIN_LINE_NUMBER_WIDTH);
+    let digits = end
+        .to_string()
+        .len()
+        .max(MIN_LINE_NUMBER_WIDTH);
     let mut renderer = Renderer::for_path(path);
 
-    for (number, text) in rows.iter().take(if expanded { usize::MAX } else { 4 }) {
+    for (number, text) in rows
+        .iter()
+        .take(if expanded { usize::MAX } else { 4 })
+    {
         source(
             &mut out,
             *number,
@@ -1492,11 +1655,36 @@ mod subagent_tests {
     fn child_cards_expose_live_and_completed_session_links_at_narrow_widths() {
         let id = "00000000000000000000000000000001";
         for status in [ToolStatus::Running, ToolStatus::Finished] {
-            let row=ToolRow{id:"orbit-child-call".into(),name:"spawn_agent".into(),arguments:json!({"task":"审查 Orbit 中文标题与很长的补充上下文"}).to_string(),output:json!({"agent_id":id,"role":"review","model":"orbit::model","status":if status==ToolStatus::Running {"running"} else {"completed"},"summary":"**检查完成**"}).to_string(),status};
+            let row = ToolRow {
+                id: "orbit-child-call".into(),
+                name: "spawn_agent".into(),
+                arguments: json!({
+                    "task": "审查 Orbit 中文标题与很长的补充上下文"
+                })
+                .to_string(),
+                output: json!({
+                    "agent_id": id,
+                    "role": "review",
+                    "model": "orbit::model",
+                    "status": if status == ToolStatus::Running {
+                        "running"
+                    } else {
+                        "completed"
+                    },
+                    "summary": "**检查完成**"
+                })
+                .to_string(),
+                status,
+            };
             for width in [12, 30, 80] {
                 let collapsed = super::super::render::tool_card_with_links(&row, false, width);
                 assert_eq!(collapsed.len(), 1);
-                assert!(collapsed[0].line.to_string().contains("查看"));
+                assert!(
+                    collapsed[0]
+                        .line
+                        .to_string()
+                        .contains("查看")
+                );
                 assert!(collapsed[0].line.width() <= usize::from(width));
                 let link = &collapsed[0].links[0];
                 assert_eq!(link.url, format!("orbit://session/{id}"));

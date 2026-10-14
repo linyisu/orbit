@@ -30,7 +30,9 @@ impl Change {
             Self::Added => (THEME.diff_added, THEME.diff_added_bg),
             Self::Removed => (THEME.diff_removed, THEME.diff_removed_bg),
         };
-        Style::default().fg(foreground).bg(background)
+        Style::default()
+            .fg(foreground)
+            .bg(background)
     }
 
     fn marker(self) -> char {
@@ -164,7 +166,11 @@ impl Renderer {
     }
 
     fn line(&mut self, text: &str) -> Line<'static> {
-        let ops = match self.state.1.parse_line(text, &languages::SYNTAXES) {
+        let ops = match self
+            .state
+            .1
+            .parse_line(text, &languages::SYNTAXES)
+        {
             Ok(ops) => ops,
             Err(_) => return Line::from(text.to_owned()),
         };
@@ -218,7 +224,9 @@ pub(super) fn render_line(line: &Line<'static>, options: Options) -> Vec<Line<'s
 fn render_line_linked(line: &Line<'static>, options: Options) -> Vec<super::markdown::LinkedLine> {
     let text = line.to_string();
     let links = super::markdown::plain_links(&text);
-    let prefix = options.gutter.span(false, options.change);
+    let prefix = options
+        .gutter
+        .span(false, options.change);
     let Some(width) = options.width.map(usize::from) else {
         return vec![styled_row(
             line,
@@ -339,7 +347,9 @@ fn styled_row(
     leading: bool,
     trailing: bool,
 ) -> super::markdown::LinkedLine {
-    let prefix = options.gutter.span(continuation, options.change);
+    let prefix = options
+        .gutter
+        .span(continuation, options.change);
     let prefix_length = prefix.content.len();
     let offset = prefix_length + usize::from(leading) * "…".len();
     let links = links
@@ -362,9 +372,12 @@ fn styled_row(
         if start >= end {
             continue;
         }
-        let style = options.change.map_or(span.style, |change| {
-            span.style.bg(change.style().bg.unwrap())
-        });
+        let style = options
+            .change
+            .map_or(span.style, |change| {
+                span.style
+                    .bg(change.style().bg.unwrap())
+            });
         let mut position = start;
         for mark in &options.highlights {
             let mark_start = mark.start.max(position);

@@ -6,6 +6,7 @@ impl MigrationName for Migration {
         "00000000000023_request_receipts"
     }
 }
+
 #[async_trait::async_trait]
 impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
@@ -14,9 +15,21 @@ impl MigrationTrait for Migration {
                 Table::create()
                     .table(Alias::new("workspace_requests"))
                     .if_not_exists()
-                    .col(ColumnDef::new(Alias::new("session_id")).text().not_null())
-                    .col(ColumnDef::new(Alias::new("request_id")).text().not_null())
-                    .col(ColumnDef::new(Alias::new("fingerprint")).text().not_null())
+                    .col(
+                        ColumnDef::new(Alias::new("session_id"))
+                            .text()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(Alias::new("request_id"))
+                            .text()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(Alias::new("fingerprint"))
+                            .text()
+                            .not_null(),
+                    )
                     .col(ColumnDef::new(Alias::new("error")).text())
                     .primary_key(
                         Index::create()
@@ -34,6 +47,7 @@ impl MigrationTrait for Migration {
             .await?;
         Ok(())
     }
+
     async fn down(&self, _: &SchemaManager) -> Result<(), DbErr> {
         super::forward_only()
     }

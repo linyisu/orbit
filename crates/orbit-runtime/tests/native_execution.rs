@@ -12,7 +12,8 @@ async fn native_execution_uses_host_paths_and_retains_output() {
     env.set_var("SHELL", "/bin/sh");
     env.set_var("HOME", root.path().to_string_lossy());
     let request = ExecutionRequest::new(
-        "printf '%s' \"$HOME\"; printf 'saved' > result; /bin/sh -c 'printf child > child'; printf 'err' >&2",
+        "printf '%s' \"$HOME\"; printf 'saved' > result; /bin/sh -c 'printf child > child'; printf \
+            'err' >&2",
         root.path(),
         Duration::from_secs(5),
     );

@@ -101,11 +101,10 @@ pub(super) async fn run(
         terminal::draw_synchronized(terminal, |frame| {
             let bounds = frame.area();
             let width = bounds.width.saturating_sub(4).min(76);
-            let height =
-                bounds
-                    .height
-                    .saturating_sub(2)
-                    .min(if message.is_empty() { 12 } else { 19 });
+            let height = bounds
+                .height
+                .saturating_sub(2)
+                .min(if message.is_empty() { 12 } else { 19 });
             let area = Rect::new(
                 bounds.x + bounds.width.saturating_sub(width) / 2,
                 bounds.y + bounds.height.saturating_sub(height) / 2,
@@ -137,7 +136,10 @@ pub(super) async fn run(
                 } else {
                     Style::default()
                 };
-                let status = if connected.iter().any(|entry| entry.name == provider.name()) {
+                let status = if connected
+                    .iter()
+                    .any(|entry| entry.name == provider.name())
+                {
                     "  已连接"
                 } else {
                     ""
@@ -244,7 +246,10 @@ pub(super) async fn run(
             _ = timer.tick() => continue,
             event = events.next() => match event {
                 Some(event) => event?,
-                None => { abort(&mut task); return Ok(None); }
+                None => {
+                    abort(&mut task);
+                    return Ok(None);
+                }
             },
         };
         if let Event::Mouse(mouse) = &event {
@@ -272,7 +277,11 @@ pub(super) async fn run(
         let mut activate = false;
         match event {
             Event::Key(key) if key.kind != KeyEventKind::Release => match key.code {
-                KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                KeyCode::Char('c')
+                    if key
+                        .modifiers
+                        .contains(KeyModifiers::CONTROL) =>
+                {
                     abort(&mut task);
                     return Ok(None);
                 }
@@ -341,7 +350,10 @@ pub(super) async fn run(
             let project_id = project.trim().to_owned();
             message = "正在初始化 Google Cloud Code Assist 项目…".into();
             task = Some(AbortOnDropHandle::new(tokio::spawn(async move {
-                match pending.finish(&project_id, &store, "google").await {
+                match pending
+                    .finish(&project_id, &store, "google")
+                    .await
+                {
                     Ok(()) => Ok((LoginOutcome::Connected, None)),
                     Err(error) => Ok((
                         LoginOutcome::GoogleProjectRequired(pending),
@@ -400,7 +412,9 @@ pub(super) async fn run(
         let browser_url = url.clone();
         task = Some(AbortOnDropHandle::new(tokio::spawn(async move {
             crate::platform::launch_browser(&browser_url).await;
-            let callback = listener.wait(&login, Duration::from_secs(300)).await?;
+            let callback = listener
+                .wait(&login, Duration::from_secs(300))
+                .await?;
             let outcome = login
                 .finish_interactive(&callback, &store, provider.name())
                 .await?;
@@ -410,7 +424,8 @@ pub(super) async fn run(
 }
 
 fn copy_label(copied_at: Option<Instant>, now: Instant) -> &'static str {
-    if copied_at.is_some_and(|at| now.saturating_duration_since(at) < Duration::from_millis(1500)) {
+    if copied_at.is_some_and(|at| now.saturating_duration_since(at) < Duration::from_millis(1_500))
+    {
         "[已复制]"
     } else {
         "[复制链接]"
@@ -444,7 +459,9 @@ fn copy_link(link: &str, clipboard: &mut Option<arboard::Clipboard>) -> Result<(
         *clipboard = arboard::Clipboard::new().ok();
     }
     if let Some(clipboard) = clipboard
-        && clipboard.set_text(link.to_owned()).is_ok()
+        && clipboard
+            .set_text(link.to_owned())
+            .is_ok()
     {
         return Ok(());
     }
@@ -524,7 +541,7 @@ mod tests {
         let now = Instant::now();
         assert_eq!(copy_label(Some(now), now), "[已复制]");
         assert_eq!(
-            copy_label(Some(now), now + Duration::from_millis(1500)),
+            copy_label(Some(now), now + Duration::from_millis(1_500)),
             "[复制链接]"
         );
         assert_eq!(copy_label(None, now), "[复制链接]");

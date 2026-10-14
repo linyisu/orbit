@@ -24,9 +24,9 @@ fn environment_routes_are_inherited_without_a_web_section() {
     if let Ok(mode) = std::env::var(CHILD) {
         let client = WebClient::new(&WebConfig::default()).unwrap();
         let (http, https) = if mode == "all" {
-            (8003, 8003)
+            (8_003, 8_003)
         } else {
-            (8001, 8002)
+            (8_001, 8_002)
         };
 
         assert_eq!(proxy_port(&client, "http://public.invalid/"), Some(http));
@@ -89,7 +89,7 @@ fn explicit_proxy_overrides_environment_and_no_proxy() {
     .unwrap()
     .explicit;
     for value in ["http://public.invalid/", "https://public.invalid/"] {
-        assert_eq!(proxy_port(&client, value), Some(7897));
+        assert_eq!(proxy_port(&client, value), Some(7_897));
     }
 }
 
@@ -109,12 +109,15 @@ fn automatic_bypass_and_direct_fallback_use_the_transport_matcher() {
         "https://[2606:4700:4700::1111]/",
     ] {
         assert!(
-            client.route(&Url::parse(value).unwrap()).unwrap().is_none(),
+            client
+                .route(&Url::parse(value).unwrap())
+                .unwrap()
+                .is_none(),
             "{value}"
         );
     }
 
-    assert_eq!(proxy_port(&client, "http://notexample.org/"), Some(8001));
+    assert_eq!(proxy_port(&client, "http://notexample.org/"), Some(8_001));
     let direct = automatic(Matcher::builder().build());
     assert!(
         direct
@@ -144,13 +147,19 @@ fn credentials_are_redacted_and_browser_fallback_requires_compatible_proxy() {
 
 #[tokio::test]
 async fn automatic_proxy_serves_pages_search_and_images_without_local_dns() {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .unwrap();
     let address = listener.local_addr().unwrap();
-    let client = automatic(Matcher::builder().all(format!("http://{address}")).build());
+    let client = automatic(
+        Matcher::builder()
+            .all(format!("http://{address}"))
+            .build(),
+    );
     let server = tokio::spawn(async move {
         for path in ["page", "search", "image"] {
             let (mut stream, _) = listener.accept().await.unwrap();
-            let mut bytes = [0; 4096];
+            let mut bytes = [0; 4_096];
             let count = stream.read(&mut bytes).await.unwrap();
             let request = String::from_utf8_lossy(&bytes[..count]);
             assert!(
@@ -167,7 +176,17 @@ async fn automatic_proxy_serves_pages_search_and_images_without_local_dns() {
                 _ => ("image/png", "image payload"),
             };
 
-            stream.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+            stream
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: \
+                {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .unwrap();
         }
     });
     let output = WebFetch::with_client(client.clone())
@@ -175,7 +194,9 @@ async fn automatic_proxy_serves_pages_search_and_images_without_local_dns() {
             ToolCall::function(
                 "page",
                 "web_fetch",
-                json!({"url":"http://proxy-only.invalid/page"}),
+                json!({
+                    "url": "http://proxy-only.invalid/page"
+                }),
             ),
             CancellationToken::new(),
         )
@@ -209,7 +230,11 @@ async fn automatic_proxy_serves_pages_search_and_images_without_local_dns() {
 
 #[tokio::test]
 async fn automatic_proxy_cannot_access_private_targets_or_private_redirects() {
-    let client = automatic(Matcher::builder().all("http://127.0.0.1:9").build());
+    let client = automatic(
+        Matcher::builder()
+            .all("http://127.0.0.1:9")
+            .build(),
+    );
     for value in [
         "http://127.0.0.1/a",
         "http://198.18.0.40/a",
@@ -217,7 +242,13 @@ async fn automatic_proxy_cannot_access_private_targets_or_private_redirects() {
         "http://localhost/a",
         "https://metadata.internal/a",
     ] {
-        let call = ToolCall::function("page", "web_fetch", json!({"url":value}));
+        let call = ToolCall::function(
+            "page",
+            "web_fetch",
+            json!({
+                "url": value
+            }),
+        );
         assert!(
             WebFetch::with_client(client.clone())
                 .execute(call, CancellationToken::new())
@@ -228,7 +259,9 @@ async fn automatic_proxy_cannot_access_private_targets_or_private_redirects() {
         assert!(client.fetch_image(value).await.is_err(), "{value}");
     }
 
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .unwrap();
     let client = automatic(
         Matcher::builder()
             .all(format!("http://{}", listener.local_addr().unwrap()))
@@ -236,9 +269,15 @@ async fn automatic_proxy_cannot_access_private_targets_or_private_redirects() {
     );
     let server = tokio::spawn(async move {
         let (mut stream, _) = listener.accept().await.unwrap();
-        let mut request = [0; 4096];
+        let mut request = [0; 4_096];
         assert!(stream.read(&mut request).await.unwrap() > 0);
-        stream.write_all(b"HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1/\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await.unwrap();
+        stream
+            .write_all(
+                b"HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1/\r\nContent-Length: \
+            0\r\nConnection: close\r\n\r\n",
+            )
+            .await
+            .unwrap();
     });
     let error = client
         .fetch_image("http://proxy-only.invalid/image")

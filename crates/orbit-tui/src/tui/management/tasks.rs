@@ -148,17 +148,23 @@ impl State {
     }
 
     fn current(&self) -> Option<&ProjectTask> {
-        self.selected
-            .and_then(|id| self.tasks.iter().find(|task| task.id == id))
+        self.selected.and_then(|id| {
+            self.tasks
+                .iter()
+                .find(|task| task.id == id)
+        })
     }
 
     fn normalize_selection(&mut self) {
         let visible = self.visible();
-        if self
-            .selected
-            .is_none_or(|id| !visible.iter().any(|index| self.tasks[*index].id == id))
-        {
-            self.selected = visible.first().map(|index| self.tasks[*index].id);
+        if self.selected.is_none_or(|id| {
+            !visible
+                .iter()
+                .any(|index| self.tasks[*index].id == id)
+        }) {
+            self.selected = visible
+                .first()
+                .map(|index| self.tasks[*index].id);
         }
     }
 
@@ -171,7 +177,9 @@ impl State {
         let position = current
             .saturating_add_signed(amount)
             .min(visible.len().saturating_sub(1));
-        self.selected = visible.get(position).map(|i| self.tasks[*i].id);
+        self.selected = visible
+            .get(position)
+            .map(|i| self.tasks[*i].id);
     }
 
     fn edit(&mut self, create: bool) {
@@ -194,7 +202,10 @@ impl State {
             details,
             priority,
             dependencies: task.map_or_else(BTreeSet::new, |task| {
-                task.depends_on.iter().copied().collect()
+                task.depends_on
+                    .iter()
+                    .copied()
+                    .collect()
             }),
             focus: 0,
             offset: 0,
@@ -210,7 +221,10 @@ impl State {
     }
 
     fn dependency_candidates(&self) -> Vec<usize> {
-        let id = self.editor.as_ref().and_then(|editor| editor.id);
+        let id = self
+            .editor
+            .as_ref()
+            .and_then(|editor| editor.id);
         self.tasks
             .iter()
             .enumerate()
@@ -219,7 +233,11 @@ impl State {
     }
 
     fn toggle_dependency(&mut self, position: usize) {
-        let Some(index) = self.dependency_candidates().get(position).copied() else {
+        let Some(index) = self
+            .dependency_candidates()
+            .get(position)
+            .copied()
+        else {
             return;
         };
         let id = self.tasks[index].id;
@@ -239,12 +257,16 @@ impl State {
             return Action::None;
         }
         let title = editor.title.text.trim().to_owned();
-        let priority = editor.priority.text.trim().parse::<i64>();
+        let priority = editor
+            .priority
+            .text
+            .trim()
+            .parse::<i64>();
         let error = if title.is_empty() {
             Some("请填写任务标题。")
         } else if title.len() > 512 {
             Some("任务标题不能超过 512 字节。")
-        } else if editor.details.text.len() > 8192 {
+        } else if editor.details.text.len() > 8_192 {
             Some("任务说明不能超过 8192 字节。")
         } else if !priority
             .as_ref()
@@ -260,7 +282,11 @@ impl State {
             self.error = Some(error.into());
             return Action::None;
         }
-        let depends_on = editor.dependencies.iter().copied().collect();
+        let depends_on = editor
+            .dependencies
+            .iter()
+            .copied()
+            .collect();
         let action = if let Some(id) = editor.id {
             TaskAction::Update {
                 id,
@@ -288,7 +314,10 @@ impl State {
         }
         match hit {
             Hit::Row(position) => {
-                self.selected = self.visible().get(position).map(|i| self.tasks[*i].id);
+                self.selected = self
+                    .visible()
+                    .get(position)
+                    .map(|i| self.tasks[*i].id);
             }
             Hit::Search => self.searching = true,
             Hit::New => self.edit(true),
@@ -388,7 +417,11 @@ impl Panel for State {
                 return Action::None;
             }
             if let Some(editor) = &mut self.editor {
-                if key.code == KeyCode::Char('s') && key.modifiers.contains(KeyModifiers::CONTROL) {
+                if key.code == KeyCode::Char('s')
+                    && key
+                        .modifiers
+                        .contains(KeyModifiers::CONTROL)
+                {
                     return self.save();
                 }
                 if editor.choosing {
@@ -396,7 +429,9 @@ impl Panel for State {
                     let editor = self.editor.as_mut().unwrap();
                     match key.code {
                         KeyCode::Up => {
-                            editor.dependency_cursor = editor.dependency_cursor.saturating_sub(1)
+                            editor.dependency_cursor = editor
+                                .dependency_cursor
+                                .saturating_sub(1)
                         }
                         KeyCode::Down => {
                             editor.dependency_cursor =
@@ -413,7 +448,9 @@ impl Panel for State {
                 }
                 if key.code == KeyCode::Tab || key.code == KeyCode::BackTab {
                     editor.focus = if key.code == KeyCode::BackTab
-                        || key.modifiers.contains(KeyModifiers::SHIFT)
+                        || key
+                            .modifiers
+                            .contains(KeyModifiers::SHIFT)
                     {
                         (editor.focus + 3) % 4
                     } else {
@@ -536,7 +573,9 @@ impl Panel for State {
                             editor.dependency_cursor = if down {
                                 (editor.dependency_cursor + 3).min(count.saturating_sub(1))
                             } else {
-                                editor.dependency_cursor.saturating_sub(3)
+                                editor
+                                    .dependency_cursor
+                                    .saturating_sub(3)
                             };
                         } else {
                             editor.offset = if down {
@@ -631,13 +670,15 @@ impl Panel for State {
             ]
         };
         toolbar(frame, row(area, 1), &buttons, &mut self.hits);
-        let status = self.error.as_deref().or(self.message.as_deref()).unwrap_or(
-            if self.pending.is_some() {
+        let status = self
+            .error
+            .as_deref()
+            .or(self.message.as_deref())
+            .unwrap_or(if self.pending.is_some() {
                 "正在请求工作区…"
             } else {
                 ""
-            },
-        );
+            });
         frame.render_widget(
             Paragraph::new(safe_output(status)).style(Style::default().fg(
                 if self.error.is_some() {
@@ -648,7 +689,11 @@ impl Panel for State {
             )),
             row(area, area.height - 2),
         );
-        let hint = if self.editor.as_ref().is_some_and(|e| e.choosing) {
+        let hint = if self
+            .editor
+            .as_ref()
+            .is_some_and(|e| e.choosing)
+        {
             "↑↓ 选择依赖 · Space 勾选 · Enter/Esc 返回编辑"
         } else if self.editor.is_some() {
             "Tab 切换字段 · 依赖 Enter 选择 · Ctrl+S 保存 · Esc 保留草稿"
@@ -662,7 +707,11 @@ impl Panel for State {
         self.body_area = Rect::new(area.x, area.y + 3, area.width, area.height - 5);
         if self.choosing_status.is_some() {
             self.draw_status(frame);
-        } else if self.editor.as_ref().is_some_and(|editor| editor.choosing) {
+        } else if self
+            .editor
+            .as_ref()
+            .is_some_and(|editor| editor.choosing)
+        {
             self.draw_dependencies(frame);
         } else if self.editor.is_some() {
             self.draw_editor(frame);
@@ -689,7 +738,12 @@ impl State {
         );
         let height = self.body_area.height.saturating_sub(2) as usize;
         let offset = selected.saturating_sub(height.saturating_sub(1));
-        for (index, status) in TaskStatus::ALL.iter().enumerate().skip(offset).take(height) {
+        for (index, status) in TaskStatus::ALL
+            .iter()
+            .enumerate()
+            .skip(offset)
+            .take(height)
+        {
             let rect = row(self.body_area, (index - offset) as u16 + 2);
             frame.render_widget(
                 Paragraph::new(status_label(*status)).style(if selected == index {
@@ -699,7 +753,8 @@ impl State {
                 }),
                 rect,
             );
-            self.hits.push((rect, Hit::StatusChoice(*status)));
+            self.hits
+                .push((rect, Hit::StatusChoice(*status)));
         }
     }
 
@@ -719,7 +774,8 @@ impl State {
             Paragraph::new("[ 完成选择 · Enter ]").style(components::accent()),
             done,
         );
-        self.hits.push((done, Hit::DependencyDone));
+        self.hits
+            .push((done, Hit::DependencyDone));
         let height = self.body_area.height.saturating_sub(3) as usize;
         if height == 0 {
             return;
@@ -730,7 +786,11 @@ impl State {
         editor.dependency_offset = editor
             .dependency_offset
             .min(editor.dependency_cursor)
-            .max(editor.dependency_cursor.saturating_sub(height - 1));
+            .max(
+                editor
+                    .dependency_cursor
+                    .saturating_sub(height - 1),
+            );
         for (position, index) in candidates
             .iter()
             .enumerate()
@@ -761,7 +821,8 @@ impl State {
                 }),
                 rect,
             );
-            self.hits.push((rect, Hit::Dependency(position)));
+            self.hits
+                .push((rect, Hit::Dependency(position)));
         }
         if candidates.is_empty() {
             frame.render_widget(
@@ -785,7 +846,8 @@ impl State {
             editor.focus == 0 && self.pending.is_none(),
             "任务标题",
         );
-        self.hits.push((row(area, 1), Hit::Field(0)));
+        self.hits
+            .push((row(area, 1), Hit::Field(0)));
         frame.render_widget(
             Paragraph::new("优先级（-100～100）").style(components::muted()),
             row(area, 2),
@@ -797,7 +859,8 @@ impl State {
             editor.focus == 2 && self.pending.is_none(),
             "0",
         );
-        self.hits.push((row(area, 3), Hit::Field(2)));
+        self.hits
+            .push((row(area, 3), Hit::Field(2)));
         let dependency_label = format!(
             "依赖：{}  [ Enter 选择任务 ]",
             if editor.dependencies.is_empty() {
@@ -819,7 +882,8 @@ impl State {
             }),
             row(area, 4),
         );
-        self.hits.push((row(area, 4), Hit::Field(3)));
+        self.hits
+            .push((row(area, 4), Hit::Field(3)));
         frame.render_widget(
             Paragraph::new("说明与验收要求").style(components::muted()),
             row(area, 5),
@@ -838,7 +902,8 @@ impl State {
             editor.focus == 1 && self.pending.is_none(),
             std::mem::take(&mut editor.follow),
         );
-        self.hits.push((self.details_area, Hit::Field(1)));
+        self.hits
+            .push((self.details_area, Hit::Field(1)));
     }
 
     fn draw_list(&mut self, frame: &mut Frame<'_>) {
@@ -851,7 +916,8 @@ impl State {
             self.searching && self.pending.is_none(),
             "搜索标题、说明或任务编号…",
         );
-        self.hits.push((row(area, 0), Hit::Search));
+        self.hits
+            .push((row(area, 0), Hit::Search));
         let content = Rect::new(
             area.x,
             area.y + 2,
@@ -896,7 +962,12 @@ impl State {
             .offset
             .min(selected_position)
             .max(selected_position.saturating_sub(height - 1));
-        for (position, index) in visible.iter().enumerate().skip(self.offset).take(height) {
+        for (position, index) in visible
+            .iter()
+            .enumerate()
+            .skip(self.offset)
+            .take(height)
+        {
             let task = &self.tasks[*index];
             let y = ((position - self.offset) * 2) as u16;
             if y >= list_area.height {
@@ -939,7 +1010,8 @@ impl State {
                     row(rect, 1),
                 );
             }
-            self.hits.push((rect, Hit::Row(position)));
+            self.hits
+                .push((rect, Hit::Row(position)));
         }
         if visible.is_empty() {
             frame.render_widget(
@@ -1026,6 +1098,7 @@ mod tests {
             updated_at: 0,
         }
     }
+
     fn state() -> State {
         let mut state = State::new("session".into(), "/project".into());
         state.tasks = vec![task(12), task(27), task(41)];
@@ -1040,7 +1113,9 @@ mod tests {
         assert_eq!(state.dependency_candidates(), [0, 2]);
         state.toggle_dependency(1);
         let editor = state.editor.as_mut().unwrap();
-        editor.details.set("  acceptance\nnext step  \n".into());
+        editor
+            .details
+            .set("  acceptance\nnext step  \n".into());
         editor.priority.set("-7".into());
         let Action::Request(Request::Tasks {
             session,
@@ -1065,7 +1140,12 @@ mod tests {
         assert_eq!(depends_on, Some(vec![41]));
         state.error("connection lost".into());
         assert_eq!(
-            state.editor.as_ref().unwrap().details.text,
+            state
+                .editor
+                .as_ref()
+                .unwrap()
+                .details
+                .text,
             "  acceptance\nnext step  \n"
         );
     }
@@ -1074,17 +1154,48 @@ mod tests {
     fn create_and_clear_dependencies_use_distinct_structured_operations() {
         let mut state = state();
         state.edit(true);
-        state.editor.as_mut().unwrap().title.set("new task".into());
-        assert!(
-            matches!(state.save(), Action::Request(Request::Tasks { action: TaskAction::Create { title, parent_id: None, depends_on, .. }, .. }) if title == "new task" && depends_on.is_empty())
-        );
+        state
+            .editor
+            .as_mut()
+            .unwrap()
+            .title
+            .set("new task".into());
+        assert!(matches!(
+            state.save(),
+            Action::Request(Request::Tasks {
+                action:
+                    TaskAction::Create {
+                        title,
+                        parent_id: None,
+                        depends_on,
+                        ..
+                    },
+                ..
+            }) if title == "new task" && depends_on.is_empty()
+        ));
         state.error("validation failed".into());
-        assert_eq!(state.editor.as_ref().unwrap().title.text, "new task");
+        assert_eq!(
+            state
+                .editor
+                .as_ref()
+                .unwrap()
+                .title
+                .text,
+            "new task"
+        );
         state.editor = None;
         state.edit(false);
-        assert!(
-            matches!(state.save(), Action::Request(Request::Tasks { action: TaskAction::Update { depends_on: Some(dependencies), .. }, .. }) if dependencies.is_empty())
-        );
+        assert!(matches!(
+            state.save(),
+            Action::Request(Request::Tasks {
+                action:
+                    TaskAction::Update {
+                        depends_on: Some(dependencies),
+                        ..
+                    },
+                ..
+            }) if dependencies.is_empty()
+        ));
     }
 
     #[test]
@@ -1124,11 +1235,16 @@ mod tests {
             .find(|(_, hit)| matches!(hit, Hit::StatusChoice(TaskStatus::Cancelled)))
             .expect("the selected status must retain a visible hit target");
         assert_eq!(rect.height, 1);
-        assert!(state.body_area.contains(Position::new(rect.x, rect.y)));
+        assert!(
+            state
+                .body_area
+                .contains(Position::new(rect.x, rect.y))
+        );
         let buffer = terminal.backend().buffer();
         let mut visible = String::new();
         let mut x = rect.x;
-        // Wide glyphs occupy continuation cells; those cells are not extra spaces in the rendered label.
+        // Wide glyphs occupy continuation cells; those cells are not extra spaces in the rendered
+        // label.
         while x < rect.right() {
             let symbol = buffer[(x, rect.y)].symbol();
             visible.push_str(symbol);

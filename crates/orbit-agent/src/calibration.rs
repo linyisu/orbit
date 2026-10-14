@@ -38,7 +38,10 @@ impl TokenCalibration {
 
         ratios.sort_by(f64::total_cmp);
 
-        ratios.get(ratios.len() / 2).copied().unwrap_or(1.0)
+        ratios
+            .get(ratios.len() / 2)
+            .copied()
+            .unwrap_or(1.0)
     }
 
     pub fn estimate(&self, local: usize) -> usize {
@@ -64,7 +67,7 @@ mod tests {
 
         c.observe(100, Some(200));
         c.observe(100, Some(190));
-        c.observe(100, Some(9000));
+        c.observe(100, Some(9_000));
 
         assert_eq!(c.estimate(150), 300);
         assert_eq!(c.local_limit(256_000, 32_000), 144_000);
@@ -80,6 +83,6 @@ mod tests {
         }
 
         assert_eq!(c.samples(), 9);
-        assert_eq!(c.estimate(1000), 1100);
+        assert_eq!(c.estimate(1_000), 1_100);
     }
 }

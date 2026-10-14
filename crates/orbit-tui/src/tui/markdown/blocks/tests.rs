@@ -30,17 +30,27 @@ fn inline_example_preserves_semantics_and_portable_css() {
     for value in ["2", "下标", "小字", "引用", "Ctrl", "Enter", "HTML"] {
         assert_eq!(find(value), ratatui::style::Style::default());
     }
-    assert!(find("删除线").add_modifier.contains(Modifier::CROSSED_OUT));
+    assert!(
+        find("删除线")
+            .add_modifier
+            .contains(Modifier::CROSSED_OUT)
+    );
     assert_eq!(
         find("彩色").fg,
         Some(ratatui::style::Color::Rgb(231, 76, 60))
     );
-    assert!(find("彩色").add_modifier.contains(Modifier::BOLD));
+    assert!(
+        find("彩色")
+            .add_modifier
+            .contains(Modifier::BOLD)
+    );
 }
 
 #[test]
 fn html_table_spans_share_native_grid_and_keep_click_targets() {
-    let source = "<table>\n  <thead>\n    <tr><th>表头 A</th><th>表头 B</th></tr>\n  </thead>\n  <tbody>\n    <tr><td><a href='https://orbit.example'>中文</a></td><td>单元格 2</td></tr>\n    <tr><td colspan='2' align='center'>跨列单元格</td></tr>\n  </tbody>\n</table>";
+    let source = "<table>\n  <thead>\n    <tr><th>表头 A</th><th>表头 B</th></tr>\n  </thead>\n  \
+        <tbody>\n    <tr><td><a href='https://orbit.example'>中文</a></td><td>单元格 2</td></tr>\n    \
+        <tr><td colspan='2' align='center'>跨列单元格</td></tr>\n  </tbody>\n</table>";
     for width in [12, 20, 80] {
         let lines = super::super::document(source, width);
         let visible = text(&lines);
@@ -48,7 +58,11 @@ fn html_table_spans_share_native_grid_and_keep_click_targets() {
         assert!(visible.contains("跨列单元格"));
         let targets = lines
             .iter()
-            .flat_map(|line| line.links.iter().map(|link| (&line.line, link)))
+            .flat_map(|line| {
+                line.links
+                    .iter()
+                    .map(|link| (&line.line, link))
+            })
             .collect::<Vec<_>>();
         assert!(!targets.is_empty());
         assert_eq!(
@@ -61,15 +75,32 @@ fn html_table_spans_share_native_grid_and_keep_click_targets() {
         if width >= 20 {
             let span = lines
                 .iter()
-                .find(|line| line.line.to_string().contains("跨列单元格"))
+                .find(|line| {
+                    line.line
+                        .to_string()
+                        .contains("跨列单元格")
+                })
                 .unwrap();
-            assert_eq!(span.line.to_string().matches('│').count(), 2);
+            assert_eq!(
+                span.line
+                    .to_string()
+                    .matches('│')
+                    .count(),
+                2
+            );
             assert!(
                 lines
                     .iter()
                     .all(|line| line.line.width() <= usize::from(width))
             );
-            assert!(!lines.last().unwrap().line.to_string().contains('┴'));
+            assert!(
+                !lines
+                    .last()
+                    .unwrap()
+                    .line
+                    .to_string()
+                    .contains('┴')
+            );
         }
     }
 }
@@ -104,7 +135,10 @@ fn html_blocks_preserve_surrounding_blank_lines_and_indented_source_code() {
 
 #[test]
 fn block_styles_links_and_generated_rails_share_copy_metadata() {
-    let source = "<blockquote>引用 <code>&lt;blockquote&gt;</code></blockquote>\n\n<div style='background:#f0f4f8; border-left:4px solid #3498db; padding:12px; margin:12px 0;'>提示 **加粗**</div>\n\n<hr>\n\n<img src='https://orbit.example/image.png' alt='HTML 图片' width='400'>\n\n<p style='text-align:center; color:#888888;'>文档结束</p>";
+    let source = "<blockquote>引用 <code>&lt;blockquote&gt;</code></blockquote>\n\n<div \
+        style='background:#f0f4f8; border-left:4px solid #3498db; padding:12px; margin:12px \
+        0;'>提示 **加粗**</div>\n\n<hr>\n\n<img src='https://orbit.example/image.png' alt='HTML 图片' \
+        width='400'>\n\n<p style='text-align:center; color:#888888;'>文档结束</p>";
     let lines = super::super::document(source, 60);
     let visible = text(&lines);
     assert!(visible.contains("引用 <blockquote>"));
@@ -134,7 +168,11 @@ fn block_styles_links_and_generated_rails_share_copy_metadata() {
     );
     let image = lines
         .iter()
-        .find(|line| line.line.to_string().contains("HTML 图片"))
+        .find(|line| {
+            line.line
+                .to_string()
+                .contains("HTML 图片")
+        })
         .unwrap();
     assert_eq!(image.links[0].url, "https://orbit.example/image.png");
     assert_eq!(
@@ -143,9 +181,17 @@ fn block_styles_links_and_generated_rails_share_copy_metadata() {
     );
     let end = lines
         .iter()
-        .find(|line| line.line.to_string().contains("文档结束"))
+        .find(|line| {
+            line.line
+                .to_string()
+                .contains("文档结束")
+        })
         .unwrap();
-    assert!(end.line.to_string().starts_with(&" ".repeat(20)));
+    assert!(
+        end.line
+            .to_string()
+            .starts_with(&" ".repeat(20))
+    );
     assert!(
         end.line
             .spans
@@ -156,7 +202,9 @@ fn block_styles_links_and_generated_rails_share_copy_metadata() {
 
 #[test]
 fn details_keep_markdown_and_literal_code_with_independent_nested_ids() {
-    let source = "<details>\n<summary>折叠</summary>\n\n- **加粗项目**\n- `fib(n)`\n- `</details>` 字面标签\n\n```html\n</details><b>源码</b>\n```\n\n<details open><summary>子块</summary>子块内容</details>\n</details>\n后文";
+    let source = "<details>\n<summary>折叠</summary>\n\n- **加粗项目**\n- `fib(n)`\n- `</details>` \
+        字面标签\n\n```html\n</details><b>源码</b>\n```\n\n<details \
+        open><summary>子块</summary>子块内容</details>\n</details>\n后文";
     let block = render(source, 80, "body/0", 0).unwrap();
     assert!(block.complete);
     assert!(!source[..block.bytes].contains("后文"));
@@ -178,7 +226,11 @@ fn details_keep_markdown_and_literal_code_with_independent_nested_ids() {
     let nested = block
         .lines
         .iter()
-        .find(|line| line.line.to_string().contains("子块内容"))
+        .find(|line| {
+            line.line
+                .to_string()
+                .contains("子块内容")
+        })
         .unwrap();
 
     assert_eq!(nested.folds.len(), 2);
@@ -186,7 +238,8 @@ fn details_keep_markdown_and_literal_code_with_independent_nested_ids() {
 
 #[test]
 fn html_callouts_and_rules_share_body_edges_and_keep_the_outer_margin_unpainted() {
-    let source = "前文\n\n<div style='background:#f0f4f8;border-left:4px solid #3498db;padding:12px'>提示 **文字**</div>\n\n<hr>\n\n---";
+    let source = "前文\n\n<div style='background:#f0f4f8;border-left:4px solid \
+        #3498db;padding:12px'>提示 **文字**</div>\n\n<hr>\n\n---";
     for width in [24, 80, 140] {
         let lines = super::super::document(source, width);
         let callout = lines
@@ -196,8 +249,23 @@ fn html_callouts_and_rules_share_body_edges_and_keep_the_outer_margin_unpainted(
         assert_eq!(callout.line.width(), usize::from(width));
         assert_eq!(callout.line.spans[0].content, "  ");
         assert_eq!(callout.line.spans[0].style.bg, None);
-        assert_eq!(callout.line.spans.last().unwrap().style.bg, None);
-        assert!(callout.line.spans.iter().any(|s| s.content == "▎ "));
+        assert_eq!(
+            callout
+                .line
+                .spans
+                .last()
+                .unwrap()
+                .style
+                .bg,
+            None
+        );
+        assert!(
+            callout
+                .line
+                .spans
+                .iter()
+                .any(|s| s.content == "▎ ")
+        );
         let html = lines
             .iter()
             .find(|line| line.chrome && line.text().contains('─'))
@@ -222,16 +290,20 @@ fn details_use_a_body_aligned_indicator_and_preserve_summary_semantics() {
             .text()
             .starts_with(&format!("  {} 普通", super::super::icons::CHEVRON_RIGHT))
     );
-    assert!(
-        header
-            .line
-            .spans
-            .iter()
-            .any(|s| s.content == "强调" && s.style.add_modifier.contains(Modifier::BOLD))
-    );
-    assert!(header.line.spans.iter().any(|s| s.content.contains("普通")
-        && !s.style.add_modifier.contains(Modifier::BOLD)
-        && s.style.fg != Some(THEME.accent)));
+    assert!(header.line.spans.iter().any(|s| {
+        s.content == "强调"
+            && s.style
+                .add_modifier
+                .contains(Modifier::BOLD)
+    }));
+    assert!(header.line.spans.iter().any(|s| {
+        s.content.contains("普通")
+            && !s
+                .style
+                .add_modifier
+                .contains(Modifier::BOLD)
+            && s.style.fg != Some(THEME.accent)
+    }));
     assert!(
         lines
             .iter()

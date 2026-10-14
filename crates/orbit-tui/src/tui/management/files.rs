@@ -18,7 +18,7 @@ use crate::{
     workspace::protocol::{Request, Response},
 };
 
-const MAX_EDIT_BYTES: usize = 1024 * 1024;
+const MAX_EDIT_BYTES: usize = 1_024 * 1_024;
 
 #[derive(Debug)]
 struct Marker {
@@ -117,7 +117,10 @@ impl Source {
             .input
             .selection()
             .map_or(self.input.cursor, |r| r.start);
-        let replace_end = self.input.selection().map_or(self.input.cursor, |r| r.end);
+        let replace_end = self
+            .input
+            .selection()
+            .map_or(self.input.cursor, |r| r.end);
         let handled = match (&fragment, event) {
             (Some(fragment), _) => {
                 self.input.insert(&fragment.input.text);
@@ -165,20 +168,31 @@ impl Source {
             if marker.range.end <= prefix {
                 true
             } else if marker.range.start >= old_end {
-                marker.range = marker.range.start.saturating_add_signed(shift)
-                    ..marker.range.end.saturating_add_signed(shift);
+                marker.range = marker
+                    .range
+                    .start
+                    .saturating_add_signed(shift)
+                    ..marker
+                        .range
+                        .end
+                        .saturating_add_signed(shift);
                 true
             } else {
                 false
             }
         });
         if let Some(fragment) = fragment {
+            self.markers.extend(
+                fragment
+                    .markers
+                    .into_iter()
+                    .map(|mut marker| {
+                        marker.range = marker.range.start + insert_at..marker.range.end + insert_at;
+                        marker
+                    }),
+            );
             self.markers
-                .extend(fragment.markers.into_iter().map(|mut marker| {
-                    marker.range = marker.range.start + insert_at..marker.range.end + insert_at;
-                    marker
-                }));
-            self.markers.sort_by_key(|marker| marker.range.start);
+                .sort_by_key(|marker| marker.range.start);
         }
         handled
     }
@@ -190,6 +204,7 @@ struct Document {
     original: String,
     source: Source,
 }
+
 #[derive(Debug)]
 enum Pending {
     List { path: String, append: bool },
@@ -197,6 +212,7 @@ enum Pending {
     Compare,
     Save { content: String },
 }
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Focus {
     Path,
@@ -204,6 +220,7 @@ enum Focus {
     Editor,
     Disk,
 }
+
 #[derive(Debug)]
 enum Confirm {
     Close,
@@ -282,10 +299,12 @@ impl State {
             cached: None,
         }
     }
+
     pub(super) fn at(mut self, path: Option<String>) -> Self {
         self.initial_path = path;
         self
     }
+
     pub(super) fn initial(&mut self) -> Request {
         if let Some(path) = self.initial_path.take() {
             if path.ends_with('/') || matches!(path.as_str(), "." | "..") {
@@ -297,6 +316,7 @@ impl State {
             self.list(self.directory.clone(), false)
         }
     }
+
     fn request(&self, action: FileAction) -> Request {
         Request::Files {
             session: self.session.clone(),
@@ -304,6 +324,7 @@ impl State {
             action,
         }
     }
+
     fn list(&mut self, path: String, append: bool) -> Request {
         let offset = if append { self.next.unwrap_or(0) } else { 0 };
         self.pending = Some(Pending::List {
@@ -317,6 +338,7 @@ impl State {
             include_hidden: self.hidden,
         })
     }
+
     fn read(&mut self, path: String) -> Request {
         self.pending = Some(Pending::Read { path: path.clone() });
         self.message = None;
@@ -325,6 +347,7 @@ impl State {
             path,
         }
     }
+
     fn dirty(&self) -> bool {
         self.unknown_save
             || self
@@ -332,6 +355,7 @@ impl State {
                 .as_ref()
                 .is_some_and(|d| d.source.raw() != d.original)
     }
+
     fn open(&mut self, path: String) -> Action {
         if self.pending.is_some() {
             return Action::None;
@@ -343,6 +367,7 @@ impl State {
             Action::Request(self.read(path))
         }
     }
+
     fn save(&mut self, original: Option<String>) -> Action {
         if self.pending.is_some() {
             return Action::None;
@@ -376,6 +401,7 @@ impl State {
         self.message = None;
         Action::Request(request)
     }
+
     fn compare(&mut self) -> Action {
         if self.pending.is_some() {
             return Action::None;
@@ -390,6 +416,7 @@ impl State {
         self.pending = Some(Pending::Compare);
         Action::Request(request)
     }
+
     fn selected(&mut self) -> Action {
         if self.pending.is_some() {
             return Action::None;
@@ -404,6 +431,7 @@ impl State {
             self.open(path)
         }
     }
+
     fn activate(&mut self, key: char) -> Action {
         if key == 'c' {
             if self.dirty() {
@@ -436,12 +464,14 @@ impl State {
             _ => Action::None,
         }
     }
+
     fn reject(&mut self, error: String, uncertain: bool) {
         if matches!(self.pending.take(), Some(Pending::Save { .. })) && uncertain {
             self.unknown_save = true;
         }
         self.message = Some(error);
     }
+
     fn file_bytes(&mut self, encoded: String, pending: Pending) -> Action {
         let raw = match STANDARD
             .decode(encoded)
@@ -515,6 +545,7 @@ impl State {
         }
         Action::None
     }
+
     fn source_rows(&mut self, width: u16) -> &[Line<'static>] {
         if !self
             .cached
@@ -540,6 +571,7 @@ impl State {
         }
         &self.cached.as_ref().unwrap().2
     }
+
     fn draw_editor(&mut self, frame: &mut Frame<'_>, area: Rect) {
         self.editor_area = area;
         if area.is_empty() {
@@ -572,7 +604,10 @@ impl State {
         }
         let offset = self.editor_offset;
         let rows = self.source_rows(area.width);
-        self.editor_offset = offset.min(rows.len().saturating_sub(area.height as usize));
+        self.editor_offset = offset.min(
+            rows.len()
+                .saturating_sub(area.height as usize),
+        );
         let lines = self
             .cached
             .as_ref()
@@ -645,7 +680,9 @@ impl Panel for State {
                     }
                 };
             }
-            let control = key.modifiers.contains(KeyModifiers::CONTROL);
+            let control = key
+                .modifiers
+                .contains(KeyModifiers::CONTROL);
             if control && matches!(key.code, KeyCode::Char('v' | 'V')) {
                 match arboard::Clipboard::new().and_then(|mut clipboard| clipboard.get_text()) {
                     Ok(text) => {
@@ -656,15 +693,18 @@ impl Panel for State {
                 return Action::None;
             }
             if control && matches!(key.code, KeyCode::Char('c' | 'C')) {
-                return self.document.as_ref().map_or(Action::None, |document| {
-                    Action::Copy(
-                        document
-                            .source
-                            .input
-                            .selected_text()
-                            .map_or_else(|| document.source.raw(), str::to_owned),
-                    )
-                });
+                return self
+                    .document
+                    .as_ref()
+                    .map_or(Action::None, |document| {
+                        Action::Copy(
+                            document
+                                .source
+                                .input
+                                .selected_text()
+                                .map_or_else(|| document.source.raw(), str::to_owned),
+                        )
+                    });
             }
             if key.code == KeyCode::Esc {
                 return self.activate('c');
@@ -675,7 +715,11 @@ impl Panel for State {
                 return Action::None;
             }
             if control && matches!(key.code, KeyCode::Char('s' | 'S')) {
-                if key.modifiers.contains(KeyModifiers::SHIFT) && self.disk.is_some() {
+                if key
+                    .modifiers
+                    .contains(KeyModifiers::SHIFT)
+                    && self.disk.is_some()
+                {
                     self.confirmation = Some(Confirm::Overwrite);
                     return Action::None;
                 }
@@ -714,7 +758,9 @@ impl Panel for State {
                         if self.pending.is_some() {
                             return Action::None;
                         }
-                        if key.modifiers.contains(KeyModifiers::ALT)
+                        if key
+                            .modifiers
+                            .contains(KeyModifiers::ALT)
                             || self.path.text.trim().ends_with('/')
                             || matches!(self.path.text.trim(), "." | "..")
                         {
@@ -722,7 +768,8 @@ impl Panel for State {
                         }
                         return self.open(self.path.text.trim().into());
                     }
-                    self.path.edit(event, self.path_area.width.max(2) as usize);
+                    self.path
+                        .edit(event, self.path_area.width.max(2) as usize);
                 }
                 Focus::List => match key.code {
                     KeyCode::Enter => return self.selected(),
@@ -734,7 +781,9 @@ impl Panel for State {
                             .min(self.entries.len().saturating_sub(1))
                     }
                     KeyCode::PageUp => {
-                        self.selected = self.selected.saturating_sub(self.list_area.height as usize)
+                        self.selected = self
+                            .selected
+                            .saturating_sub(self.list_area.height as usize)
                     }
                     KeyCode::PageDown => {
                         self.selected = self
@@ -771,11 +820,12 @@ impl Panel for State {
                     }
                     KeyCode::Up | KeyCode::PageUp => {
                         self.disk_offset =
-                            self.disk_offset.saturating_sub(if key.code == KeyCode::Up {
-                                1
-                            } else {
-                                self.disk_area.height as usize
-                            })
+                            self.disk_offset
+                                .saturating_sub(if key.code == KeyCode::Up {
+                                    1
+                                } else {
+                                    self.disk_area.height as usize
+                                })
                     }
                     _ => {}
                 },
@@ -785,7 +835,8 @@ impl Panel for State {
             return Action::None;
         } else if let Event::Paste(_) = event {
             if self.focus == Focus::Path {
-                self.path.edit(event, self.path_area.width.max(2) as usize);
+                self.path
+                    .edit(event, self.path_area.width.max(2) as usize);
             } else if self.focus == Focus::Editor
                 && self.pending.is_none()
                 && !self.readonly
@@ -801,20 +852,26 @@ impl Panel for State {
             let point = (mouse.column, mouse.row).into();
             match mouse.kind {
                 MouseEventKind::Down(MouseButton::Left) => {
-                    if let Some((_, action)) =
-                        self.actions.iter().find(|(area, _)| area.contains(point))
+                    if let Some((_, action)) = self
+                        .actions
+                        .iter()
+                        .find(|(area, _)| area.contains(point))
                     {
                         return self.activate(*action);
                     }
-                    if let Some((_, index)) =
-                        self.row_hits.iter().find(|(area, _)| area.contains(point))
+                    if let Some((_, index)) = self
+                        .row_hits
+                        .iter()
+                        .find(|(area, _)| area.contains(point))
                     {
                         self.selected = *index;
                         self.focus = Focus::List;
                         return self.selected();
                     }
-                    if let Some((_, focus)) =
-                        self.hits.iter().find(|(area, _)| area.contains(point))
+                    if let Some((_, focus)) = self
+                        .hits
+                        .iter()
+                        .find(|(area, _)| area.contains(point))
                     {
                         self.focus = *focus;
                     }
@@ -838,10 +895,14 @@ impl Panel for State {
                         3
                     };
                     if self.editor_area.contains(point) {
-                        self.editor_offset = self.editor_offset.saturating_add_signed(delta);
+                        self.editor_offset = self
+                            .editor_offset
+                            .saturating_add_signed(delta);
                         self.follow_cursor = false;
                     } else if self.disk_area.contains(point) {
-                        self.disk_offset = self.disk_offset.saturating_add_signed(delta);
+                        self.disk_offset = self
+                            .disk_offset
+                            .saturating_add_signed(delta);
                     } else if self.list_area.contains(point) {
                         self.selected = self
                             .selected
@@ -854,6 +915,7 @@ impl Panel for State {
         }
         Action::None
     }
+
     fn receive(&mut self, response: Response) -> Action {
         if let Response::Error(error) = response {
             self.reject(error, false);
@@ -897,7 +959,11 @@ impl Panel for State {
                 Pending::Save { content: requested },
                 Response::Files(Snapshot::Saved { path, content }),
             ) => {
-                if let Some(document) = self.document.as_mut().filter(|d| d.path == path) {
+                if let Some(document) = self
+                    .document
+                    .as_mut()
+                    .filter(|d| d.path == path)
+                {
                     if requested != content {
                         self.unknown_save = true;
                         self.message = Some("保存回执与请求内容不一致；请比较磁盘版本".into());
@@ -917,9 +983,11 @@ impl Panel for State {
         }
         Action::None
     }
+
     fn error(&mut self, error: String) {
         self.reject(error, true);
     }
+
     fn invalidate_geometry(&mut self) {
         self.list_area = Rect::default();
         self.editor_area = Rect::default();
@@ -929,6 +997,7 @@ impl Panel for State {
         self.actions.clear();
         self.row_hits.clear();
     }
+
     fn draw(&mut self, frame: &mut Frame<'_>, area: Rect) {
         self.invalidate_geometry();
         if area.is_empty() {
@@ -964,7 +1033,8 @@ impl Panel for State {
             }),
             self.path_area,
         );
-        self.hits.push((self.path_area, Focus::Path));
+        self.hits
+            .push((self.path_area, Focus::Path));
         let footer_height = 3.min(area.height.saturating_sub(2));
         let footer = Rect::new(
             area.x,
@@ -976,7 +1046,8 @@ impl Panel for State {
             area.x,
             area.y + 2,
             area.width,
-            area.height.saturating_sub(2 + footer_height),
+            area.height
+                .saturating_sub(2 + footer_height),
         );
         let (list, document) = if body.width >= 64 {
             let width = 28.min(body.width / 3);
@@ -1045,20 +1116,31 @@ impl Panel for State {
                 document.x,
                 document.y + editor_height,
                 document.width,
-                1.min(document.height.saturating_sub(editor_height)),
+                1.min(
+                    document
+                        .height
+                        .saturating_sub(editor_height),
+                ),
             );
             self.disk_area = Rect::new(
                 document.x,
                 label.bottom(),
                 document.width,
-                document.bottom().saturating_sub(label.bottom()),
+                document
+                    .bottom()
+                    .saturating_sub(label.bottom()),
             );
             frame.render_widget(
                 Paragraph::new("磁盘版本 · 只读（Ctrl+Shift+S 使用编辑内容替换）")
                     .style(components::accent()),
                 label,
             );
-            let lines = code::file_lines(self.document.as_ref().map_or("", |d| &d.path), disk);
+            let lines = code::file_lines(
+                self.document
+                    .as_ref()
+                    .map_or("", |d| &d.path),
+                disk,
+            );
             let wrapped: Vec<_> = lines
                 .iter()
                 .flat_map(|line| {
@@ -1071,9 +1153,11 @@ impl Panel for State {
                     )
                 })
                 .collect();
-            self.disk_offset = self
-                .disk_offset
-                .min(wrapped.len().saturating_sub(self.disk_area.height as usize));
+            self.disk_offset = self.disk_offset.min(
+                wrapped
+                    .len()
+                    .saturating_sub(self.disk_area.height as usize),
+            );
             frame.render_widget(
                 Paragraph::new(
                     wrapped
@@ -1084,12 +1168,14 @@ impl Panel for State {
                 ),
                 self.disk_area,
             );
-            self.hits.push((self.disk_area, Focus::Disk));
+            self.hits
+                .push((self.disk_area, Focus::Disk));
             self.draw_editor(frame, editor);
         } else {
             self.draw_editor(frame, document);
         }
-        self.hits.push((self.editor_area, Focus::Editor));
+        self.hits
+            .push((self.editor_area, Focus::Editor));
         let status = match &self.confirmation {
             Some(Confirm::Close) => "放弃未保存或未确认的编辑并关闭？Y 放弃 · N / Esc 保留".into(),
             Some(Confirm::Open(_)) => "放弃当前编辑并打开另一文件？Y 放弃 · N / Esc 保留".into(),
@@ -1169,6 +1255,7 @@ mod tests {
     fn key(code: KeyCode, modifiers: KeyModifiers) -> Event {
         Event::Key(KeyEvent::new(code, modifiers))
     }
+
     fn loaded(raw: &str) -> State {
         let mut state =
             State::new("session".into(), "/workspace".into()).at(Some("src/main.rs".into()));
@@ -1183,6 +1270,7 @@ mod tests {
         }));
         state
     }
+
     #[test]
     fn edits_preserve_existing_tabs_mixed_line_endings_and_pasted_source() {
         let mut source = Source::new("\tlet old = 1;\r\nnext\nlast\r");
@@ -1192,10 +1280,13 @@ mod tests {
             .set_cursor(source.input.text.find("old").unwrap());
         source.edit(&Event::Paste("新\t值".into()), 80);
         assert_eq!(source.raw(), "\tlet 新\t值old = 1;\r\nnext\nlast\r");
-        source.input.set_cursor(source.input.text.len());
+        source
+            .input
+            .set_cursor(source.input.text.len());
         source.edit(&key(KeyCode::Enter, KeyModifiers::NONE), 80);
         assert!(source.raw().ends_with("last\r\r\n"));
     }
+
     #[test]
     fn untouched_controls_are_visible_and_round_trip_without_terminal_escapes() {
         let raw = "before\u{1b}[31m\u{7}after\r\n";
@@ -1203,10 +1294,13 @@ mod tests {
         assert_eq!(source.raw(), raw);
         assert!(!source.input.text.contains('\u{1b}'));
         assert!(!source.input.text.contains('\u{7}'));
-        source.input.set_cursor(source.input.text.len());
+        source
+            .input
+            .set_cursor(source.input.text.len());
         source.edit(&Event::Paste("\tend\u{1b}".into()), 80);
         assert_eq!(source.raw(), format!("{raw}\tend\u{1b}"));
     }
+
     #[test]
     fn save_uses_original_source_and_unknown_reply_requires_comparison() {
         let mut state = loaded("\told\r\n");
@@ -1233,6 +1327,7 @@ mod tests {
         assert!(!state.unknown_save);
         assert!(!state.dirty());
     }
+
     #[test]
     fn conflict_and_dirty_close_keep_the_draft_until_explicit_confirmation() {
         let mut state = loaded("old");
@@ -1244,7 +1339,15 @@ mod tests {
         state.compare();
         state.receive(Response::File(STANDARD.encode("external")));
         assert_eq!(state.disk.as_deref(), Some("external"));
-        assert_eq!(state.document.as_ref().unwrap().source.raw(), "draft old");
+        assert_eq!(
+            state
+                .document
+                .as_ref()
+                .unwrap()
+                .source
+                .raw(),
+            "draft old"
+        );
         assert!(matches!(
             state.handle(&key(KeyCode::Esc, KeyModifiers::NONE)),
             Action::None
@@ -1261,6 +1364,7 @@ mod tests {
         assert!(!state.dirty());
         assert!(state.document.is_none());
     }
+
     #[test]
     fn binary_is_not_editable_and_resizing_never_changes_raw_source() {
         let mut state = State::new("session".into(), "/workspace".into()).at(Some("binary".into()));

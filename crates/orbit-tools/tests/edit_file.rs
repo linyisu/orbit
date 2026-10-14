@@ -47,7 +47,12 @@ async fn replaces_inserts_deletes_and_explicitly_replaces_all_without_normalizin
         fs::write(root.path().join("file"), before).unwrap();
         let (task, mut rx) = start(
             root.path(),
-            json!({ "path": "file", "old_text": old, "new_text": new, "replace_all": all }),
+            json!({
+                "path": "file",
+                "old_text": old,
+                "new_text": new,
+                "replace_all": all
+            }),
             CancellationToken::new(),
         );
         let request = tokio::time::timeout(Duration::from_secs(2), rx.recv())
@@ -86,17 +91,63 @@ async fn rejects_ambiguous_missing_invalid_noop_and_oversized_edits_before_appro
     fs::write(root.path().join("file"), "aaa\r\nx x").unwrap();
 
     for args in [
-        json!({ "path": "file", "old_text": "aa", "new_text": "b" }),
-        json!({ "path": "file", "old_text": "x", "new_text": "y" }),
-        json!({ "path": "file", "old_text": "absent", "new_text": "y" }),
-        json!({ "path": "file", "old_text": "aaa\n", "new_text": "y" }),
-        json!({ "path": "file", "old_text": "", "new_text": "y" }),
-        json!({ "path": "file", "old_text": "aaa", "new_text": "aaa" }),
-        json!({ "path": "file", "old_text": "aaa", "new_text": "\u{0}" }),
-        json!({ "path": "file", "old_text": "x", "new_text": "z".repeat(600000), "replace_all": true }),
-        json!({ "path": "missing", "old_text": "x", "new_text": "y" }),
-        json!({ "path": "../file", "old_text": "x", "new_text": "y" }),
-        json!({ "path": "file", "old_text": "aaa", "new_text": "y", "unknown": true }),
+        json!({
+            "path": "file",
+            "old_text": "aa",
+            "new_text": "b"
+        }),
+        json!({
+            "path": "file",
+            "old_text": "x",
+            "new_text": "y"
+        }),
+        json!({
+            "path": "file",
+            "old_text": "absent",
+            "new_text": "y"
+        }),
+        json!({
+            "path": "file",
+            "old_text": "aaa\n",
+            "new_text": "y"
+        }),
+        json!({
+            "path": "file",
+            "old_text": "",
+            "new_text": "y"
+        }),
+        json!({
+            "path": "file",
+            "old_text": "aaa",
+            "new_text": "aaa"
+        }),
+        json!({
+            "path": "file",
+            "old_text": "aaa",
+            "new_text": "\u{0}"
+        }),
+        json!({
+            "path": "file",
+            "old_text": "x",
+            "new_text": "z".repeat(600_000),
+            "replace_all": true
+        }),
+        json!({
+            "path": "missing",
+            "old_text": "x",
+            "new_text": "y"
+        }),
+        json!({
+            "path": "../file",
+            "old_text": "x",
+            "new_text": "y"
+        }),
+        json!({
+            "path": "file",
+            "old_text": "aaa",
+            "new_text": "y",
+            "unknown": true
+        }),
     ] {
         let (task, mut rx) = start(root.path(), args, CancellationToken::new());
 
@@ -120,7 +171,11 @@ async fn failed_edits_return_bounded_current_text_without_approval_or_modificati
     ] {
         let (task, mut rx) = start(
             root.path(),
-            json!({"path":"file","old_text":old,"new_text":"replacement"}),
+            json!({
+                "path": "file",
+                "old_text": old,
+                "new_text": "replacement"
+            }),
             CancellationToken::new(),
         );
         let ToolError::ExecutionFailed(error) = task.await.unwrap().unwrap_err() else {
@@ -131,7 +186,9 @@ async fn failed_edits_return_bounded_current_text_without_approval_or_modificati
         if code == "text_not_found" {
             assert_eq!(feedback["exact_matches"], 0);
         }
-        let candidates = feedback["candidates"].as_array().unwrap();
+        let candidates = feedback["candidates"]
+            .as_array()
+            .unwrap();
         assert!(!candidates.is_empty() && candidates.len() <= 3);
         if code == "text_not_found" {
             assert_eq!(candidates[0]["line"], 2);
@@ -142,7 +199,7 @@ async fn failed_edits_return_bounded_current_text_without_approval_or_modificati
                     .contains("        finish();\r\n")
             );
         }
-        assert!(error.len() < 5000);
+        assert!(error.len() < 5_000);
         assert!(rx.try_recv().is_err());
         assert_eq!(
             fs::read_to_string(root.path().join("file")).unwrap(),
@@ -176,7 +233,11 @@ async fn mismatch_diagnostics_locate_long_blocks_and_inline_changes_without_writ
         fs::write(root.path().join("file"), &before).unwrap();
         let (task, mut rx) = start(
             root.path(),
-            json!({"path":"file","old_text":old,"new_text":"replacement"}),
+            json!({
+                "path": "file",
+                "old_text": old,
+                "new_text": "replacement"
+            }),
             CancellationToken::new(),
         );
         let ToolError::ExecutionFailed(error) = task.await.unwrap().unwrap_err() else {
@@ -187,7 +248,7 @@ async fn mismatch_diagnostics_locate_long_blocks_and_inline_changes_without_writ
         assert!(candidate.is_object(), "{feedback}");
         assert_eq!(candidate["first_difference"]["line"], line);
         assert_eq!(candidate["first_difference"]["column"], column);
-        assert!(error.len() < 6000);
+        assert!(error.len() < 6_000);
         assert!(rx.try_recv().is_err());
         assert_eq!(
             fs::read_to_string(root.path().join("file")).unwrap(),
@@ -204,7 +265,11 @@ async fn denial_cancellation_and_concurrent_changes_never_overwrite_the_file() {
         let token = CancellationToken::new();
         let (task, mut rx) = start(
             root.path(),
-            json!({ "path": "file", "old_text": "original", "new_text": "edited" }),
+            json!({
+                "path": "file",
+                "old_text": "original",
+                "new_text": "edited"
+            }),
             token.clone(),
         );
         let request = tokio::time::timeout(Duration::from_secs(2), rx.recv())
@@ -244,7 +309,11 @@ async fn rejects_protected_files_and_links() {
     for path in ["config.toml", "sym", "hard"] {
         let (task, mut rx) = start(
             root.path(),
-            json!({ "path": path, "old_text": "text", "new_text": "changed" }),
+            json!({
+                "path": path,
+                "old_text": "text",
+                "new_text": "changed"
+            }),
             CancellationToken::new(),
         );
 
@@ -256,15 +325,24 @@ async fn rejects_protected_files_and_links() {
 #[tokio::test]
 async fn edits_large_source_without_replacing_unrelated_content() {
     let root = tempfile::tempdir().unwrap();
-    let before = format!("{}\nunique anchor\n", "x".repeat(128 * 1024));
+    let before = format!("{}\nunique anchor\n", "x".repeat(128 * 1_024));
     fs::write(root.path().join("large"), &before).unwrap();
     let (task, mut rx) = start(
         root.path(),
-        json!({ "path": "large", "old_text": "unique anchor", "new_text": "updated anchor" }),
+        json!({
+            "path": "large",
+            "old_text": "unique anchor",
+            "new_text": "updated anchor"
+        }),
         CancellationToken::new(),
     );
 
-    rx.recv().await.unwrap().decision.send(true).unwrap();
+    rx.recv()
+        .await
+        .unwrap()
+        .decision
+        .send(true)
+        .unwrap();
     task.await.unwrap().unwrap();
 
     assert_eq!(

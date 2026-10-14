@@ -8,7 +8,9 @@ use anyhow::{Context, Result, ensure};
 use tokio::process::Command;
 
 pub async fn run(command: &mut Command) -> Result<Output> {
-    command.stdout(Stdio::piped()).stderr(Stdio::piped());
+    command
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
     wait(command).await
 }
 
@@ -24,7 +26,11 @@ pub async fn run_to_file(command: &mut Command, path: &Path) -> Result<()> {
 async fn wait(command: &mut Command) -> Result<Output> {
     let description = format!("{command:?}");
     let output = tokio::time::timeout(Duration::from_secs(120), async {
-        command.kill_on_drop(true).spawn()?.wait_with_output().await
+        command
+            .kill_on_drop(true)
+            .spawn()?
+            .wait_with_output()
+            .await
     })
     .await
     .with_context(|| format!("command timed out: {description}"))?
@@ -40,7 +46,9 @@ async fn wait(command: &mut Command) -> Result<Output> {
 }
 
 pub fn stdout(output: Output) -> Result<String> {
-    Ok(String::from_utf8(output.stdout)?.trim().to_owned())
+    Ok(String::from_utf8(output.stdout)?
+        .trim()
+        .to_owned())
 }
 
 #[cfg(test)]
@@ -52,10 +60,15 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let source = directory.path().join("source");
         let destination = directory.path().join("download");
-        let bytes: Vec<_> = (0..=255).cycle().take(128 * 1024 + 17).collect();
+        let bytes: Vec<_> = (0..=255)
+            .cycle()
+            .take(128 * 1_024 + 17)
+            .collect();
         std::fs::write(&source, &bytes).unwrap();
 
-        let captured = run(Command::new("cat").arg(&source)).await.unwrap();
+        let captured = run(Command::new("cat").arg(&source))
+            .await
+            .unwrap();
         assert_eq!(captured.stdout, bytes);
         run_to_file(Command::new("cat").arg(&source), &destination)
             .await

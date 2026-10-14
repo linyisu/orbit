@@ -29,9 +29,9 @@ fn fixed_terminal(stdout: Stdout, area: Rect) -> io::Result<AppTerminal> {
     )
 }
 
+/// Make every cell differ from the fresh drawing buffer. This clears stale cells with ordinary cell
+/// updates instead of a visible Clear(All).
 fn prime_full_redraw<B: Backend>(terminal: &mut Terminal<B>) {
-    // Make every cell differ from the fresh drawing buffer. This clears stale
-    // cells with ordinary cell updates instead of a visible Clear(All).
     for cell in &mut terminal.current_buffer_mut().content {
         cell.set_bg(crate::tui::theme::THEME.repaint_sentinel);
     }
@@ -39,9 +39,9 @@ fn prime_full_redraw<B: Backend>(terminal: &mut Terminal<B>) {
     terminal.swap_buffers();
 }
 
+/// Replacing an old wide glyph can spread the new background to its other half. Repaint the
+/// boundary even when the next blank matches the cache.
 fn mark_background_edges(buffer: &mut Buffer) {
-    // Replacing an old wide glyph can spread the new background to its other
-    // half. Repaint the boundary even when the next blank matches the cache.
     let area = buffer.area;
     for y in area.top()..area.bottom() {
         let mut x = area.left();
@@ -163,7 +163,9 @@ pub fn draw_synchronized(
     terminal: &mut AppTerminal,
     render: impl FnOnce(&mut Frame<'_>),
 ) -> io::Result<()> {
-    terminal.backend_mut().queue(BeginSynchronizedUpdate)?;
+    terminal
+        .backend_mut()
+        .queue(BeginSynchronizedUpdate)?;
     super::media::delete_stale(&mut io::stdout())?;
     let draw = (|| {
         let actual: Rect = terminal.size()?.into();
@@ -285,9 +287,12 @@ mod tests {
             assert_eq!(current[(12, 0)].symbol(), " ");
             assert_eq!(current[(12, 0)].bg, Color::Reset);
             assert!(
-                previous.diff(current).iter().any(|(x, y, cell)| {
-                    (*x, *y) == (12, 0) && cell.symbol() == " " && cell.bg == Color::Reset
-                }),
+                previous
+                    .diff(current)
+                    .iter()
+                    .any(|(x, y, cell)| {
+                        (*x, *y) == (12, 0) && cell.symbol() == " " && cell.bg == Color::Reset
+                    }),
                 "the terminal must receive a background reset after the badge's final padding cell"
             );
 

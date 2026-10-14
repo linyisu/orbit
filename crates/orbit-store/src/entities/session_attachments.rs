@@ -11,6 +11,7 @@ pub struct Model {
     pub byte_size: i64,
     pub created_at: i64,
 }
+
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
 pub enum Relation {
     #[sea_orm(
@@ -20,4 +21,5 @@ pub enum Relation {
     )]
     Session,
 }
+
 impl ActiveModelBehavior for ActiveModel {}

@@ -46,6 +46,7 @@ fn tabs_query() -> Select<tui_tabs::Entity> {
         )
         .order_by_asc(tui_tabs::Column::Position)
 }
+
 impl Store {
     pub async fn tui_tab_title(&self, id: &str) -> Result<Option<String>> {
         let id = id.to_owned();
@@ -59,6 +60,7 @@ impl Store {
         })
         .await
     }
+
     pub async fn grant_tui_file(&self, id: &str, path: &str) -> Result<()> {
         let (id, path) = (id.to_owned(), path.to_owned());
         self.write_access(move |conn| async move {
@@ -81,6 +83,7 @@ impl Store {
         })
         .await
     }
+
     pub async fn tui_file_grants(&self, id: &str) -> Result<std::collections::HashSet<String>> {
         let id = id.to_owned();
         self.read_access(move |conn| async move {
@@ -94,6 +97,7 @@ impl Store {
         })
         .await
     }
+
     pub async fn set_tui_mode(&self, id: &str, mode: &str) -> Result<()> {
         anyhow::ensure!(
             matches!(mode, "ask" | "auto" | "YOLO"),
@@ -117,6 +121,7 @@ impl Store {
         })
         .await
     }
+
     pub async fn tui_mode(&self, id: &str) -> Result<String> {
         let id = id.to_owned();
         self.read_access(move |conn| async move {
@@ -127,6 +132,7 @@ impl Store {
         })
         .await
     }
+
     pub async fn publish_tui_runtime(&self, id: &str, run: i64, runtime: TuiRuntime) -> Result<()> {
         let id = id.to_owned();
         let status = if runtime.status == "cancelling" {
@@ -170,6 +176,7 @@ impl Store {
         })
         .await
     }
+
     pub async fn tui_runtime(&self, id: &str) -> Result<Option<TuiRuntime>> {
         let id = id.to_owned();
         self.read_access(move |conn| async move {
@@ -182,7 +189,9 @@ impl Store {
                 .into_tuple::<(i64, String)>()
                 .one(&tx)
                 .await?;
-            let state = tui_session_state::Entity::find_by_id(&id).one(&tx).await?;
+            let state = tui_session_state::Entity::find_by_id(&id)
+                .one(&tx)
+                .await?;
             let payload = match (latest, state) {
                 (Some((id, status)), Some(state))
                     if state.run_id == Some(id) && status != "interrupted" =>
@@ -197,6 +206,7 @@ impl Store {
         })
         .await
     }
+
     pub async fn session_revision(&self, id: &str) -> Result<Option<SessionRevision>> {
         let id = id.to_owned();
         self.read_access(move |conn| async move {
@@ -246,6 +256,7 @@ impl Store {
         })
         .await
     }
+
     pub async fn run_events_after(
         &self,
         session: &str,
@@ -270,11 +281,16 @@ impl Store {
         })
         .await
     }
+
     pub async fn remember_tui_tab(&self, id: &str) -> Result<()> {
         let id = id.to_owned();
         self.write_access(move |conn| async move {
             let tx = conn.begin().await?;
-            if sessions::Entity::find_by_id(&id).count(&tx).await? > 0 {
+            if sessions::Entity::find_by_id(&id)
+                .count(&tx)
+                .await?
+                > 0
+            {
                 tui_tabs::Entity::insert(tui_tabs::ActiveModel {
                     session_id: Set(id),
                     ..Default::default()
@@ -293,6 +309,7 @@ impl Store {
         })
         .await
     }
+
     pub async fn forget_tui_tab(&self, id: &str) -> Result<()> {
         let id = id.to_owned();
         self.write_access(move |conn| async move {
@@ -304,6 +321,7 @@ impl Store {
         })
         .await
     }
+
     pub async fn all_tui_tabs(&self) -> Result<Vec<String>> {
         self.read_access(move |conn| async move {
             Ok(tabs_query()
@@ -315,8 +333,11 @@ impl Store {
         })
         .await
     }
+
     pub async fn tui_tabs(&self, project: &str) -> Result<Vec<String>> {
-        let projects = self.equivalent_project_ids(project).await?;
+        let projects = self
+            .equivalent_project_ids(project)
+            .await?;
         self.read_access(move |conn| async move {
             Ok(tabs_query()
                 .filter(sessions::Column::ProjectId.is_in(projects))
@@ -347,7 +368,10 @@ mod tests {
             .create(a.to_string_lossy().into_owned(), "m".into())
             .await
             .unwrap();
-        first.begin("hello".into(), "m".into()).await.unwrap();
+        first
+            .begin("hello".into(), "m".into())
+            .await
+            .unwrap();
         first
             .finish("completed", vec![], Some(vec![]))
             .await
@@ -360,17 +384,36 @@ mod tests {
             .create(b.to_string_lossy().into_owned(), "m".into())
             .await
             .unwrap();
-        other.begin("hello".into(), "m".into()).await.unwrap();
+        other
+            .begin("hello".into(), "m".into())
+            .await
+            .unwrap();
         other
             .finish("completed", vec![], Some(vec![]))
             .await
             .unwrap();
         for id in [first.id(), empty.id(), other.id()] {
-            store.remember_tui_tab(id).await.unwrap();
+            store
+                .remember_tui_tab(id)
+                .await
+                .unwrap();
         }
         let peer = Store::open(db).await.unwrap();
-        assert_eq!(peer.tui_tabs(&project.id).await.unwrap(), vec![first.id()]);
-        peer.forget_tui_tab(first.id()).await.unwrap();
-        assert!(store.tui_tabs(&project.id).await.unwrap().is_empty());
+        assert_eq!(
+            peer.tui_tabs(&project.id)
+                .await
+                .unwrap(),
+            vec![first.id()]
+        );
+        peer.forget_tui_tab(first.id())
+            .await
+            .unwrap();
+        assert!(
+            store
+                .tui_tabs(&project.id)
+                .await
+                .unwrap()
+                .is_empty()
+        );
     }
 }

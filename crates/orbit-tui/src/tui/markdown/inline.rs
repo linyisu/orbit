@@ -42,25 +42,38 @@ impl Formatting {
 
     fn code(&self) -> bool {
         matches!(self, Self::Code)
-            || matches!(self, Self::Group(items) if items.iter().any(Self::code))
+            || matches!(
+                self,
+                Self::Group(items) if items.iter().any(Self::code)
+            )
     }
 
     fn style(&self, style: Style) -> Style {
         match self {
             Self::Bold => style
-                .fg(if style.add_modifier.contains(Modifier::ITALIC) {
-                    THEME.md_bold_italic
-                } else {
-                    THEME.md_bold
-                })
+                .fg(
+                    if style
+                        .add_modifier
+                        .contains(Modifier::ITALIC)
+                    {
+                        THEME.md_bold_italic
+                    } else {
+                        THEME.md_bold
+                    },
+                )
                 .add_modifier(Modifier::BOLD),
 
             Self::Italic => style
-                .fg(if style.add_modifier.contains(Modifier::BOLD) {
-                    THEME.md_bold_italic
-                } else {
-                    THEME.md_italic
-                })
+                .fg(
+                    if style
+                        .add_modifier
+                        .contains(Modifier::BOLD)
+                    {
+                        THEME.md_bold_italic
+                    } else {
+                        THEME.md_italic
+                    },
+                )
                 .add_modifier(Modifier::ITALIC),
 
             Self::Strike => style
@@ -68,7 +81,9 @@ impl Formatting {
                 .add_modifier(Modifier::CROSSED_OUT),
             Self::Underline => style.add_modifier(Modifier::UNDERLINED),
             Self::Mark => super::mark_style(style),
-            Self::Code => style.fg(THEME.md_inline_code).add_modifier(Modifier::BOLD),
+            Self::Code => style
+                .fg(THEME.md_inline_code)
+                .add_modifier(Modifier::BOLD),
             Self::Heading(level) => style
                 .fg(match level {
                     pulldown_cmark::HeadingLevel::H1 => THEME.md_h1,
@@ -79,9 +94,13 @@ impl Formatting {
                 .add_modifier(Modifier::BOLD),
 
             Self::Quote => style.fg(THEME.md_quote_text),
-            Self::Link(_) => style.fg(THEME.md_link).add_modifier(Modifier::UNDERLINED),
+            Self::Link(_) => style
+                .fg(THEME.md_link)
+                .add_modifier(Modifier::UNDERLINED),
             Self::Image(_) => style,
-            Self::Group(items) => items.iter().fold(style, |style, item| item.style(style)),
+            Self::Group(items) => items
+                .iter()
+                .fold(style, |style, item| item.style(style)),
             Self::Custom(custom) => style.patch(*custom),
         }
     }
@@ -185,31 +204,45 @@ impl Renderer {
                     .map(str::to_owned)
             })
             .or_else(|| {
-                self.frames.iter().rev().find_map(|frame| {
-                    frame
-                        .formatting
-                        .as_ref()
-                        .and_then(Formatting::image_link)
-                        .map(str::to_owned)
-                })
+                self.frames
+                    .iter()
+                    .rev()
+                    .find_map(|frame| {
+                        frame
+                            .formatting
+                            .as_ref()
+                            .and_then(Formatting::image_link)
+                            .map(str::to_owned)
+                    })
             });
 
-        self.rows.last_mut().unwrap().push(Atom {
-            span,
-            url,
-            media: self.frames.iter().rev().find_map(|f| match &f.formatting {
-                Some(Formatting::Image(url)) => Some(crate::tui::media::Source::Image(url.clone())),
-                _ => None,
-            }),
-        });
+        self.rows
+            .last_mut()
+            .unwrap()
+            .push(Atom {
+                span,
+                url,
+                media: self
+                    .frames
+                    .iter()
+                    .rev()
+                    .find_map(|f| match &f.formatting {
+                        Some(Formatting::Image(url)) => {
+                            Some(crate::tui::media::Source::Image(url.clone()))
+                        }
+                        _ => None,
+                    }),
+            });
     }
 
     fn text(&mut self, text: &str, markdown: bool) {
         let style = self.style();
-        let literal = self
-            .frames
-            .iter()
-            .any(|frame| frame.formatting.as_ref().is_some_and(Formatting::code));
+        let literal = self.frames.iter().any(|frame| {
+            frame
+                .formatting
+                .as_ref()
+                .is_some_and(Formatting::code)
+        });
 
         if literal || !markdown {
             self.push(Span::styled(text.to_owned(), style));
@@ -249,7 +282,8 @@ impl Renderer {
 
                     Tag::Item => {
                         self.push(Span::styled(
-                            self.ordered.map_or("• ".into(), |n| format!("{n}. ")),
+                            self.ordered
+                                .map_or("• ".into(), |n| format!("{n}. ")),
                             Style::default().fg(if self.ordered.is_some() {
                                 THEME.md_ordered_bullet
                             } else {
@@ -263,7 +297,8 @@ impl Renderer {
                         (!dest_url.starts_with('#')).then(|| Formatting::Link(dest_url.to_string()))
                     }
                     Tag::Image { dest_url, .. } => {
-                        self.image_starts.push(self.rows.iter().map(Vec::len).sum());
+                        self.image_starts
+                            .push(self.rows.iter().map(Vec::len).sum());
                         Some(Formatting::Image(dest_url.to_string()))
                     }
 
@@ -294,13 +329,20 @@ impl Renderer {
 
             Event::Text(text) => self.text(&text, true),
             Event::FootnoteReference(label) => {
-                if let Some(number) = self.footnotes.get(&super::footnotes::key(&label)) {
+                if let Some(number) = self
+                    .footnotes
+                    .get(&super::footnotes::key(&label))
+                {
                     self.push(Span::styled(
                         format!("[{number}]"),
                         super::footnotes::style(),
                     ));
-                    self.rows.last_mut().unwrap().last_mut().unwrap().url =
-                        Some(super::footnotes::target(&label));
+                    self.rows
+                        .last_mut()
+                        .unwrap()
+                        .last_mut()
+                        .unwrap()
+                        .url = Some(super::footnotes::target(&label));
                 } else {
                     self.text(&format!("[^{label}]"), false);
                 }
@@ -325,7 +367,12 @@ impl Renderer {
                     ),
                     Style::default().fg(THEME.md_inline_code),
                 ));
-                self.rows.last_mut().unwrap().last_mut().unwrap().media = Some(source);
+                self.rows
+                    .last_mut()
+                    .unwrap()
+                    .last_mut()
+                    .unwrap()
+                    .media = Some(source);
             }
 
             Event::Html(text) | Event::InlineHtml(text) => {
@@ -377,12 +424,21 @@ impl Renderer {
                 } else {
                     THEME.secondary
                 });
-                let marker =
-                    self.rows.last_mut().unwrap().iter_mut().rev().find(|atom| {
+                let marker = self
+                    .rows
+                    .last_mut()
+                    .unwrap()
+                    .iter_mut()
+                    .rev()
+                    .find(|atom| {
                         atom.span.content == "• "
-                            || atom.span.content.strip_suffix(". ").is_some_and(|n| {
-                                !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())
-                            })
+                            || atom
+                                .span
+                                .content
+                                .strip_suffix(". ")
+                                .is_some_and(|n| {
+                                    !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())
+                                })
                     });
 
                 if let Some(marker) = marker {

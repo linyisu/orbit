@@ -13,14 +13,24 @@ impl Snapshot {
     /// Gemini and Claude/GPT pools; their order in the response is not meaningful.
     /// Keep all limits in `account` so the details view can still show both pools.
     pub fn summary_limits(&self) -> impl Iterator<Item = &Limit> {
-        let antigravity = self.account.provider.eq_ignore_ascii_case("antigravity");
-        let model = self.model.rsplit("::").next().unwrap_or(&self.model);
+        let antigravity = self
+            .account
+            .provider
+            .eq_ignore_ascii_case("antigravity");
+        let model = self
+            .model
+            .rsplit("::")
+            .next()
+            .unwrap_or(&self.model);
         let family = quota_family(model);
-        self.account.limits.iter().filter(move |limit| {
-            limit.scope == Scope::Account
-                && (!antigravity
-                    || quota_family(&limit.label).is_none_or(|group| Some(group) == family))
-        })
+        self.account
+            .limits
+            .iter()
+            .filter(move |limit| {
+                limit.scope == Scope::Account
+                    && (!antigravity
+                        || quota_family(&limit.label).is_none_or(|group| Some(group) == family))
+            })
     }
 }
 
@@ -40,6 +50,7 @@ fn quota_family(name: &str) -> Option<QuotaFamily> {
         None
     }
 }
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Account {
     /// Opaque source fingerprint, used only to keep stale data account-scoped.
@@ -52,6 +63,7 @@ pub struct Account {
     pub note: Option<String>,
     pub error: Option<String>,
 }
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Limit {
     pub label: String,
@@ -74,6 +86,7 @@ pub enum Scope {
     Account,
     Model,
 }
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Session {
     pub runs: usize,

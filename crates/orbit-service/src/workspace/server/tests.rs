@@ -41,6 +41,7 @@ impl Fixture {
     async fn new(url: &str) -> Self {
         Self::with_vision(url, false).await
     }
+
     async fn with_vision(url: &str, vision: bool) -> Self {
         let root = tempfile::tempdir().unwrap();
         let workspace = root.path().join("workspace");
@@ -87,8 +88,14 @@ impl Fixture {
                 read: true,
                 write: true,
             });
-        let handle = Arc::new(Handle::spawn(setup, None).await.unwrap());
-        handle.clients.store(1, Ordering::Release);
+        let handle = Arc::new(
+            Handle::spawn(setup, None)
+                .await
+                .unwrap(),
+        );
+        handle
+            .clients
+            .store(1, Ordering::Release);
         let service = Service {
             options,
             sessions: Mutex::new([(handle.info.id.clone(), handle.clone())].into()),
@@ -170,7 +177,15 @@ async fn usage_request_inspects_the_current_model_without_persisting_or_starting
     assert_eq!(snapshot.model, "test");
     assert!(snapshot.account.note.is_some());
     assert_eq!(snapshot.session.runs, 0);
-    assert!(fixture.handle.store.list().await.unwrap().is_empty());
+    assert!(
+        fixture
+            .handle
+            .store
+            .list()
+            .await
+            .unwrap()
+            .is_empty()
+    );
     let after = fixture.page(0).await;
     assert_eq!(after.next, before.next);
     assert!(!after.busy);
@@ -183,7 +198,9 @@ async fn usage_request_inspects_the_current_model_without_persisting_or_starting
 
 #[tokio::test]
 async fn steering_receipt_confirms_persistence_while_the_model_is_still_waiting() {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .unwrap();
     let fixture = Fixture::new(&format!("http://{}/v1", listener.local_addr().unwrap())).await;
     let session = fixture.handle.info.id.clone();
     fixture
@@ -228,8 +245,16 @@ async fn steering_receipt_confirms_persistence_while_the_model_is_still_waiting(
     );
     let page = fixture.page(0).await;
     assert!(page.busy);
-    assert!(!page.updates.iter().any(|update| matches!(update, protocol::Update::Agent(event) if matches!(event.as_ref(), orbit_agent::events::AgentEvent::InputReceived { .. }))));
-    fixture.request(Request::Cancel { session }).await.unwrap();
+    assert!(!page.updates.iter().any(
+        |update| matches!(update, protocol::Update::Agent(event) if matches!(
+            event.as_ref(),
+            orbit_agent::events::AgentEvent::InputReceived { .. }
+        ))
+    ));
+    fixture
+        .request(Request::Cancel { session })
+        .await
+        .unwrap();
     fixture.wait(|page| !page.busy).await;
 }
 
@@ -269,7 +294,11 @@ async fn sent_images_are_readable_only_through_the_owning_session() {
         let setup = crate::workspace::setup::prepare_workspace(&options, &workspace, None)
             .await
             .unwrap();
-        handles.push(Arc::new(Handle::spawn(setup, None).await.unwrap()));
+        handles.push(Arc::new(
+            Handle::spawn(setup, None)
+                .await
+                .unwrap(),
+        ));
     }
     let owner = handles[0].clone();
     let other = handles[1].clone();
@@ -332,9 +361,14 @@ async fn sent_images_are_readable_only_through_the_owning_session() {
         )
         .await
         .unwrap();
-    assert!(
-        matches!(response, Response::File(data) if base64::engine::general_purpose::STANDARD.decode(&data).unwrap() == bytes)
-    );
+    assert!(matches!(
+        response,
+        Response::File(data)
+            if base64::engine::general_purpose::STANDARD
+                .decode(&data)
+                .unwrap()
+                == bytes
+    ));
     assert!(
         service
             .dispatch(
@@ -348,5 +382,8 @@ async fn sent_images_are_readable_only_through_the_owning_session() {
             .await
             .is_err()
     );
-    owner.command(session::Command::Cancel).await.unwrap();
+    owner
+        .command(session::Command::Cancel)
+        .await
+        .unwrap();
 }

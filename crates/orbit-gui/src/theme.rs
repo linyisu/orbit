@@ -17,6 +17,7 @@ struct FontCatalog {
     code: SharedString,
     emoji: bool,
 }
+
 impl Global for FontCatalog {}
 
 pub(crate) fn installed_fonts(cx: &App) -> &[SharedString] {
@@ -58,7 +59,11 @@ fn fallback_families(installed: &[String]) -> Vec<String> {
             "DejaVu Sans",
             "Noto Sans",
         ])
-        .filter(|candidate| installed.iter().any(|family| family == candidate))
+        .filter(|candidate| {
+            installed
+                .iter()
+                .any(|family| family == candidate)
+        })
         .map(str::to_owned)
         .collect()
 }
@@ -81,7 +86,11 @@ fn resolve_family(
     installed: &[SharedString],
 ) -> SharedString {
     preferred
-        .and_then(|preferred| installed.iter().find(|family| family.as_ref() == preferred))
+        .and_then(|preferred| {
+            installed
+                .iter()
+                .find(|family| family.as_ref() == preferred)
+        })
         .unwrap_or(fallback)
         .clone()
 }
@@ -96,7 +105,11 @@ pub(crate) fn document_style() -> gpui_kit::component::text::TextViewStyle {
                 .text_size(rems(0.875))
                 .line_height(relative(1.5)),
         )
-        .table_cell(StyleRefinement::default().min_w_0().whitespace_normal())
+        .table_cell(
+            StyleRefinement::default()
+                .min_w_0()
+                .whitespace_normal(),
+        )
 }
 
 pub(crate) fn install(cx: &mut App) {
@@ -120,11 +133,16 @@ pub(crate) fn install(cx: &mut App) {
     .find(|name| fonts.iter().any(|font| font == name))
     .map(Into::into);
     cx.set_global(FontCatalog {
-        families: fonts.into_iter().map(Into::into).collect(),
+        families: fonts
+            .into_iter()
+            .map(Into::into)
+            .collect(),
         ui: family
             .clone()
             .unwrap_or_else(|| Theme::global(cx).font_family.clone()),
-        code: Theme::global(cx).mono_font_family.clone(),
+        code: Theme::global(cx)
+            .mono_font_family
+            .clone(),
         emoji,
     });
     for theme in &mut set.themes {

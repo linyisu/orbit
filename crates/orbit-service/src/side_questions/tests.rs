@@ -11,14 +11,18 @@ fn tool_less_requests_preserve_context_without_unresolved_protocol_calls() {
             tool_calls: vec![ToolCall::function(
                 "orbit-call",
                 "read_file",
-                serde_json::json!({"path":"orbit.rs"}),
+                serde_json::json!({
+                    "path": "orbit.rs"
+                }),
             )],
         },
         ChatMessage::tool("orbit-call", "Orbit 文件内容"),
         ChatMessage::assistant_tool_calls(vec![ToolCall::function(
             "pending",
             "read_file",
-            serde_json::json!({"path":"orbit.md"}),
+            serde_json::json!({
+                "path": "orbit.md"
+            }),
         )]),
         ChatMessage::assistant("正在检查中文"),
     ];
@@ -28,17 +32,21 @@ fn tool_less_requests_preserve_context_without_unresolved_protocol_calls() {
         &[],
         "什么原因？",
         Some(ReasoningEffort::High),
-        4096,
+        4_096,
     );
 
     assert!(sent.tools.is_empty());
     assert_eq!(sent.reasoning_effort, Some(ReasoningEffort::High));
-    assert_eq!(sent.max_tokens, Some(4096));
-    assert!(sent.messages.iter().all(|message| match message {
-        ChatMessage::Tool { .. } => false,
-        ChatMessage::Assistant { tool_calls, .. } => tool_calls.is_empty(),
-        _ => true,
-    }));
+    assert_eq!(sent.max_tokens, Some(4_096));
+    assert!(
+        sent.messages
+            .iter()
+            .all(|message| match message {
+                ChatMessage::Tool { .. } => false,
+                ChatMessage::Assistant { tool_calls, .. } => tool_calls.is_empty(),
+                _ => true,
+            })
+    );
     let text = serde_json::to_string(&sent.messages).unwrap();
     for expected in [
         "Orbit 项目指令",

@@ -26,26 +26,38 @@ impl ConnectionDraft {
         let source = super::read_config(path)?;
         let config: FileConfig = toml::from_str(&source)?;
         let provider = name
-            .map(|name| config.providers.get(name).cloned().context("连接已不存在"))
+            .map(|name| {
+                config
+                    .providers
+                    .get(name)
+                    .cloned()
+                    .context("连接已不存在")
+            })
             .transpose()?;
-        let models = provider.as_ref().map_or_else(Vec::new, |p| {
-            let mut ids = p.models.iter().map(|m| m.id.clone()).collect::<Vec<_>>();
-            // Keep overrides for temporarily unavailable automatic models editable and intact.
-            for id in p.spec.model_overrides.keys() {
-                if !ids.contains(id) {
-                    ids.push(id.clone());
-                }
-            }
-            ids.into_iter()
-                .map(|id| {
-                    let mut explicit = ModelProfile::new(&id);
-                    if let Some(settings) = p.spec.model_overrides.get(&id) {
-                        settings.apply(&mut explicit, p.api_format);
+        let models = provider
+            .as_ref()
+            .map_or_else(Vec::new, |p| {
+                let mut ids = p
+                    .models
+                    .iter()
+                    .map(|m| m.id.clone())
+                    .collect::<Vec<_>>();
+                // Keep overrides for temporarily unavailable automatic models editable and intact.
+                for id in p.spec.model_overrides.keys() {
+                    if !ids.contains(id) {
+                        ids.push(id.clone());
                     }
-                    explicit
-                })
-                .collect::<Vec<_>>()
-        });
+                }
+                ids.into_iter()
+                    .map(|id| {
+                        let mut explicit = ModelProfile::new(&id);
+                        if let Some(settings) = p.spec.model_overrides.get(&id) {
+                            settings.apply(&mut explicit, p.api_format);
+                        }
+                        explicit
+                    })
+                    .collect::<Vec<_>>()
+            });
 
         Ok(Self {
             name: name.unwrap_or_default().to_owned(),
@@ -56,7 +68,10 @@ impl ConnectionDraft {
             endpoint: provider
                 .as_ref()
                 .map_or_else(String::new, |p| p.base_url.clone()),
-            original_models: models.iter().map(|m| m.id.clone()).collect(),
+            original_models: models
+                .iter()
+                .map(|m| m.id.clone())
+                .collect(),
             models,
             provider,
             source,
@@ -110,9 +125,12 @@ pub async fn save(
         "请至少启用一个模型"
     );
     ensure!(
-        draft.models.iter().all(|m| !m.id.trim().is_empty()
-            && m.id.len() <= 256
-            && !m.id.chars().any(char::is_control)),
+        draft
+            .models
+            .iter()
+            .all(|m| !m.id.trim().is_empty()
+                && m.id.len() <= 256
+                && !m.id.chars().any(char::is_control)),
         "模型 ID 无效"
     );
     let endpoint = url::Url::parse(&draft.endpoint).context("服务地址无效")?;
@@ -147,12 +165,16 @@ pub async fn save(
         }
     }
 
-    let mut document = draft.source.parse::<toml_edit::DocumentMut>()?;
+    let mut document = draft
+        .source
+        .parse::<toml_edit::DocumentMut>()?;
     if let Some(name) = &draft.original_name {
         ensure!(name == &draft.name, "编辑连接时不能更改连接名称");
     } else {
         ensure!(
-            document["providers"].get(&draft.name).is_none(),
+            document["providers"]
+                .get(&draft.name)
+                .is_none(),
             "连接名称已存在"
         );
     }
@@ -198,7 +220,9 @@ pub async fn save(
     match key {
         KeyChange::Keep => {}
         KeyChange::Replace(_) | KeyChange::None => {
-            let table = provider.as_table_like_mut().context("连接配置无效")?;
+            let table = provider
+                .as_table_like_mut()
+                .context("连接配置无效")?;
             table.remove("api_key");
             table.remove("credential");
             if matches!(key, KeyChange::Replace(_)) {
@@ -246,7 +270,9 @@ pub async fn remove(path: &Path, auth: &Path, draft: &ConnectionDraft) -> Result
         .providers
         .get(name)
         .and_then(|provider| provider.credential.clone());
-    let mut document = draft.source.parse::<toml_edit::DocumentMut>()?;
+    let mut document = draft
+        .source
+        .parse::<toml_edit::DocumentMut>()?;
     let providers = document["providers"]
         .as_table_like_mut()
         .context("供应商配置无效")?;
@@ -301,38 +327,64 @@ mod tests {
             .set_api_key("existing", "secret".into(), "http://localhost/v1")
             .await
             .unwrap();
-        std::fs::write(&path, "# preserved\n[providers.gateway]\napi_format='openai_responses'\nbase_url='http://localhost/v1'\ncredential='existing'\nauto_refresh_models=false\ntimeout_seconds=75\nmodels=['a','b']\n[providers.gateway.model_overrides.a]\nsupports_vision=true\n").unwrap();
+        std::fs::write(
+            &path,
+            "# preserved\n[providers.gateway]\napi_format='openai_responses'\nbas\
+            e_url='http://localhost/v1'\ncredential='existing'\nauto_refresh_models=false\ntimeout\
+            _seconds=75\nmodels=['a','b']\n[providers.gateway.model_overrides.a]\nsupports_vision=\
+            true\n",
+        )
+        .unwrap();
         let mut draft = ConnectionDraft::load(&path, Some("gateway")).unwrap();
-        draft.models[0].context_tokens = Some(131072);
-        draft.models[0].input_context_tokens = Some(96000);
-        draft.models[0].max_output_tokens = Some(8192);
-        let options = save(&path, &auth, &draft, KeyChange::Keep).await.unwrap();
-        assert_eq!(options[0].input_context_tokens, 96000);
-        assert_eq!(options[0].max_output_tokens, 8192);
+        draft.models[0].context_tokens = Some(131_072);
+        draft.models[0].input_context_tokens = Some(96_000);
+        draft.models[0].max_output_tokens = Some(8_192);
+        let options = save(&path, &auth, &draft, KeyChange::Keep)
+            .await
+            .unwrap();
+        assert_eq!(options[0].input_context_tokens, 96_000);
+        assert_eq!(options[0].max_output_tokens, 8_192);
         assert!(options[0].supports_vision);
 
         let mut draft = ConnectionDraft::load(&path, Some("gateway")).unwrap();
-        assert_eq!(draft.models[0].context_tokens, Some(131072));
-        assert_eq!(draft.models[0].input_context_tokens, Some(96000));
-        assert_eq!(draft.models[0].max_output_tokens, Some(8192));
+        assert_eq!(draft.models[0].context_tokens, Some(131_072));
+        assert_eq!(draft.models[0].input_context_tokens, Some(96_000));
+        assert_eq!(draft.models[0].max_output_tokens, Some(8_192));
         assert!(draft.models[1].context_tokens.is_none());
         draft.models[0].context_tokens = None;
         draft.models[0].input_context_tokens = None;
         draft.models[0].max_output_tokens = None;
-        save(&path, &auth, &draft, KeyChange::Keep).await.unwrap();
+        save(&path, &auth, &draft, KeyChange::Keep)
+            .await
+            .unwrap();
 
         let draft = ConnectionDraft::load(&path, Some("gateway")).unwrap();
         assert!(draft.models[0].context_tokens.is_none());
-        assert!(draft.models[0].input_context_tokens.is_none());
-        assert!(draft.models[0].max_output_tokens.is_none());
+        assert!(
+            draft.models[0]
+                .input_context_tokens
+                .is_none()
+        );
+        assert!(
+            draft.models[0]
+                .max_output_tokens
+                .is_none()
+        );
         assert_eq!(draft.models[0].supports_vision, Some(true));
         let configuration = FileConfig::load(&path, &auth).unwrap();
         assert_eq!(configuration.providers["gateway"].timeout_seconds, 75);
         assert_eq!(
-            configuration.providers["gateway"].credential.as_deref(),
+            configuration.providers["gateway"]
+                .credential
+                .as_deref(),
             Some("existing")
         );
-        assert_eq!(configuration.providers["gateway"].models.len(), 2);
+        assert_eq!(
+            configuration.providers["gateway"]
+                .models
+                .len(),
+            2
+        );
         assert_eq!(store.list().unwrap().len(), 1);
         let source = std::fs::read_to_string(&path).unwrap();
         assert!(source.starts_with("# preserved"));
@@ -349,11 +401,21 @@ mod tests {
             .set_api_key("shared", "secret".into(), "http://localhost/v1")
             .await
             .unwrap();
-        let provider = "api_format='openai_chat_completions'\nbase_url='http://localhost/v1'\ncredential='shared'\nmodels=['model']\n";
-        std::fs::write(&path, format!("# preserved\n[compaction]\nmodel='first::model'\n[providers.first]\n{provider}[providers.second]\n{provider}")).unwrap();
+        let provider = "api_format='openai_chat_completions'\nbase_url='http://localhost/v1'\ncrede\
+            ntial='shared'\nmodels=['model']\n";
+        std::fs::write(
+            &path,
+            format!(
+                "# preserved\n[compaction]\nmodel='first::model'\n[providers.\
+            first]\n{provider}[providers.second]\n{provider}"
+            ),
+        )
+        .unwrap();
         let first = ConnectionDraft::load(&path, Some("first")).unwrap();
         let stale = ConnectionDraft::load(&path, Some("second")).unwrap();
-        let options = remove(&path, &auth, &first).await.unwrap();
+        let options = remove(&path, &auth, &first)
+            .await
+            .unwrap();
         assert_eq!(options.len(), 1);
         assert_eq!(saved_connections(&path).unwrap(), vec!["second"]);
         assert!(
@@ -369,11 +431,24 @@ mod tests {
                 .unwrap()
                 .starts_with("# preserved")
         );
-        assert!(remove(&path, &auth, &stale).await.is_err());
+        assert!(
+            remove(&path, &auth, &stale)
+                .await
+                .is_err()
+        );
         assert_eq!(store.list().unwrap().len(), 1);
         let second = ConnectionDraft::load(&path, Some("second")).unwrap();
-        assert!(remove(&path, &auth, &second).await.unwrap().is_empty());
+        assert!(
+            remove(&path, &auth, &second)
+                .await
+                .unwrap()
+                .is_empty()
+        );
         assert!(store.list().unwrap().is_empty());
-        assert!(saved_connections(&path).unwrap().is_empty());
+        assert!(
+            saved_connections(&path)
+                .unwrap()
+                .is_empty()
+        );
     }
 }

@@ -35,9 +35,12 @@ impl ExecutionCheckpoint {
             let missing: Vec<_> = tool_calls
                 .iter()
                 .filter(|call| {
-                    !history[index+1..].iter().any(|m| {
-                matches!(m, ChatMessage::Tool { tool_call_id, .. } if tool_call_id == &call.id)
-            })
+                    !history[index + 1..].iter().any(|m| {
+                        matches!(
+                            m,
+                            ChatMessage::Tool { tool_call_id, .. } if tool_call_id == &call.id
+                        )
+                    })
                 })
                 .cloned()
                 .collect();
@@ -45,9 +48,13 @@ impl ExecutionCheckpoint {
             for call in missing {
                 unresolved += 1;
                 let message = if self.in_flight.contains(&call.id) {
-                    "Execution interrupted while this tool was in flight. Its side effects are UNKNOWN. Do not automatically repeat it. Inspect files or external state and reconcile with the user's task before deciding any further action."
+                    "Execution interrupted while this tool was in flight. Its side effects are \
+                        UNKNOWN. Do not automatically repeat it. Inspect files or external state \
+                        and reconcile with the user's task before deciding any further action."
                 } else {
-                    "Execution interrupted before this tool started. It was NOT executed. Re-evaluate whether it is still needed; this message is a recovery status, not a tool result."
+                    "Execution interrupted before this tool started. It was NOT executed. \
+                        Re-evaluate whether it is still needed; this message is a recovery \
+                        status, not a tool result."
                 };
 
                 history.push(ChatMessage::tool(call.id, message));

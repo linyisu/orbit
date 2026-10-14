@@ -32,7 +32,11 @@ pub(crate) fn register<'a, 'image>(
             .map_or(0, |metadata| metadata.len().min(i64::MAX as u64) as i64);
         rows.push(session_attachments::ActiveModel {
             session_id: Set(session.to_owned()),
-            content_hash: Set(file_name.split_once('.').unwrap().0.to_owned()),
+            content_hash: Set(file_name
+                .split_once('.')
+                .unwrap()
+                .0
+                .to_owned()),
             file_name: Set(file_name),
             byte_size: Set(byte_size),
             ..Default::default()
@@ -57,10 +61,12 @@ pub(crate) fn register<'a, 'image>(
 }
 
 pub(crate) fn in_messages(messages: &[ChatMessage]) -> impl Iterator<Item = &Attachment> {
-    messages.iter().flat_map(|message| match message {
-        ChatMessage::User { attachments, .. } => attachments.as_slice(),
-        _ => &[],
-    })
+    messages
+        .iter()
+        .flat_map(|message| match message {
+            ChatMessage::User { attachments, .. } => attachments.as_slice(),
+            _ => &[],
+        })
 }
 
 impl Store {
@@ -97,7 +103,11 @@ impl Store {
             }
             // A fresh installation or a draft-only service has no historical
             // payload to index, and must not create domain/maintenance records.
-            if sessions::Entity::find().count(&tx).await? == 0 {
+            if sessions::Entity::find()
+                .count(&tx)
+                .await?
+                == 0
+            {
                 return Ok(());
             }
             let mut sessions = sessions::Entity::find()
@@ -280,23 +290,55 @@ mod tests {
             )
             .await
             .unwrap();
-        let usage = store.session_storage_usage().await.unwrap();
-        assert!(usage.iter().all(|row| row.attachment_bytes == 12));
-        assert!(store.storage_footprint().await.unwrap().attachment_bytes >= 12);
+        let usage = store
+            .session_storage_usage()
+            .await
+            .unwrap();
+        assert!(
+            usage
+                .iter()
+                .all(|row| row.attachment_bytes == 12)
+        );
+        assert!(
+            store
+                .storage_footprint()
+                .await
+                .unwrap()
+                .attachment_bytes
+                >= 12
+        );
         drop(journal);
         drop(first);
         drop(second);
-        store.delete_session(&first_id).await.unwrap();
+        store
+            .delete_session(&first_id)
+            .await
+            .unwrap();
         assert!(asset_path.exists());
-        store.delete_session(&second_id).await.unwrap();
+        store
+            .delete_session(&second_id)
+            .await
+            .unwrap();
         assert!(
             asset_path.exists(),
             "an upload or reader lease still owns the file"
         );
         drop(attachment);
-        assert_eq!(store.collect_attachment_garbage().await.unwrap(), 12);
+        assert_eq!(
+            store
+                .collect_attachment_garbage()
+                .await
+                .unwrap(),
+            12
+        );
         assert!(!asset_path.exists());
-        assert!(store.session_storage_usage().await.unwrap().is_empty());
+        assert!(
+            store
+                .session_storage_usage()
+                .await
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[tokio::test]
@@ -340,7 +382,11 @@ mod tests {
         assert!(kept.exists());
         assert!(!removed.exists());
         assert_eq!(
-            store.session_storage_usage().await.unwrap()[0].attachment_bytes,
+            store
+                .session_storage_usage()
+                .await
+                .unwrap()[0]
+                .attachment_bytes,
             9
         );
         store.delete_session(&id).await.unwrap();

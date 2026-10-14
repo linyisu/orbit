@@ -44,19 +44,26 @@ fn record() -> Record {
         },
     }
 }
+
 fn key(code: KeyCode) -> Event {
     Event::Key(KeyEvent::new(code, KeyModifiers::NONE))
 }
+
 fn state() -> State {
     let mut s = State::default();
     s.sync(vec![record()]);
     s.open_next();
     s
 }
+
 #[test]
 fn user_input_requires_explicit_choice_and_keeps_draft_when_dismissed() {
     let mut s = state();
-    assert!(s.answers("request")[0].selected.is_empty());
+    assert!(
+        s.answers("request")[0]
+            .selected
+            .is_empty()
+    );
     s.activate(Focus::Option(2));
     s.handle(&Event::Paste("自定义内容".into()));
     s.handle(&key(KeyCode::Esc));
@@ -69,6 +76,7 @@ fn user_input_requires_explicit_choice_and_keeps_draft_when_dismissed() {
     assert!(s.answers("request")[0].text.is_empty());
     assert_eq!(s.answers("request")[0].selected, ["a"]);
 }
+
 #[test]
 fn user_input_submit_validates_and_multi_terminal_result_replaces_local_draft() {
     let mut s = state();
@@ -111,6 +119,7 @@ fn user_input_submit_validates_and_multi_terminal_result_replaces_local_draft() 
     assert_eq!(s.answers("request")[1].text, "另一终端的答案");
     assert!(matches!(s.activate(Focus::Decline), Action::None));
 }
+
 #[test]
 fn user_input_mouse_hover_is_bold_but_does_not_select_and_click_selects() {
     let mut s = state();
@@ -119,7 +128,11 @@ fn user_input_mouse_hover_is_bold_but_does_not_select_and_click_selects() {
         s.draw(f);
     })
     .unwrap();
-    let (rect, _) = s.hits.iter().find(|(_, f)| *f == Focus::Option(1)).unwrap();
+    let (rect, _) = s
+        .hits
+        .iter()
+        .find(|(_, f)| *f == Focus::Option(1))
+        .unwrap();
     let mut mouse = MouseEvent {
         kind: MouseEventKind::Moved,
         column: rect.x,
@@ -127,7 +140,11 @@ fn user_input_mouse_hover_is_bold_but_does_not_select_and_click_selects() {
         modifiers: KeyModifiers::NONE,
     };
     s.handle(&Event::Mouse(mouse));
-    assert!(s.answers("request")[0].selected.is_empty());
+    assert!(
+        s.answers("request")[0]
+            .selected
+            .is_empty()
+    );
     t.draw(|f| {
         s.draw(f);
     })
@@ -139,6 +156,7 @@ fn user_input_mouse_hover_is_bold_but_does_not_select_and_click_selects() {
     s.handle(&Event::Mouse(mouse));
     assert_eq!(s.answers("request")[0].selected, ["b"]);
 }
+
 #[test]
 fn user_input_small_terminal_and_long_unicode_wrap_without_panics() {
     let mut s = state();
@@ -175,7 +193,8 @@ fn user_input_modal_owns_keyboard_and_cursor_and_history_opens_from_tool() {
         .unwrap();
     let cursor = ui.ime_cursor.unwrap();
     assert!(!ui.input_area.contains(cursor));
-    ui.user_input.handle(&Event::Paste("回答内容".into()));
+    ui.user_input
+        .handle(&Event::Paste("回答内容".into()));
     assert_eq!(ui.input.text, "保留主输入框草稿");
     ui.user_input.handle(&key(KeyCode::Esc));
     let mut completed = record();
@@ -212,7 +231,11 @@ fn user_input_keyboard_scrolls_focused_option_into_view_and_queue_is_preserved()
         s.draw(f);
     })
     .unwrap();
-    assert!(s.hits.iter().any(|(_, focus)| *focus == Focus::Option(0)));
+    assert!(
+        s.hits
+            .iter()
+            .any(|(_, focus)| *focus == Focus::Option(0))
+    );
     s.handle(&key(KeyCode::Esc));
     s.open_next();
     assert!(matches!(&s.dialog,Some(Dialog::Form(v)) if v.id=="second"));
@@ -255,7 +278,10 @@ fn user_input_history_paging_preserves_latest_order_and_cursor() {
         next: None,
     });
     assert_eq!(
-        s.records.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(),
+        s.records
+            .iter()
+            .map(|r| r.id.as_str())
+            .collect::<Vec<_>>(),
         ["newest", "request", "older"]
     );
 }
@@ -268,14 +294,20 @@ fn user_input_history_uses_request_identity_when_tool_call_ids_repeat() {
     newer.status = Status::Declined;
     s.upsert(newer.clone());
     assert!(s.open_tool("call", &serde_json::to_string(&newer).unwrap()));
-    assert!(matches!(&s.dialog,Some(Dialog::Form(v)) if v.id=="newer-request"));
+    assert!(matches!(
+        &s.dialog,
+        Some(Dialog::Form(v)) if v.id == "newer-request"
+    ));
 }
 
 #[test]
 fn user_input_tab_changes_questions_and_enter_confirms_single_choice() {
     let mut s = state();
     s.handle(&key(KeyCode::Down));
-    assert!(matches!(&s.dialog, Some(Dialog::Form(v)) if v.focus == Focus::Option(1)));
+    assert!(matches!(
+        &s.dialog,
+        Some(Dialog::Form(v)) if v.focus == Focus::Option(1)
+    ));
     s.handle(&key(KeyCode::Enter));
     assert_eq!(s.answers("request")[0].selected, ["b"]);
     assert!(matches!(&s.dialog, Some(Dialog::Form(v)) if v.page == 1 && v.focus == Focus::Text));
@@ -285,7 +317,10 @@ fn user_input_tab_changes_questions_and_enter_confirms_single_choice() {
     s.handle(&key(KeyCode::Tab));
     assert_eq!(s.answers("request")[1].text, "要求");
     s.handle(&key(KeyCode::Tab));
-    assert!(matches!(&s.dialog, Some(Dialog::Form(v)) if v.page == 2 && !v.sending));
+    assert!(matches!(
+        &s.dialog,
+        Some(Dialog::Form(v)) if v.page == 2 && !v.sending
+    ));
     assert!(matches!(
         s.handle(&key(KeyCode::Enter)),
         Action::Answer { .. }
@@ -392,9 +427,12 @@ fn user_input_enter_on_custom_multiple_choice_opens_editor_without_losing_select
 
 fn paint(s: &mut State, terminal: &mut Terminal<TestBackend>) -> Option<Position> {
     let mut cursor = None;
-    terminal.draw(|frame| cursor = s.draw(frame)).unwrap();
+    terminal
+        .draw(|frame| cursor = s.draw(frame))
+        .unwrap();
     cursor
 }
+
 fn hit(s: &State, focus: Focus) -> Rect {
     s.hits
         .iter()
@@ -402,6 +440,7 @@ fn hit(s: &State, focus: Focus) -> Rect {
         .unwrap()
         .0
 }
+
 fn pointer(kind: MouseEventKind, rect: Rect) -> Event {
     Event::Mouse(MouseEvent {
         kind,
@@ -410,6 +449,7 @@ fn pointer(kind: MouseEventKind, rect: Rect) -> Event {
         modifiers: KeyModifiers::NONE,
     })
 }
+
 fn screen(terminal: &Terminal<TestBackend>) -> String {
     terminal
         .backend()
@@ -432,9 +472,10 @@ fn user_input_mouse_click_advances_single_choices_but_keeps_multi_and_custom_ope
         paint(&mut s, &mut terminal);
         s.handle(&pointer(MouseEventKind::Up(MouseButton::Left), option));
         assert_eq!(s.answers("request")[0].selected, ["b"]);
-        assert!(
-            matches!(&s.dialog, Some(Dialog::Form(v)) if v.page == usize::from(kind == Kind::Single))
-        );
+        assert!(matches!(
+            &s.dialog,
+            Some(Dialog::Form(v)) if v.page == usize::from(kind == Kind::Single)
+        ));
         if kind == Kind::Single {
             assert!(paint(&mut s, &mut terminal).is_some());
             s.handle(&Event::Paste("第二题回答".into()));
@@ -465,7 +506,10 @@ fn user_input_custom_answer_edits_the_choice_row_without_an_extra_note_field() {
     s.handle(&key(KeyCode::Char('新')));
     assert_eq!(s.answers("request")[0].text, "新我的答案");
     assert!(s.answers("request")[0].note.is_empty());
-    assert!(matches!(&s.dialog, Some(Dialog::Form(v)) if v.page == 0 && v.focus == Focus::Text));
+    assert!(matches!(
+        &s.dialog,
+        Some(Dialog::Form(v)) if v.page == 0 && v.focus == Focus::Text
+    ));
 }
 
 #[test]
@@ -490,9 +534,10 @@ fn user_input_next_click_release_and_hover_preserve_the_new_text_editor_focus() 
     ] {
         s.handle(&event);
         assert!(paint(&mut s, &mut terminal).is_some());
-        assert!(
-            matches!(&s.dialog, Some(Dialog::Form(v)) if v.page == 1 && v.focus == Focus::Text)
-        );
+        assert!(matches!(
+            &s.dialog,
+            Some(Dialog::Form(v)) if v.page == 1 && v.focus == Focus::Text
+        ));
     }
     s.handle(&Event::Paste("光标仍在回答中".into()));
     assert_eq!(s.answers("request")[1].text, "光标仍在回答中");
@@ -512,7 +557,10 @@ fn user_input_hover_moves_without_scrolling_relayout_or_highlighting_other_contr
         s.handle(&pointer(MouseEventKind::Moved, rect));
         paint(&mut s, &mut terminal);
         assert_eq!(s.hits, geometry);
-        assert!(matches!(&s.dialog, Some(Dialog::Form(v)) if v.focus == Focus::Option(0)));
+        assert!(matches!(
+            &s.dialog,
+            Some(Dialog::Form(v)) if v.focus == Focus::Option(0)
+        ));
         assert_ne!(
             terminal.backend().buffer()[(next.x, next.y)].bg,
             THEME.accent
@@ -590,7 +638,11 @@ fn user_input_submission_closes_on_receipt_and_failures_preserve_the_answers() {
     let mut terminal = Terminal::new(TestBackend::new(100, 35)).unwrap();
     assert!(paint(&mut s, &mut terminal).is_none());
     assert!(!screen(&terminal).contains("查看完毕"));
-    assert!(!s.hits.iter().any(|(_, focus)| *focus == Focus::Next));
+    assert!(
+        !s.hits
+            .iter()
+            .any(|(_, focus)| *focus == Focus::Next)
+    );
     s.activate(Focus::Later);
     assert!(!s.visible());
 }

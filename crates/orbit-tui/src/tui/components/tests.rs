@@ -50,7 +50,10 @@ fn disabled_buttons_have_no_hit_and_action_bars_stay_inside_their_allocation() {
                 .unwrap();
             assert_eq!(hit.intersection(allocation), hit);
             assert_eq!(frame.buffer_mut()[(hit.x, hit.y)].bg, THEME.accent);
-            assert!(bar.button(frame, "第三项", Control::default()).is_none());
+            assert!(
+                bar.button(frame, "第三项", Control::default())
+                    .is_none()
+            );
         })
         .unwrap();
 }

@@ -4,10 +4,19 @@ use ratatui::{Terminal, backend::TestBackend};
 
 fn permission_profile(mode: Mode, revision: u64) -> SessionInfo {
     serde_json::from_value(serde_json::json!({
-        "id":"same-session", "title":"", "workspace":"/project", "model":"mock", "models":[],
-        "mode":mode, "mode_revision":revision,
-        "supports_vision":false, "reasoning_effort":null, "reasoning_efforts":[],
-        "context_tokens":1000, "input_context_tokens":900, "max_output_tokens":100
+        "id": "same-session",
+        "title": "",
+        "workspace": "/project",
+        "model": "mock",
+        "models": [],
+        "mode": mode,
+        "mode_revision": revision,
+        "supports_vision": false,
+        "reasoning_effort": null,
+        "reasoning_efforts": [],
+        "context_tokens": 1_000,
+        "input_context_tokens": 900,
+        "max_output_tokens": 100
     }))
     .unwrap()
 }
@@ -16,7 +25,8 @@ fn permission_profile(mode: Mode, revision: u64) -> SessionInfo {
 fn permissions_follow_confirmation_and_ignore_stale_snapshots() {
     let (mut tab, mut rx) = tab("本地");
     let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
-    tab.submit("/permissions yolo".into()).unwrap();
+    tab.submit("/permissions yolo".into())
+        .unwrap();
     let call = rx.try_recv().unwrap();
     assert!(matches!(
         call.request,
@@ -53,7 +63,8 @@ fn permissions_follow_confirmation_and_ignore_stale_snapshots() {
     assert_eq!(tab.state.permissions.pending, None);
 
     // A failed write never becomes the confirmed mode, even if the request was queued.
-    tab.submit("/permissions auto".into()).unwrap();
+    tab.submit("/permissions auto".into())
+        .unwrap();
     rx.try_recv()
         .unwrap()
         .reply
@@ -66,7 +77,8 @@ fn permissions_follow_confirmation_and_ignore_stale_snapshots() {
     assert!(render_screen(&mut tab.state).contains("cannot save"));
     assert!(tab.state.info_dialog.is_none());
 
-    tab.submit("/permissions yolo".into()).unwrap();
+    tab.submit("/permissions yolo".into())
+        .unwrap();
     let late = rx.try_recv().unwrap().reply.unwrap();
     tab.disconnect("connection lost".into(), false);
     assert!(
@@ -78,7 +90,8 @@ fn permissions_follow_confirmation_and_ignore_stale_snapshots() {
     );
     assert_eq!(tab.state.permissions.pending, None);
     assert_eq!(tab.state.permissions.mode, Mode::Ask);
-    tab.submit("/permissions auto".into()).unwrap();
+    tab.submit("/permissions auto".into())
+        .unwrap();
     assert_eq!(tab.state.permissions.pending, None);
     assert_eq!(tab.state.permissions.mode, Mode::Ask);
 }
@@ -94,12 +107,18 @@ fn shift_tab_cycles_pending_intent_without_changing_draft_or_work_mode() {
         tab.state.input.set("未发送草稿".into());
         let work_mode = tab.state.planning.mode();
         let mut replies = Vec::new();
-        for (index, expected) in [Mode::Yolo, Mode::Ask, Mode::Auto].into_iter().enumerate() {
+        for (index, expected) in [Mode::Yolo, Mode::Ask, Mode::Auto]
+            .into_iter()
+            .enumerate()
+        {
             tab.busy = index != 0;
             tab.handle(Event::Key(KeyEvent::new(code, modifiers)))
                 .unwrap();
             let call = rx.try_recv().unwrap();
-            assert!(matches!(call.request, Request::SetMode {mode, ..} if mode == expected));
+            assert!(matches!(
+                call.request,
+                Request::SetMode { mode, .. } if mode == expected
+            ));
             replies.push((call.reply.unwrap(), expected));
             assert_eq!(tab.state.permissions.mode, Mode::Auto);
             assert_eq!(tab.state.permissions.pending, Some(expected));

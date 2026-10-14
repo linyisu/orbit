@@ -11,14 +11,14 @@ async fn editing_an_automatic_connection_preserves_unavailable_model_overrides()
             TestProvider::new("auto")
                 .models([TestModel::new("temporarily-unavailable")
                     .vision(false)
-                    .context(100000)])
+                    .context(100_000)])
                 .automatic(),
         )
         .write(&path)
         .unwrap();
     let mut draft = edit::ConnectionDraft::load(&path, Some("auto")).unwrap();
     assert_eq!(draft.models.len(), 1);
-    draft.models[0].context_tokens = Some(200000);
+    draft.models[0].context_tokens = Some(200_000);
     edit::save(&path, &auth, &draft, edit::KeyChange::Keep)
         .await
         .unwrap();
@@ -27,7 +27,7 @@ async fn editing_an_automatic_connection_preserves_unavailable_model_overrides()
     assert!(provider.spec.models.is_auto());
     assert_eq!(
         provider.spec.model_overrides["temporarily-unavailable"].context_tokens,
-        Some(200000)
+        Some(200_000)
     );
     assert_eq!(
         provider.spec.model_overrides["temporarily-unavailable"].supports_vision,
@@ -35,6 +35,7 @@ async fn editing_an_automatic_connection_preserves_unavailable_model_overrides()
     );
     assert!(provider.models.is_empty());
 }
+
 #[tokio::test]
 async fn first_custom_connection_bootstraps_and_reloads_without_plaintext_key() {
     let temp = tempfile::tempdir().unwrap();
@@ -62,7 +63,11 @@ async fn first_custom_connection_bootstraps_and_reloads_without_plaintext_key() 
     assert!(models[0].config.api_key.is_none());
     assert!(!saved.contains("private-test-key"));
     let store = orbit_auth::AuthStore::new(auth).unwrap();
-    let credential = models[0].config.credential.as_ref().unwrap();
+    let credential = models[0]
+        .config
+        .credential
+        .as_ref()
+        .unwrap();
     let headers = store
         .resolve(
             &credential.name,
@@ -168,7 +173,12 @@ fn api_key_connection_persists_discovered_models_without_a_secret() {
     assert_eq!(models[0].model, "server-model-a");
     assert_eq!(models[1].model, "server-model-b");
     assert_eq!(
-        models[0].config.credential.as_ref().unwrap().name,
+        models[0]
+            .config
+            .credential
+            .as_ref()
+            .unwrap()
+            .name,
         "deepseek"
     );
     let saved = std::fs::read_to_string(path).unwrap();
@@ -197,7 +207,12 @@ fn zhipu_profile_uses_domestic_coding_endpoint_and_credential() {
 
     assert_eq!(models[0].model, "glm-server-model");
     assert_eq!(
-        models[0].config.credential.as_ref().unwrap().name,
+        models[0]
+            .config
+            .credential
+            .as_ref()
+            .unwrap()
+            .name,
         "zhipu-coding-plan"
     );
     let saved = std::fs::read_to_string(path).unwrap();
@@ -210,7 +225,8 @@ fn connection_preserves_config_and_reloads_both_account_protocols() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("config.toml");
     let auth = directory.path().join("auth");
-    let original = "# user settings\n[providers.local]\nbase_url = 'http://localhost:8000/v1'\napi_key = 'test-key'\nmodels = [\"local-model\"]\n";
+    let original = "# user settings\n[providers.local]\nbase_url = \
+        'http://localhost:8000/v1'\napi_key = 'test-key'\nmodels = [\"local-model\"]\n";
     std::fs::write(&path, original).unwrap();
 
     for (credential, format, endpoint) in [
@@ -237,11 +253,21 @@ fn connection_preserves_config_and_reloads_both_account_protocols() {
             .unwrap();
 
         assert_eq!(
-            connected.config.credential.as_ref().unwrap().directory,
+            connected
+                .config
+                .credential
+                .as_ref()
+                .unwrap()
+                .directory,
             auth
         );
         assert_eq!(
-            connected.config.credential.as_ref().unwrap().name,
+            connected
+                .config
+                .credential
+                .as_ref()
+                .unwrap()
+                .name,
             credential
         );
         assert!(
@@ -273,7 +299,10 @@ fn explicit_account_selection_is_preserved_when_connecting_another_account() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("config.toml");
     let auth = directory.path().join("auth");
-    let original = "[providers.account]\napi_format = 'google_code_assist'\nbase_url = 'https://daily-cloudcode-pa.googleapis.com/'\ncredential = 'antigravity'\nmodels = [\"gemini-3-pro\", \"custom-model\"]\n[providers.account.model_overrides.\"gemini-3-pro\"]\ncontext_tokens = 90000\n";
+    let original = "[providers.account]\napi_format = 'google_code_assist'\nbase_url = \
+        'https://daily-cloudcode-pa.googleapis.com/'\ncredential = 'antigravity'\nmodels = \
+        [\"gemini-3-pro\", \"custom-model\"]\n[providers.account.model_overrides.\"gemini-3-pro\"]\
+        \ncontext_tokens = 90000\n";
     std::fs::write(&path, original).unwrap();
 
     let config = crate::config::FileConfig::load(&path, &auth).unwrap();
@@ -288,11 +317,14 @@ fn explicit_account_selection_is_preserved_when_connecting_another_account() {
     .unwrap();
 
     assert_eq!(
-        options.iter().map(|m| m.model.as_str()).collect::<Vec<_>>(),
+        options
+            .iter()
+            .map(|m| m.model.as_str())
+            .collect::<Vec<_>>(),
         ["gemini-3-pro", "custom-model"]
     );
     assert_eq!(reconnected.len(), options.len());
-    assert_eq!(options[0].context_tokens, 90000);
+    assert_eq!(options[0].context_tokens, 90_000);
 
     assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
 
@@ -306,8 +338,16 @@ fn explicit_account_selection_is_preserved_when_connecting_another_account() {
     .unwrap();
 
     assert_eq!(connected.len(), 3);
-    assert!(connected.iter().any(|model| model.model == "gemini-3-pro"));
-    assert!(connected.iter().any(|model| model.model == "gpt-5.5"));
+    assert!(
+        connected
+            .iter()
+            .any(|model| model.model == "gemini-3-pro")
+    );
+    assert!(
+        connected
+            .iter()
+            .any(|model| model.model == "gpt-5.5")
+    );
     assert_eq!(
         crate::config::FileConfig::load(&path, &auth)
             .unwrap()
@@ -324,7 +364,8 @@ fn connection_keeps_existing_provider_and_rejects_invalid_config_without_writing
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("config.toml");
     let auth = directory.path().join("auth");
-    let original = "[providers.google-account]\nbase_url = 'http://localhost:8000/v1'\napi_key = 'test-key'\nmodels = [\"existing\"]\n";
+    let original = "[providers.google-account]\nbase_url = 'http://localhost:8000/v1'\napi_key = \
+        'test-key'\nmodels = [\"existing\"]\n";
     std::fs::write(&path, original).unwrap();
 
     let models = append_profile(
@@ -380,7 +421,11 @@ async fn save_custom(
     draft.endpoint = endpoint.into();
     draft.models = ids
         .iter()
-        .map(|id| serde_json::from_value(serde_json::json!({ "id": id })))
+        .map(|id| {
+            serde_json::from_value(serde_json::json!({
+                "id": id
+            }))
+        })
         .collect::<Result<_, _>>()?;
     edit::save(
         path,
@@ -400,7 +445,9 @@ async fn editing_keeps_credentials_and_independent_model_overrides() {
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().join("config.toml");
     let auth = temp.path().join("auth");
-    let original = "# keep this comment\n[providers.gateway]\napi_format = 'openai_responses'\nbase_url = 'http://localhost:8080/v1'\nauto_refresh_models = false\ncredential = 'existing'\ntimeout_seconds = 123\nmodels = [\"a\", \"b\"]\n";
+    let original = "# keep this comment\n[providers.gateway]\napi_format = \
+        'openai_responses'\nbase_url = 'http://localhost:8080/v1'\nauto_refresh_models = \
+        false\ncredential = 'existing'\ntimeout_seconds = 123\nmodels = [\"a\", \"b\"]\n";
     std::fs::write(&path, original).unwrap();
     let store = orbit_auth::AuthStore::new(auth.clone()).unwrap();
     store
@@ -408,11 +455,11 @@ async fn editing_keeps_credentials_and_independent_model_overrides() {
         .await
         .unwrap();
     let mut draft = edit::ConnectionDraft::load(&path, Some("gateway")).unwrap();
-    draft.models[0].max_output_tokens = Some(4096);
-    draft.models[0].context_tokens = Some(65536);
+    draft.models[0].max_output_tokens = Some(4_096);
+    draft.models[0].context_tokens = Some(65_536);
     draft.models[0].supports_vision = Some(true);
-    draft.models[1].max_output_tokens = Some(8192);
-    draft.models[1].context_tokens = Some(131072);
+    draft.models[1].max_output_tokens = Some(8_192);
+    draft.models[1].context_tokens = Some(131_072);
     draft.models[1].supports_vision = Some(false);
     draft.models.reverse();
 
@@ -426,18 +473,28 @@ async fn editing_keeps_credentials_and_independent_model_overrides() {
     assert!(saved.starts_with("# keep this comment"));
     assert!(!saved.contains("secret"));
     assert_eq!(options[0].model, "b");
-    assert_eq!(options[0].max_output_tokens, 8192);
-    assert_eq!(options[1].max_output_tokens, 4096);
-    assert_eq!(options[0].input_context_tokens, 131072 - 8192);
-    assert_eq!(options[1].input_context_tokens, 65536 - 4096);
+    assert_eq!(options[0].max_output_tokens, 8_192);
+    assert_eq!(options[1].max_output_tokens, 4_096);
+    assert_eq!(options[0].input_context_tokens, 131_072 - 8_192);
+    assert_eq!(options[1].input_context_tokens, 65_536 - 4_096);
     assert!(!options[0].supports_vision);
     assert!(options[1].supports_vision);
     assert_eq!(
-        options[0].config.credential.as_ref().unwrap().name,
+        options[0]
+            .config
+            .credential
+            .as_ref()
+            .unwrap()
+            .name,
         "existing"
     );
     assert_eq!(reloaded.providers["gateway"].timeout_seconds, 123);
-    assert_eq!(reloaded.providers["gateway"].models.len(), 2);
+    assert_eq!(
+        reloaded.providers["gateway"]
+            .models
+            .len(),
+        2
+    );
     assert_eq!(store.list().unwrap().len(), 1);
 }
 
@@ -449,7 +506,12 @@ async fn stale_draft_cannot_overwrite_config_or_create_credentials() {
     let mut draft = edit::ConnectionDraft::load(&path, None).unwrap();
     draft.name = "local".into();
     draft.endpoint = "http://localhost/v1".into();
-    draft.models = vec![serde_json::from_value(serde_json::json!({ "id": "a" })).unwrap()];
+    draft.models = vec![
+        serde_json::from_value(serde_json::json!({
+            "id": "a"
+        }))
+        .unwrap(),
+    ];
     std::fs::write(&path, "# changed\n").unwrap();
 
     let result = edit::save(&path, &auth, &draft, edit::KeyChange::Replace("new-secret")).await;

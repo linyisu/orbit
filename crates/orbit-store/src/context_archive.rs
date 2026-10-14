@@ -29,27 +29,50 @@ impl Store {
 
         self.read_access(move |conn| async move {
             let tx = conn.begin().await?;
-            let mut select = context_archives::Entity::find().filter(context_archives::Column::SessionId.eq(session_id));
-            if let Some(before) = before_archive { select = select.filter(context_archives::Column::Id.lt(before)); }
+            let mut select = context_archives::Entity::find()
+                .filter(context_archives::Column::SessionId.eq(session_id));
+            if let Some(before) = before_archive {
+                select = select.filter(context_archives::Column::Id.lt(before));
+            }
             let rows: Vec<(i64, i64, i64)> = select
                 .select_only()
                 .column(context_archives::Column::Id)
                 .column(context_archives::Column::CreatedAt)
-                .column_as(Expr::col((context_archive_messages::Entity, context_archive_messages::Column::Ordinal)).count(), "message_count")
-                .join(JoinType::LeftJoin, context_archive_messages::Relation::Archive.def().rev())
+                .column_as(
+                    Expr::col((
+                        context_archive_messages::Entity,
+                        context_archive_messages::Column::Ordinal,
+                    ))
+                    .count(),
+                    "message_count",
+                )
+                .join(
+                    JoinType::LeftJoin,
+                    context_archive_messages::Relation::Archive
+                        .def()
+                        .rev(),
+                )
                 .group_by(context_archives::Column::Id)
                 .group_by(context_archives::Column::CreatedAt)
                 .order_by_desc(context_archives::Column::Id)
                 .limit((ARCHIVE_LIST_LIMIT + 1) as u64)
-                .into_tuple().all(&tx).await?;
+                .into_tuple()
+                .all(&tx)
+                .await?;
             let mut archives = Vec::with_capacity(rows.len());
             for (id, created_at, count) in rows {
-                archives.push(json!({"archive_id": id, "created_at": created_at, "message_count": count}));
+                archives.push(json!({
+                    "archive_id": id,
+                    "created_at": created_at,
+                    "message_count": count
+                }));
             }
             let has_more = archives.len() > ARCHIVE_LIST_LIMIT;
             archives.truncate(ARCHIVE_LIST_LIMIT);
             let next = if has_more {
-                archives.last().map(|archive| archive["archive_id"].clone())
+                archives
+                    .last()
+                    .map(|archive| archive["archive_id"].clone())
             } else {
                 None
             };
@@ -57,7 +80,8 @@ impl Store {
                 if before_archive.is_some() {
                     "No older archives in this conversation."
                 } else {
-                    "No pre-compaction archives exist in this conversation yet. Read_history only reads saved compaction snapshots; do not guess archive IDs."
+                    "No pre-compaction archives exist in this conversation yet. Read_history only \
+                        reads saved compaction snapshots; do not guess archive IDs."
                 }
             } else {
                 "Use an archive_id from this list to search or read saved original messages."
@@ -69,7 +93,8 @@ impl Store {
                 "next_before_archive": next,
                 "message": message,
             }))
-        }).await
+        })
+        .await
     }
 
     /// Restore the complete snapshot for a retry of a previously incomplete
@@ -190,32 +215,67 @@ impl Store {
             let tx = conn.begin().await?;
             let exists = context_archives::Entity::find_by_id(archive_id)
                 .filter(context_archives::Column::SessionId.eq(session))
-                .one(&tx).await?.is_some();
-            ensure!(exists, "history archive not found in this session; call read_history with {{}} to discover available archive IDs instead of guessing");
+                .one(&tx)
+                .await?
+                .is_some();
+            ensure!(
+                exists,
+                "history archive not found in this session; call read_history with \
+                {{}} to discover available archive IDs instead of guessing"
+            );
             // Slice in SQLite so a preview never materializes a whole large message.
             let payload: SimpleExpr = Expr::col(context_archive_messages::Column::Payload).into();
-            let function = |name: &str, args: Vec<SimpleExpr>| -> SimpleExpr { Func::cust(Alias::new(name)).args(args).into() };
+            let function = |name: &str, args: Vec<SimpleExpr>| -> SimpleExpr {
+                Func::cust(Alias::new(name))
+                    .args(args)
+                    .into()
+            };
             let mut select = context_archive_messages::Entity::find()
                 .filter(context_archive_messages::Column::ArchiveId.eq(archive_id))
-                .filter(context_archive_messages::Column::Ordinal.gt(after_message.map_or(-1, |i| i as i64)));
-            if let Some(message) = message { select = select.filter(context_archive_messages::Column::Ordinal.eq(message as i64)); }
+                .filter(
+                    context_archive_messages::Column::Ordinal
+                        .gt(after_message.map_or(-1, |i| i as i64)),
+                );
+            if let Some(message) = message {
+                select =
+                    select.filter(context_archive_messages::Column::Ordinal.eq(message as i64));
+            }
             let (start, hit) = if let Some(query) = query.as_ref() {
                 let position = function("instr", vec![payload.clone(), Expr::value(query.clone())]);
                 select = select.filter(Expr::expr(position.clone()).gt(0));
-                (function("max", vec![Expr::value(1), Expr::expr(position.clone()).sub(120)]), Expr::expr(position).sub(1))
-            } else { (Expr::value(offset as i64 + 1), Expr::value(0)) };
-            let rows: Vec<(i64, i64, String, i64)> = select.select_only()
+                (
+                    function(
+                        "max",
+                        vec![Expr::value(1), Expr::expr(position.clone()).sub(120)],
+                    ),
+                    Expr::expr(position).sub(1),
+                )
+            } else {
+                (Expr::value(offset as i64 + 1), Expr::value(0))
+            };
+            let rows: Vec<(i64, i64, String, i64)> = select
+                .select_only()
                 .column(context_archive_messages::Column::Ordinal)
                 .column_as(function("length", vec![payload.clone()]), "total")
-                .column_as(function("substr", vec![payload, start, Expr::value(length as i64)]), "text")
+                .column_as(
+                    function("substr", vec![payload, start, Expr::value(length as i64)]),
+                    "text",
+                )
                 .column_as(hit, "hit")
                 .order_by_asc(context_archive_messages::Column::Ordinal)
-                .limit(9).into_tuple().all(&tx).await?;
+                .limit(9)
+                .into_tuple()
+                .all(&tx)
+                .await?;
             let has_more = rows.len() > 8;
             let mut items = Vec::new();
             for (index, total, text, hit) in rows.into_iter().take(8) {
                 let total = total as usize;
-                let start = if query.is_some() { hit.saturating_sub(120).max(0) as usize } else { offset };
+                let start = if query.is_some() {
+                    hit.saturating_sub(120).max(0) as usize
+                } else {
+                    offset
+                };
                 let next = start + text.chars().count();
                 items.push(json!({
                     "message": index,
@@ -226,10 +286,22 @@ impl Store {
                 }));
             }
 
-            let next_message = if has_more { items.last().map(|i| i["message"].clone()) } else { None };
+            let next_message = if has_more {
+                items
+                    .last()
+                    .map(|i| i["message"].clone())
+            } else {
+                None
+            };
 
-            Ok(json!({ "archive_id": archive_id, "source_kind": "untrusted_session_history", "items": items, "next_after_message": next_message }))
-        }).await
+            Ok(json!({
+                "archive_id": archive_id,
+                "source_kind": "untrusted_session_history",
+                "items": items,
+                "next_after_message": next_message
+            }))
+        })
+        .await
     }
 }
 
@@ -240,7 +312,9 @@ mod tests {
     #[tokio::test]
     async fn archive_listing_is_bounded_newest_first_and_session_scoped() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Store::open(dir.path().join("orbit.db")).await.unwrap();
+        let store = Store::open(dir.path().join("orbit.db"))
+            .await
+            .unwrap();
         let owner = store
             .create(dir.path().display().to_string(), "model".into())
             .await
@@ -250,7 +324,10 @@ mod tests {
             .await
             .unwrap();
 
-        let empty = store.list_context_archives(owner.id(), None).await.unwrap();
+        let empty = store
+            .list_context_archives(owner.id(), None)
+            .await
+            .unwrap();
         assert_eq!(empty["archives"], json!([]));
         assert!(
             empty["message"]
@@ -279,21 +356,41 @@ mod tests {
             .archive_context(foreign.id(), &[ChatMessage::user("foreign body")])
             .await
             .unwrap();
-        let first = store.list_context_archives(owner.id(), None).await.unwrap();
+        let first = store
+            .list_context_archives(owner.id(), None)
+            .await
+            .unwrap();
         assert_eq!(
-            first["archives"].as_array().unwrap().len(),
+            first["archives"]
+                .as_array()
+                .unwrap()
+                .len(),
             ARCHIVE_LIST_LIMIT
         );
         assert_eq!(first["archives"][0]["archive_id"], *ids.last().unwrap());
         assert_eq!(first["archives"][0]["message_count"], 2);
-        assert!(first["archives"][0]["created_at"].as_i64().is_some());
-        assert!(!first.to_string().contains("private source body"));
+        assert!(
+            first["archives"][0]["created_at"]
+                .as_i64()
+                .is_some()
+        );
+        assert!(
+            !first
+                .to_string()
+                .contains("private source body")
+        );
 
         let second = store
             .list_context_archives(owner.id(), first["next_before_archive"].as_i64())
             .await
             .unwrap();
-        assert_eq!(second["archives"].as_array().unwrap().len(), 3);
+        assert_eq!(
+            second["archives"]
+                .as_array()
+                .unwrap()
+                .len(),
+            3
+        );
         assert!(second["next_before_archive"].is_null());
         let listed: Vec<_> = [first, second]
             .into_iter()
@@ -342,13 +439,19 @@ mod tests {
             ChatMessage::user("保留 API"),
             ChatMessage::tool(
                 "call",
-                format!("{}错误证据{}", "甲".repeat(4000), "乙".repeat(4000)),
+                format!("{}错误证据{}", "甲".repeat(4_000), "乙".repeat(4_000)),
             ),
         ];
-        let archive = store.archive_context(owner.id(), &history).await.unwrap();
+        let archive = store
+            .archive_context(owner.id(), &history)
+            .await
+            .unwrap();
 
         assert_eq!(
-            store.archive_context(owner.id(), &history).await.unwrap(),
+            store
+                .archive_context(owner.id(), &history)
+                .await
+                .unwrap(),
             archive,
             "repeated compaction of one source must preserve archive references"
         );
@@ -405,7 +508,11 @@ mod tests {
                 .await
                 .unwrap();
             let item = &page["items"][0];
-            recovered.push_str(item["serialized_message"].as_str().unwrap());
+            recovered.push_str(
+                item["serialized_message"]
+                    .as_str()
+                    .unwrap(),
+            );
 
             match item["next_offset"].as_u64() {
                 Some(next) => offset = next as usize,

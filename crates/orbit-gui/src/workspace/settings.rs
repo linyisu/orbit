@@ -83,12 +83,18 @@ impl Workspace {
                 }
             }
         }
-        let appearance = self.appearance.as_ref().map(|view| view.view.clone());
+        let appearance = self
+            .appearance
+            .as_ref()
+            .map(|view| view.view.clone());
         let accounts = cx.new(|cx| {
             crate::accounts::Accounts::new(&self.options, self.runtime.clone(), window, cx)
         });
         let owner = cx.weak_entity();
-        let session = self.info.as_ref().map(|info| info.id.clone());
+        let session = self
+            .info
+            .as_ref()
+            .map(|info| info.id.clone());
         let workspace = self.location.to_string();
         let environment = self.environment();
         let skills = cx.new(|cx| {
@@ -152,7 +158,11 @@ impl Workspace {
                 window,
                 |page: &mut SettingsPage, input, event, window, cx| {
                     if matches!(event, InputEvent::Change) {
-                        let query = input.read(cx).value().trim().to_lowercase();
+                        let query = input
+                            .read(cx)
+                            .value()
+                            .trim()
+                            .to_lowercase();
                         if !page_matches(page.initial_page, &query)
                             && let Some(ix) = (0..PAGES.len()).find(|ix| page_matches(*ix, &query))
                         {
@@ -263,14 +273,31 @@ impl SettingsPage {
     /// or the conversation is visible. A blank conversation is not disposable
     /// while one of those forms is being edited or saved.
     pub(super) fn has_pending_work(&self, cx: &App) -> bool {
-        self.accounts.read(cx).has_pending_work()
-            || self.advanced.read(cx).has_pending_work(cx)
+        self.accounts
+            .read(cx)
+            .has_pending_work()
+            || self
+                .advanced
+                .read(cx)
+                .has_pending_work(cx)
             || self.mcp.read(cx).has_pending_work()
-            || self.shortcuts.read(cx).has_pending_work(cx)
+            || self
+                .shortcuts
+                .read(cx)
+                .has_pending_work(cx)
             || self.contexts.iter().any(|context| {
-                context.skills.read(cx).has_pending_work()
-                    || context.memory.read(cx).has_pending_work()
-                    || context.plugins.read(cx).has_pending_work()
+                context
+                    .skills
+                    .read(cx)
+                    .has_pending_work()
+                    || context
+                        .memory
+                        .read(cx)
+                        .has_pending_work()
+                    || context
+                        .plugins
+                        .read(cx)
+                        .has_pending_work()
             })
     }
 
@@ -350,7 +377,8 @@ impl SettingsPage {
             .shortcuts
             .update(cx, |shortcuts, cx| shortcuts.deactivate(window, cx))
         {
-            self.query.update(cx, |input, cx| input.focus(window, cx));
+            self.query
+                .update(cx, |input, cx| input.focus(window, cx));
         }
     }
 
@@ -421,7 +449,9 @@ impl SettingsPage {
 
     fn content(&self, cx: &mut Context<Self>) -> AnyElement {
         match self.initial_page {
-            0 => self.appearance_page(cx).into_any_element(),
+            0 => self
+                .appearance_page(cx)
+                .into_any_element(),
             1 => {
                 let owner = self.owner.clone();
                 v_flex()
@@ -446,7 +476,10 @@ impl SettingsPage {
             2 => self.skills.clone().into_any_element(),
             3 => self.mcp.clone().into_any_element(),
             4 => self.memory.clone().into_any_element(),
-            6 => self.shortcuts.clone().into_any_element(),
+            6 => self
+                .shortcuts
+                .clone()
+                .into_any_element(),
             7 => self.advanced.clone().into_any_element(),
             _ => div().into_any_element(),
         }
@@ -455,7 +488,12 @@ impl SettingsPage {
 
 impl Render for SettingsPage {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let query = self.query.read(cx).value().trim().to_lowercase();
+        let query = self
+            .query
+            .read(cx)
+            .value()
+            .trim()
+            .to_lowercase();
         let visible: Vec<_> = (0..PAGES.len())
             .filter(|ix| page_matches(*ix, &query))
             .collect();
@@ -553,7 +591,12 @@ impl Render for SettingsPage {
                         .child(
                             v_flex()
                                 .gap_2()
-                                .child(div().text_xl().font_semibold().child(title))
+                                .child(
+                                    div()
+                                        .text_xl()
+                                        .font_semibold()
+                                        .child(title),
+                                )
                                 .child(
                                     div()
                                         .text_sm()
@@ -603,7 +646,8 @@ impl Render for SettingsPage {
                                     .update(cx, |shortcuts, cx| shortcuts.deactivate(window, cx));
                                 let _ = back.update(cx, |view, cx| {
                                     cx.emit(WorkspaceEvent::CloseSettings);
-                                    view.input.update(cx, |input, cx| input.focus(window, cx));
+                                    view.input
+                                        .update(cx, |input, cx| input.focus(window, cx));
                                     cx.notify();
                                 });
                             }),
@@ -624,19 +668,23 @@ impl Render for SettingsPage {
                     ),
             )
             .child(
-                div().flex_1().min_h_0().min_w_0().child(
-                    h_resizable("settings-panes")
-                        .child(
-                            resizable_panel()
-                                .size(
-                                    (window.rem_size() * 12.5)
-                                        .min(window.viewport_size().width * 0.23),
-                                )
-                                .size_range(window.rem_size() * 9. ..window.rem_size() * 18.)
-                                .child(sidebar),
-                        )
-                        .child(resizable_panel().child(body)),
-                ),
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .min_w_0()
+                    .child(
+                        h_resizable("settings-panes")
+                            .child(
+                                resizable_panel()
+                                    .size(
+                                        (window.rem_size() * 12.5)
+                                            .min(window.viewport_size().width * 0.23),
+                                    )
+                                    .size_range(window.rem_size() * 9. ..window.rem_size() * 18.)
+                                    .child(sidebar),
+                            )
+                            .child(resizable_panel().child(body)),
+                    ),
             )
     }
 }
@@ -649,7 +697,10 @@ fn page_matches(ix: usize, query: &str) -> bool {
 }
 
 fn content_column() -> Div {
-    v_flex().w_full().max_w(rems(60.)).mx_auto()
+    v_flex()
+        .w_full()
+        .max_w(rems(60.))
+        .mx_auto()
 }
 
 fn section(title: &'static str, description: &'static str, cx: &App) -> Div {
@@ -670,14 +721,23 @@ fn section(title: &'static str, description: &'static str, cx: &App) -> Div {
 }
 
 fn setting_row(title: &'static str, description: &'static str, cx: &App) -> Div {
-    h_flex().w_full().gap_4().flex_wrap().child(
-        v_flex().flex_1().min_w_48().gap_1().child(title).child(
-            div()
-                .text_sm()
-                .text_color(cx.theme().muted_foreground)
-                .child(description),
-        ),
-    )
+    h_flex()
+        .w_full()
+        .gap_4()
+        .flex_wrap()
+        .child(
+            v_flex()
+                .flex_1()
+                .min_w_48()
+                .gap_1()
+                .child(title)
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(description),
+                ),
+        )
 }
 
 fn color_mode(cx: &App) -> impl IntoElement + use<> {
@@ -759,7 +819,12 @@ fn theme_previews(cx: &App) -> impl IntoElement + use<> {
                                     .gap_2()
                                     .bg(sidebar)
                                     .child(div().h_1().w_full().bg(foreground))
-                                    .child(div().h_1().w_full().bg(foreground.opacity(0.3))),
+                                    .child(
+                                        div()
+                                            .h_1()
+                                            .w_full()
+                                            .bg(foreground.opacity(0.3)),
+                                    ),
                             )
                             .child(
                                 v_flex()
@@ -767,7 +832,12 @@ fn theme_previews(cx: &App) -> impl IntoElement + use<> {
                                     .p_3()
                                     .gap_2()
                                     .child(div().w_12().h_1().bg(foreground))
-                                    .child(div().w_full().h_1().bg(foreground.opacity(0.3)))
+                                    .child(
+                                        div()
+                                            .w_full()
+                                            .h_1()
+                                            .bg(foreground.opacity(0.3)),
+                                    )
                                     .child(div().w_full().h_5().bg(muted)),
                             ),
                     )

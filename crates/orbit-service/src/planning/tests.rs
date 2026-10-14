@@ -8,9 +8,16 @@ async fn fixture() -> (
     orbit_store::store::SessionWriter,
 ) {
     let dir = tempfile::tempdir().unwrap();
-    let store = Store::open(dir.path().join("sessions.db")).await.unwrap();
+    let store = Store::open(dir.path().join("sessions.db"))
+        .await
+        .unwrap();
     let writer = store
-        .create(dir.path().to_string_lossy().into_owned(), "test".into())
+        .create(
+            dir.path()
+                .to_string_lossy()
+                .into_owned(),
+            "test".into(),
+        )
         .await
         .unwrap();
     let plan = Planning::new(
@@ -23,11 +30,25 @@ async fn fixture() -> (
     plan.enable();
     (dir, plan, writer)
 }
+
 async fn draft(plan: &Planning, files: Vec<&str>) -> State {
     plan.enter().await.unwrap();
     let current = plan.snapshot().await;
-    plan.update(json!({"generation":current.generation,"title":"Implement feature","markdown":"## Scope\nRead relevant files and add the feature.\n## Validation\nRun regression tests.","steps":["Implement","Verify"],"files":files})).await.unwrap()
+    plan.update(json!({
+        "generation": current.generation,
+        "title": "Implement feature",
+        "markdown": "## Scope\nRead relevant files and add the feature.\n## Validation\nRun \
+            regression tests.",
+        "steps": [
+            "Implement",
+            "Verify"
+        ],
+        "files": files
+    }))
+    .await
+    .unwrap()
 }
+
 async fn reviewing(
     plan: &Planning,
 ) -> (
@@ -49,6 +70,7 @@ async fn reviewing(
     .unwrap();
     (task, token, plan.snapshot().await.generation)
 }
+
 #[tokio::test]
 async fn plan_read_only_checks_executions_not_only_tool_definitions() {
     let (_dir, plan, _writer) = fixture().await;
@@ -82,7 +104,12 @@ async fn plan_read_only_checks_executions_not_only_tool_definitions() {
         "mcp__unsafe",
         "request_capability",
     ] {
-        assert!(!copy.definitions().iter().any(|d| d.function.name == name));
+        assert!(
+            !copy
+                .definitions()
+                .iter()
+                .any(|d| d.function.name == name)
+        );
         assert!(
             copy.execute(
                 ToolCall::function("c", name, json!({})),
@@ -141,6 +168,7 @@ async fn plan_read_only_checks_executions_not_only_tool_definitions() {
             .is_err()
     );
 }
+
 #[tokio::test]
 async fn plan_cannot_enter_until_mutating_tool_lease_finishes() {
     let (_dir, plan, _writer) = fixture().await;
@@ -157,6 +185,7 @@ async fn plan_cannot_enter_until_mutating_tool_lease_finishes() {
     drop(lease);
     plan.enter().await.unwrap();
 }
+
 #[tokio::test]
 async fn plan_feedback_revises_without_granting_permission_and_stale_approval_fails() {
     let (_dir, plan, _writer) = fixture().await;
@@ -176,7 +205,11 @@ async fn plan_feedback_revises_without_granting_permission_and_stale_approval_fa
     assert_eq!(state.plan.as_ref().unwrap().feedback, "Add tests");
     let next = draft(&plan, vec![]).await;
     assert_eq!(next.plan.unwrap().revision, 2);
-    assert!(plan.action(Action::Approve { generation }).await.is_err());
+    assert!(
+        plan.action(Action::Approve { generation })
+            .await
+            .is_err()
+    );
     assert!(
         plan.action(Action::Approve {
             generation: u64::MAX
@@ -185,6 +218,7 @@ async fn plan_feedback_revises_without_granting_permission_and_stale_approval_fa
         .is_err()
     );
 }
+
 #[tokio::test]
 async fn plan_approval_is_once_and_creates_linked_project_tasks_atomically() {
     let (_dir, plan, _writer) = fixture().await;
@@ -200,7 +234,12 @@ async fn plan_approval_is_once_and_creates_linked_project_tasks_atomically() {
     assert_eq!(state.mode, WorkMode::Build);
     let record = state.plan.unwrap();
     assert_eq!(record.task_ids.len(), 2);
-    let session = plan.0.store.session(&plan.0.session).await.unwrap();
+    let session = plan
+        .0
+        .store
+        .session(&plan.0.session)
+        .await
+        .unwrap();
     assert_eq!(
         plan.0
             .store
@@ -211,10 +250,15 @@ async fn plan_approval_is_once_and_creates_linked_project_tasks_atomically() {
         2
     );
     assert_eq!(
-        plan.0.store.planning(&plan.0.session).await.unwrap(),
+        plan.0
+            .store
+            .planning(&plan.0.session)
+            .await
+            .unwrap(),
         plan.snapshot().await
     );
 }
+
 #[tokio::test]
 async fn plan_cancelled_review_survives_reopen_and_idle_approval_returns_one_prompt() {
     let (dir, plan, _writer) = fixture().await;
@@ -245,6 +289,7 @@ async fn plan_cancelled_review_survives_reopen_and_idle_approval_returns_one_pro
             .is_none()
     );
 }
+
 #[tokio::test]
 async fn plan_changed_files_block_approval_until_new_revision() {
     let (dir, plan, _writer) = fixture().await;
@@ -263,6 +308,7 @@ async fn plan_changed_files_block_approval_until_new_revision() {
     cancel.cancel();
     let _ = task.await;
 }
+
 #[tokio::test]
 async fn plan_storage_rejects_stale_writes_and_file_paths_outside_workspace() {
     let (_dir, plan, _writer) = fixture().await;
@@ -275,7 +321,11 @@ async fn plan_storage_rejects_stale_writes_and_file_paths_outside_workspace() {
             .is_err()
     );
     for path in ["../outside", "/etc/passwd"] {
-        assert!(plan.fingerprints(vec![path.into()]).await.is_err());
+        assert!(
+            plan.fingerprints(vec![path.into()])
+                .await
+                .is_err()
+        );
     }
     plan.disable_file_tracking();
     assert!(
@@ -285,13 +335,25 @@ async fn plan_storage_rejects_stale_writes_and_file_paths_outside_workspace() {
             .to_string()
             .contains("禁用了文件读取")
     );
-    plan.action(Action::Leave).await.unwrap();
-    assert_eq!(plan.snapshot().await.plan.unwrap().status, Status::Draft);
+    plan.action(Action::Leave)
+        .await
+        .unwrap();
+    assert_eq!(
+        plan.snapshot()
+            .await
+            .plan
+            .unwrap()
+            .status,
+        Status::Draft
+    );
 }
+
 #[tokio::test]
 async fn plan_client_without_review_support_gets_error_instead_of_waiting_forever() {
     let (_dir, plan, _writer) = fixture().await;
-    plan.0.enabled.store(false, Ordering::Release);
+    plan.0
+        .enabled
+        .store(false, Ordering::Release);
     let tool = PlanTool {
         planning: plan,
         name: "enter_plan",
@@ -361,7 +423,9 @@ async fn plan_policy_context_tracks_latest_mode_and_revision() {
             .contains("Implement feature")
     );
     let (task, _cancel, generation) = reviewing(&plan).await;
-    plan.action(Action::Approve { generation }).await.unwrap();
+    plan.action(Action::Approve { generation })
+        .await
+        .unwrap();
     task.await.unwrap().unwrap();
     assert!(
         registry
@@ -369,5 +433,10 @@ async fn plan_policy_context_tracks_latest_mode_and_revision() {
             .unwrap()
             .contains("Parent work mode: build")
     );
-    assert!(registry.policy_context().unwrap().contains("approved"));
+    assert!(
+        registry
+            .policy_context()
+            .unwrap()
+            .contains("approved")
+    );
 }

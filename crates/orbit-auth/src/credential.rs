@@ -158,7 +158,10 @@ impl Credential {
         }
 
         if self.kind == CredentialKind::ChatgptOAuth {
-            let account = self.account_id.as_deref().ok_or(AuthError::InvalidToken)?;
+            let account = self
+                .account_id
+                .as_deref()
+                .ok_or(AuthError::InvalidToken)?;
             let mut value = HeaderValue::from_str(account).map_err(|_| AuthError::InvalidToken)?;
             value.set_sensitive(true);
             headers.insert("chatgpt-account-id", value);
@@ -167,7 +170,9 @@ impl Credential {
 
         if self.kind == CredentialKind::AntigravityOAuth {
             crate::google::validate_project(
-                self.project_id.as_deref().ok_or(AuthError::InvalidToken)?,
+                self.project_id
+                    .as_deref()
+                    .ok_or(AuthError::InvalidToken)?,
             )?;
             headers.insert(
                 "user-agent",
@@ -178,7 +183,9 @@ impl Credential {
 
         if self.kind == CredentialKind::GoogleOAuth {
             crate::google::validate_project(
-                self.project_id.as_deref().ok_or(AuthError::InvalidToken)?,
+                self.project_id
+                    .as_deref()
+                    .ok_or(AuthError::InvalidToken)?,
             )?;
             headers.insert(
                 "client-metadata",
@@ -234,7 +241,7 @@ mod tests {
             endpoint: "https://api.anthropic.com/v1/".into(),
             access: Secret("access-secret".into()),
             refresh: Some(Secret("refresh-secret".into())),
-            expires_at: Some(now() + 3600),
+            expires_at: Some(now() + 3_600),
             account: None,
             account_id: None,
             project_id: None,

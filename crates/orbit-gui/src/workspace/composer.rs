@@ -37,7 +37,12 @@ impl History {
     }
 
     pub(super) fn accepted(&mut self, text: &str) {
-        if !text.trim().is_empty() && self.entries.last().is_none_or(|last| last != text) {
+        if !text.trim().is_empty()
+            && self
+                .entries
+                .last()
+                .is_none_or(|last| last != text)
+        {
             self.entries.push(text.to_owned());
         }
         self.index = None;
@@ -45,15 +50,18 @@ impl History {
     }
 
     pub(super) fn changed(&mut self, text: &str) {
-        if self.index.is_some_and(|index| self.entries[index] != text) {
+        if self
+            .index
+            .is_some_and(|index| self.entries[index] != text)
+        {
             self.index = None;
             self.draft = None;
         }
     }
 
+    /// A history entry contains text only. Never pair an old prompt with a current image draft or
+    /// resurrect previously uploaded attachments.
     fn navigate(&mut self, previous: bool, current: Draft, images: bool) -> Option<Draft> {
-        // A history entry contains text only. Never pair an old prompt with a
-        // current image draft or resurrect previously uploaded attachments.
         if images || self.entries.is_empty() {
             return None;
         }
@@ -62,7 +70,9 @@ impl History {
             if self.index.is_none() {
                 self.draft = Some(current);
             }
-            self.index.unwrap_or(self.entries.len()).saturating_sub(1)
+            self.index
+                .unwrap_or(self.entries.len())
+                .saturating_sub(1)
         } else {
             let index = self.index? + 1;
             if index == self.entries.len() {
@@ -92,7 +102,10 @@ pub(super) fn is_image(path: &std::path::Path) -> bool {
 }
 
 fn references(paths: &[PathBuf]) -> (Vec<PathBuf>, String) {
-    let (images, files): (Vec<_>, Vec<_>) = paths.iter().cloned().partition(|path| is_image(path));
+    let (images, files): (Vec<_>, Vec<_>) = paths
+        .iter()
+        .cloned()
+        .partition(|path| is_image(path));
     let references = files
         .iter()
         .map(|path| format!("[文件：{}]", path.display()))
@@ -118,6 +131,7 @@ impl Workspace {
         );
         orbit_client::attachments::pasted_paths(text, &directory)
     }
+
     pub(super) fn history_arrow(
         &mut self,
         previous: bool,
@@ -127,7 +141,10 @@ impl Workspace {
         if self.command_open
             || !self.paths.is_empty()
             || window.modifiers() != Modifiers::default()
-            || !self.input.focus_handle(cx).is_focused(window)
+            || !self
+                .input
+                .focus_handle(cx)
+                .is_focused(window)
         {
             return;
         }
@@ -225,7 +242,9 @@ mod tests {
         assert!(!history.handles_arrow(true, "editing\nsecond", &(10..10)));
         assert!(!history.handles_arrow(true, "selected", &(0..4)));
         assert!(!history.handles_arrow(false, "", &(0..0)));
-        let recalled = history.navigate(true, draft("", 0..0), false).unwrap();
+        let recalled = history
+            .navigate(true, draft("", 0..0), false)
+            .unwrap();
         assert!(history.handles_arrow(true, &recalled.text, &recalled.selection));
         assert!(history.handles_arrow(false, &recalled.text, &recalled.selection));
         assert_eq!(
@@ -240,10 +259,15 @@ mod tests {
         history.accepted("first prompt");
         history.accepted("第二条\n保留缩进");
         let original = draft("unfinished\n草稿", 11..17);
-        let second = history.navigate(true, original.clone(), false).unwrap();
+        let second = history
+            .navigate(true, original.clone(), false)
+            .unwrap();
         assert_eq!(second.text, "第二条\n保留缩进");
-        history.changed(&second.text); // Owner-supplied synchronization is not an edit.
-        let first = history.navigate(true, second.clone(), false).unwrap();
+        // Owner-supplied synchronization is not an edit.
+        history.changed(&second.text);
+        let first = history
+            .navigate(true, second.clone(), false)
+            .unwrap();
         assert_eq!(first.text, "first prompt");
         assert_eq!(history.navigate(false, first, false), Some(second.clone()));
         assert_eq!(history.navigate(false, second, false), Some(original));

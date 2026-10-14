@@ -26,6 +26,7 @@ pub(crate) enum Phase {
     Failed,
     Stopped,
 }
+
 impl Phase {
     pub(crate) fn label(self) -> &'static str {
         match self {
@@ -51,6 +52,7 @@ pub(crate) enum ToolStatus {
     Failed,
     Stopped,
 }
+
 impl ToolStatus {
     pub(crate) fn label(self) -> &'static str {
         match self {
@@ -312,27 +314,39 @@ pub(crate) struct Execution {
     turns: usize,
     agents: Vec<ChildAgent>,
 }
+
 impl Execution {
     pub(crate) fn phase(&self) -> Phase {
         self.phase
     }
+
     pub(crate) fn tools(&self) -> &[ToolRun] {
         &self.tools
     }
+
     pub(crate) fn files(&self) -> &BTreeSet<String> {
         &self.files
     }
+
     pub(crate) fn turns(&self) -> usize {
         self.turns
     }
+
     pub(crate) fn agents(&self) -> &[ChildAgent] {
         &self.agents
     }
 
     pub(crate) fn sync_agents(&mut self, agents: &[orbit_protocol::subagents::Agent]) {
         for current in agents {
-            if let Some(agent) = self.agents.iter_mut().find(|agent| agent.id == current.id) {
-                if agent.authoritative_run.is_some_and(|run| run > current.run) {
+            if let Some(agent) = self
+                .agents
+                .iter_mut()
+                .find(|agent| agent.id == current.id)
+            {
+                if agent
+                    .authoritative_run
+                    .is_some_and(|run| run > current.run)
+                {
                     continue;
                 }
                 agent.status = child_status(&current.status).into();
@@ -418,7 +432,8 @@ impl Execution {
             AgentEvent::ContextCompacted { .. } => self.phase = Phase::Waiting,
             AgentEvent::ToolStarted { call } => {
                 self.phase = Phase::Working;
-                self.tools.retain(|tool| tool.id != call.id);
+                self.tools
+                    .retain(|tool| tool.id != call.id);
                 self.tool(call, ToolStatus::Running);
             }
             AgentEvent::ToolFinished {
@@ -431,8 +446,11 @@ impl Execution {
                 }
                 self.tool(call, ToolStatus::Complete);
                 self.output(call, content);
-                self.files
-                    .extend(changes.iter().map(|change| change.path.clone()));
+                self.files.extend(
+                    changes
+                        .iter()
+                        .map(|change| change.path.clone()),
+                );
             }
             AgentEvent::ToolFailed { call, error } => {
                 if !self.accepts(call) {
@@ -469,12 +487,21 @@ impl Execution {
     }
 
     fn output(&mut self, call: &ToolCall, content: &str) {
-        if let Some(tool) = self.tools.iter_mut().find(|tool| tool.id == call.id) {
+        if let Some(tool) = self
+            .tools
+            .iter_mut()
+            .find(|tool| tool.id == call.id)
+        {
             tool.output = Some(content.to_owned());
             tool.live = false;
             if let Some(result) = tool.command_result() {
                 tool.status = result.status();
-                tool.elapsed_ms = Some(result.elapsed.as_millis().min(u64::MAX as u128) as u64);
+                tool.elapsed_ms = Some(
+                    result
+                        .elapsed
+                        .as_millis()
+                        .min(u64::MAX as u128) as u64,
+                );
             }
         }
         if call.function.name == "spawn_agent"
@@ -484,8 +511,17 @@ impl Execution {
             let task = serde_json::from_str::<serde_json::Value>(&call.function.arguments)
                 .ok()
                 .and_then(|args| argument(Some(&args), &["task", "prompt"]).map(str::to_owned));
-            let status = child_status(value["status"].as_str().unwrap_or_default()).to_owned();
-            if let Some(agent) = self.agents.iter_mut().find(|agent| agent.id == id) {
+            let status = child_status(
+                value["status"]
+                    .as_str()
+                    .unwrap_or_default(),
+            )
+            .to_owned();
+            if let Some(agent) = self
+                .agents
+                .iter_mut()
+                .find(|agent| agent.id == id)
+            {
                 // Replayed spawn receipts describe launch time, not the latest
                 // stored run. They cannot overwrite the live catalogue.
                 if agent.authoritative_run.is_none() {
@@ -495,7 +531,11 @@ impl Execution {
                     }
                 }
             } else {
-                let role = child_role(value["role"].as_str().unwrap_or_default());
+                let role = child_role(
+                    value["role"]
+                        .as_str()
+                        .unwrap_or_default(),
+                );
                 self.agents.push(ChildAgent {
                     id: id.to_owned(),
                     role: role.to_owned(),
@@ -508,7 +548,11 @@ impl Execution {
     }
 
     fn tool(&mut self, call: &ToolCall, status: ToolStatus) {
-        if let Some(tool) = self.tools.iter_mut().find(|tool| tool.id == call.id) {
+        if let Some(tool) = self
+            .tools
+            .iter_mut()
+            .find(|tool| tool.id == call.id)
+        {
             tool.status = status;
         } else {
             let args = serde_json::from_str::<serde_json::Value>(&call.function.arguments).ok();
@@ -571,10 +615,16 @@ mod tests {
         let call = ToolCall::function(
             "spawn",
             "spawn_agent",
-            serde_json::json!({"task":"检查项目"}),
+            serde_json::json!({
+                "task": "检查项目"
+            }),
         );
-        let running =
-            serde_json::json!({"agent_id":"child","role":"review","status":"running"}).to_string();
+        let running = serde_json::json!({
+            "agent_id": "child",
+            "role": "review",
+            "status": "running"
+        })
+        .to_string();
         state.agent(&AgentEvent::ToolFinished {
             call: call.clone(),
             content: running.clone(),
@@ -616,6 +666,7 @@ mod tests {
         state.sync_agents(&[]);
         assert_eq!(state.agents()[0].status, "运行中");
     }
+
     fn update(value: serde_json::Value) -> Update {
         serde_json::from_value(value).unwrap()
     }
@@ -633,14 +684,21 @@ mod tests {
         let command = "\n\t \n  python3  -c \"\nprint('已完成')\n\"";
         let tool = presented_tool(
             "run_command",
-            serde_json::json!({"command":command,"cwd":"/home/用户/项目"}),
+            serde_json::json!({
+                "command": command,
+                "cwd": "/home/用户/项目"
+            }),
         );
         let original = tool.arguments.clone();
         let presentation = tool.presentation();
         assert_eq!(presentation.title(), "python3 -c \"");
         assert_eq!(presentation.subtitle(), "命令 · /home/用户/项目");
         assert!(presentation.tooltip().contains(command));
-        assert!(presentation.tooltip().ends_with("/home/用户/项目"));
+        assert!(
+            presentation
+                .tooltip()
+                .ends_with("/home/用户/项目")
+        );
         assert_eq!(tool.arguments, original);
         assert_eq!(tool.status, ToolStatus::Running);
     }
@@ -648,12 +706,25 @@ mod tests {
     #[test]
     fn presentation_bounds_long_unicode_titles_but_keeps_the_complete_tooltip() {
         let command = format!("printf '{}'", "数据🦀".repeat(300));
-        let tool = presented_tool("run_command", serde_json::json!({"command":command}));
+        let tool = presented_tool(
+            "run_command",
+            serde_json::json!({
+                "command": command
+            }),
+        );
         let presentation = tool.presentation();
         assert_eq!(presentation.title().chars().count(), 161);
         assert!(presentation.title().ends_with('…'));
-        assert!(presentation.tooltip().ends_with(&command));
-        assert!(!presentation.title().contains('\u{fffd}'));
+        assert!(
+            presentation
+                .tooltip()
+                .ends_with(&command)
+        );
+        assert!(
+            !presentation
+                .title()
+                .contains('\u{fffd}')
+        );
     }
 
     #[test]
@@ -668,7 +739,12 @@ mod tests {
             ("/", "/", ""),
             ("C:\\", "C:\\", ""),
         ] {
-            let tool = presented_tool("read_file", serde_json::json!({"path":path}));
+            let tool = presented_tool(
+                "read_file",
+                serde_json::json!({
+                    "path": path
+                }),
+            );
             let presentation = tool.presentation();
             assert_eq!(presentation.title(), title);
             assert_eq!(
@@ -687,13 +763,24 @@ mod tests {
     fn empty_invalid_and_unknown_arguments_leave_an_identifiable_row() {
         for arguments in [
             serde_json::json!({}),
-            serde_json::json!({"command":" \n\t"}),
+            serde_json::json!({
+                "command": " \n\t"
+            }),
         ] {
             let tool = presented_tool("run_command", arguments);
             assert_eq!(tool.presentation().title(), "命令");
-            assert!(tool.presentation().tooltip().contains("run_command"));
+            assert!(
+                tool.presentation()
+                    .tooltip()
+                    .contains("run_command")
+            );
         }
-        let mut tool = presented_tool("mcp__catalog__search", serde_json::json!({"query":"齿轮"}));
+        let mut tool = presented_tool(
+            "mcp__catalog__search",
+            serde_json::json!({
+                "query": "齿轮"
+            }),
+        );
         assert_eq!(tool.presentation().title(), "mcp__catalog__search");
         assert_eq!(tool.presentation().subtitle(), "齿轮");
         tool.arguments = "not JSON".into();
@@ -706,25 +793,34 @@ mod tests {
         for (name, args, title, label) in [
             (
                 "search_text",
-                serde_json::json!({"query":"渲染 错误", "path":"src"}),
+                serde_json::json!({
+                    "query": "渲染 错误",
+                    "path": "src"
+                }),
                 "渲染 错误",
                 "搜索代码 · src",
             ),
             (
                 "web_search",
-                serde_json::json!({"query":"GPUI tooltip"}),
+                serde_json::json!({
+                    "query": "GPUI tooltip"
+                }),
                 "GPUI tooltip",
                 "搜索网页",
             ),
             (
                 "web_fetch",
-                serde_json::json!({"url":"https://example.com/文档"}),
+                serde_json::json!({
+                    "url": "https://example.com/文档"
+                }),
                 "https://example.com/文档",
                 "读取网页",
             ),
             (
                 "spawn_agent",
-                serde_json::json!({"task":"检查布局\n保留用户改动"}),
+                serde_json::json!({
+                    "task": "检查布局\n保留用户改动"
+                }),
                 "检查布局",
                 "启动 Agent",
             ),
@@ -739,33 +835,84 @@ mod tests {
     #[test]
     fn projection_tracks_real_tools_compaction_and_committed_files() {
         let mut state = Execution::default();
-        let call = serde_json::json!({"id":"write-1","function":{"name":"write_file","arguments":"{\"path\":\"src/main.rs\"}"}});
-        state.apply(&update(serde_json::json!({"Started":{"prompt":"fix"}})));
-        state.apply(&update(
-            serde_json::json!({"Agent":{"CompactionStarted":null}}),
-        ));
+        let call = serde_json::json!({
+            "id": "write-1",
+            "function": {
+                "name": "write_file",
+                "arguments": "{\"path\":\"src/main.rs\"}"
+            }
+        });
+        state.apply(&update(serde_json::json!({
+            "Started": {
+                "prompt": "fix"
+            }
+        })));
+        state.apply(&update(serde_json::json!({
+            "Agent": {
+                "CompactionStarted": null
+            }
+        })));
         assert_eq!(state.phase(), Phase::Compacting);
-        state.apply(&update(
-            serde_json::json!({"Agent":{"ToolStarted":{"call":call}}}),
-        ));
+        state.apply(&update(serde_json::json!({
+            "Agent": {
+                "ToolStarted": {
+                    "call": call
+                }
+            }
+        })));
         assert!(state.files().is_empty());
-        state.apply(&update(serde_json::json!({"Agent":{"ToolFinished":{"call":call,"content":"ok","changes":[{"path":"src/main.rs","before":null,"after":"fn main() {}"}]}}})));
+        state.apply(&update(serde_json::json!({
+            "Agent": {
+                "ToolFinished": {
+                    "call": call,
+                    "content": "ok",
+                    "changes": [{
+                        "path": "src/main.rs",
+                        "before": null,
+                        "after": "fn main() {}"
+                    }]
+                }
+            }
+        })));
         assert_eq!(state.tools().len(), 1);
         assert_eq!(state.tools()[0].status, ToolStatus::Complete);
         assert!(state.files().contains("src/main.rs"));
-        state.apply(&update(
-            serde_json::json!({"Finished":{"status":"completed"}}),
-        ));
+        state.apply(&update(serde_json::json!({
+            "Finished": {
+                "status": "completed"
+            }
+        })));
         assert_eq!(state.phase(), Phase::Complete);
-        state.apply(&update(serde_json::json!({"Started":{"prompt":"next"}})));
+        state.apply(&update(serde_json::json!({
+            "Started": {
+                "prompt": "next"
+            }
+        })));
         assert!(state.tools().is_empty());
         assert_eq!(state.files().len(), 1);
     }
+
     #[test]
     fn failed_run_never_leaves_a_tool_marked_running() {
         let mut state = Execution::default();
-        state.apply(&update(serde_json::json!({"Agent":{"ToolStarted":{"call":{"id":"one","function":{"name":"run_command","arguments":"{}"}}}}})));
-        state.apply(&update(serde_json::json!({"Finished":{"status":"failed"}})));
+        state.apply(&update(serde_json::json!({
+            "Agent": {
+                "ToolStarted": {
+                    "call": {
+                        "id": "one",
+                        "function": {
+                            "name": "run_command",
+                            "arguments": "{}"
+                        }
+                    }
+                }
+            }
+        })));
+        state.apply(&update(serde_json::json!({
+            "Finished": {
+                "status": "failed"
+            }
+        })));
         assert_eq!(state.tools()[0].status, ToolStatus::Failed);
         assert_eq!(state.phase(), Phase::Failed);
     }
@@ -773,19 +920,50 @@ mod tests {
     #[test]
     fn delegated_work_stays_pending_until_its_own_completion_event() {
         let mut state = Execution::default();
-        let call = serde_json::json!({"id":"delegate","function":{"name":"spawn_agent","arguments":"{\"task\":\"review\"}"}});
-        let running = serde_json::json!({"agent_id":"review-1","role":"review","status":"running"})
-            .to_string();
-        state.apply(&update(serde_json::json!({"Agent":{"ToolBackgrounded":{"call":call,"job_id":"job-1","content":running}}})));
-        state.apply(&update(
-            serde_json::json!({"Finished":{"status":"completed"}}),
-        ));
+        let call = serde_json::json!({
+            "id": "delegate",
+            "function": {
+                "name": "spawn_agent",
+                "arguments": "{\"task\":\"review\"}"
+            }
+        });
+        let running = serde_json::json!({
+            "agent_id": "review-1",
+            "role": "review",
+            "status": "running"
+        })
+        .to_string();
+        state.apply(&update(serde_json::json!({
+            "Agent": {
+                "ToolBackgrounded": {
+                    "call": call,
+                    "job_id": "job-1",
+                    "content": running
+                }
+            }
+        })));
+        state.apply(&update(serde_json::json!({
+            "Finished": {
+                "status": "completed"
+            }
+        })));
         assert_eq!(state.tools()[0].status, ToolStatus::Background);
         assert_eq!(state.agents()[0].status, "运行中");
-        let completed =
-            serde_json::json!({"agent_id":"review-1","role":"review","status":"completed"})
-                .to_string();
-        state.apply(&update(serde_json::json!({"Agent":{"ToolFinished":{"call":call,"content":completed,"changes":[]}}})));
+        let completed = serde_json::json!({
+            "agent_id": "review-1",
+            "role": "review",
+            "status": "completed"
+        })
+        .to_string();
+        state.apply(&update(serde_json::json!({
+            "Agent": {
+                "ToolFinished": {
+                    "call": call,
+                    "content": completed,
+                    "changes": []
+                }
+            }
+        })));
         assert_eq!(state.tools().len(), 1);
         assert_eq!(state.tools()[0].status, ToolStatus::Complete);
         assert_eq!(state.agents().len(), 1);
@@ -796,9 +974,20 @@ mod tests {
     fn child_task_identity_survives_completion_and_follow_up_tool_receipts() {
         let task = "\n检查  侧栏布局\n保留当前项目与用户草稿";
         let mut state = Execution::default();
-        let call = ToolCall::function("spawn", "spawn_agent", serde_json::json!({"task":task}));
+        let call = ToolCall::function(
+            "spawn",
+            "spawn_agent",
+            serde_json::json!({
+                "task": task
+            }),
+        );
         let receipt = |status: &str| {
-            serde_json::json!({"agent_id":"child","role":"review","status":status}).to_string()
+            serde_json::json!({
+                "agent_id": "child",
+                "role": "review",
+                "status": status
+            })
+            .to_string()
         };
         state.agent(&AgentEvent::ToolBackgrounded {
             call: call.clone(),
@@ -807,7 +996,9 @@ mod tests {
         });
         assert_eq!(state.agents()[0].task(), Some(task));
         assert_eq!(
-            state.agents()[0].task_summary().as_deref(),
+            state.agents()[0]
+                .task_summary()
+                .as_deref(),
             Some("检查 侧栏布局")
         );
         state.agent(&AgentEvent::ToolFinished {
@@ -820,7 +1011,10 @@ mod tests {
                 call: ToolCall::function(
                     name,
                     name,
-                    serde_json::json!({"agent_id":"child", "message":"补充说明"}),
+                    serde_json::json!({
+                        "agent_id": "child",
+                        "message": "补充说明"
+                    }),
                 ),
                 content: receipt("running"),
                 changes: vec![],
@@ -841,27 +1035,57 @@ mod tests {
     #[test]
     fn child_tasks_accept_legacy_prompts_but_never_invent_missing_tasks() {
         for (arguments, task) in [
-            (serde_json::json!({"prompt":"审查改动"}), Some("审查改动")),
-            (serde_json::json!({"task":" \n\t"}), None),
+            (
+                serde_json::json!({
+                    "prompt": "审查改动"
+                }),
+                Some("审查改动"),
+            ),
+            (
+                serde_json::json!({
+                    "task": " \n\t"
+                }),
+                None,
+            ),
             (serde_json::json!({}), None),
         ] {
             let mut state = Execution::default();
             state.agent(&AgentEvent::ToolFinished {
                 call: ToolCall::function("spawn", "spawn_agent", arguments),
-                content: serde_json::json!({"agent_id":"child","role":"review","status":"completed","task":"结果中的其他文本"}).to_string(),
+                content: serde_json::json!({
+                    "agent_id": "child",
+                    "role": "review",
+                    "status": "completed",
+                    "task": "结果中的其他文本"
+                })
+                .to_string(),
                 changes: vec![],
             });
             assert_eq!(state.agents()[0].task(), task);
-            assert_eq!(state.agents()[0].task_summary().as_deref(), task);
+            assert_eq!(
+                state.agents()[0]
+                    .task_summary()
+                    .as_deref(),
+                task
+            );
         }
     }
 
     fn command_result(exit_code: serde_json::Value, timed_out: bool, cancelled: bool) -> String {
         serde_json::json!({
-            "exit_code":exit_code,"elapsed":{"secs":1,"nanos":234000000},
-            "stdout":"out\n","stderr":"err\n","timed_out":timed_out,"cancelled":cancelled,
-            "output_truncated":false,"stdout_total_bytes":4,"stderr_total_bytes":4,
-            "retained_output_truncated":false
+            "exit_code": exit_code,
+            "elapsed": {
+                "secs": 1,
+                "nanos": 234_000_000
+            },
+            "stdout": "out\n",
+            "stderr": "err\n",
+            "timed_out": timed_out,
+            "cancelled": cancelled,
+            "output_truncated": false,
+            "stdout_total_bytes": 4,
+            "stderr_total_bytes": 4,
+            "retained_output_truncated": false
         })
         .to_string()
     }
@@ -878,7 +1102,9 @@ mod tests {
             let call = ToolCall::function(
                 "command",
                 "run_command",
-                serde_json::json!({"command":"example"}),
+                serde_json::json!({
+                    "command": "example"
+                }),
             );
             state.agent(&AgentEvent::ToolStarted { call: call.clone() });
             state.agent(&AgentEvent::ToolFinished {
@@ -887,7 +1113,7 @@ mod tests {
                 changes: vec![],
             });
             assert_eq!(state.tools()[0].status, expected);
-            assert_eq!(state.tools()[0].elapsed_ms, Some(1234));
+            assert_eq!(state.tools()[0].elapsed_ms, Some(1_234));
         }
     }
 
@@ -897,7 +1123,9 @@ mod tests {
         let call = ToolCall::function(
             "command",
             "run_command",
-            serde_json::json!({"command":"example"}),
+            serde_json::json!({
+                "command": "example"
+            }),
         );
         state.agent(&AgentEvent::ToolStarted { call: call.clone() });
         let progress = |stdout: Option<&str>| orbit_protocol::ToolProgress {
@@ -907,9 +1135,19 @@ mod tests {
         };
         state.apply_progress(&[progress(Some("first\n"))]);
         state.apply_progress(&[progress(None)]);
-        assert_eq!(state.tools()[0].stdout_preview.as_deref(), Some("first\n"));
+        assert_eq!(
+            state.tools()[0]
+                .stdout_preview
+                .as_deref(),
+            Some("first\n")
+        );
         state.apply_progress(&[progress(Some("second\n"))]);
-        assert_eq!(state.tools()[0].stdout_preview.as_deref(), Some("second\n"));
+        assert_eq!(
+            state.tools()[0]
+                .stdout_preview
+                .as_deref(),
+            Some("second\n")
+        );
         assert!(state.tools()[0].live);
         state.agent(&AgentEvent::ToolFinished {
             call,
@@ -918,8 +1156,19 @@ mod tests {
         });
         state.apply_progress(&[progress(Some("stale"))]);
         assert!(!state.tools()[0].live);
-        assert_eq!(state.tools()[0].stdout_preview.as_deref(), Some("second\n"));
-        assert_eq!(state.tools()[0].command_result().unwrap().stdout, "out\n");
+        assert_eq!(
+            state.tools()[0]
+                .stdout_preview
+                .as_deref(),
+            Some("second\n")
+        );
+        assert_eq!(
+            state.tools()[0]
+                .command_result()
+                .unwrap()
+                .stdout,
+            "out\n"
+        );
     }
 
     #[test]
@@ -928,7 +1177,9 @@ mod tests {
         let old = ToolCall::function(
             "same-id",
             "run_command",
-            serde_json::json!({"command":"first"}),
+            serde_json::json!({
+                "command": "first"
+            }),
         );
         state.agent(&AgentEvent::ToolStarted { call: old.clone() });
         state.apply_progress(&[orbit_protocol::ToolProgress {
@@ -940,13 +1191,20 @@ mod tests {
         let background = ToolCall::function(
             "same-id",
             "run_command",
-            serde_json::json!({"command":"next","background":true}),
+            serde_json::json!({
+                "command": "next",
+                "background": true
+            }),
         );
         state.agent(&AgentEvent::ToolStarted {
             call: background.clone(),
         });
         assert_ne!(state.tools()[0].generation, generation);
-        assert!(state.tools()[0].stdout_preview.is_none());
+        assert!(
+            state.tools()[0]
+                .stdout_preview
+                .is_none()
+        );
         state.apply_progress(&[orbit_protocol::ToolProgress {
             call_id: "same-id".into(),
             stdout: Some("background".into()),

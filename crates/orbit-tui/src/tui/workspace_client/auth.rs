@@ -41,7 +41,9 @@ impl Prompt {
             Event::Key(key) if key.kind != KeyEventKind::Release => match key.code {
                 KeyCode::Esc | KeyCode::Char('c')
                     if key.code == KeyCode::Esc
-                        || key.modifiers.contains(KeyModifiers::CONTROL) =>
+                        || key
+                            .modifiers
+                            .contains(KeyModifiers::CONTROL) =>
                 {
                     return true;
                 }
@@ -67,7 +69,9 @@ impl Prompt {
         let width = bounds.width.saturating_sub(4).min(88);
         let prompt = render::safe_multiline_output(&challenge.prompt);
         let text = Paragraph::new(prompt).wrap(Wrap { trim: false });
-        let lines = text.line_count(width.saturating_sub(4)).min(18) as u16;
+        let lines = text
+            .line_count(width.saturating_sub(4))
+            .min(18) as u16;
         let height = (lines + 6).min(bounds.height.saturating_sub(2));
         let area = Rect::new(
             bounds.x + (bounds.width - width) / 2,
@@ -134,7 +138,9 @@ mod tests {
         prompt.handle(&Event::Paste("private-test-secret".into()));
         let mut terminal =
             ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 30)).unwrap();
-        terminal.draw(|frame| prompt.draw(frame)).unwrap();
+        terminal
+            .draw(|frame| prompt.draw(frame))
+            .unwrap();
         let rendered = format!("{:?}", terminal.backend());
         assert!(!rendered.contains("private-test-secret"));
         assert!(!format!("{prompt:?}").contains("private-test-secret"));

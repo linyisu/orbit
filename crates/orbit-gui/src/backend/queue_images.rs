@@ -46,7 +46,10 @@ pub(super) async fn localize(
                     let bytes = base64::engine::general_purpose::STANDARD.decode(data)?;
                     let image = orbit_tools::image_assets::ImageAssets::for_database(&database)
                         .import_bytes(name, bytes)?;
-                    Ok(image.path().to_string_lossy().into_owned())
+                    Ok(image
+                        .path()
+                        .to_string_lossy()
+                        .into_owned())
                 })
                 .await??;
                 cache.insert(key, path.clone());

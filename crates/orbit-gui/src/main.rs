@@ -1,3 +1,5 @@
+//! GPUI Kit desktop shell; workspace services remain behind orbit-client.
+
 mod accounts;
 mod appearance;
 mod assets;

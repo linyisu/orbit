@@ -100,8 +100,10 @@ impl Part {
                 line = line.framed(self.leading.clone(), self.trailing.clone());
             }
 
-            line.folds.extend(template.folds.clone());
-            line.anchors.extend(template.anchors.clone());
+            line.folds
+                .extend(template.folds.clone());
+            line.anchors
+                .extend(template.anchors.clone());
             line
         })
         .collect()
@@ -172,7 +174,8 @@ fn render(
                             }
                         })
                         .map(move |mut line| {
-                            line.media_requests.extend(requests.clone());
+                            line.media_requests
+                                .extend(requests.clone());
                             line
                         })
                 })
@@ -184,7 +187,10 @@ fn render(
         .iter()
         .map(|row| {
             let mut row = row.clone();
-            let occupied = row.iter().map(|cell| cell.colspan).sum::<usize>();
+            let occupied = row
+                .iter()
+                .map(|cell| cell.colspan)
+                .sum::<usize>();
             for _ in occupied..cols {
                 row.push(Cell {
                     lines: vec![LinkedLine::default()],
@@ -210,8 +216,10 @@ fn render(
                 .map(|line| line.line.width())
                 .max()
                 .unwrap_or(0);
-            let available =
-                widths[column..column + count].iter().sum::<usize>() + 3 * count.saturating_sub(1);
+            let available = widths[column..column + count]
+                .iter()
+                .sum::<usize>()
+                + 3 * count.saturating_sub(1);
             if desired > available {
                 widths[column + count - 1] += desired - available;
             }
@@ -240,8 +248,12 @@ fn render(
             .collect::<std::collections::BTreeSet<_>>()
     };
     let border = |left: &str, above: Option<&[Cell]>, below: Option<&[Cell]>, right: &str| {
-        let above = above.map(boundaries).unwrap_or_default();
-        let below = below.map(boundaries).unwrap_or_default();
+        let above = above
+            .map(boundaries)
+            .unwrap_or_default();
+        let below = below
+            .map(boundaries)
+            .unwrap_or_default();
         let mut body = String::new();
         for (i, w) in widths.iter().enumerate() {
             body.push_str(&"─".repeat(w + 2));
@@ -267,8 +279,12 @@ fn render(
         let cells: Vec<_> = row
             .iter()
             .map(|cell| {
-                let count = cell.colspan.min(cols.saturating_sub(column));
-                let span_width = widths[column..column + count].iter().sum::<usize>()
+                let count = cell
+                    .colspan
+                    .min(cols.saturating_sub(column));
+                let span_width = widths[column..column + count]
+                    .iter()
+                    .sum::<usize>()
                     + 3 * count.saturating_sub(1);
                 column += count;
                 (
@@ -290,7 +306,8 @@ fn render(
                                         }
                                     })
                                     .map(move |mut line| {
-                                        line.media_requests.extend(requests.clone());
+                                        line.media_requests
+                                            .extend(requests.clone());
                                         line
                                     })
                                     .collect::<Vec<_>>()
@@ -326,11 +343,13 @@ fn render(
                 let cell = rendered.get(n);
                 let definition = &row[i];
                 let padding = cell_width.saturating_sub(cell.map_or(0, |cell| cell.line.width()));
-                let alignment = definition.alignment.unwrap_or(match alignments[column] {
-                    pulldown_cmark::Alignment::Right => ratatui::layout::Alignment::Right,
-                    pulldown_cmark::Alignment::Center => ratatui::layout::Alignment::Center,
-                    _ => ratatui::layout::Alignment::Left,
-                });
+                let alignment = definition
+                    .alignment
+                    .unwrap_or(match alignments[column] {
+                        pulldown_cmark::Alignment::Right => ratatui::layout::Alignment::Right,
+                        pulldown_cmark::Alignment::Center => ratatui::layout::Alignment::Center,
+                        _ => ratatui::layout::Alignment::Left,
+                    });
                 let left = match alignment {
                     ratatui::layout::Alignment::Right => padding,
                     ratatui::layout::Alignment::Center => padding / 2,
@@ -341,38 +360,67 @@ fn render(
                 spans.push(Span::raw(" ".repeat(left + 1)));
                 byte_offset += left + 1;
                 if let Some(cell) = cell {
-                    let column_offset = spans.iter().map(Span::width).sum::<usize>();
-                    media.extend(cell.media.iter().cloned().map(|mut target| {
-                        target.range.start += byte_offset;
-                        target.range.end += byte_offset;
-                        target
-                    }));
-                    graphics.extend(cell.graphics.iter().cloned().map(|mut graphic| {
-                        graphic.x += column_offset as u16;
-                        graphic
-                    }));
-                    copy.extend(cell.copy.iter().cloned().map(|mut copy| {
-                        copy.columns.start += column_offset;
-                        copy.columns.end += column_offset;
-                        copy
-                    }));
+                    let column_offset = spans
+                        .iter()
+                        .map(Span::width)
+                        .sum::<usize>();
+                    media.extend(
+                        cell.media
+                            .iter()
+                            .cloned()
+                            .map(|mut target| {
+                                target.range.start += byte_offset;
+                                target.range.end += byte_offset;
+                                target
+                            }),
+                    );
+                    graphics.extend(
+                        cell.graphics
+                            .iter()
+                            .cloned()
+                            .map(|mut graphic| {
+                                graphic.x += column_offset as u16;
+                                graphic
+                            }),
+                    );
+                    copy.extend(
+                        cell.copy
+                            .iter()
+                            .cloned()
+                            .map(|mut copy| {
+                                copy.columns.start += column_offset;
+                                copy.columns.end += column_offset;
+                                copy
+                            }),
+                    );
                     requests.extend(cell.media_requests.clone());
-                    links.extend(cell.links.iter().cloned().map(|mut link| {
-                        link.start += byte_offset;
-                        link.end += byte_offset;
-                        link
-                    }));
+                    links.extend(
+                        cell.links
+                            .iter()
+                            .cloned()
+                            .map(|mut link| {
+                                link.start += byte_offset;
+                                link.end += byte_offset;
+                                link
+                            }),
+                    );
                     byte_offset += cell.line.to_string().len();
-                    spans.extend(cell.line.spans.iter().cloned().map(|mut span| {
-                        if definition.header {
-                            span.style = span
-                                .style
-                                .add_modifier(Modifier::BOLD)
-                                .fg(THEME.md_table_header);
-                        }
+                    spans.extend(
+                        cell.line
+                            .spans
+                            .iter()
+                            .cloned()
+                            .map(|mut span| {
+                                if definition.header {
+                                    span.style = span
+                                        .style
+                                        .add_modifier(Modifier::BOLD)
+                                        .fg(THEME.md_table_header);
+                                }
 
-                        span
-                    }));
+                                span
+                            }),
+                    );
                 }
 
                 decorations.extend([spans.len(), spans.len() + 1]);
@@ -437,16 +485,26 @@ impl Cell {
                 offset += 1;
             }
 
-            links.extend(line.links.iter().cloned().map(|mut link| {
-                link.start += offset;
-                link.end += offset;
-                link
-            }));
-            media.extend(line.media.iter().cloned().map(|mut target| {
-                target.range.start += offset;
-                target.range.end += offset;
-                target
-            }));
+            links.extend(
+                line.links
+                    .iter()
+                    .cloned()
+                    .map(|mut link| {
+                        link.start += offset;
+                        link.end += offset;
+                        link
+                    }),
+            );
+            media.extend(
+                line.media
+                    .iter()
+                    .cloned()
+                    .map(|mut target| {
+                        target.range.start += offset;
+                        target.range.end += offset;
+                        target
+                    }),
+            );
             offset += line.line.to_string().len();
             spans.extend(line.line.spans.iter().cloned());
         }
@@ -465,7 +523,10 @@ impl Cell {
 pub(super) fn labelled_table_rows(rows: &[Vec<Cell>]) -> Vec<LinkedLine> {
     let mut lines = Vec::new();
     let has_header = rows[0].iter().any(|cell| cell.header);
-    for row in rows.iter().skip(usize::from(has_header)) {
+    for row in rows
+        .iter()
+        .skip(usize::from(has_header))
+    {
         let mut column = 0;
         for cell in row {
             let start = column;
@@ -486,21 +547,30 @@ pub(super) fn labelled_table_rows(rows: &[Vec<Cell>]) -> Vec<LinkedLine> {
                     header.line.spans.push(Span::raw(" / "));
                 }
                 let offset = header.line.to_string().len();
+                header.links.extend(
+                    heading
+                        .links
+                        .into_iter()
+                        .map(|mut link| {
+                            link.start += offset;
+                            link.end += offset;
+                            link
+                        }),
+                );
+                header.media.extend(
+                    heading
+                        .media
+                        .into_iter()
+                        .map(|mut target| {
+                            target.range.start += offset;
+                            target.range.end += offset;
+                            target
+                        }),
+                );
                 header
-                    .links
-                    .extend(heading.links.into_iter().map(|mut link| {
-                        link.start += offset;
-                        link.end += offset;
-                        link
-                    }));
-                header
-                    .media
-                    .extend(heading.media.into_iter().map(|mut target| {
-                        target.range.start += offset;
-                        target.range.end += offset;
-                        target
-                    }));
-                header.line.spans.extend(heading.line.spans);
+                    .line
+                    .spans
+                    .extend(heading.line.spans);
             }
 
             if header.line.spans.is_empty() {
@@ -541,16 +611,28 @@ pub(super) fn labelled_table_rows(rows: &[Vec<Cell>]) -> Vec<LinkedLine> {
                     .collect::<Vec<_>>();
 
                 if index == 0 {
-                    links.extend(header.links.iter().cloned().map(|mut link| {
-                        link.start += 2;
-                        link.end += 2;
-                        link
-                    }));
-                    media.extend(header.media.iter().cloned().map(|mut target| {
-                        target.range.start += 2;
-                        target.range.end += 2;
-                        target
-                    }));
+                    links.extend(
+                        header
+                            .links
+                            .iter()
+                            .cloned()
+                            .map(|mut link| {
+                                link.start += 2;
+                                link.end += 2;
+                                link
+                            }),
+                    );
+                    media.extend(
+                        header
+                            .media
+                            .iter()
+                            .cloned()
+                            .map(|mut target| {
+                                target.range.start += 2;
+                                target.range.end += 2;
+                                target
+                            }),
+                    );
                 }
 
                 media.sort_by_key(|target| target.range.start);

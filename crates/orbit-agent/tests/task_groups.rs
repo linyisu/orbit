@@ -26,7 +26,13 @@ fn response(text: &str) -> ChatCompletion {
 async fn auxiliary_completion_wakes_parent_without_polling_or_duplicate_tool_responses() {
     let jobs = BackgroundJobs::with_capacity(16).unwrap();
     jobs.restore_result(
-        ToolCall::function("child", "spawn_agent", serde_json::json!({"task":"review"})),
+        ToolCall::function(
+            "child",
+            "spawn_agent",
+            serde_json::json!({
+                "task": "review"
+            }),
+        ),
         "review".into(),
         ToolOutput::text("{\"agent_id\":\"orbit-child\",\"status\":\"completed\"}"),
     )
@@ -43,15 +49,14 @@ async fn auxiliary_completion_wakes_parent_without_polling_or_duplicate_tool_res
         .unwrap();
 
     assert_eq!(model.requests().len(), 1);
-    assert!(result.history.iter().any(
-        |m| matches!(m,ChatMessage::User{content,..} if content.contains("subagent_completion"))
-    ));
-    assert!(
-        !result
-            .history
-            .iter()
-            .any(|m| matches!(m,ChatMessage::Tool{tool_call_id,..} if tool_call_id=="child"))
-    );
+    assert!(result.history.iter().any(|m| matches!(
+        m,
+        ChatMessage::User { content, .. } if content.contains("subagent_completion")
+    )));
+    assert!(!result.history.iter().any(|m| matches!(
+        m,
+        ChatMessage::Tool { tool_call_id, .. } if tool_call_id == "child"
+    )));
 }
 
 #[tokio::test]
@@ -137,7 +142,10 @@ async fn inbox_wakes_waiting_agent_and_cancellation_reaps_auxiliary_jobs() {
         model.requests()[2]
             .messages
             .iter()
-            .any(|m| matches!(m,ChatMessage::User{content,..} if content=="extra context"))
+            .any(|m| matches!(
+                m,
+                ChatMessage::User { content, .. } if content == "extra context"
+            ))
     );
 }
 
@@ -216,8 +224,45 @@ async fn progress_reminders_wake_parent_and_idle_launched_children_join_the_next
         .unwrap();
 
     assert_eq!(model.requests().len(), 3);
-    assert!(model.requests()[1].messages.iter().any(|message| matches!(message, ChatMessage::User{content,..} if content.contains("needs a progress check"))));
-    assert_eq!(result.history.iter().filter(|message| matches!(message, ChatMessage::User{content,..} if content.contains("needs a progress check"))).count(), 1);
-    assert!(result.history.iter().any(|message| matches!(message, ChatMessage::Tool{content,..} if content.contains("orbit-child") && content.contains("completed"))));
-    assert!(!result.history.iter().any(|message| matches!(message, ChatMessage::Tool{tool_call_id,..} if tool_call_id == "ui-followup")));
+    assert!(
+        model.requests()[1]
+            .messages
+            .iter()
+            .any(|message| matches!(message,
+        ChatMessage::User{
+        content,
+        ..
+    } if content
+        .contains("needs a progress check")))
+    );
+    assert_eq!(
+        result
+            .history
+            .iter()
+            .filter(|message| matches!(
+                message,
+                ChatMessage::User { content, .. } if content.contains("needs a progress check")
+            ))
+            .count(),
+        1
+    );
+    assert!(
+        result
+            .history
+            .iter()
+            .any(|message| matches!(
+                message,
+                ChatMessage::Tool { content, .. }
+                    if content.contains("orbit-child") && content.contains("completed")
+            ))
+    );
+    assert!(
+        !result
+            .history
+            .iter()
+            .any(|message| matches!(
+                message,
+                ChatMessage::Tool { tool_call_id, .. } if tool_call_id == "ui-followup"
+            ))
+    );
 }

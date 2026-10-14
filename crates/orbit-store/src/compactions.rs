@@ -95,12 +95,16 @@ impl Store {
         })
         .await
     }
+
     pub async fn compactions(&self, session_id: &str) -> Result<Vec<StoredCompaction>> {
         let id = session_id.to_owned();
         self.read_access(move |conn| async move {
             let tx = conn.begin().await?;
             ensure!(
-                sessions::Entity::find_by_id(&id).count(&tx).await? > 0,
+                sessions::Entity::find_by_id(&id)
+                    .count(&tx)
+                    .await?
+                    > 0,
                 "session not found"
             );
             let json = |function: &str| {
@@ -171,7 +175,7 @@ mod tests {
                 uncertainty: vec![],
             },
             requests: 1,
-            input_tokens: 1000,
+            input_tokens: 1_000,
         };
 
         store

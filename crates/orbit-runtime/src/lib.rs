@@ -1,3 +1,5 @@
+//! Execution, filesystem and capability boundaries independent of any frontend.
+
 pub mod capability;
 pub mod error;
 pub mod execution;

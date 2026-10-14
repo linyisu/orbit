@@ -17,7 +17,12 @@ pub(crate) fn references(source: &str, names: &BTreeSet<&str>) -> (Vec<Identifie
         }
         // Common comment/string forms. These remain lexical candidates, not
         // language-aware resolution (e.g. heredocs require a real grammar).
-        if ch == '#' || (ch == '/' && chars.peek().is_some_and(|(_, c)| *c == '/')) {
+        if ch == '#'
+            || (ch == '/'
+                && chars
+                    .peek()
+                    .is_some_and(|(_, c)| *c == '/'))
+        {
             for (_, c) in chars.by_ref() {
                 if c == '\n' {
                     line += 1;
@@ -26,7 +31,11 @@ pub(crate) fn references(source: &str, names: &BTreeSet<&str>) -> (Vec<Identifie
             }
             continue;
         }
-        if ch == '/' && chars.peek().is_some_and(|(_, c)| *c == '*') {
+        if ch == '/'
+            && chars
+                .peek()
+                .is_some_and(|(_, c)| *c == '*')
+        {
             chars.next();
             let mut previous = '\0';
             for (_, c) in chars.by_ref() {
@@ -82,7 +91,8 @@ mod tests {
     use super::*;
     #[test]
     fn references_exclude_literals_comments_numbers_and_duplicate_tokens() {
-        let source = "resolve resolve\n// resolve\n/* resolve\nresolve */\n\"resolve\" 'resolve' `resolve`\n# resolve\n123resolve 123\nresolve";
+        let source = "resolve resolve\n// resolve\n/* resolve\nresolve */\n\"resolve\" 'resolve' \
+            `resolve`\n# resolve\n123resolve 123\nresolve";
         let (found, truncated) = references(source, &BTreeSet::from(["resolve", "123"]));
         assert!(!truncated);
         assert_eq!(
@@ -93,7 +103,7 @@ mod tests {
             [("resolve", 1), ("resolve", 8)]
         );
         let (found, truncated) =
-            references(&"resolve\n".repeat(10000), &BTreeSet::from(["resolve"]));
+            references(&"resolve\n".repeat(10_000), &BTreeSet::from(["resolve"]));
         assert!(truncated);
         assert_eq!(found.len(), 512);
     }

@@ -22,7 +22,7 @@ use super::{View, view::Geometry};
 
 // Budget for RGBA pixels and the encoded PNG transfer together.
 const MAX_PIXELS: u64 = super::MAX_CACHE_BYTES as u64 / 12;
-const PAYLOAD_CHUNK_BYTES: usize = 3072;
+const PAYLOAD_CHUNK_BYTES: usize = 3_072;
 const PLACEMENT_ID: u32 = 1;
 
 pub(super) struct Image {
@@ -92,7 +92,8 @@ impl Image {
             self.id
         )
         .unwrap();
-        self.transmitted.store(false, Ordering::Release);
+        self.transmitted
+            .store(false, Ordering::Release);
     }
 }
 
@@ -113,9 +114,15 @@ pub(super) struct Placement {
 
 impl Placement {
     pub fn area(&self) -> Rect {
-        let geometry = self.image.geometry(self.body, self.view);
-        let width = geometry.width.div_ceil(u32::from(self.image.cell.width)) as u16;
-        let height = geometry.height.div_ceil(u32::from(self.image.cell.height)) as u16;
+        let geometry = self
+            .image
+            .geometry(self.body, self.view);
+        let width = geometry
+            .width
+            .div_ceil(u32::from(self.image.cell.width)) as u16;
+        let height = geometry
+            .height
+            .div_ceil(u32::from(self.image.cell.height)) as u16;
         Rect::new(
             self.body.x + (self.body.width - width) / 2,
             self.body.y + (self.body.height - height) / 2,
@@ -129,15 +136,30 @@ impl Placement {
     }
 
     fn display(&self, commands: &mut String) {
-        if !self.image.transmitted.swap(true, Ordering::AcqRel) {
+        if !self
+            .image
+            .transmitted
+            .swap(true, Ordering::AcqRel)
+        {
             commands.push_str(&self.image.upload);
         }
         let area = self.area();
-        let geometry = self.image.geometry(self.body, self.view);
+        let geometry = self
+            .image
+            .geometry(self.body, self.view);
         let (x, y, width, height) = geometry.bounds(self.image.width, self.image.height);
         // A stable placement id replaces the crop in the terminal without another upload.
-        write!(commands, "\x1b7\x1b[{};{}H\x1b_Ga=p,i={},p={PLACEMENT_ID},q=2,C=1,x={x},y={y},w={width},h={height},c={},r={}\x1b\\\x1b8",
-            area.y + 1, area.x + 1, self.image.id, area.width, area.height).unwrap();
+        write!(
+            commands,
+            "\x1b7\x1b[{};{}H\x1b_Ga=p,i={},p={PLACEMENT_ID},q=2,C=1,x={x},y={y},w={wi\
+            dth},h={height},c={},r={}\x1b\\\x1b8",
+            area.y + 1,
+            area.x + 1,
+            self.image.id,
+            area.width,
+            area.height
+        )
+        .unwrap();
     }
 }
 
@@ -180,7 +202,7 @@ mod tests {
             let (parameters, payload) = chunk.split_once(';').unwrap();
             assert!(parameters.contains("q=2"));
             let payload = payload.strip_suffix("\x1b\\").unwrap();
-            assert!(payload.len() <= 4096);
+            assert!(payload.len() <= 4_096);
             encoded.push_str(payload);
         }
         let decoded = image::load_from_memory(&STANDARD.decode(encoded).unwrap())
@@ -201,16 +223,24 @@ mod tests {
         };
         let mut frame = buffer();
         paint(Some(&placement), None, &mut frame);
-        assert!(frame[(0, 0)].symbol().contains("a=t,f=100"));
-        assert!(frame[(0, 0)].symbol().ends_with("\x1b8中"));
+        assert!(
+            frame[(0, 0)]
+                .symbol()
+                .contains("a=t,f=100")
+        );
+        assert!(
+            frame[(0, 0)]
+                .symbol()
+                .ends_with("\x1b8中")
+        );
         assert_eq!(frame[(0, 0)].cell_width(), 2);
         let mut frame = buffer();
         paint(Some(&placement), Some(&placement), &mut frame);
         assert_eq!(frame[(0, 0)].symbol(), "中");
 
         for (zoom, pan, body) in [
-            (200, (-1000, -1000), placement.body),
-            (400, (1000, 1000), placement.body),
+            (200, (-1_000, -1_000), placement.body),
+            (400, (1_000, 1_000), placement.body),
             (200, (0, 0), Rect::new(3, 4, 30, 12)),
         ] {
             let previous = placement.clone();
@@ -227,10 +257,18 @@ mod tests {
         }
         let mut frame = buffer();
         paint(None, Some(&placement), &mut frame);
-        assert!(frame[(0, 0)].symbol().contains("a=d,d=i"));
+        assert!(
+            frame[(0, 0)]
+                .symbol()
+                .contains("a=d,d=i")
+        );
         assert!(!frame[(0, 0)].symbol().contains("d=I"));
         let mut frame = buffer();
         paint(Some(&placement), None, &mut frame);
-        assert!(frame[(0, 0)].symbol().contains("a=t,f=100"));
+        assert!(
+            frame[(0, 0)]
+                .symbol()
+                .contains("a=t,f=100")
+        );
     }
 }

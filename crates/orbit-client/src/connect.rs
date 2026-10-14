@@ -18,7 +18,9 @@ impl Opened {
         progress: super::interaction::Progress,
     ) -> Result<Self> {
         progress.report("启动工作区服务并等待握手");
-        let mut client = connection.connect_progress(Some(&progress)).await?;
+        let mut client = connection
+            .connect_progress(Some(&progress))
+            .await?;
         progress.report("已完成握手，正在打开工作区会话");
         progress.report("应用本地配置并打开工作区会话");
         let local = connection.local_configuration.as_ref();

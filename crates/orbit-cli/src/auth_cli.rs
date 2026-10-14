@@ -79,7 +79,9 @@ pub(crate) async fn run(command: AuthCommand, directory: PathBuf) -> Result<()> 
             stdin,
         } => {
             let key = read_secret(stdin)?;
-            store.set_api_key(&name, key, &base_url).await?;
+            store
+                .set_api_key(&name, key, &base_url)
+                .await?;
             println!("已保存凭据 {name}，配置中使用 credential = {name:?}");
         }
 
@@ -165,11 +167,15 @@ fn read_secret(from_stdin: bool) -> Result<String> {
             bail!("--stdin 需要管道输入；交互输入请省略该选项");
         }
         let mut bytes = Vec::new();
-        io::stdin().take(16_385).read_to_end(&mut bytes)?;
+        io::stdin()
+            .take(16_385)
+            .read_to_end(&mut bytes)?;
         if bytes.len() > 16_384 {
             bail!("输入过长");
         }
-        return Ok(String::from_utf8(bytes)?.trim().to_owned());
+        return Ok(String::from_utf8(bytes)?
+            .trim()
+            .to_owned());
     }
 
     if !io::stdin().is_terminal() {
@@ -198,14 +204,21 @@ fn read_secret(from_stdin: bool) -> Result<String> {
             match key.code {
                 KeyCode::Enter => return Ok(value),
                 KeyCode::Esc => bail!("输入已取消"),
-                KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                KeyCode::Char('c')
+                    if key
+                        .modifiers
+                        .contains(KeyModifiers::CONTROL) =>
+                {
                     bail!("输入已取消")
                 }
                 KeyCode::Backspace => {
                     value.pop();
                 }
                 KeyCode::Char(c)
-                    if !c.is_control() && !key.modifiers.contains(KeyModifiers::CONTROL) =>
+                    if !c.is_control()
+                        && !key
+                            .modifiers
+                            .contains(KeyModifiers::CONTROL) =>
                 {
                     if value.len() + c.len_utf8() > 16_384 {
                         bail!("输入过长");

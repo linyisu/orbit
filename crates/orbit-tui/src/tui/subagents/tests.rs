@@ -24,10 +24,26 @@ fn task_cards_preserve_status_statistics_links_and_shared_markdown() {
         ("queued", "已排队"),
     ] {
         let row = ToolRow {
-            id:"orbit-child".into(),name:"spawn_agent".into(),
-            arguments:json!({"task":"审查中文边界 🦀 和长文件名","role":"review"}).to_string(),
-            status:if status=="running" {ToolStatus::Running} else {ToolStatus::Finished},
-            output:json!({"agent_id":"00000000000000000000000000000001","status":status,"model":"orbit::model","tool_calls":3,"elapsed_ms":12900,"_activity":{"current":"read_file crates/orbit-tui/src/tui/很长很长很长的文件名.rs"},"summary":"**检查完成**\n\n[证据](https://orbit.example/evidence)"}).to_string(),
+            id: "orbit-child".into(),
+            name: "spawn_agent".into(),
+            arguments: json!({"task":"审查中文边界 🦀 和长文件名","role":"review"}).to_string(),
+            status: if status == "running" {
+                ToolStatus::Running
+            } else {
+                ToolStatus::Finished
+            },
+            output: json!({
+                "agent_id": "00000000000000000000000000000001",
+                "status": status,
+                "model": "orbit::model",
+                "tool_calls": 3,
+                "elapsed_ms": 12_900,
+                "_activity": {
+                    "current": "read_file crates/orbit-tui/src/tui/很长很长很长的文件名.rs"
+                },
+                "summary": "**检查完成**\n\n[证据](https://orbit.example/evidence)"
+            })
+            .to_string(),
         };
 
         for width in [10, 11, 12, 30, 80] {
@@ -60,7 +76,10 @@ fn task_cards_preserve_status_statistics_links_and_shared_markdown() {
                         .line
                         .spans
                         .iter()
-                        .filter(|span| span.style.add_modifier.contains(Modifier::UNDERLINED))
+                        .filter(|span| span
+                            .style
+                            .add_modifier
+                            .contains(Modifier::UNDERLINED))
                         .all(|span| span.content == "查看")
                 );
                 if width == 80 && expanded {
@@ -69,20 +88,38 @@ fn task_cards_preserve_status_statistics_links_and_shared_markdown() {
                             .iter()
                             .any(|line| line.line.to_string().contains(expected))
                     );
-                    assert!(
-                        lines
-                            .iter()
-                            .any(|line| line.line.to_string().contains("3 次调用 · 12s"))
-                    );
+                    assert!(lines.iter().any(|line| {
+                        line.line
+                            .to_string()
+                            .contains("3 次调用 · 12s")
+                    }));
                 }
 
                 if expanded {
-                    assert!(lines.first().unwrap().line.to_string().starts_with('╭'));
-                    assert!(lines.last().unwrap().line.to_string().starts_with('╰'));
-                    assert!(lines[1..lines.len() - 1].iter().all(|line| {
-                        let text = line.line.to_string();
-                        text.starts_with('│') && text.ends_with('│')
-                    }));
+                    assert!(
+                        lines
+                            .first()
+                            .unwrap()
+                            .line
+                            .to_string()
+                            .starts_with('╭')
+                    );
+                    assert!(
+                        lines
+                            .last()
+                            .unwrap()
+                            .line
+                            .to_string()
+                            .starts_with('╰')
+                    );
+                    assert!(
+                        lines[1..lines.len() - 1]
+                            .iter()
+                            .all(|line| {
+                                let text = line.line.to_string();
+                                text.starts_with('│') && text.ends_with('│')
+                            })
+                    );
                 } else {
                     assert_eq!(lines.len(), 1);
                     if width == 80 {
@@ -99,7 +136,11 @@ fn task_cards_preserve_status_statistics_links_and_shared_markdown() {
                     let bold = lines
                         .iter()
                         .flat_map(|line| &line.line.spans)
-                        .filter(|span| span.style.add_modifier.contains(Modifier::BOLD))
+                        .filter(|span| {
+                            span.style
+                                .add_modifier
+                                .contains(Modifier::BOLD)
+                        })
                         .map(|span| span.content.as_ref())
                         .collect::<String>();
 
@@ -114,13 +155,20 @@ fn task_cards_preserve_status_statistics_links_and_shared_markdown() {
 fn subagent_results_and_rules_stay_inside_the_shared_tool_frame() {
     for width in [12, 40, 160] {
         let mut state = UiState::new("orbit::model");
-        state.transcript.push(TranscriptItem::Tool(ToolRow {
-            id: "orbit-report".into(),
-            name: "spawn_agent".into(),
-            arguments: json!({"task":"检查 Orbit 报告"}).to_string(),
-            status: ToolStatus::Finished,
-            output: json!({"agent_id":"00000000000000000000000000000001","status":"completed","summary":"# Orbit\n\n---\n\n```rust\n// Orbit 注释\nfn orbit() {}\n```"}).to_string(),
-        }));
+        state
+            .transcript
+            .push(TranscriptItem::Tool(ToolRow {
+                id: "orbit-report".into(),
+                name: "spawn_agent".into(),
+                arguments: json!({"task":"检查 Orbit 报告"}).to_string(),
+                status: ToolStatus::Finished,
+                output: json!({
+                    "agent_id": "00000000000000000000000000000001",
+                    "status": "completed",
+                    "summary": "# Orbit\n\n---\n\n```rust\n// Orbit 注释\nfn orbit() {}\n```"
+                })
+                .to_string(),
+            }));
         state.expanded.insert(0);
         let mut terminal = Terminal::new(TestBackend::new(width + 6, 50)).unwrap();
         terminal
@@ -151,7 +199,9 @@ fn parent_navigation_has_hover_respects_selection_and_does_not_cover_the_editor(
     let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
     let mut state = UiState::new("orbit::model");
     state.subagent_parent = Some("orbit-parent".into());
-    state.transcript.push(TranscriptItem::User("子任务".into()));
+    state
+        .transcript
+        .push(TranscriptItem::User("子任务".into()));
     terminal
         .draw(|frame| super::super::render::draw(frame, &mut state))
         .unwrap();

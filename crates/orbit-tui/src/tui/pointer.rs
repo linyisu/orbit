@@ -9,12 +9,17 @@ pub(super) fn handle_tool_scroll(state: &mut UiState, event: &Event) -> bool {
         MouseEventKind::ScrollDown => wheel::TOOL_LINES as isize,
         _ => return false,
     };
-    if state.transcript_layout.scroll_tool_body(
-        state.selection.viewport,
-        state.max_scroll.saturating_sub(state.scroll),
-        (mouse.column, mouse.row),
-        lines,
-    ) {
+    if state
+        .transcript_layout
+        .scroll_tool_body(
+            state.selection.viewport,
+            state
+                .max_scroll
+                .saturating_sub(state.scroll),
+            (mouse.column, mouse.row),
+            lines,
+        )
+    {
         state.selection.clear();
         state.link_hovered = None;
         return true;
@@ -36,7 +41,10 @@ pub(super) fn tab_target(event: &Event, state: &UiState) -> Option<TabAction> {
 
     match event {
         Event::Key(key)
-            if key.kind != KeyEventKind::Release && key.modifiers.contains(KeyModifiers::ALT) =>
+            if key.kind != KeyEventKind::Release
+                && key
+                    .modifiers
+                    .contains(KeyModifiers::ALT) =>
         {
             let KeyCode::Char(digit @ '1'..='9') = key.code else {
                 return None;
@@ -51,11 +59,19 @@ pub(super) fn tab_target(event: &Event, state: &UiState) -> Option<TabAction> {
         Event::Key(key)
             if key.kind != KeyEventKind::Release
                 && key.code == KeyCode::Tab
-                && key.modifiers.contains(KeyModifiers::CONTROL) =>
+                && key
+                    .modifiers
+                    .contains(KeyModifiers::CONTROL) =>
         {
-            let index = state.tabs.iter().position(|tab| tab.active)?;
+            let index = state
+                .tabs
+                .iter()
+                .position(|tab| tab.active)?;
             let count = state.tabs.len();
-            let next = if key.modifiers.contains(KeyModifiers::SHIFT) {
+            let next = if key
+                .modifiers
+                .contains(KeyModifiers::SHIFT)
+            {
                 (index + count - 1) % count
             } else {
                 (index + 1) % count
@@ -148,7 +164,12 @@ pub(super) fn update_tab_hover(event: &Event, state: &mut UiState) -> bool {
         _ => return false,
     };
 
-    if state.tab_hover.as_ref().map(|(action, _)| action) == next.as_ref() {
+    if state
+        .tab_hover
+        .as_ref()
+        .map(|(action, _)| action)
+        == next.as_ref()
+    {
         return false;
     }
 
@@ -178,7 +199,9 @@ pub(super) fn toggle_transcript_at(state: &mut UiState, point: (u16, u16)) -> bo
     let offset = if state.follow_bottom {
         state.max_scroll
     } else {
-        state.max_scroll.saturating_sub(state.scroll)
+        state
+            .max_scroll
+            .saturating_sub(state.scroll)
     };
 
     if let Some(source) = state
@@ -194,15 +217,18 @@ pub(super) fn toggle_transcript_at(state: &mut UiState, point: (u16, u16)) -> bo
         return true;
     }
 
-    let offset = state.max_scroll.saturating_sub(state.scroll);
-    if let Some((index, id)) =
-        state
-            .transcript_layout
-            .html_disclosure_at(state.selection.viewport, offset, point)
+    let offset = state
+        .max_scroll
+        .saturating_sub(state.scroll);
+    if let Some((index, id)) = state
+        .transcript_layout
+        .html_disclosure_at(state.selection.viewport, offset, point)
     {
         state.selection.clear();
         state.follow_bottom = false;
-        state.transcript_layout.toggle_html(index, id);
+        state
+            .transcript_layout
+            .toggle_html(index, id);
         state.transcript_layout.update_expanded(
             &state.transcript,
             &state.expanded,
@@ -252,7 +278,9 @@ pub(super) fn toggle_transcript_item(state: &mut UiState, index: usize) {
     }
     if let Some(super::app::TranscriptItem::Tool(row)) = state.transcript.get(index)
         && row.name == "ask_user"
-        && state.user_input.open_tool(&row.id, &row.output)
+        && state
+            .user_input
+            .open_tool(&row.id, &row.output)
     {
         return;
     }
@@ -265,8 +293,12 @@ pub(super) fn toggle_transcript_group(state: &mut UiState, index: usize) {
 }
 
 pub(super) fn toggle_transcript(state: &mut UiState, index: usize, group: bool) {
-    let offset = state.max_scroll.saturating_sub(state.scroll);
-    let anchor = state.transcript_layout.anchor_at(offset);
+    let offset = state
+        .max_scroll
+        .saturating_sub(state.scroll);
+    let anchor = state
+        .transcript_layout
+        .anchor_at(offset);
     let expanded = if group {
         &mut state.expanded_tool_groups
     } else {
@@ -274,7 +306,10 @@ pub(super) fn toggle_transcript(state: &mut UiState, index: usize, group: bool) 
     };
     let collapsing = expanded.contains(&index);
     let viewport_height = usize::from(state.selection.viewport.height);
-    let start = state.transcript_layout.item_offset(index).unwrap_or(offset);
+    let start = state
+        .transcript_layout
+        .item_offset(index)
+        .unwrap_or(offset);
     let after = if group {
         state
             .transcript_layout
@@ -297,9 +332,13 @@ pub(super) fn toggle_transcript(state: &mut UiState, index: usize, group: bool) 
 
     if group
         && collapsing
-        && let Some(range) = state.transcript_layout.group_range(index)
+        && let Some(range) = state
+            .transcript_layout
+            .group_range(index)
     {
-        state.expanded.retain(|index| !range.contains(index));
+        state
+            .expanded
+            .retain(|index| !range.contains(index));
     }
 
     state.follow_bottom = false;
@@ -315,15 +354,25 @@ pub(super) fn toggle_transcript(state: &mut UiState, index: usize, group: bool) 
         .height()
         .saturating_sub(usize::from(state.selection.viewport.height));
     let mut target = if viewport_in_collapsing_item {
-        state.transcript_layout.item_offset(index).unwrap_or(offset)
+        state
+            .transcript_layout
+            .item_offset(index)
+            .unwrap_or(offset)
     } else {
         anchor
-            .and_then(|anchor| state.transcript_layout.offset_for_anchor(anchor))
+            .and_then(|anchor| {
+                state
+                    .transcript_layout
+                    .offset_for_anchor(anchor)
+            })
             .unwrap_or(offset)
     };
 
     if !collapsing && visible {
-        let start = state.transcript_layout.item_offset(index).unwrap_or(start);
+        let start = state
+            .transcript_layout
+            .item_offset(index)
+            .unwrap_or(start);
         let end = state
             .transcript_layout
             .item_offset(after)
@@ -331,7 +380,10 @@ pub(super) fn toggle_transcript(state: &mut UiState, index: usize, group: bool) 
         // Reveal newly inserted rows with the smallest downward movement. For
         // cards taller than the viewport, keep their title instead of jumping
         // to the tail of their output (or to unrelated later messages).
-        target = target.max(end.saturating_sub(viewport_height).min(start));
+        target = target.max(
+            end.saturating_sub(viewport_height)
+                .min(start),
+        );
     }
 
     state.scroll = state.max_scroll.saturating_sub(target);
@@ -361,7 +413,10 @@ pub(super) fn handle_input_mouse(state: &mut UiState, event: &Event) -> bool {
                 state.input_width,
             );
 
-            if mouse.modifiers.contains(KeyModifiers::SHIFT) {
+            if mouse
+                .modifiers
+                .contains(KeyModifiers::SHIFT)
+            {
                 state.input.extend_selection(index);
             } else {
                 state.input.begin_selection(index);
@@ -374,8 +429,14 @@ pub(super) fn handle_input_mouse(state: &mut UiState, event: &Event) -> bool {
         MouseEventKind::Drag(MouseButton::Left) | MouseEventKind::Up(MouseButton::Left)
             if state.input_dragging && area.width > 0 && area.height > 0 =>
         {
-            let column = mouse.column.clamp(area.x, area.right() - 1) - area.x;
-            let row = mouse.row.clamp(area.y, area.bottom() - 1) - area.y;
+            let column = mouse
+                .column
+                .clamp(area.x, area.right() - 1)
+                - area.x;
+            let row = mouse
+                .row
+                .clamp(area.y, area.bottom() - 1)
+                - area.y;
             let index = state.input.position_at(
                 column as usize,
                 row as usize + state.input_scroll,

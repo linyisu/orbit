@@ -133,9 +133,13 @@ pub async fn execute(
         }
         if !page.more {
             tokio::select! {
-                _ = tokio::time::sleep(POLL_INTERVAL) => {},
+                _ = tokio::time::sleep(POLL_INTERVAL) => {}
                 _ = cancellation.cancelled(), if !cancel_sent => {
-                    client.request(Request::Cancel { session: session.into() }).await?;
+                    client
+                        .request(Request::Cancel {
+                            session: session.into(),
+                        })
+                        .await?;
                     cancel_sent = true;
                 }
             }

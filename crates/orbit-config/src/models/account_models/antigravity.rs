@@ -17,7 +17,9 @@ pub(super) fn normalize(payload: &Value) -> Result<(Vec<ModelProfile>, Vec<Strin
         if entry["isInternal"] == true
             || entry["disabled"] == true
             || matches!(wire.as_str(), "chat_20706" | "chat_23310")
-            || payload["deprecatedModelIds"].get(wire).is_some()
+            || payload["deprecatedModelIds"]
+                .get(wire)
+                .is_some()
             || selectable
                 .as_ref()
                 .is_some_and(|ids| !ids.contains(wire.as_str()))
@@ -38,7 +40,8 @@ pub(super) fn normalize(payload: &Value) -> Result<(Vec<ModelProfile>, Vec<Strin
         let alias = if wire == "gemini-3.1-pro-high" {
             "gemini-3.1-pro"
         } else {
-            wire.strip_suffix("-tiered").unwrap_or(wire)
+            wire.strip_suffix("-tiered")
+                .unwrap_or(wire)
         };
         let logical = bundled.iter().find(|(id, spec)| {
             *id == alias
@@ -50,14 +53,26 @@ pub(super) fn normalize(payload: &Value) -> Result<(Vec<ModelProfile>, Vec<Strin
                     .is_some_and(|routes| routes.values().any(|v| v == wire))
         });
         let id = logical.map_or(wire.as_str(), |(id, _)| id.as_str());
-        if models.iter().any(|model| model.id == id) {
+        if models
+            .iter()
+            .any(|model| model.id == id)
+        {
             continue;
         }
-        let reasoning = logical.and_then(|(_, spec)| spec.thinking.as_ref()).map(|thinking|
-                json!({ "adapter": "google", "efforts": thinking["efforts"], "default": "high" }));
+        let reasoning = logical
+            .and_then(|(_, spec)| spec.thinking.as_ref())
+            .map(|thinking| {
+                json!({
+                    "adapter": "google",
+                    "efforts": thinking["efforts"],
+                    "default": "high"
+                })
+            });
         models.push(profile(
             id,
-            entry["maxTokens"].as_u64().unwrap_or(200000) as usize,
+            entry["maxTokens"]
+                .as_u64()
+                .unwrap_or(200_000) as usize,
             entry["supportsImages"] == true,
             reasoning,
         )?);
@@ -71,7 +86,10 @@ fn agent_ids(payload: &Value) -> Result<Option<HashSet<&str>>> {
         return Ok(None);
     };
     let mut ids = HashSet::new();
-    for sort in sorts.as_array().context("agentModelSorts 必须是数组")? {
+    for sort in sorts
+        .as_array()
+        .context("agentModelSorts 必须是数组")?
+    {
         for group in sort["groups"]
             .as_array()
             .context("模型分组缺少 groups 数组")?
@@ -80,7 +98,10 @@ fn agent_ids(payload: &Value) -> Result<Option<HashSet<&str>>> {
                 .as_array()
                 .context("模型分组缺少 modelIds 数组")?
             {
-                ids.insert(id.as_str().context("modelIds 必须包含模型 ID 字符串")?);
+                ids.insert(
+                    id.as_str()
+                        .context("modelIds 必须包含模型 ID 字符串")?,
+                );
             }
         }
     }

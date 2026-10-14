@@ -87,15 +87,62 @@ impl Tool for ReadFile {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition::function(
             "read_file",
-            "Read a UTF-8 file inside the workspace (or outside path granted via request_capability). Use a relative path or granted outside path, and optional 1-based start_line/max_lines. If a long line is truncated, resume with the returned next_start_line and next_start_char (Unicode character offset within that line). Returns JSON with numbered lines. Protected configuration files are rejected. Reads incrementally with a configurable scan budget per call (default 64 MiB) and 32 KiB content limit. Resume using next_cursor to avoid rescanning; cursors are rejected if the file changed. total_lines is null until EOF is reached.",
+            "Read a UTF-8 file inside the workspace (or outside path granted via \
+                request_capability). Use a relative path or granted outside path, and optional \
+                1-based start_line/max_lines. If a long line is truncated, resume with the \
+                returned next_start_line and next_start_char (Unicode character offset within \
+                that line). Returns JSON with numbered lines. Protected configuration files are \
+                rejected. Reads incrementally with a configurable scan budget per call (default \
+                64 MiB) and 32 KiB content limit. Resume using next_cursor to avoid rescanning; \
+                cursors are rejected if the file changed. total_lines is null until EOF is \
+                reached.",
             json!({
                 "type": "object",
                 "properties": {
-                    "path": { "type": "string", "description": "Path relative to the workspace root, or an outside path granted via request_capability" },
-                    "cursor": { "type": "object", "description": "Pass next_cursor unchanged to resume this file version", "properties": {"version": {"type": "string"}, "offset": {"type": "integer", "minimum": 0}, "line": {"type": "integer", "minimum": 1}, "character": {"type": "integer", "minimum": 0}}, "required": ["version", "offset", "line", "character"], "additionalProperties": false },
-                    "start_line": { "type": "integer", "minimum": 1, "default": 1 },
-                    "start_char": { "type": "integer", "minimum": 0, "default": 0 },
-                    "max_lines": { "type": "integer", "minimum": 1, "maximum": MAX_PAGE_LINES, "default": DEFAULT_PAGE_LINES }
+                    "path": {
+                        "type": "string",
+                        "description": "Path relative to the workspace root, or an outside path \
+                            granted via request_capability"
+                    },
+                    "cursor": {
+                        "type": "object",
+                        "description": "Pass next_cursor unchanged to resume this file version",
+                        "properties": {
+                            "version": {
+                                "type": "string"
+                            },
+                            "offset": {
+                                "type": "integer",
+                                "minimum": 0
+                            },
+                            "line": {
+                                "type": "integer",
+                                "minimum": 1
+                            },
+                            "character": {
+                                "type": "integer",
+                                "minimum": 0
+                            }
+                        },
+                        "required": ["version", "offset", "line", "character"],
+                        "additionalProperties": false
+                    },
+                    "start_line": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "default": 1
+                    },
+                    "start_char": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "default": 0
+                    },
+                    "max_lines": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": MAX_PAGE_LINES,
+                        "default": DEFAULT_PAGE_LINES
+                    }
                 },
                 "required": ["path"],
                 "additionalProperties": false
@@ -129,8 +176,11 @@ impl Tool for ReadFile {
 
             tokio::select! {
                 _ = cancellation.cancelled() => Err(ToolError::Cancelled),
-                result = task => result.map_err(|error| ToolError::ExecutionFailed(error.to_string()))?,
-            }.map(ToolOutput::text)
+                result = task => {
+                    result.map_err(|error| ToolError::ExecutionFailed(error.to_string()))?
+                }
+            }
+            .map(ToolOutput::text)
         })
     }
 }
@@ -167,7 +217,8 @@ fn read(
         (1, 0, 0)
     };
 
-    file.seek(SeekFrom::Start(offset)).map_err(failed)?;
+    file.seek(SeekFrom::Start(offset))
+        .map_err(failed)?;
     let mut reader = BufReader::new(file);
     let start_line = arguments
         .cursor
@@ -193,7 +244,11 @@ fn read(
             ));
         }
 
-        if reader.fill_buf().map_err(failed)?.is_empty() {
+        if reader
+            .fill_buf()
+            .map_err(failed)?
+            .is_empty()
+        {
             eof = true;
             break;
         }
@@ -215,7 +270,13 @@ fn read(
         let bytes = scalar.len_utf8() as u64;
         scanned += bytes;
         position += bytes;
-        if scalar == '\r' && reader.fill_buf().map_err(failed)?.first() == Some(&b'\n') {
+        if scalar == '\r'
+            && reader
+                .fill_buf()
+                .map_err(failed)?
+                .first()
+                == Some(&b'\n')
+        {
             continue;
         }
         if scalar == '\0' {
@@ -254,7 +315,14 @@ fn read(
     if eof && prefix_written && !content.ends_with('\n') && content.len() < MAX_TEXT_OUTPUT_BYTES {
         content.push('\n');
     }
-    if snapshot != version(&reader.get_ref().metadata().map_err(failed)?) {
+    if snapshot
+        != version(
+            &reader
+                .get_ref()
+                .metadata()
+                .map_err(failed)?,
+        )
+    {
         return Err(failed("file changed during read; retry"));
     }
     let next = (!eof).then_some(Cursor {
@@ -265,10 +333,15 @@ fn read(
     });
     let total_lines = eof.then_some(if character == 0 { line - 1 } else { line });
     Ok(json!({
-        "path": arguments.path, "start_line": start_line, "start_char": start_char,
-        "end_line": end_line, "total_lines": total_lines,
-        "truncated": !eof, "next_start_line": next.as_ref().map(|c| c.line),
-        "next_start_char": next.as_ref().map(|c| c.character), "next_cursor": next,
+        "path": arguments.path,
+        "start_line": start_line,
+        "start_char": start_char,
+        "end_line": end_line,
+        "total_lines": total_lines,
+        "truncated": !eof,
+        "next_start_line": next.as_ref().map(|c| c.line),
+        "next_start_char": next.as_ref().map(|c| c.character),
+        "next_cursor": next,
         "content": content
     })
     .to_string())
@@ -280,7 +353,9 @@ fn failed(error: impl std::fmt::Display) -> ToolError {
 
 fn read_scalar(reader: &mut impl Read) -> Result<char, ToolError> {
     let mut bytes = [0u8; 4];
-    reader.read_exact(&mut bytes[..1]).map_err(failed)?;
+    reader
+        .read_exact(&mut bytes[..1])
+        .map_err(failed)?;
     let length = match bytes[0] {
         0..=0x7f => 1,
         0xc2..=0xdf => 2,
@@ -289,7 +364,9 @@ fn read_scalar(reader: &mut impl Read) -> Result<char, ToolError> {
         _ => return Err(failed("file is not UTF-8 text")),
     };
 
-    reader.read_exact(&mut bytes[1..length]).map_err(failed)?;
+    reader
+        .read_exact(&mut bytes[1..length])
+        .map_err(failed)?;
     std::str::from_utf8(&bytes[..length])
         .map_err(|_| failed("file is not UTF-8 text"))?
         .chars()

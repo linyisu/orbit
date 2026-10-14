@@ -143,7 +143,11 @@ impl State {
         let Some(entry) = entry.filter(|entry| entry.editable()) else {
             return Action::None;
         };
-        if self.editor.as_ref().is_some_and(|editor| editor.stale) {
+        if self
+            .editor
+            .as_ref()
+            .is_some_and(|editor| editor.stale)
+        {
             return Action::None;
         }
         if !self.removing {
@@ -179,7 +183,11 @@ impl State {
                 .editor
                 .as_ref()
                 .map(|e| &e.input.text)
-                .or_else(|| self.entries.get(self.selected).map(|e| &e.content))
+                .or_else(|| {
+                    self.entries
+                        .get(self.selected)
+                        .map(|e| &e.content)
+                })
                 .map(|text| Action::Copy(text.clone()))
                 .unwrap_or(Action::None),
             Hit::Refresh => self.start(Pending::List(None), QueueAction::List { after: None }),
@@ -235,7 +243,10 @@ impl Panel for State {
                 }
                 return Action::None;
             }
-            if key.modifiers.contains(KeyModifiers::CONTROL) {
+            if key
+                .modifiers
+                .contains(KeyModifiers::CONTROL)
+            {
                 match key.code {
                     KeyCode::Char('s') => return self.save(),
                     KeyCode::Char('r') => return self.activate(Hit::Refresh),
@@ -258,7 +269,9 @@ impl Panel for State {
                     if key.code == KeyCode::Enter && key.modifiers.is_empty() {
                         editor.input.insert("\n");
                     } else {
-                        editor.input.edit(event, self.body.width.max(1) as usize);
+                        editor
+                            .input
+                            .edit(event, self.body.width.max(1) as usize);
                     }
                 } else {
                     match key.code {
@@ -294,7 +307,10 @@ impl Panel for State {
             let point = (mouse.column, mouse.row).into();
             match mouse.kind {
                 MouseEventKind::Down(MouseButton::Left) => {
-                    if let Some((_, hit)) = self.hits.iter().find(|(area, _)| area.contains(point))
+                    if let Some((_, hit)) = self
+                        .hits
+                        .iter()
+                        .find(|(area, _)| area.contains(point))
                     {
                         return self.activate(*hit);
                     }
@@ -338,7 +354,11 @@ impl Panel for State {
                     self.offset = 0;
                 }
                 for entry in entries {
-                    if let Some(old) = self.entries.iter_mut().find(|old| old.id == entry.id) {
+                    if let Some(old) = self
+                        .entries
+                        .iter_mut()
+                        .find(|old| old.id == entry.id)
+                    {
                         *old = entry;
                     } else {
                         self.entries.push(entry);
@@ -346,7 +366,9 @@ impl Panel for State {
                 }
                 self.next = next;
                 self.run = run;
-                self.selected = self.selected.min(self.entries.len().saturating_sub(1));
+                self.selected = self
+                    .selected
+                    .min(self.entries.len().saturating_sub(1));
                 if let Some(editor) = &mut self.editor {
                     if let Some(entry) = self
                         .entries
@@ -368,7 +390,11 @@ impl Panel for State {
                 }
             }
             (Some(Pending::Edit), Response::InputQueue(Snapshot::Edited { entry })) => {
-                if let Some(old) = self.entries.iter_mut().find(|old| old.id == entry.id) {
+                if let Some(old) = self
+                    .entries
+                    .iter_mut()
+                    .find(|old| old.id == entry.id)
+                {
                     *old = entry.clone();
                 }
                 if let Some(editor) = &mut self.editor
@@ -380,11 +406,18 @@ impl Panel for State {
                 self.message = Some("已更新待发送消息。".into());
             }
             (Some(Pending::Remove), Response::InputQueue(Snapshot::Removed { id })) => {
-                self.entries.retain(|entry| entry.id != id);
-                if self.editor.as_ref().is_some_and(|e| e.entry.id == id) {
+                self.entries
+                    .retain(|entry| entry.id != id);
+                if self
+                    .editor
+                    .as_ref()
+                    .is_some_and(|e| e.entry.id == id)
+                {
                     self.editor = None;
                 }
-                self.selected = self.selected.min(self.entries.len().saturating_sub(1));
+                self.selected = self
+                    .selected
+                    .min(self.entries.len().saturating_sub(1));
                 self.message = Some("已移除待发送消息。".into());
             }
             (_, Response::Error(error)) => self.error = Some(error),
@@ -448,7 +481,9 @@ impl Panel for State {
                     .as_ref()
                     .map(|e| e.entry.editable() && !e.stale)
                     .unwrap_or_else(|| {
-                        self.entries.get(self.selected).is_some_and(Entry::editable)
+                        self.entries
+                            .get(self.selected)
+                            .is_some_and(Entry::editable)
                     }),
             ),
             ("复制 Ctrl+Y", Hit::Copy, false),
@@ -483,9 +518,11 @@ impl Panel for State {
             if self.selected < self.offset {
                 self.offset = self.selected;
             }
-            self.offset = self
-                .offset
-                .min(self.entries.len().saturating_sub(self.body.height as usize));
+            self.offset = self.offset.min(
+                self.entries
+                    .len()
+                    .saturating_sub(self.body.height as usize),
+            );
             if self.selected >= self.offset + self.body.height as usize {
                 self.offset = self.selected + 1 - self.body.height as usize;
             }
@@ -515,7 +552,9 @@ impl Panel for State {
                     "#{} · {}  {}",
                     entry.id,
                     state,
-                    entry.content.replace(['\n', '\r', '\t'], " ")
+                    entry
+                        .content
+                        .replace(['\n', '\r', '\t'], " ")
                 );
                 frame.render_widget(
                     Paragraph::new(safe_output(&text)).style(if index == self.selected {
@@ -568,11 +607,17 @@ mod tests {
         }));
         state
     }
+
     #[test]
     fn edits_use_exact_sampled_content_and_run() {
         let mut state = state();
         state.edit();
-        state.editor.as_mut().unwrap().input.insert("new");
+        state
+            .editor
+            .as_mut()
+            .unwrap()
+            .input
+            .insert("new");
         let Action::Request(Request::InputQueue {
             expected_workspace,
             action:
@@ -592,14 +637,28 @@ mod tests {
         assert_eq!(run, Some(7));
         assert!(content.ends_with("new"));
     }
+
     #[test]
     fn unknown_write_keeps_draft_and_requires_refresh() {
         let mut state = state();
         state.edit();
-        state.editor.as_mut().unwrap().input.insert("draft");
+        state
+            .editor
+            .as_mut()
+            .unwrap()
+            .input
+            .insert("draft");
         state.save();
         state.error("connection lost".into());
-        assert!(state.editor.as_ref().unwrap().input.text.ends_with("draft"));
+        assert!(
+            state
+                .editor
+                .as_ref()
+                .unwrap()
+                .input
+                .text
+                .ends_with("draft")
+        );
         assert!(matches!(state.save(), Action::None));
         state.activate(Hit::Refresh);
         state.receive(Response::InputQueue(Snapshot::List {
@@ -615,6 +674,7 @@ mod tests {
             })
         ));
     }
+
     #[test]
     fn claimed_entries_and_unconfirmed_removals_never_mutate() {
         let mut state = state();

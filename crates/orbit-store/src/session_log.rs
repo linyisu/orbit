@@ -47,7 +47,7 @@ impl Store {
         limit: usize,
     ) -> Result<(bool, Vec<CanonicalMessage>)> {
         ensure!(
-            (1..=1000).contains(&limit),
+            (1..=1_000).contains(&limit),
             "message page must contain 1–1000 entries"
         );
 
@@ -56,7 +56,10 @@ impl Store {
         self.read_access(move |conn| async move {
             let tx = conn.begin().await?;
             ensure!(
-                sessions::Entity::find_by_id(&session_id).count(&tx).await? > 0,
+                sessions::Entity::find_by_id(&session_id)
+                    .count(&tx)
+                    .await?
+                    > 0,
                 "session not found"
             );
             let gap = session_log_gaps::Entity::find_by_id(&session_id)
@@ -90,7 +93,10 @@ impl Store {
         self.read_access(move |conn| async move {
             let tx = conn.begin().await?;
             ensure!(
-                sessions::Entity::find_by_id(&session_id).count(&tx).await? > 0,
+                sessions::Entity::find_by_id(&session_id)
+                    .count(&tx)
+                    .await?
+                    > 0,
                 "session not found"
             );
             let gap = session_log_gaps::Entity::find_by_id(&session_id)
@@ -153,7 +159,10 @@ mod tests {
         let id = writer.id().to_owned();
         for asset in ["first.png", "second.png"] {
             // Identical prompts and upload names must retain distinct assets.
-            writer.begin(String::new(), "model".into()).await.unwrap();
+            writer
+                .begin(String::new(), "model".into())
+                .await
+                .unwrap();
             let message = ChatMessage::user_with_attachments(
                 "",
                 vec![orbit_model::types::Attachment::Image {
@@ -189,12 +198,20 @@ mod tests {
         }
         let snapshot = store.load(&id).await.unwrap();
         assert_eq!(snapshot.runs.len(), 2);
-        for (run, asset) in snapshot.runs.iter().zip(["first.png", "second.png"]) {
+        for (run, asset) in snapshot
+            .runs
+            .iter()
+            .zip(["first.png", "second.png"])
+        {
             assert_eq!(
                 run.images,
                 vec![orbit_protocol::MessageImage {
                     name: "clipboard.png".into(),
-                    path: directory.path().join(asset).to_string_lossy().into_owned(),
+                    path: directory
+                        .path()
+                        .join(asset)
+                        .to_string_lossy()
+                        .into_owned(),
                 }]
             );
         }
@@ -210,7 +227,10 @@ mod tests {
             .await
             .unwrap();
         let id = writer.id().to_owned();
-        writer.begin("hello".into(), "model".into()).await.unwrap();
+        writer
+            .begin("hello".into(), "model".into())
+            .await
+            .unwrap();
         let journal = writer.execution_journal().unwrap();
         let user = ChatMessage::user("hello");
         let reply = ChatMessage::assistant("the original detailed answer");
@@ -252,17 +272,27 @@ mod tests {
             .unwrap();
 
         let reopened = Store::open(path).await.unwrap();
-        let (legacy_gap, messages) = reopened.canonical_messages(&id, None, 10).await.unwrap();
+        let (legacy_gap, messages) = reopened
+            .canonical_messages(&id, None, 10)
+            .await
+            .unwrap();
 
         assert!(!legacy_gap);
         assert_eq!(messages.len(), 2);
         assert_eq!(messages[0].message, user);
         assert_eq!(messages[1].message, reply);
-        let (gap, tail) = reopened.canonical_tail(&id, None).await.unwrap();
+        let (gap, tail) = reopened
+            .canonical_tail(&id, None)
+            .await
+            .unwrap();
         assert!(!gap);
         assert_eq!(tail.unwrap().message, reply);
         assert_eq!(
-            reopened.load(&id).await.unwrap().history,
+            reopened
+                .load(&id)
+                .await
+                .unwrap()
+                .history,
             vec![ChatMessage::user("compacted task state")]
         );
     }
@@ -278,7 +308,10 @@ mod tests {
             .await
             .unwrap();
         let id = writer.id().to_owned();
-        writer.begin("hello".into(), "model".into()).await.unwrap();
+        writer
+            .begin("hello".into(), "model".into())
+            .await
+            .unwrap();
         let model = MockModel::new(vec![ChatCompletion {
             id: None,
             model: None,
@@ -301,7 +334,10 @@ mod tests {
             .await
             .unwrap();
 
-        let (legacy_gap, messages) = store.canonical_messages(&id, None, 10).await.unwrap();
+        let (legacy_gap, messages) = store
+            .canonical_messages(&id, None, 10)
+            .await
+            .unwrap();
 
         assert!(!legacy_gap);
         assert_eq!(messages.len(), 2);
@@ -316,8 +352,18 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(store.canonical_messages("missing", None, 10).await.is_err());
-        assert!(store.canonical_tail("missing", None).await.is_err());
+        assert!(
+            store
+                .canonical_messages("missing", None, 10)
+                .await
+                .is_err()
+        );
+        assert!(
+            store
+                .canonical_tail("missing", None)
+                .await
+                .is_err()
+        );
     }
 
     #[tokio::test]
@@ -347,7 +393,14 @@ mod tests {
             .begin("Orbit 第二轮".into(), "orbit-model".into())
             .await
             .unwrap();
-        assert!(store.canonical_tail(&id, None).await.unwrap().1.is_none());
+        assert!(
+            store
+                .canonical_tail(&id, None)
+                .await
+                .unwrap()
+                .1
+                .is_none()
+        );
         assert_eq!(
             store
                 .canonical_tail(&id, Some(first))
@@ -390,8 +443,17 @@ mod tests {
             .await
             .unwrap();
         let id = writer.id().to_owned();
-        writer.begin("check".into(), "model".into()).await.unwrap();
-        let call = ToolCall::function("call-1", "echo", serde_json::json!({ "value": "ok" }));
+        writer
+            .begin("check".into(), "model".into())
+            .await
+            .unwrap();
+        let call = ToolCall::function(
+            "call-1",
+            "echo",
+            serde_json::json!({
+                "value": "ok"
+            }),
+        );
         let model = MockModel::new(vec![
             ChatCompletion {
                 id: None,
@@ -412,9 +474,14 @@ mod tests {
         tools.register(ClosureTool::new(
             "echo",
             "Echo a value",
-            serde_json::json!({ "type": "object" }),
+            serde_json::json!({
+                "type": "object"
+            }),
             |arguments, _| async move {
-                Ok(arguments["value"].as_str().unwrap_or_default().to_owned())
+                Ok(arguments["value"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_owned())
             },
         ));
         let agent = Agent::new(model, tools, AgentConfig::default())
@@ -431,7 +498,10 @@ mod tests {
             .finish("completed", vec![], Some(result.history))
             .await
             .unwrap();
-        let (_, messages) = store.canonical_messages(&id, None, 10).await.unwrap();
+        let (_, messages) = store
+            .canonical_messages(&id, None, 10)
+            .await
+            .unwrap();
 
         assert_eq!(messages.len(), 4);
         assert_eq!(

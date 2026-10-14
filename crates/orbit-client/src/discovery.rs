@@ -43,7 +43,9 @@ pub fn snapshot() -> (Vec<Host>, Vec<String>) {
         return Default::default();
     };
     if !state.loading
-        && state.checked.is_none_or(|time| time.elapsed() >= CACHE_TTL)
+        && state
+            .checked
+            .is_none_or(|time| time.elapsed() >= CACHE_TTL)
         && let Ok(runtime) = tokio::runtime::Handle::try_current()
     {
         state.loading = true;
@@ -142,7 +144,7 @@ fn collect(
     let Ok(bytes) = std::fs::read(&path) else {
         return;
     };
-    if bytes.len() > 1024 * 1024 {
+    if bytes.len() > 1_024 * 1_024 {
         return;
     }
     for line in String::from_utf8_lossy(&bytes).lines() {
@@ -249,7 +251,12 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let home = root.path();
         std::fs::create_dir_all(home.join(".ssh/conf.d")).unwrap();
-        std::fs::write(home.join(".ssh/config"), "Include conf.d/*\nHost 204 other\n HostName=10.0.0.2\n User alice\n Port 2222\nHost *\n User default\n").unwrap();
+        std::fs::write(
+            home.join(".ssh/config"),
+            "Include conf.d/*\nHost 204 other\n \
+            HostName=10.0.0.2\n User alice\n Port 2222\nHost *\n User default\n",
+        )
+        .unwrap();
         std::fs::write(
             home.join(".ssh/conf.d/dev"),
             "Host dev\n User bob\n IdentityFile ~/.ssh/id_dev\n",

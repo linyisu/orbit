@@ -31,6 +31,7 @@ impl Store {
         })
         .await
     }
+
     /// Local lexical search: exact phrases, then terms, with newest records breaking ties.
     pub async fn search_session_memories(
         &self,
@@ -107,7 +108,10 @@ impl Store {
         self.write_access(|conn| async move {
             let tx = conn.begin().await?;
             ensure!(
-                sessions::Entity::find_by_id(session_id).count(&tx).await? > 0,
+                sessions::Entity::find_by_id(session_id)
+                    .count(&tx)
+                    .await?
+                    > 0,
                 "session not found"
             );
             let row = memories::ActiveModel {
@@ -125,6 +129,7 @@ impl Store {
         })
         .await
     }
+
     pub async fn set_session_memory_active(
         &self,
         session_id: &str,
@@ -148,6 +153,7 @@ impl Store {
         .await
     }
 }
+
 fn memory(row: memories::Model) -> Result<SessionMemory> {
     Ok(SessionMemory {
         id: row.id,
@@ -160,6 +166,7 @@ fn memory(row: memories::Model) -> Result<SessionMemory> {
         updated_at: row.updated_at,
     })
 }
+
 fn validate_memory_fields(title: &str, content: &str) -> Result<()> {
     ensure!(!title.trim().is_empty(), "memory title must not be empty");
     ensure!(title.len() <= 512, "memory title exceeds 512 bytes");
@@ -167,7 +174,7 @@ fn validate_memory_fields(title: &str, content: &str) -> Result<()> {
         !content.trim().is_empty(),
         "memory content must not be empty"
     );
-    ensure!(content.len() <= 8192, "memory content exceeds 8192 bytes");
+    ensure!(content.len() <= 8_192, "memory content exceeds 8192 bytes");
 
     Ok(())
 }

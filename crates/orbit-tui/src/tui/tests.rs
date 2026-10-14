@@ -53,7 +53,9 @@ fn argument_menu_completes_without_executing_incomplete_commands() {
     );
     assert_eq!(state.input.text, "/memory add fact ");
 
-    state.input.set("/permissions au".into());
+    state
+        .input
+        .set("/permissions au".into());
     assert_eq!(
         press(&mut state, KeyCode::Enter, KeyModifiers::NONE, true),
         Action::Submit("/permissions auto".into())
@@ -146,7 +148,9 @@ fn selections_replace_text_copy_before_cancel_and_leave_attachments_alone() {
     );
     keyboard_action(&mut state, Event::Paste("编辑".into()), false);
     assert_eq!(state.input.text, "Orbit你好编辑");
-    state.attachments.push(image("orbit.png"));
+    state
+        .attachments
+        .push(image("orbit.png"));
     press(&mut state, KeyCode::Char('a'), KeyModifiers::CONTROL, false);
     press(&mut state, KeyCode::Backspace, KeyModifiers::NONE, false);
     assert!(state.input.text.is_empty());
@@ -184,7 +188,10 @@ fn history_commands_do_not_capture_up_down_in_the_completion_menu() {
     let directory = tempfile::tempdir().unwrap();
     std::fs::create_dir(directory.path().join("orbit-workspace")).unwrap();
     let mut state = UiState::new("orbit-model");
-    state.workspace = directory.path().to_string_lossy().into_owned();
+    state.workspace = directory
+        .path()
+        .to_string_lossy()
+        .into_owned();
     state.input.history = vec!["Orbit earlier".into(), "/mode ask".into(), "/cd ".into()];
     state.input.set("Orbit draft".into());
     for (key, expected) in [
@@ -234,7 +241,9 @@ fn tab_opens_recalled_command_hints_before_completing_a_choice() {
     assert_eq!(state.input.text, "/mode ");
     assert!(!state.menu().is_empty());
     press(&mut state, KeyCode::Down, KeyModifiers::NONE, false);
-    let choice = state.menu()[state.menu_index].name.clone();
+    let choice = state.menu()[state.menu_index]
+        .name
+        .clone();
     press(&mut state, KeyCode::Tab, KeyModifiers::NONE, false);
     assert_eq!(state.input.text, choice);
 }
@@ -265,7 +274,10 @@ fn recalled_directory_enter_uses_the_original_command_instead_of_a_hint() {
     std::fs::create_dir(directory.path().join("orbit-alpha")).unwrap();
     std::fs::create_dir(directory.path().join("orbit-beta")).unwrap();
     let mut state = UiState::new("orbit-model");
-    state.workspace = directory.path().to_string_lossy().into_owned();
+    state.workspace = directory
+        .path()
+        .to_string_lossy()
+        .into_owned();
     let command = format!("/cd {}/", directory.path().display());
     state.input.set(command.clone());
     assert!(state.menu().len() >= 2);
@@ -282,9 +294,14 @@ fn recalled_directory_enter_uses_the_original_command_instead_of_a_hint() {
 #[test]
 fn multiline_home_stays_in_text_and_explicit_history_restores_the_draft_cursor() {
     let mut state = UiState::new("orbit-model");
-    state.input.history.push("Orbit history".into());
+    state
+        .input
+        .history
+        .push("Orbit history".into());
     state.input.set("first\nsecond".into());
-    state.attachments.push(image("orbit.png"));
+    state
+        .attachments
+        .push(image("orbit.png"));
     press(&mut state, KeyCode::Home, KeyModifiers::NONE, false);
     assert_eq!(state.input.cursor, 6);
     assert!(state.attachment_cursor.is_none());
@@ -298,7 +315,9 @@ fn multiline_home_stays_in_text_and_explicit_history_restores_the_draft_cursor()
 #[test]
 fn input_mouse_drag_and_shift_click_edit_without_using_transcript_selection() {
     let mut state = UiState::new("orbit-model");
-    state.input.set("你好Orbit\nnext".into());
+    state
+        .input
+        .set("你好Orbit\nnext".into());
     state.input_area = ratatui::layout::Rect::new(4, 10, 11, 2);
     state.input_width = 10;
     for (kind, column, modifiers) in [
@@ -373,7 +392,9 @@ fn pasted_or_dropped_image_paths_become_attachments() {
     );
     assert!(state.input.text.is_empty());
 
-    let file_url = url::Url::from_file_path(&image).unwrap().to_string();
+    let file_url = url::Url::from_file_path(&image)
+        .unwrap()
+        .to_string();
 
     assert_eq!(
         pasted_image_paths(&file_url, temp.path()),
@@ -384,7 +405,9 @@ fn pasted_or_dropped_image_paths_become_attachments() {
 #[test]
 fn absolute_paths_during_a_run_are_steering_not_commands() {
     let mut state = UiState::new("mock");
-    state.input.set("/tmp/report.txt 请看看".into());
+    state
+        .input
+        .set("/tmp/report.txt 请看看".into());
     assert_eq!(
         press(&mut state, KeyCode::Enter, KeyModifiers::NONE, true),
         Action::Steer("/tmp/report.txt 请看看".into())
@@ -454,7 +477,9 @@ fn attachments_are_atomic_editable_input_items() {
 #[test]
 fn attachment_click_focuses_it_and_image_only_messages_can_submit() {
     let mut state = UiState::new("mock");
-    state.attachments.push(image("only.png"));
+    state
+        .attachments
+        .push(image("only.png"));
     state
         .attachment_areas
         .push(ratatui::layout::Rect::new(4, 5, 20, 1));
@@ -473,10 +498,19 @@ fn vertical_attachment_navigation_crosses_wrapped_rows_and_returns_to_the_draft(
     let mut state = UiState::new("mock");
     state.input_width = 18;
     state.attachments = vec![image("first.png"), image("second.png"), image("third.png")];
-    state.input.set("first line\nsecond line".into());
+    state
+        .input
+        .set("first line\nsecond line".into());
     press(&mut state, KeyCode::Up, KeyModifiers::NONE, false);
     assert!(state.attachment_cursor.is_none());
-    assert_eq!(state.input.visual_lines(state.input_width).1.row, 0);
+    assert_eq!(
+        state
+            .input
+            .visual_lines(state.input_width)
+            .1
+            .row,
+        0
+    );
     let cursor = state.input.cursor;
     for index in [2, 1, 0] {
         press(&mut state, KeyCode::Up, KeyModifiers::NONE, false);

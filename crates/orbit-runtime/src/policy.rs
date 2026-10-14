@@ -72,7 +72,9 @@ impl SessionGrantStore {
         } else {
             let is_redundant = self.filesystem.iter().any(|existing| {
                 existing.environment == new_grant.environment
-                    && new_grant.path.is_subpath_of(&existing.path)
+                    && new_grant
+                        .path
+                        .is_subpath_of(&existing.path)
                     && (!new_grant.read || existing.read)
                     && (!new_grant.write || existing.write)
             });
@@ -93,7 +95,9 @@ impl SessionGrantStore {
                 return true;
             }
 
-            let is_child_redundant = existing.path.is_subpath_of(&grant_to_check.path)
+            let is_child_redundant = existing
+                .path
+                .is_subpath_of(&grant_to_check.path)
                 && (!existing.read || grant_to_check.read)
                 && (!existing.write || grant_to_check.write);
 
@@ -212,54 +216,87 @@ impl PolicyEngine {
     ) -> Result<Self, RuntimeError> {
         let base_dir = workspace.canonical();
 
-        let validate_path = |p: &std::path::Path,
-                             resolved: &ResolvedPath|
-         -> Result<(), RuntimeError> {
-            let canon = resolved.canonical();
+        let validate_path =
+            |p: &std::path::Path, resolved: &ResolvedPath| -> Result<(), RuntimeError> {
+                let canon = resolved.canonical();
 
-            if !canon.exists() {
-                return Err(failed(format!(
-                    "persistent permission path '{}' does not exist",
-                    p.display()
-                )));
-            }
+                if !canon.exists() {
+                    return Err(failed(format!(
+                        "persistent permission path '{}' does not exist",
+                        p.display()
+                    )));
+                }
 
-            if crate::execution::process::is_reserved_system_path(canon) {
-                return Err(failed(format!(
-                    "persistent permission path '{}' is a reserved system path",
-                    p.display()
-                )));
-            }
+                if crate::execution::process::is_reserved_system_path(canon) {
+                    return Err(failed(format!(
+                        "persistent permission path '{}' is a reserved system path",
+                        p.display()
+                    )));
+                }
 
-            if base_dir.starts_with(canon) {
-                return Err(failed(format!(
-                    "persistent permission path '{}' is an ancestor of the workspace",
-                    p.display()
-                )));
-            }
+                if base_dir.starts_with(canon) {
+                    return Err(failed(format!(
+                        "persistent permission path '{}' is an ancestor of the workspace",
+                        p.display()
+                    )));
+                }
 
-            if canon.starts_with(base_dir) {
-                return Err(failed(format!(
-                    "persistent permission path '{}' is inside the workspace; persistent permissions are for external paths",
-                    p.display()
-                )));
-            }
+                if canon.starts_with(base_dir) {
+                    return Err(failed(format!(
+                        "persistent permission path '{}' is inside the workspace; persistent \
+                        permissions are for external paths",
+                        p.display()
+                    )));
+                }
 
-            Ok(())
-        };
+                Ok(())
+            };
 
         let validate_templates = |paths: Vec<PathBuf>| -> Result<Vec<PathBuf>, RuntimeError> {
-            paths.into_iter().map(|path| {
-                let candidate = if path.is_absolute() { path } else { base_dir.join(path) };
-                if std::fs::symlink_metadata(&candidate).map_err(failed)?.file_type().is_symlink() { return Err(failed("template authorization requires an ordinary file, not a symlink")); }
-                let canonical = std::fs::canonicalize(&candidate).map_err(failed)?;
-                let rel = canonical.strip_prefix(base_dir).map_err(|_| failed("template must be inside workspace"))?;
-                let name = canonical.file_name().and_then(|s| s.to_str()).unwrap_or("");
-                if !name.starts_with(".env.") || !canonical.is_file() || rel.parent().is_some_and(|p| p.components().any(|c| crate::filesystem::path_security::is_protected_workspace_name(&c.as_os_str().to_string_lossy()))) {
-                    return Err(failed("template authorization requires an exact ordinary .env.* file inside workspace"));
-                }
-                Ok(canonical)
-            }).collect()
+            paths
+                .into_iter()
+                .map(|path| {
+                    let candidate = if path.is_absolute() {
+                        path
+                    } else {
+                        base_dir.join(path)
+                    };
+                    if std::fs::symlink_metadata(&candidate)
+                        .map_err(failed)?
+                        .file_type()
+                        .is_symlink()
+                    {
+                        return Err(failed(
+                            "template authorizati\
+                    on requires an ordinary file, not a symlink",
+                        ));
+                    }
+                    let canonical = std::fs::canonicalize(&candidate).map_err(failed)?;
+                    let rel = canonical
+                        .strip_prefix(base_dir)
+                        .map_err(|_| failed("template must be inside workspace"))?;
+                    let name = canonical
+                        .file_name()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("");
+                    if !name.starts_with(".env.")
+                        || !canonical.is_file()
+                        || rel.parent().is_some_and(|p| {
+                            p.components().any(|c| {
+                                crate::filesystem::path_security::is_protected_workspace_name(
+                                    &c.as_os_str().to_string_lossy(),
+                                )
+                            })
+                        })
+                    {
+                        return Err(failed(
+                            "template authorization requires an exact ordinary .env.* \
+                        file inside workspace",
+                        ));
+                    }
+                    Ok(canonical)
+                })
+                .collect()
         };
         let read_templates = validate_templates(permissions.read_templates)?;
         let write_templates = validate_templates(permissions.write_templates)?;
@@ -303,7 +340,8 @@ impl PolicyEngine {
 
                 if rw_c == ro_c || rw_c.starts_with(ro_c) || ro_c.starts_with(rw_c) {
                     return Err(failed(format!(
-                        "persistent permissions conflict: read_write path '{}' overlaps with read path '{}'; read and read_write ranges cannot overlap",
+                        "persistent permissions conflict: read_write path '{}' overlaps with read \
+                            path '{}'; read and read_write ranges cannot overlap",
                         rw_c.display(),
                         ro_c.display()
                     )));
@@ -405,14 +443,16 @@ impl PolicyEngine {
             // Granting an ancestor would expose unrelated paths above the workspace.
             if ws_canon.starts_with(canon) && ws_canon != canon {
                 return PolicyDecision::Denied(format!(
-                    "path '{}' is an ancestor of the workspace and cannot be granted as an external capability",
+                    "path '{}' is an ancestor of the workspace and cannot be granted as an \
+                        external capability",
                     canon.display()
                 ));
             }
 
             if crate::execution::process::is_reserved_system_path(canon) {
                 return PolicyDecision::Denied(format!(
-                    "path '{}' is a reserved runtime path and cannot be granted as external capability",
+                    "path '{}' is a reserved runtime path and cannot be granted as external \
+                        capability",
                     canon.display()
                 ));
             }
@@ -453,8 +493,11 @@ impl PolicyEngine {
                                 .iter()
                                 .chain(self.policy.write_templates.iter())
                                 .any(|p| p == canon);
-                            let template_write =
-                                self.policy.write_templates.iter().any(|p| p == canon);
+                            let template_write = self
+                                .policy
+                                .write_templates
+                                .iter()
+                                .any(|p| p == canon);
                             if template_write
                                 || (template_read && !capability.access.allows_write())
                             {
@@ -515,9 +558,10 @@ fn normalize_resolved_paths(paths: &mut Vec<ResolvedPath>) {
     let mut normalized: Vec<ResolvedPath> = Vec::new();
 
     for p in paths.drain(..) {
-        let is_covered = normalized
-            .iter()
-            .any(|existing| p.canonical().starts_with(existing.canonical()));
+        let is_covered = normalized.iter().any(|existing| {
+            p.canonical()
+                .starts_with(existing.canonical())
+        });
 
         if !is_covered {
             normalized.push(p);

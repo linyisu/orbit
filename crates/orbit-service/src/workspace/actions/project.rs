@@ -12,7 +12,9 @@ pub(super) fn task_report(result: TaskResult) -> Report {
                     task.id,
                     task.status.as_str(),
                     task.title,
-                    task.owner_session_id.as_deref().unwrap_or("无"),
+                    task.owner_session_id
+                        .as_deref()
+                        .unwrap_or("无"),
                     task.depends_on,
                     task.blocked_by,
                     if task.details.is_empty() {

@@ -47,7 +47,12 @@ fn parse(bytes: &[u8]) -> Result<Listing> {
     let mut fields = bytes[start..]
         .split(|byte| *byte == 0)
         .filter(|field| !field.is_empty());
-    let path = String::from_utf8(fields.next().context("missing directory path")?.to_vec())?;
+    let path = String::from_utf8(
+        fields
+            .next()
+            .context("missing directory path")?
+            .to_vec(),
+    )?;
     let mut directories = fields
         .map(|field| String::from_utf8(field.to_vec()))
         .collect::<std::result::Result<Vec<_>, _>>()?;

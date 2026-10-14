@@ -123,7 +123,11 @@ pub(crate) fn render(source: &str, width: u16, path: &str, depth: usize) -> Opti
         let was_fenced = fence.is_some();
         let _ = context.code_line(line.trim_end_matches(['\r', '\n']), &mut fence);
         if was_fenced || fence.is_some() {
-            protected.push_str(&line.replace('&', "&amp;").replace('<', "&lt;"));
+            protected.push_str(
+                &line
+                    .replace('&', "&amp;")
+                    .replace('<', "&lt;"),
+            );
         } else {
             protected.push_str(&protect_inline_code(line));
         }
@@ -138,7 +142,13 @@ pub(crate) fn render(source: &str, width: u16, path: &str, depth: usize) -> Opti
     )
     .one(protected);
     let mut lines = Vec::new();
-    for (index, node) in dom.document.children.borrow().iter().enumerate() {
+    for (index, node) in dom
+        .document
+        .children
+        .borrow()
+        .iter()
+        .enumerate()
+    {
         lines.extend(node_lines(
             node,
             width,
@@ -190,7 +200,14 @@ fn attribute(node: &Handle, key: &str) -> String {
 }
 
 fn has_attribute(node: &Handle, key: &str) -> bool {
-    matches!(&node.data, Element { attrs, .. } if attrs.borrow().iter().any(|attr| attr.name.local.as_ref() == key))
+    matches!(
+        &node.data,
+        Element { attrs, .. }
+            if attrs
+                .borrow()
+                .iter()
+                .any(|attr| attr.name.local.as_ref() == key)
+    )
 }
 
 fn source(node: &Handle) -> String {
@@ -295,7 +312,9 @@ fn node_lines(node: &Handle, width: u16, path: &str, depth: usize) -> Vec<Linked
 
             for line in &mut content {
                 line.folds.push(fold.clone());
-                *line = line.clone().framed(vec![Span::raw("  ")], Vec::new());
+                *line = line
+                    .clone()
+                    .framed(vec![Span::raw("  ")], Vec::new());
             }
 
             lines.extend(content);
@@ -327,7 +346,9 @@ fn node_lines(node: &Handle, width: u16, path: &str, depth: usize) -> Vec<Linked
         "div" | "p" => {
             let inset = usize::from(presentation.rail.is_some()) * 2
                 + usize::from(presentation.padding) * 2;
-            let inner = block_width.saturating_sub(inset as u16).max(1);
+            let inner = block_width
+                .saturating_sub(inset as u16)
+                .max(1);
             let mut content = super::document_at(body.trim(), inner.saturating_add(2), path, depth);
             for line in &mut content {
                 line.strip_body_margin();
@@ -468,7 +489,11 @@ fn table(node: &Handle, width: u16, path: &str, depth: usize) -> Vec<LinkedLine>
         .collect();
     let cols = cells
         .iter()
-        .map(|row| row.iter().map(|cell| cell.colspan).sum())
+        .map(|row| {
+            row.iter()
+                .map(|cell| cell.colspan)
+                .sum()
+        })
         .max()
         .unwrap_or(0);
     if cols == 0 {

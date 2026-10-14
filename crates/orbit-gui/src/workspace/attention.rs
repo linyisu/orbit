@@ -17,9 +17,11 @@ pub(super) struct Attention {
     shown: HashSet<Decision>,
     active: Option<Decision>,
 }
+
 impl Attention {
     fn sync(&mut self, pending: &[Decision]) -> bool {
-        self.shown.retain(|key| pending.contains(key));
+        self.shown
+            .retain(|key| pending.contains(key));
         if self
             .active
             .as_ref()
@@ -31,6 +33,7 @@ impl Attention {
             false
         }
     }
+
     fn next(&self, pending: &[Decision], available: bool) -> Option<Decision> {
         available
             .then(|| {
@@ -41,19 +44,23 @@ impl Attention {
             })
             .flatten()
     }
+
     pub(super) fn present(&mut self, key: Decision) {
         self.shown.insert(key.clone());
         self.active = Some(key);
     }
+
     pub(super) fn dismiss(&mut self, key: &Decision) {
         if self.active.as_ref() == Some(key) {
             self.active = None;
         }
     }
+
     pub(super) fn clear(&mut self) -> bool {
         self.shown.clear();
         self.active.take().is_some()
     }
+
     pub(super) fn suspend(&mut self) -> bool {
         if let Some(key) = self.active.take() {
             self.shown.remove(&key);

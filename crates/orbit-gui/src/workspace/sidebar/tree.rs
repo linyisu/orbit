@@ -14,7 +14,9 @@ impl Sidebar {
             .flat_map(|section| &section.children)
             .find(|item| item.id == *id)
         {
-            project.clone().expanded(!project.is_expanded());
+            project
+                .clone()
+                .expanded(!project.is_expanded());
             host.tree.update(cx, |tree, cx| {
                 tree.set_items(host.groups.clone(), cx);
                 tree.set_selected_item(Some(project), cx);
@@ -23,6 +25,7 @@ impl Sidebar {
             cx.notify();
         }
     }
+
     pub(super) fn project_tree(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let owner = cx.weak_entity();
         let options = self.hosts[self.host.expect("bound sidebar")]
@@ -53,9 +56,10 @@ impl Sidebar {
                         .read(cx)
                         .selected_item()
                         .map(|item| item.id.clone());
-                    if let Some(id) =
-                        id.and_then(|id| id.strip_prefix("session:").map(str::to_owned))
-                    {
+                    if let Some(id) = id.and_then(|id| {
+                        id.strip_prefix("session:")
+                            .map(str::to_owned)
+                    }) {
                         match event.keystroke.key.as_str() {
                             "f2" => view.with_owner(
                                 cx,
@@ -92,7 +96,11 @@ impl Sidebar {
                             .gap_2()
                             .text_xs()
                             .text_color(cx.theme().muted_foreground)
-                            .child(div().flex_1().child(entry.item().label.clone()))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .child(entry.item().label.clone()),
+                            )
                             .child(
                                 Icon::new(if expanded {
                                     IconName::ChevronDown
@@ -106,7 +114,9 @@ impl Sidebar {
                 let drag = organization::project_drag(
                     owner.clone(),
                     options.clone(),
-                    id.strip_prefix("project:").unwrap_or_default().to_owned(),
+                    id.strip_prefix("project:")
+                        .unwrap_or_default()
+                        .to_owned(),
                     entry.item().label.clone(),
                     ix,
                 );
@@ -124,11 +134,13 @@ impl Sidebar {
                     .as_ref()
                     .filter(|(key, _)| key == &id)
                     .map(|(_, time)| *time);
-                let task = id.strip_prefix("session:").and_then(|session| {
-                    tasks
-                        .iter()
-                        .find(|task| task.session.as_deref() == Some(session))
-                });
+                let task = id
+                    .strip_prefix("session:")
+                    .and_then(|session| {
+                        tasks
+                            .iter()
+                            .find(|task| task.session.as_deref() == Some(session))
+                    });
                 let status = task.map(|task| task.status);
                 let row_group: SharedString = format!("sidebar-row-{id}").into();
                 ListItem::new(id.clone())
@@ -198,7 +210,10 @@ impl Sidebar {
                                     .whitespace_nowrap()
                                     .text_ellipsis()
                                     .when(project, |label| {
-                                        let path = id.strip_prefix("project:").unwrap().to_owned();
+                                        let path = id
+                                            .strip_prefix("project:")
+                                            .unwrap()
+                                            .to_owned();
                                         label.tooltip(move |window, cx| {
                                             Tooltip::new(path.clone()).build(window, cx)
                                         })
@@ -227,14 +242,11 @@ impl Sidebar {
                                         .when(task.loading && !task.attention, |slot| {
                                             slot.child(Spinner::new().small())
                                         })
-                                        .when_some(
-                                            status,
-                                            |slot, status| {
-                                                slot.tooltip(move |window, cx| {
-                                                    Tooltip::new(status).build(window, cx)
-                                                })
-                                            },
-                                        )
+                                        .when_some(status, |slot, status| {
+                                            slot.tooltip(move |window, cx| {
+                                                Tooltip::new(status).build(window, cx)
+                                            })
+                                        })
                                     }),
                             )
                             .when(project || !folder, |content| {
@@ -303,8 +315,9 @@ impl Sidebar {
                     .when(project, |row| {
                         row.drag_over::<organization::ProjectDrag>(move |style, dragged, _, cx| {
                             if dragged.owner_matches(&drag_target) {
-                                let style =
-                                    style.bg(cx.theme().accent).border_color(cx.theme().ring);
+                                let style = style
+                                    .bg(cx.theme().accent)
+                                    .border_color(cx.theme().ring);
                                 if dragged.drop_before(&drag_target) {
                                     style.border_t_2()
                                 } else {
@@ -318,7 +331,9 @@ impl Sidebar {
                             move |drag: &organization::ProjectDrag, window, cx| {
                                 organization::drop_project(
                                     drag,
-                                    drop_id.strip_prefix("project:").unwrap(),
+                                    drop_id
+                                        .strip_prefix("project:")
+                                        .unwrap(),
                                     &drop_owner,
                                     window,
                                     cx,

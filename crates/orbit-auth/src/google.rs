@@ -72,7 +72,9 @@ pub(crate) async fn exchange_using(
         .await
         && let Ok(value) = json_response(response).await
     {
-        credential.account = value["email"].as_str().map(str::to_owned);
+        credential.account = value["email"]
+            .as_str()
+            .map(str::to_owned);
     }
 
     Ok(credential)
@@ -100,7 +102,10 @@ pub(crate) async fn refresh_using(
     client_id: &str,
     client_secret: &str,
 ) -> Result<Credential> {
-    let refresh = previous.refresh.as_ref().ok_or(AuthError::LoginRequired)?;
+    let refresh = previous
+        .refresh
+        .as_ref()
+        .ok_or(AuthError::LoginRequired)?;
     let value = form_token(
         TOKEN_URL,
         &[
@@ -147,7 +152,9 @@ async fn discover_project(base: &str, token: &str, project: Option<&str>) -> Res
         "platform": "PLATFORM_UNSPECIFIED",
         "pluginType": "GEMINI"
     });
-    let mut body = json!({ "metadata": metadata });
+    let mut body = json!({
+        "metadata": metadata
+    });
     if let Some(project) = project {
         validate_project(project)?;
         metadata["duetProject"] = json!(project);
@@ -170,15 +177,24 @@ async fn discover_project(base: &str, token: &str, project: Option<&str>) -> Res
 
     let default_tier = loaded["allowedTiers"]
         .as_array()
-        .and_then(|tiers| tiers.iter().find(|tier| tier["isDefault"] == true));
+        .and_then(|tiers| {
+            tiers
+                .iter()
+                .find(|tier| tier["isDefault"] == true)
+        });
     let tier = match default_tier {
-        Some(tier) => tier["id"].as_str().unwrap_or("free-tier"),
+        Some(tier) => tier["id"]
+            .as_str()
+            .unwrap_or("free-tier"),
         None => "legacy-tier",
     };
     if tier != "free-tier" && project.is_none() {
         return Err(AuthError::GoogleProjectRequired);
     }
-    let mut body = json!({ "tierId": tier, "metadata": metadata });
+    let mut body = json!({
+        "tierId": tier,
+        "metadata": metadata
+    });
     if tier != "free-tier"
         && let Some(project) = project
     {
@@ -203,7 +219,9 @@ async fn discover_project(base: &str, token: &str, project: Option<&str>) -> Res
             return Ok(resolved.to_owned());
         }
 
-        let name = operation["name"].as_str().ok_or(AuthError::InvalidToken)?;
+        let name = operation["name"]
+            .as_str()
+            .ok_or(AuthError::InvalidToken)?;
         if !name.starts_with("operations/")
             || !name
                 .bytes()
@@ -258,10 +276,14 @@ pub(crate) mod tests {
                 while !bytes.ends_with(b"\r\n\r\n") {
                     bytes.push(socket.read_u8().await.unwrap());
                 }
-                let header = String::from_utf8(bytes).unwrap().to_ascii_lowercase();
+                let header = String::from_utf8(bytes)
+                    .unwrap()
+                    .to_ascii_lowercase();
                 for expected in &expected_headers {
                     assert!(
-                        header.lines().any(|line| line == expected),
+                        header
+                            .lines()
+                            .any(|line| line == expected),
                         "missing expected header {expected:?} in {header:?}"
                     );
                 }
@@ -273,7 +295,10 @@ pub(crate) mod tests {
                     .parse()
                     .unwrap();
                 let mut body = vec![0; length];
-                socket.read_exact(&mut body).await.unwrap();
+                socket
+                    .read_exact(&mut body)
+                    .await
+                    .unwrap();
                 requests.push(if body.is_empty() {
                     Value::Null
                 } else {
@@ -284,7 +309,10 @@ pub(crate) mod tests {
                     "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                     body.len()
                 );
-                socket.write_all(response.as_bytes()).await.unwrap();
+                socket
+                    .write_all(response.as_bytes())
+                    .await
+                    .unwrap();
             }
 
             requests
@@ -294,19 +322,42 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn existing_projects_and_free_tier_onboarding_are_both_resolved() {
-        let (base, task) = server(vec![json!({ "currentTier": { "id": "free-tier" }, "cloudaicompanionProject": "existing-project" })]).await;
+        let (base, task) = server(vec![json!({
+            "currentTier": {
+                "id": "free-tier"
+            },
+            "cloudaicompanionProject": "existing-project"
+        })])
+        .await;
 
-        let project = discover_project(&base, "fake-token", None).await.unwrap();
+        let project = discover_project(&base, "fake-token", None)
+            .await
+            .unwrap();
 
         assert_eq!(project, "existing-project");
         assert_eq!(task.await.unwrap().len(), 1);
 
         let (base, task) = server(vec![
-            json!({ "allowedTiers": [{ "id": "free-tier", "isDefault": true }] }),
-            json!({ "done": true, "response": { "cloudaicompanionProject": { "id": "new-project" } } }),
-        ]).await;
+            json!({
+                "allowedTiers": [{
+                    "id": "free-tier",
+                    "isDefault": true
+                }]
+            }),
+            json!({
+                "done": true,
+                "response": {
+                    "cloudaicompanionProject": {
+                        "id": "new-project"
+                    }
+                }
+            }),
+        ])
+        .await;
 
-        let project = discover_project(&base, "fake-token", None).await.unwrap();
+        let project = discover_project(&base, "fake-token", None)
+            .await
+            .unwrap();
 
         assert_eq!(project, "new-project");
         let requests = task.await.unwrap();
@@ -316,23 +367,49 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn default_tier_without_id_uses_free_onboarding() {
         let (base, task) = server(vec![
-            json!({ "allowedTiers": [{ "isDefault": true }] }),
-            json!({ "done": true, "response": { "cloudaicompanionProject": { "id": "managed-project" } } }),
-        ]).await;
+            json!({
+                "allowedTiers": [{
+                    "isDefault": true
+                }]
+            }),
+            json!({
+                "done": true,
+                "response": {
+                    "cloudaicompanionProject": {
+                        "id": "managed-project"
+                    }
+                }
+            }),
+        ])
+        .await;
 
-        let project = discover_project(&base, "fake-token", None).await.unwrap();
+        let project = discover_project(&base, "fake-token", None)
+            .await
+            .unwrap();
 
         assert_eq!(project, "managed-project");
         let requests = task.await.unwrap();
         assert_eq!(requests[1]["tierId"], "free-tier");
-        assert!(requests[1].get("cloudaicompanionProject").is_none());
+        assert!(
+            requests[1]
+                .get("cloudaicompanionProject")
+                .is_none()
+        );
     }
 
     #[tokio::test]
     async fn explicit_project_is_forwarded_to_standard_tier_onboarding() {
         let (base, task) = server(vec![
-            json!({ "allowedTiers": [{ "id": "standard-tier", "isDefault": true }] }),
-            json!({ "done": true, "response": {} }),
+            json!({
+                "allowedTiers": [{
+                    "id": "standard-tier",
+                    "isDefault": true
+                }]
+            }),
+            json!({
+                "done": true,
+                "response": {}
+            }),
         ])
         .await;
 
@@ -360,7 +437,12 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn workspace_accounts_require_an_explicit_project_when_discovery_has_none() {
-        let (base, task) = server(vec![json!({ "currentTier": { "id": "standard-tier" } })]).await;
+        let (base, task) = server(vec![json!({
+            "currentTier": {
+                "id": "standard-tier"
+            }
+        })])
+        .await;
 
         let result = discover_project(&base, "fake-token", None).await;
 

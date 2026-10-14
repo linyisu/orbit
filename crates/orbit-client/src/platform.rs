@@ -19,6 +19,7 @@ pub async fn launch_browser(url: &str) {
         let _ = url;
         return;
     }
+
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
         let _ = tokio::time::timeout(

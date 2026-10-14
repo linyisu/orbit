@@ -10,7 +10,10 @@ fn temporary_assets() -> Result<ImageAssets> {
 
 pub fn paths(paths: Vec<PathBuf>) -> Result<Vec<Attachment>> {
     let assets = temporary_assets()?;
-    paths.iter().map(|path| assets.import_path(path)).collect()
+    paths
+        .iter()
+        .map(|path| assets.import_path(path))
+        .collect()
 }
 
 pub fn rgba(width: usize, height: usize, bytes: Vec<u8>) -> Result<Vec<Attachment>> {
@@ -54,6 +57,7 @@ pub fn pasted_paths(text: &str, directory: &Path) -> Option<Vec<PathBuf>> {
     if let Some(path) = pasted_path(whole, directory) {
         return Some(vec![path]);
     }
+
     #[cfg(unix)]
     {
         let paths = shlex::split(text)?
@@ -62,6 +66,7 @@ pub fn pasted_paths(text: &str, directory: &Path) -> Option<Vec<PathBuf>> {
             .collect::<Option<Vec<_>>>()?;
         (!paths.is_empty()).then_some(paths)
     }
+
     #[cfg(not(unix))]
     None
 }
@@ -100,14 +105,18 @@ mod tests {
     #[test]
     fn pasted_paths_accept_existing_absolute_relative_and_file_url_images() {
         let directory = tempfile::tempdir().unwrap();
-        let image = directory.path().join("中文 screen shot.PNG");
+        let image = directory
+            .path()
+            .join("中文 screen shot.PNG");
         std::fs::write(&image, b"validated when imported").unwrap();
         for input in [
             image.to_string_lossy().into_owned(),
             "中文 screen shot.PNG".into(),
             "'中文 screen shot.PNG'".into(),
             "\"中文 screen shot.PNG\"".into(),
-            url::Url::from_file_path(&image).unwrap().to_string(),
+            url::Url::from_file_path(&image)
+                .unwrap()
+                .to_string(),
         ] {
             assert_eq!(
                 pasted_paths(&input, directory.path()),

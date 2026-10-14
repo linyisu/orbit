@@ -8,6 +8,7 @@ pub(in crate::tui) struct Pointer<T> {
     active: bool,
     position: Option<Position>,
 }
+
 impl<T> Default for Pointer<T> {
     fn default() -> Self {
         Self {
@@ -17,6 +18,7 @@ impl<T> Default for Pointer<T> {
         }
     }
 }
+
 impl<T: Copy> Pointer<T> {
     pub fn hovered(&self) -> Option<T> {
         self.hovered

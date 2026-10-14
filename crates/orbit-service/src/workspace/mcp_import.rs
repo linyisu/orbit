@@ -14,6 +14,16 @@ use std::{
 };
 use tokio::{io::AsyncReadExt, process::Command};
 
+const MAX_SOURCE_ADDRESS_BYTES: usize = 4_096;
+const SOURCE_SCAN_TTL: Duration = Duration::from_secs(900);
+const MAX_SOURCE_DEPTH: usize = 24;
+const MAX_SOURCE_ENTRIES: usize = 20_000;
+const MAX_SOURCE_FILE_BYTES: u64 = 32 * 1_024 * 1_024;
+const MAX_SOURCE_TOTAL_BYTES: u64 = 256 * 1_024 * 1_024;
+const MAX_METADATA_BYTES: usize = 1_024 * 1_024;
+const MAX_INSTALL_OUTPUT_BYTES: usize = 16 * 1_024;
+const INSTALL_TIMEOUT: Duration = Duration::from_secs(180);
+
 pub(super) struct Scan {
     storage: tempfile::TempDir,
     session: String,
@@ -22,7 +32,9 @@ pub(super) struct Scan {
     candidates: Vec<McpCandidate>,
     created: Instant,
 }
+
 impl Scan {
+    /// Copy and inspect source metadata without executing repository code.
     pub(super) async fn acquire(
         session: String,
         workspace: PathBuf,
@@ -30,7 +42,7 @@ impl Scan {
         home: Option<PathBuf>,
     ) -> Result<Self> {
         ensure!(
-            !source.trim().is_empty() && source.len() <= 4096,
+            !source.trim().is_empty() && source.len() <= MAX_SOURCE_ADDRESS_BYTES,
             "请输入有效的 MCP 来源地址或目录"
         );
         let home = home
@@ -52,7 +64,9 @@ impl Scan {
         tokio::task::spawn_blocking(move || {
             let root = fs::canonicalize(root)?;
             let root = if root.is_file() {
-                root.parent().context("来源目录无效")?.to_path_buf()
+                root.parent()
+                    .context("来源目录无效")?
+                    .to_path_buf()
             } else {
                 root
             };
@@ -71,6 +85,7 @@ impl Scan {
         })
         .await?
     }
+
     fn token(&self) -> String {
         self.storage
             .path()
@@ -79,6 +94,7 @@ impl Scan {
             .to_string_lossy()
             .into_owned()
     }
+
     pub(super) fn snapshot(&self) -> Snapshot {
         Snapshot::McpSource {
             token: self.token(),
@@ -86,6 +102,9 @@ impl Scan {
             candidates: self.candidates.clone(),
         }
     }
+
+    /// Install one reviewed candidate for the same session and workspace that scanned it.
+    /// Retain the source at its reviewed path so virtualenv entry points stay valid.
     pub(super) async fn install(
         self,
         token: &str,
@@ -100,7 +119,7 @@ impl Scan {
             "MCP 来源已改变，请重新扫描"
         );
         ensure!(
-            self.created.elapsed() < Duration::from_secs(900),
+            self.created.elapsed() < SOURCE_SCAN_TTL,
             "MCP 来源已过期，请重新扫描"
         );
         let candidate = self
@@ -118,7 +137,6 @@ impl Scan {
         for command in &candidate.install {
             run(command, &directory).await?;
         }
-        // The path does not change after installation, including virtualenv scripts.
         let _installed = self.storage.keep();
         Ok(Snapshot::McpInstalled {
             name: candidate.name,
@@ -126,6 +144,7 @@ impl Scan {
         })
     }
 }
+
 fn reject_links(path: &Path) -> Result<()> {
     for part in path.ancestors() {
         if let Ok(metadata) = fs::symlink_metadata(part) {
@@ -138,13 +157,14 @@ fn reject_links(path: &Path) -> Result<()> {
     }
     Ok(())
 }
+
 fn copy_source(
     source: &Path,
     target: &Path,
     depth: usize,
     limits: &mut (u64, usize),
 ) -> Result<()> {
-    ensure!(depth <= 24, "MCP 来源目录层级过深");
+    ensure!(depth <= MAX_SOURCE_DEPTH, "MCP 来源目录层级过深");
     reject_links(source)?;
     fs::create_dir(target)?;
     for entry in fs::read_dir(source)? {
@@ -156,7 +176,10 @@ fn copy_source(
             continue;
         }
         limits.1 += 1;
-        ensure!(limits.1 <= 20000, "MCP 来源文件过多，请选择子目录");
+        ensure!(
+            limits.1 <= MAX_SOURCE_ENTRIES,
+            "MCP 来源文件过多，请选择子目录"
+        );
         let kind = entry.file_type()?;
         ensure!(
             !kind.is_symlink(),
@@ -171,7 +194,7 @@ fn copy_source(
             let len = entry.metadata()?.len();
             limits.0 += len;
             ensure!(
-                len <= 32 * 1024 * 1024 && limits.0 <= 256 * 1024 * 1024,
+                len <= MAX_SOURCE_FILE_BYTES && limits.0 <= MAX_SOURCE_TOTAL_BYTES,
                 "MCP 来源超过大小限制，请选择子目录"
             );
             fs::copy(entry.path(), out)?;
@@ -179,14 +202,16 @@ fn copy_source(
     }
     Ok(())
 }
+
 fn read_metadata(path: &Path) -> Result<String> {
     let mut value = String::new();
     fs::File::open(path)?
-        .take(1024 * 1024 + 1)
+        .take(MAX_METADATA_BYTES as u64 + 1)
         .read_to_string(&mut value)?;
-    ensure!(value.len() <= 1024 * 1024, "MCP 元数据超过 1 MiB");
+    ensure!(value.len() <= MAX_METADATA_BYTES, "MCP 元数据超过 1 MiB");
     Ok(value)
 }
+
 fn executable(name: &str) -> String {
     let environment = orbit_runtime::execution::shell_environment::snapshot();
     std::env::split_paths(
@@ -200,17 +225,18 @@ fn executable(name: &str) -> String {
     .map(|path| path.to_string_lossy().into_owned())
     .unwrap_or_else(|| name.to_owned())
 }
+
 async fn drain(mut reader: impl tokio::io::AsyncRead + Unpin) -> std::io::Result<Vec<u8>> {
     let mut tail = Vec::new();
-    let mut buffer = [0; 4096];
+    let mut buffer = [0; 4_096];
     loop {
         let count = reader.read(&mut buffer).await?;
         if count == 0 {
             break;
         }
         tail.extend_from_slice(&buffer[..count]);
-        if tail.len() > 16384 {
-            tail.drain(..tail.len() - 16384);
+        if tail.len() > MAX_INSTALL_OUTPUT_BYTES {
+            tail.drain(..tail.len() - MAX_INSTALL_OUTPUT_BYTES);
         }
     }
     Ok(tail)
@@ -227,8 +253,12 @@ impl Drop for ProcessGroup {
     }
 }
 
+/// Run a dependency command with bounded diagnostics and a process-group lifetime.
+/// Cancellation and timeout drop the guard, terminating descendants as well as the direct child.
 async fn run(arguments: &[String], directory: &Path) -> Result<()> {
-    let (program, args) = arguments.split_first().context("安装命令为空")?;
+    let (program, args) = arguments
+        .split_first()
+        .context("安装命令为空")?;
     let mut command = Command::new(program);
     let environment = orbit_runtime::execution::shell_environment::snapshot();
     command
@@ -250,13 +280,11 @@ async fn run(arguments: &[String], directory: &Path) -> Result<()> {
     let _group = ProcessGroup(child.id());
     let stdout = child.stdout.take().unwrap();
     let stderr = child.stderr.take().unwrap();
-    let result = tokio::time::timeout(Duration::from_secs(180), async {
+    let result = tokio::time::timeout(INSTALL_TIMEOUT, async {
         let (status, out, err) = tokio::join!(child.wait(), drain(stdout), drain(stderr));
         Ok::<_, std::io::Error>((status?, out?, err?))
     })
     .await;
-    // The group guard also runs if this future is cancelled, so descendants
-    // cannot outlive a timeout or a closed installation request.
     let (status, out, err) = result.context("安装超时（180 秒），请检查目标机器的网络和依赖")??;
     ensure!(
         status.success(),

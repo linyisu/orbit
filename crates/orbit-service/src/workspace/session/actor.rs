@@ -117,11 +117,24 @@ pub(super) async fn run(
                 let Some(envelope) = envelope else { break };
                 // Keep polling and accepting cancellation while optional tools
                 // initialize. The first run must see the complete tool catalog.
-                if actor.setup.resources.mcp_startup.is_some() && matches!(&envelope.command,
-                    Command::Start { .. } | Command::Plan { action: orbit_protocol::plan::Action::Approve { .. } | orbit_protocol::plan::Action::Feedback { .. } }
-                ) {
+                if actor
+                    .setup
+                    .resources
+                    .mcp_startup
+                    .is_some()
+                    && matches!(
+                        &envelope.command,
+                        Command::Start { .. }
+                            | Command::Plan {
+                                action: orbit_protocol::plan::Action::Approve { .. }
+                                    | orbit_protocol::plan::Action::Feedback { .. },
+                            }
+                    )
+                {
                     if actor.starting.is_some() {
-                        let _ = envelope.reply.send(Err(anyhow::anyhow!("已有输入正在等待工具准备完成")));
+                        let _ = envelope
+                            .reply
+                            .send(Err(anyhow::anyhow!("已有输入正在等待工具准备完成")));
                     } else {
                         actor.starting = Some(envelope);
                     }
@@ -130,10 +143,13 @@ pub(super) async fn run(
                 if let Command::RetireUnobserved { result } = envelope.command {
                     // Drafts have nothing to save. Persisted sessions can release
                     // their runtime only after execution and metadata work finish.
-                    let retire = actor.starting.is_none() && actor.import.is_none() && actor.mcp_reload.is_none() && (!actor.setup.session.is_persisted()
-                        || (!actor.active()
-                            && !actor.questions.running().await
-                            && !actor.setup.session.metadata_pending()));
+                    let retire = actor.starting.is_none()
+                        && actor.import.is_none()
+                        && actor.mcp_reload.is_none()
+                        && (!actor.setup.session.is_persisted()
+                            || (!actor.active()
+                                && !actor.questions.running().await
+                                && !actor.setup.session.metadata_pending()));
                     let _ = result.send(retire);
                     if retire {
                         drop(actor);
@@ -144,8 +160,14 @@ pub(super) async fn run(
                     continue;
                 }
                 if matches!(&envelope.command, Command::Close) {
-                    if actor.active() || actor.questions.running().await || actor.import.is_some() || actor.mcp_reload.is_some() {
-                        let _ = envelope.reply.send(Err(anyhow::anyhow!("会话正在运行，无法删除")));
+                    if actor.active()
+                        || actor.questions.running().await
+                        || actor.import.is_some()
+                        || actor.mcp_reload.is_some()
+                    {
+                        let _ = envelope
+                            .reply
+                            .send(Err(anyhow::anyhow!("会话正在运行，无法删除")));
                         continue;
                     }
                     drop(actor);
@@ -155,77 +177,181 @@ pub(super) async fn run(
                 let result = actor.command(envelope.command).await;
                 let _ = envelope.reply.send(result);
             }
-            event = async { actor.running.as_mut().unwrap().events.recv().await }, if actor.running.is_some() => {
-                match event {
-                    Some(event) => {
-                        actor.progress.record(&event);
-                        let mut view = actor.view.lock().await;
-                        if actor.progress.is_empty() { view.progress.clear(); }
-                        view.push(Update::agent(event));
-                    },
-                    None => actor.finish_run().await,
+            event = async {
+                actor
+                    .running
+                    .as_mut()
+                    .unwrap()
+                    .events
+                    .recv()
+                    .await
+            }, if actor.running.is_some() => match event {
+                Some(event) => {
+                    actor.progress.record(&event);
+                    let mut view = actor.view.lock().await;
+                    if actor.progress.is_empty() {
+                        view.progress.clear();
+                    }
+                    view.push(Update::agent(event));
                 }
-            }
-            result = async { (&mut actor.undo.as_mut().unwrap().task).await }, if actor.undo.is_some() => {
+                None => actor.finish_run().await,
+            },
+            result = async { (&mut actor.undo.as_mut().unwrap().task).await },
+                if actor.undo.is_some() => {
                 let undo = actor.undo.take().unwrap();
                 actor.pending.clear();
                 let mut view = actor.view.lock().await;
                 view.busy = false;
                 view.approvals.clear();
-                let result = match result { Ok(result) => result, Err(error) => Err(anyhow::anyhow!("撤销任务中断：{error}")) };
+                let result = match result {
+                    Ok(result) => result,
+                    Err(error) => Err(anyhow::anyhow!("撤销任务中断：{error}")),
+                };
                 if let Some((path, reply)) = undo.completion {
-                    let _ = reply.send(result.map(|detail| orbit_protocol::review::Snapshot::Undone { path, detail }));
+                    let _ = reply.send(
+                        result.map(|detail| orbit_protocol::review::Snapshot::Undone {
+                            path,
+                            detail,
+                        }),
+                    );
                 } else {
-                    let text = match result { Ok(text) => text, Err(error) => format!("撤销失败：{error:#}") };
-                    view.push(Update::Report(orbit_protocol::Report { title: "撤销文件写入".into(), text }));
+                    let text = match result {
+                        Ok(text) => text,
+                        Err(error) => format!("撤销失败：{error:#}"),
+                    };
+                    view.push(Update::Report(orbit_protocol::Report {
+                        title: "撤销文件写入".into(),
+                        text,
+                    }));
                 }
             }
-            output = async { (&mut actor.import.as_mut().unwrap().task).await }, if actor.import.is_some() => {
+            output = async { (&mut actor.import.as_mut().unwrap().task).await },
+                if actor.import.is_some() => {
                 let import = actor.import.take().unwrap();
-                import.finish(&mut actor.setup, output.unwrap_or_else(|error| Err(anyhow::anyhow!("MCP 导入任务中断：{error}"))));
+                import.finish(
+                    &mut actor.setup,
+                    output
+                        .unwrap_or_else(|error| Err(anyhow::anyhow!("MCP 导入任务中断：{error}"))),
+                );
             }
             Some(request) = actor.setup.resources.approvals.recv() => actor.approval(request).await,
-            output = async { (&mut actor.mcp_reload.as_mut().unwrap().task).await }, if actor.mcp_reload.is_some() => {
+            output = async { (&mut actor.mcp_reload.as_mut().unwrap().task).await },
+                if actor.mcp_reload.is_some() => {
                 let reload = actor.mcp_reload.take().unwrap();
-                reload.finish(&mut actor.setup, output.unwrap_or_else(|error| Err(anyhow::anyhow!("MCP 重新加载中断：{error}"))));
+                reload.finish(
+                    &mut actor.setup,
+                    output
+                        .unwrap_or_else(|error| Err(anyhow::anyhow!("MCP 重新加载中断：{error}"))),
+                );
             }
-            output = async { (&mut actor.setup.resources.mcp_startup.as_mut().unwrap().task).await }, if actor.setup.resources.mcp_startup.is_some() => {
-                let startup = actor.setup.resources.mcp_startup.take().unwrap();
+            output = async {
+                (&mut actor
+                    .setup
+                    .resources
+                    .mcp_startup
+                    .as_mut()
+                    .unwrap()
+                    .task)
+                    .await
+            },
+                if actor
+                    .setup
+                    .resources
+                    .mcp_startup
+                    .is_some() => {
+                let startup = actor
+                    .setup
+                    .resources
+                    .mcp_startup
+                    .take()
+                    .unwrap();
                 startup.finish(&mut actor.setup, output.map_err(anyhow::Error::from));
             }
-            output = async { actor.setup.resources.model_refresh.as_mut().unwrap().await }, if actor.setup.resources.model_refresh.is_some() => {
+            output = async {
+                actor
+                    .setup
+                    .resources
+                    .model_refresh
+                    .as_mut()
+                    .unwrap()
+                    .await
+            },
+                if actor
+                    .setup
+                    .resources
+                    .model_refresh
+                    .is_some() => {
                 actor.setup.resources.model_refresh = None;
                 if let Ok(report) = output {
-                    for diagnostic in report.diagnostics { eprintln!("{diagnostic}"); }
+                    for diagnostic in report.diagnostics {
+                        eprintln!("{diagnostic}");
+                    }
                     actor.models_refreshed = true;
                 }
             }
-            _ = outputs.tick(), if actor.running.is_some() && !actor.progress.is_empty() && actor.progress_task.is_none() => {
-                actor.progress_task = Some(actor.progress.start_snapshot(&actor.setup.resources.tools, &actor.setup.session.command_output));
+            _ = outputs.tick(),
+                if actor.running.is_some()
+                    && !actor.progress.is_empty()
+                    && actor.progress_task.is_none() => {
+                actor.progress_task = Some(actor.progress.start_snapshot(
+                    &actor.setup.resources.tools,
+                    &actor.setup.session.command_output,
+                ));
             }
-            result = async { actor.progress_task.as_mut().unwrap().await }, if actor.progress_task.is_some() => {
+            result = async {
+                actor
+                    .progress_task
+                    .as_mut()
+                    .unwrap()
+                    .await
+            }, if actor.progress_task.is_some() => {
                 actor.progress_task = None;
                 if let Ok(snapshot) = result {
                     actor.view.lock().await.progress = actor.progress.accept(snapshot);
                 }
             }
             _ = flush.tick() => {
-                if actor.running.is_some() && let Err(error) = actor.setup.session.flush_events().await {
-                    actor.view.lock().await.push(Update::agent(AgentEvent::Failed { error: error.to_string() }));
+                if actor.running.is_some()
+                    && let Err(error) = actor.setup.session.flush_events().await
+                {
+                    actor
+                        .view
+                        .lock()
+                        .await
+                        .push(Update::agent(AgentEvent::Failed {
+                            error: error.to_string(),
+                        }));
                     actor.cancel();
                 }
                 actor.sync_user_input().await;
                 if actor.models_refreshed && !actor.busy() {
                     actor.models_refreshed = false;
-                    if let Err(error) = actor.command(Command::ConfigureModels { configuration: None }).await {
+                    if let Err(error) = actor
+                        .command(Command::ConfigureModels {
+                            configuration: None,
+                        })
+                        .await
+                    {
                         eprintln!("后台模型目录更新未应用：{error:#}");
                     }
                 }
                 actor.compact_if_needed().await;
-                if actor.setup.session.poll_title().await.unwrap_or(false) { actor.profile().await; }
+                if actor
+                    .setup
+                    .session
+                    .poll_title()
+                    .await
+                    .unwrap_or(false)
+                {
+                    actor.profile().await;
+                }
             }
         }
-        if actor.setup.resources.mcp_startup.is_none()
+        if actor
+            .setup
+            .resources
+            .mcp_startup
+            .is_none()
             && actor.mcp_reload.is_none()
             && let Some(envelope) = actor.starting.take()
             && !envelope.reply.is_closed()
@@ -244,17 +370,23 @@ impl Actor {
 
     fn active(&self) -> bool {
         self.busy()
-            || self.setup.resources.tools.task_groups().any(|jobs| {
-                jobs.snapshots(&[], false).map_or(true, |jobs| {
-                    jobs.iter().any(|job| {
-                        matches!(
-                            job.status,
-                            orbit_agent::background::JobStatus::Running
-                                | orbit_agent::background::JobStatus::Cancelling
-                        )
-                    })
+            || self
+                .setup
+                .resources
+                .tools
+                .task_groups()
+                .any(|jobs| {
+                    jobs.snapshots(&[], false)
+                        .map_or(true, |jobs| {
+                            jobs.iter().any(|job| {
+                                matches!(
+                                    job.status,
+                                    orbit_agent::background::JobStatus::Running
+                                        | orbit_agent::background::JobStatus::Cancelling
+                                )
+                            })
+                        })
                 })
-            })
     }
 
     fn cancel(&self) {
@@ -267,10 +399,20 @@ impl Actor {
     }
 
     async fn sync_user_input(&self) {
-        let inputs = self.setup.resources.user_input.pending().await;
+        let inputs = self
+            .setup
+            .resources
+            .user_input
+            .pending()
+            .await;
         let mut view = self.view.lock().await;
         view.user_inputs = inputs;
-        view.planning = self.setup.resources.planning.snapshot().await;
+        view.planning = self
+            .setup
+            .resources
+            .planning
+            .snapshot()
+            .await;
         let waiting = view
             .user_inputs
             .iter()
@@ -309,7 +451,13 @@ impl Actor {
                 if matches!(action, Action::Enable | Action::Enter) {
                     self.planning_enabled = true;
                 }
-                if self.setup.resources.planning.already_applied(&action).await {
+                if self
+                    .setup
+                    .resources
+                    .planning
+                    .already_applied(&action)
+                    .await
+                {
                     return Ok(());
                 }
                 match &action {
@@ -323,7 +471,12 @@ impl Actor {
                         "请等待当前任务结束或提交计划后再操作"
                     ),
                 }
-                let prompt = self.setup.resources.planning.action(action).await?;
+                let prompt = self
+                    .setup
+                    .resources
+                    .planning
+                    .action(action)
+                    .await?;
                 self.sync_user_input().await;
                 if let Some(prompt) = prompt {
                     ensure!(!self.busy(), "请等待当前任务结束，再发送消息继续计划");
@@ -342,14 +495,22 @@ impl Actor {
                 self.setup.resources.user_input.enable();
             }
             Command::AnswerUserInput { id, answers } => {
-                self.setup.resources.user_input.answer(&id, answers).await?
+                self.setup
+                    .resources
+                    .user_input
+                    .answer(&id, answers)
+                    .await?
             }
             Command::Activity { result } => {
                 let _ = result.send(self.active() || self.questions.running().await);
             }
             Command::UsageContext { result } => {
                 let _ = result.send((
-                    self.setup.resources.model.config().clone(),
+                    self.setup
+                        .resources
+                        .model
+                        .config()
+                        .clone(),
                     self.setup.session.is_persisted(),
                 ));
             }
@@ -362,7 +523,10 @@ impl Actor {
                         orbit_model::types::ToolCall::function(
                             super::super::request_id(),
                             "send_agent_message",
-                            serde_json::json!({"agent_id": agent, "message": message}),
+                            serde_json::json!({
+                                "agent_id": agent,
+                                "message": message
+                            }),
                         ),
                         CancellationToken::new(),
                     )
@@ -418,28 +582,40 @@ impl Actor {
                     crate::config::FileConfig::load(&options.config, &options.auth_directory)?;
                 let _ = orbit_config::models::updater::load_cached(&mut config).await;
                 let models = config.model_options()?;
-                let previous_limit = self.setup.resources.budget.input_context_tokens;
+                let previous_limit = self
+                    .setup
+                    .resources
+                    .budget
+                    .input_context_tokens;
                 let selected = self.setup.resources.model_name.clone();
                 let available = models
                     .iter()
                     .any(|model| model.qualified_name() == selected);
-                let effort =
-                    self.setup
-                        .resources
-                        .model
-                        .config()
-                        .reasoning_effort
-                        .filter(|effort| {
-                            models.iter().any(|model| {
-                                model.qualified_name() == selected
-                                    && model.reasoning_efforts.contains(effort)
-                            })
-                        });
-                self.setup.resources.budget.model_options = models;
+                let effort = self
+                    .setup
+                    .resources
+                    .model
+                    .config()
+                    .reasoning_effort
+                    .filter(|effort| {
+                        models.iter().any(|model| {
+                            model.qualified_name() == selected
+                                && model.reasoning_efforts.contains(effort)
+                        })
+                    });
+                self.setup
+                    .resources
+                    .budget
+                    .model_options = models;
                 if available {
                     profile::select(&mut self.setup, &selected, effort.map(|e| e.as_str())).await?;
                     self.compact_after_model_switch |= self.setup.resources.budget.auto_compact
-                        && self.setup.resources.budget.input_context_tokens < previous_limit;
+                        && self
+                            .setup
+                            .resources
+                            .budget
+                            .input_context_tokens
+                            < previous_limit;
                 }
                 if let Some(installed) = installed {
                     self.setup.resources.options = installed.options.clone();
@@ -465,9 +641,17 @@ impl Actor {
                 result,
             } => {
                 ensure!(
-                    expected_workspace.as_ref().is_none_or(|expected| {
-                        expected == &self.setup.session.snapshot.session.workspace
-                    }),
+                    expected_workspace
+                        .as_ref()
+                        .is_none_or(|expected| {
+                            expected
+                                == &self
+                                    .setup
+                                    .session
+                                    .snapshot
+                                    .session
+                                    .workspace
+                        }),
                     "工作区已切换，请重新打开当前项目的设置后重试"
                 );
                 if matches!(
@@ -510,16 +694,22 @@ impl Actor {
                 result,
             } => {
                 let busy = self.active() || self.questions.running().await;
-                let response =
-                    async {
-                        ensure!(
-                            expected_workspace.as_ref().is_none_or(|expected| expected
-                                == &self.setup.session.snapshot.session.workspace),
-                            "工作区已切换，请重新打开文件"
-                        );
-                        crate::workspace::files::execute(&mut self.setup, action, busy).await
-                    }
-                    .await;
+                let response = async {
+                    ensure!(
+                        expected_workspace
+                            .as_ref()
+                            .is_none_or(|expected| expected
+                                == &self
+                                    .setup
+                                    .session
+                                    .snapshot
+                                    .session
+                                    .workspace),
+                        "工作区已切换，请重新打开文件"
+                    );
+                    crate::workspace::files::execute(&mut self.setup, action, busy).await
+                }
+                .await;
                 let _ = result.send(response);
             }
             Command::Review {
@@ -527,7 +717,13 @@ impl Actor {
                 expected_workspace,
                 result,
             } => {
-                let scope = expected_workspace == self.setup.session.snapshot.session.workspace;
+                let scope = expected_workspace
+                    == self
+                        .setup
+                        .session
+                        .snapshot
+                        .session
+                        .workspace;
                 if !scope {
                     let _ = result.send(Err(anyhow::anyhow!("工作区已切换，请重新打开差异审查")));
                 } else if matches!(
@@ -593,7 +789,13 @@ impl Actor {
             } => {
                 let response = async {
                     ensure!(
-                        expected_workspace == self.setup.session.snapshot.session.workspace,
+                        expected_workspace
+                            == self
+                                .setup
+                                .session
+                                .snapshot
+                                .session
+                                .workspace,
                         "工作区已切换，请重新打开子 Agent 列表"
                     );
                     crate::workspace::subagents::execute(&mut self.setup, action).await
@@ -606,7 +808,10 @@ impl Actor {
                 expected_workspace,
                 result,
             } => {
-                let inbox = self.running.as_ref().map(|run| run.inbox.clone());
+                let inbox = self
+                    .running
+                    .as_ref()
+                    .map(|run| run.inbox.clone());
                 let response = crate::workspace::input_queue::execute(
                     &mut self.setup,
                     inbox,
@@ -623,9 +828,17 @@ impl Actor {
             } => {
                 let response = async {
                     ensure!(
-                        expected_workspace.as_ref().is_none_or(|expected| {
-                            expected == &self.setup.session.snapshot.session.workspace
-                        }),
+                        expected_workspace
+                            .as_ref()
+                            .is_none_or(|expected| {
+                                expected
+                                    == &self
+                                        .setup
+                                        .session
+                                        .snapshot
+                                        .session
+                                        .workspace
+                            }),
                         "工作区已切换，请重新打开当前项目的任务页后重试"
                     );
                     crate::workspace::tasks::snapshot(&mut self.setup, action).await
@@ -638,10 +851,19 @@ impl Actor {
                     !self.busy(),
                     "wait for the current task before changing its model"
                 );
-                let previous_limit = self.setup.resources.budget.input_context_tokens;
+                let previous_limit = self
+                    .setup
+                    .resources
+                    .budget
+                    .input_context_tokens;
                 profile::select(&mut self.setup, &model, effort.as_deref()).await?;
                 self.compact_after_model_switch |= self.setup.resources.budget.auto_compact
-                    && self.setup.resources.budget.input_context_tokens < previous_limit;
+                    && self
+                        .setup
+                        .resources
+                        .budget
+                        .input_context_tokens
+                        < previous_limit;
                 self.profile().await;
             }
             Command::Steer {
@@ -651,7 +873,7 @@ impl Actor {
             } => {
                 let message = message.trim().to_owned();
                 ensure!(
-                    (!message.is_empty() || !images.is_empty()) && message.len() <= 1024 * 1024,
+                    (!message.is_empty() || !images.is_empty()) && message.len() <= 1_024 * 1_024,
                     "invalid session input"
                 );
                 let run = self
@@ -660,7 +882,10 @@ impl Actor {
                     .ok_or_else(|| anyhow::anyhow!("session is idle; submit a new message"))?;
                 let attachments = super::super::run::import_images(
                     self.setup.session.store.path(),
-                    self.setup.resources.model.supports_vision(),
+                    self.setup
+                        .resources
+                        .model
+                        .supports_vision(),
                     self.setup
                         .resources
                         .policy
@@ -694,7 +919,9 @@ impl Actor {
             }
             Command::Cancel => {
                 if let Some(envelope) = self.starting.take() {
-                    let _ = envelope.reply.send(Err(anyhow::anyhow!("输入已取消")));
+                    let _ = envelope
+                        .reply
+                        .send(Err(anyhow::anyhow!("输入已取消")));
                 }
                 self.cancel();
                 self.pending.clear();
@@ -714,7 +941,14 @@ impl Actor {
                     && remember
                     && let Some(key) = approval_key(
                         preview,
-                        Path::new(&self.setup.session.snapshot.session.workspace),
+                        Path::new(
+                            &self
+                                .setup
+                                .session
+                                .snapshot
+                                .session
+                                .workspace,
+                        ),
                     )
                 {
                     if matches!(
@@ -734,7 +968,12 @@ impl Actor {
             }
             Command::Undo { path } => {
                 ensure!(
-                    self.setup.resources.planning.snapshot().await.mode
+                    self.setup
+                        .resources
+                        .planning
+                        .snapshot()
+                        .await
+                        .mode
                         != orbit_protocol::plan::WorkMode::Plan,
                     "Plan 模式不能撤销文件修改，请先切换 Build"
                 );
@@ -752,7 +991,7 @@ impl Actor {
                     !request_id.is_empty()
                         && request_id.len() <= 128
                         && (!prompt.is_empty() || !images.is_empty())
-                        && prompt.len() <= 1024 * 1024,
+                        && prompt.len() <= 1_024 * 1_024,
                     "invalid workspace request"
                 );
                 let identity = request_fingerprint(&prompt, &images, compact, &model);
@@ -776,7 +1015,10 @@ impl Actor {
                     RequestClaim::Rejected(error) => anyhow::bail!("{error}"),
                 }
                 let mut presentation = orbit_protocol::RunPresentation {
-                    images: images.iter().map(|image| image.name.clone()).collect(),
+                    images: images
+                        .iter()
+                        .map(|image| image.name.clone())
+                        .collect(),
                     compact,
                     queued_input: false,
                     replayed: false,
@@ -814,7 +1056,8 @@ impl Actor {
                     inbox,
                 });
                 self.accepted.clear();
-                self.accepted.insert(request_id.clone(), identity);
+                self.accepted
+                    .insert(request_id.clone(), identity);
                 self.profile().await;
                 {
                     let mut view = self.view.lock().await;
@@ -837,7 +1080,11 @@ impl Actor {
 
     async fn compact_if_needed(&mut self) {
         if self.busy()
-            || self.setup.resources.mcp_startup.is_some()
+            || self
+                .setup
+                .resources
+                .mcp_startup
+                .is_some()
             || !self.compact_after_model_switch
         {
             return;
@@ -869,7 +1116,14 @@ impl Actor {
     }
 
     fn allows(&self, preview: &orbit_tools::approval::ApprovalPreview) -> bool {
-        let workspace = Path::new(&self.setup.session.snapshot.session.workspace);
+        let workspace = Path::new(
+            &self
+                .setup
+                .session
+                .snapshot
+                .session
+                .workspace,
+        );
         let key = approval_key(preview, workspace);
         self.undo.is_none()
             && (self.setup.resources.mode == Mode::Yolo
@@ -885,7 +1139,11 @@ impl Actor {
             .pending
             .remove(&id)
             .ok_or_else(|| anyhow::anyhow!("approval is no longer pending"))?;
-        self.view.lock().await.approvals.remove(&id);
+        self.view
+            .lock()
+            .await
+            .approvals
+            .remove(&id);
         self.sync_user_input().await;
         request
             .decision
@@ -911,7 +1169,8 @@ impl Actor {
         if let Some(clock) = &mut self.view.lock().await.clock {
             clock.pause();
         }
-        self.pending.insert(self.approval_id, request);
+        self.pending
+            .insert(self.approval_id, request);
     }
 
     async fn finish_run(&mut self) {
@@ -923,14 +1182,22 @@ impl Actor {
             AgentEvent::Failed { error } => Some(error),
             _ => None,
         };
-        let saved = self.setup.session.finish(status, history).await;
+        let saved = self
+            .setup
+            .session
+            .finish(status, history)
+            .await;
         if let Ok(mut workspace) = self.workspace.write() {
             *workspace = self.setup.resources.workspace.clone();
         }
         self.questions.update(&self.setup);
         let status = if saved.is_ok() { status } else { "failed" };
         let mut view = self.view.lock().await;
-        if let Some(error) = error.or_else(|| saved.err().map(|error| error.to_string())) {
+        if let Some(error) = error.or_else(|| {
+            saved
+                .err()
+                .map(|error| error.to_string())
+        }) {
             view.push(Update::agent(AgentEvent::Failed { error }));
         }
         self.progress.clear();
@@ -982,7 +1249,10 @@ impl Actor {
             .into_iter()
             .rev()
             .find(|change| {
-                !change.undone && path.as_ref().is_none_or(|path| path == &change.change.path)
+                !change.undone
+                    && path
+                        .as_ref()
+                        .is_none_or(|path| path == &change.change.path)
             })
             .ok_or_else(|| anyhow::anyhow!("当前会话没有匹配的可撤销写入"))?;
         let writer = self.setup.resources.undo_writer.clone();
@@ -991,8 +1261,12 @@ impl Actor {
         let cancellation = CancellationToken::new();
         let token = cancellation.clone();
         let task = tokio::spawn(async move {
-            let output = writer.restore(change.change.clone(), token).await?;
-            store.record_workspace_undo(&session, &change).await?;
+            let output = writer
+                .restore(change.change.clone(), token)
+                .await?;
+            store
+                .record_workspace_undo(&session, &change)
+                .await?;
             Ok(output)
         });
         self.undo = Some(Undo {

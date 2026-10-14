@@ -6,29 +6,41 @@ pub(super) fn events(workspace: &str, live: bool) -> VecDeque<Value> {
     let mut events = VecDeque::new();
     for index in 1..=5 {
         if index > 1 {
-            events.push_back(json!({"Agent":{"Model":{"ReasoningDelta":format!(
-                "检查第 {index} 个命令前的状态。"
-            )}}}));
+            events.push_back(json!({
+                "Agent": {
+                    "Model": {
+                        "ReasoningDelta": format!("检查第 {index} 个命令前的状态。")
+                    }
+                }
+            }));
         }
         let file = matches!(index, 1 | 5);
         let arguments = if file {
-            json!({"path":format!("src/disclosure-{index:02}.txt")})
+            json!({
+                "path": format!("src/disclosure-{index:02}.txt")
+            })
         } else {
             json!({
-                "command":format!("printf 'disclosure-{index:02}\\n'"),
-                "cwd":workspace,
-                "timeout_seconds":30,
-                "background":false,
+                "command": format!("printf 'disclosure-{index:02}\\n'"),
+                "cwd": workspace,
+                "timeout_seconds": 30,
+                "background": false,
             })
         };
         let call = json!({
-            "id":format!("disclosure-{index:02}"),
-            "function":{
-                "name":if file { "read_file" } else { "run_command" },
-                "arguments":serde_json::to_string(&arguments).unwrap(),
+            "id": format!("disclosure-{index:02}"),
+            "function": {
+                "name": if file { "read_file" } else { "run_command" },
+                "arguments": serde_json::to_string(&arguments).unwrap(),
             },
         });
-        events.push_back(json!({"Agent":{"ToolStarted":{"call":call}}}));
+        events.push_back(json!({
+            "Agent": {
+                "ToolStarted": {
+                    "call": call
+                }
+            }
+        }));
         let lines = match index {
             1 => 50,
             5 => 30,
@@ -41,39 +53,68 @@ pub(super) fn events(workspace: &str, live: bool) -> VecDeque<Value> {
             stdout
         } else {
             serde_json::to_string(&json!({
-                "exit_code":0,
-                "elapsed":{"secs":0,"nanos":250000000},
-                "stdout":stdout,
-                "stderr":"",
-                "timed_out":false,
-                "cancelled":false,
-                "output_truncated":false,
-                "retained_output_truncated":false,
-                "sandbox":"native",
+                "exit_code": 0,
+                "elapsed": {
+                    "secs": 0,
+                    "nanos": 250_000_000
+                },
+                "stdout": stdout,
+                "stderr": "",
+                "timed_out": false,
+                "cancelled": false,
+                "output_truncated": false,
+                "retained_output_truncated": false,
+                "sandbox": "native",
             }))
             .unwrap()
         };
-        events.push_back(json!({"Agent":{"ToolFinished":{
-            "call":call,"content":content,"changes":[],
-        }}}));
+        events.push_back(json!({
+            "Agent": {
+                "ToolFinished": {
+                    "call": call,
+                    "content": content,
+                    "changes": [],
+                }
+            }
+        }));
         if live && index == 1 {
             // One event is delivered per poll, leaving the first completed
             // result available for expansion while the group keeps running.
-            events.extend((0..120).map(|_| json!({"Agent":{"Model":{"ReasoningDelta":""}}})));
+            events.extend((0..120).map(|_| {
+                json!({
+                    "Agent": {
+                        "Model": {
+                            "ReasoningDelta": ""
+                        }
+                    }
+                })
+            }));
         }
     }
-    events.push_back(json!({"Agent":{"Model":{"TextDelta":"DISCLOSURES-END：五个命令已完成。"}}}));
+    events.push_back(json!({
+        "Agent": {
+            "Model": {
+                "TextDelta": "DISCLOSURES-END：五个命令已完成。"
+            }
+        }
+    }));
     events
 }
 
 pub(super) fn flow_events() -> VecDeque<Value> {
     let first = json!({
-        "id":"disclosure-flow-first",
-        "function":{"name":"read_file","arguments":"{\"path\":\"src/main.rs\"}"},
+        "id": "disclosure-flow-first",
+        "function": {
+            "name": "read_file",
+            "arguments": "{\"path\":\"src/main.rs\"}"
+        },
     });
     let resumed = json!({
-        "id":"disclosure-flow-resumed",
-        "function":{"name":"read_file","arguments":"{\"path\":\"Cargo.toml\"}"},
+        "id": "disclosure-flow-resumed",
+        "function": {
+            "name": "read_file",
+            "arguments": "{\"path\":\"Cargo.toml\"}"
+        },
     });
     let reasoning = format!(
         "FLOW-REASONING-BEGIN: The provided text highlights a duplicated phrase within a new article, specifically copied from another previously corrected article. This indicates a potential copy-paste error during the new article's creation. The goal is to address this duplicated content while retaining its original meaning.\n\n\
@@ -86,14 +127,30 @@ pub(super) fn flow_events() -> VecDeque<Value> {
     [
         json!({"Agent":{"Model":{"ReasoningDelta":reasoning}}}),
         json!({"Agent":{"ToolStarted":{"call":first}}}),
-        json!({"Agent":{"ToolFinished":{"call":first,"content":"FLOW-FIRST-TOOL: source inspected","changes":[]}}}),
+        json!({
+            "Agent": {
+                "ToolFinished": {
+                    "call": first,
+                    "content": "FLOW-FIRST-TOOL: source inspected",
+                    "changes": []
+                }
+            }
+        }),
         // An empty model delta must not end the execution presentation.
         json!({"Agent":{"Model":{"TextDelta":""}}}),
         json!({"Agent":{"Model":{"TextDelta":"FLOW-FIRST: 初步检查已完成。"}}}),
         json!({"Agent":{"Model":{"ReasoningDelta":"FLOW-LATE-REASONING: 中途输出文字后，思考和工具记录应保持展开。"}}}),
         json!({"Agent":{"Model":{"TextDelta":" FLOW-CONTINUATION: 继续说明检查进展，任务还未完成。"}}}),
         json!({"Agent":{"ToolStarted":{"call":resumed}}}),
-        json!({"Agent":{"ToolFinished":{"call":resumed,"content":"FLOW-RESUMED-TOOL: manifest inspected","changes":[]}}}),
+        json!({
+            "Agent": {
+                "ToolFinished": {
+                    "call": resumed,
+                    "content": "FLOW-RESUMED-TOOL: manifest inspected",
+                    "changes": []
+                }
+            }
+        }),
         json!({"Agent":{"Model":{"ReasoningDelta":"FLOW-RESUMED-REASONING: 后续工具执行继续，展开状态应保持稳定。"}}}),
         json!({"Agent":{"Model":{"TextDelta":"FLOW-FINAL: 补充检查完成，开始最终答复。"}}}),
     ]

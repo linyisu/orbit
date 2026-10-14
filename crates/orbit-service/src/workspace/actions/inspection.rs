@@ -37,14 +37,23 @@ pub(super) async fn inspect(setup: &PreparedWorkspace, section: Inspection) -> R
         Inspection::Diagnostics => report(
             "诊断记录",
             if session.is_persisted() {
-                orbit_store::diagnostics::text(&session.store.diagnostics(session.id()).await?)
+                orbit_store::diagnostics::text(
+                    &session
+                        .store
+                        .diagnostics(session.id())
+                        .await?,
+                )
             } else {
                 "尚未开始会话，暂无诊断记录。".into()
             },
         ),
         Inspection::Changes => {
-            let listing =
-                super::super::changes::list(&session.store.workspace_changes(session.id()).await?);
+            let listing = super::super::changes::list(
+                &session
+                    .store
+                    .workspace_changes(session.id())
+                    .await?,
+            );
             report(
                 "文件改动",
                 format!(
@@ -54,7 +63,10 @@ pub(super) async fn inspect(setup: &PreparedWorkspace, section: Inspection) -> R
             )
         }
         Inspection::Diff { path } => {
-            let changes = session.store.workspace_changes(session.id()).await?;
+            let changes = session
+                .store
+                .workspace_changes(session.id())
+                .await?;
             let text = match path {
                 Some(path) => super::super::changes::diff(&changes, &path),
                 None => super::super::changes::list(&changes),
@@ -64,7 +76,10 @@ pub(super) async fn inspect(setup: &PreparedWorkspace, section: Inspection) -> R
         Inspection::Status => report("会话状态", status(setup).await?),
         Inspection::Context => {
             let mut history = if session.is_persisted() {
-                session.store.live_context(session.id()).await?
+                session
+                    .store
+                    .live_context(session.id())
+                    .await?
             } else {
                 session.snapshot.history.clone()
             };
@@ -113,7 +128,11 @@ pub(super) async fn inspect(setup: &PreparedWorkspace, section: Inspection) -> R
             report(
                 "上下文预算",
                 format!(
-                    "原始估算：{estimated} tokens\n校准估算：{} tokens\n输入窗口：{} · 输出上限：{} · 请求预算：{}\n自动整理：{}\n项目指令：{}\nSkills：{}\n\n系统提示：约 {system} tokens\n项目指令内容：约 {rules} tokens\n历史消息：约 {conversation} tokens\n工具定义：约 {definitions} tokens\n代码概览工具结果：约 {overview} tokens\n任务与会话记忆：约 {project_state} tokens\n校准：{} 个服务端样本 · 系数 {:.3}\n分类估算包含各自协议开销，不能相加为总计。",
+                    "原始估算：{estimated} tokens\n校准估算：{} tokens\n输入窗口：{} · 输出上限：{} · \
+                        请求预算：{}\n自动整理：{}\n项目指令：{}\nSkills：{}\n\n系统提示：约 {system} tokens\n项目指令内容：约 \
+                        {rules} tokens\n历史消息：约 {conversation} tokens\n工具定义：约 {definitions} \
+                        tokens\n代码概览工具结果：约 {overview} tokens\n任务与会话记忆：约 {project_state} \
+                        tokens\n校准：{} 个服务端样本 · 系数 {:.3}\n分类估算包含各自协议开销，不能相加为总计。",
                     calibration.estimate(estimated),
                     budget.input_context_tokens,
                     budget.max_output_tokens,
@@ -155,7 +174,11 @@ fn tool_context_tokens(history: &[ChatMessage], name: &str) -> usize {
     let messages = history
         .iter()
         .filter(|message| {
-            matches!(message, ChatMessage::Tool { tool_call_id, .. } if ids.contains(tool_call_id.as_str()))
+            matches!(
+                message,
+                ChatMessage::Tool { tool_call_id, .. }
+                    if ids.contains(tool_call_id.as_str())
+            )
         })
         .cloned()
         .collect::<Vec<_>>();
@@ -175,23 +198,35 @@ async fn status(setup: &PreparedWorkspace) -> Result<String> {
     } else {
         "无临时日志；完整输出不跨任务或重启保留"
     };
-    let baseline = session.git_baseline.as_ref().map_or_else(
-        || "非 Git 工作区或无法读取".into(),
-        |value| {
-            format!(
-                "{} · HEAD {} · 初始改动 {} 项{}",
-                value["branch"]["head"].as_str().unwrap_or("detached"),
-                value["branch"]["oid"].as_str().unwrap_or("unknown"),
-                value["entries"].as_array().map_or(0, Vec::len),
-                if value["has_more"].as_bool() == Some(true) {
-                    "（达到扫描上限）"
-                } else {
-                    ""
-                }
-            )
-        },
-    );
-    let records = session.store.verification_records(session.id()).await?;
+    let baseline = session
+        .git_baseline
+        .as_ref()
+        .map_or_else(
+            || "非 Git 工作区或无法读取".into(),
+            |value| {
+                format!(
+                    "{} · HEAD {} · 初始改动 {} 项{}",
+                    value["branch"]["head"]
+                        .as_str()
+                        .unwrap_or("detached"),
+                    value["branch"]["oid"]
+                        .as_str()
+                        .unwrap_or("unknown"),
+                    value["entries"]
+                        .as_array()
+                        .map_or(0, Vec::len),
+                    if value["has_more"].as_bool() == Some(true) {
+                        "（达到扫描上限）"
+                    } else {
+                        ""
+                    }
+                )
+            },
+        );
+    let records = session
+        .store
+        .verification_records(session.id())
+        .await?;
     let passed = records
         .iter()
         .filter(|record| record.exit_code == Some(0) && !record.timed_out && !record.cancelled)
@@ -209,7 +244,9 @@ async fn status(setup: &PreparedWorkspace) -> Result<String> {
         },
     );
     Ok(format!(
-        "会话：{}\n工作目录：{}\n数据库：{}\n模型：{}\n执行：{}\n命令原始输出：{output}\nGit 基线：{baseline}\n上下文：{} 条持久化消息\n项目指令：{}\nSkills：{} 个\nMCP：{} 个 server\n超时：{}s（模型流空闲） · 命令默认 {}s / 最大 {}s\n审批：{:?}\n工具：{}\n命令执行：{} 次 · 成功退出 {} · 异常结束 {} · 最近 {recent}\n{}",
+        "会话：{}\n工作目录：{}\n数据库：{}\n模型：{}\n执行：{}\n命令原始输出：{output}\nGit 基线：{baseline}\n上下文：{} \
+            条持久化消息\n项目指令：{}\nSkills：{} 个\nMCP：{} 个 server\n超时：{}s（模型流空闲） · 命令默认 {}s / 最大 \
+            {}s\n审批：{:?}\n工具：{}\n命令执行：{} 次 · 成功退出 {} · 异常结束 {} · 最近 {recent}\n{}",
         session.id(),
         session.snapshot.session.workspace,
         session.store.path().display(),
@@ -219,9 +256,17 @@ async fn status(setup: &PreparedWorkspace) -> Result<String> {
         budget.instructions.source_summary(),
         budget.skills.len(),
         budget.mcp_statuses.len(),
-        resources.model.config().timeout.as_secs(),
-        resources.command_limits.default_timeout_seconds,
-        resources.command_limits.max_timeout_seconds,
+        resources
+            .model
+            .config()
+            .timeout
+            .as_secs(),
+        resources
+            .command_limits
+            .default_timeout_seconds,
+        resources
+            .command_limits
+            .max_timeout_seconds,
         resources.mode,
         resources
             .tools

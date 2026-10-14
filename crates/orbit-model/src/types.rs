@@ -129,6 +129,7 @@ impl PartialEq for Attachment {
             && self.is_temporary() == other.is_temporary()
     }
 }
+
 impl Eq for Attachment {}
 
 /// An opaque resource owner keeps an imported file alive through delivery and
@@ -147,11 +148,12 @@ impl PartialEq for TemporaryImage {
         self.path == other.path
     }
 }
+
 impl Eq for TemporaryImage {}
 
 impl Attachment {
     /// Shared byte limit for imported, transmitted and displayed images.
-    pub const MAX_IMAGE_BYTES: usize = 20 * 1024 * 1024;
+    pub const MAX_IMAGE_BYTES: usize = 20 * 1_024 * 1_024;
 
     pub fn name(&self) -> &str {
         match self {
@@ -261,7 +263,11 @@ impl Attachment {
         if !metadata.is_file() || metadata.len() > Self::MAX_IMAGE_BYTES as u64 {
             return Err(too_large());
         }
-        if !file.metadata().map_err(io_error)?.is_file() {
+        if !file
+            .metadata()
+            .map_err(io_error)?
+            .is_file()
+        {
             return Err(too_large());
         }
         let mut bytes = Vec::new();
@@ -560,7 +566,13 @@ impl std::fmt::Debug for ModelConfig {
             .debug_struct("ModelConfig")
             .field("api_format", &self.api_format)
             .field("base_url", &self.base_url)
-            .field("api_key", &self.api_key.as_ref().map(|_| "[redacted]"))
+            .field(
+                "api_key",
+                &self
+                    .api_key
+                    .as_ref()
+                    .map(|_| "[redacted]"),
+            )
             .field("credential", &self.credential)
             .field("model", &self.model)
             .field("timeout", &self.timeout)
@@ -637,19 +649,27 @@ mod tests {
     #[test]
     fn test_reasoning_effort_parsing_and_labels() {
         assert_eq!(
-            "none".parse::<ReasoningEffort>().unwrap(),
+            "none"
+                .parse::<ReasoningEffort>()
+                .unwrap(),
             ReasoningEffort::None
         );
         assert_eq!(
-            "off".parse::<ReasoningEffort>().unwrap(),
+            "off"
+                .parse::<ReasoningEffort>()
+                .unwrap(),
             ReasoningEffort::None
         );
         assert_eq!(
-            "disabled".parse::<ReasoningEffort>().unwrap(),
+            "disabled"
+                .parse::<ReasoningEffort>()
+                .unwrap(),
             ReasoningEffort::None
         );
         assert_eq!(
-            "high".parse::<ReasoningEffort>().unwrap(),
+            "high"
+                .parse::<ReasoningEffort>()
+                .unwrap(),
             ReasoningEffort::High
         );
 

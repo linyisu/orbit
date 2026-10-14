@@ -27,6 +27,7 @@ impl Store {
         })
         .await
     }
+
     pub async fn user_input(&self, session: &str, id: &str) -> Result<Option<Record>> {
         self.read_access(|conn| async move {
             inputs::Entity::find()
@@ -39,6 +40,7 @@ impl Store {
         })
         .await
     }
+
     pub async fn user_input_history(&self, session: &str, before: Option<i64>) -> Result<History> {
         self.read_access(|conn| async move {
             let mut query = inputs::Entity::find().filter(inputs::Column::SessionId.eq(session));
@@ -65,6 +67,7 @@ impl Store {
         })
         .await
     }
+
     pub async fn interrupt_user_inputs(&self, session: &str) -> Result<()> {
         self.write_access(|conn| async move {
             let payload = sea_query::Expr::col(inputs::Column::Payload);

@@ -12,6 +12,7 @@ pub struct Model {
     pub result: Option<String>,
     pub delivered: bool,
 }
+
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
 pub enum Relation {
     #[sea_orm(
@@ -33,6 +34,7 @@ pub enum Relation {
     )]
     ParentSession,
 }
+
 impl ActiveModelBehavior for ActiveModel {}
 
 impl Related<super::agent_sessions::Entity> for Entity {
@@ -40,11 +42,13 @@ impl Related<super::agent_sessions::Entity> for Entity {
         Relation::ChildSession.def()
     }
 }
+
 impl Related<super::runs::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::ParentRun.def()
     }
 }
+
 impl Related<super::sessions::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::ParentSession.def()

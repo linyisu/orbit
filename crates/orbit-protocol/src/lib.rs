@@ -1,3 +1,6 @@
+//! Versioned workspace requests, events, pagination and transport framing.
+//! Schema changes must preserve the declared compatibility floor.
+
 pub mod admin;
 pub mod files;
 pub mod input_queue;
@@ -16,23 +19,30 @@ use std::io;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
-// Version 25 adds target-owned MCP source discovery and dependency installation.
+/// Current request and event schema version advertised during the handshake.
 pub const VERSION: u32 = 26;
-// Steering receipts identify the durable input independently of its consumption.
+/// Oldest peer schema accepted by this implementation.
 pub const MIN_COMPATIBLE_VERSION: u32 = 15;
 
+/// Accept peers whose schema version lies within the supported compatibility range.
 pub fn supports_version(version: u32) -> bool {
     (MIN_COMPATIBLE_VERSION..=VERSION).contains(&version)
 }
-// Keep framing stable so Hello can report incompatible schema versions.
+/// Stable transport marker used before schema compatibility is negotiated.
 pub const PREAMBLE: &[u8] = b"\0ORBIT-WORKSPACE/1\n";
-pub const MAX_FRAME_BYTES: usize = 32 * 1024 * 1024;
-pub const PAGE_BYTES: usize = 1024 * 1024;
+/// Maximum encoded JSON payload accepted for one transport frame.
+pub const MAX_FRAME_BYTES: usize = 32 * 1_024 * 1_024;
+/// Default byte budget for paginated history responses.
+pub const PAGE_BYTES: usize = 1_024 * 1_024;
+/// Default event count requested in one history page.
 pub const PAGE_EVENTS: usize = 128;
 
+const MAX_PREAMBLE_SCAN_BYTES: usize = 16 * 1_024;
+
+/// Find the transport marker after bounded startup noise from SSH or shell initialization.
 pub async fn read_preamble(reader: &mut (impl AsyncRead + Unpin)) -> io::Result<()> {
     let mut matched = 0;
-    for _ in 0..16384 {
+    for _ in 0..MAX_PREAMBLE_SCAN_BYTES {
         let byte = reader.read_u8().await?;
         matched = if byte == PREAMBLE[matched] {
             matched + 1
@@ -431,7 +441,9 @@ pub async fn write<T: Serialize>(
             "workspace frame exceeds limit",
         ));
     }
-    writer.write_u32(bytes.len() as u32).await?;
+    writer
+        .write_u32(bytes.len() as u32)
+        .await?;
     writer.write_all(&bytes).await?;
     writer.flush().await
 }
@@ -444,13 +456,24 @@ mod tests {
     fn settings_workspace_guards_are_optional_for_legacy_clients() {
         for legacy in [
             serde_json::json!({
-                "method": "resources", "session": "session", "action": "Skills"
+                "method": "resources",
+                "session": "session",
+                "action": "Skills"
             }),
             serde_json::json!({
-                "method": "plugins", "session": "session", "action": { "action": "list" }
+                "method": "plugins",
+                "session": "session",
+                "action": {
+                    "action": "list"
+                }
             }),
             serde_json::json!({
-                "method": "tasks", "session": "session", "action": { "action": "list", "include_completed": true }
+                "method": "tasks",
+                "session": "session",
+                "action": {
+                    "action": "list",
+                    "include_completed": true
+                }
             }),
         ] {
             let request: Request = serde_json::from_value(legacy.clone()).unwrap();
@@ -494,10 +517,14 @@ mod tests {
         let hello = serde_json::json!({
             "type": "hello",
             "value": {
-                "version": VERSION, "workspace": "/project",
+                "version": VERSION,
+                "workspace": "/project",
                 "capabilities": {
-                    "system": "Linux", "architecture": "x86_64", "shell": "sh",
-                    "native_processes": true, "files": true,
+                    "system": "Linux",
+                    "architecture": "x86_64",
+                    "shell": "sh",
+                    "native_processes": true,
+                    "files": true,
                     "features": []
                 }
             }
@@ -537,11 +564,18 @@ mod tests {
             .await
             .unwrap();
         });
-        assert!(
-            matches!(read::<Request>(&mut reader).await.unwrap(), Request::Open { resume: Some(id), .. } if id == "中文\n会话")
-        );
         assert!(matches!(
-            read::<Request>(&mut reader).await.unwrap(),
+            read::<Request>(&mut reader)
+                .await
+                .unwrap(),
+            Request::Open {
+                resume: Some(id), ..
+            } if id == "中文\n会话"
+        ));
+        assert!(matches!(
+            read::<Request>(&mut reader)
+                .await
+                .unwrap(),
             Request::Hello {
                 version: VERSION,
                 workspace: None
@@ -670,6 +704,7 @@ pub struct Report {
     pub title: String,
     pub text: String,
 }
+
 /// Capability categories omitted from both tool registration and model requests.
 #[derive(
     Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, serde::Serialize, serde::Deserialize,

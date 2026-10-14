@@ -47,6 +47,7 @@ pub(super) struct Mcp {
     status_error: Option<String>,
     status_task: Task<()>,
 }
+
 impl Mcp {
     pub(super) fn has_pending_work(&self) -> bool {
         self.busy || self.editing || self.importer.is_some()
@@ -122,6 +123,7 @@ impl Mcp {
         });
         view
     }
+
     pub(super) fn bind_context(
         &mut self,
         session: Option<String>,
@@ -141,9 +143,11 @@ impl Mcp {
         self.applied = false;
         self.refresh_status(cx);
     }
+
     fn refresh_status(&mut self, cx: &mut Context<Self>) {
         self.request_status(Action::Mcp, cx);
     }
+
     fn apply_current(&mut self, cx: &mut Context<Self>) {
         let Some(draft) = &self.draft else { return };
         let config = orbit_tools::mcp::McpConfig {
@@ -166,6 +170,7 @@ impl Mcp {
             cx,
         );
     }
+
     fn request_status(&mut self, action: Action, cx: &mut Context<Self>) {
         if self.status_busy {
             return;
@@ -236,20 +241,26 @@ impl Mcp {
         });
         cx.notify();
     }
+
     fn load(&mut self, cx: &mut Context<Self>) {
         if self.busy {
             return;
         }
         let path = self.path.clone();
-        let job = self.runtime.spawn_blocking(move || McpDraft::load(&path));
+        let job = self
+            .runtime
+            .spawn_blocking(move || McpDraft::load(&path));
         self.receive(job, false, cx);
     }
+
     fn reload_base(&mut self, cx: &mut Context<Self>) {
         if self.busy {
             return;
         }
         let path = self.path.clone();
-        let job = self.runtime.spawn_blocking(move || McpDraft::load(&path));
+        let job = self
+            .runtime
+            .spawn_blocking(move || McpDraft::load(&path));
         self.busy = true;
         self.error = None;
         self.base_reloaded = false;
@@ -275,6 +286,7 @@ impl Mcp {
         });
         cx.notify();
     }
+
     fn receive(
         &mut self,
         job: tokio::task::JoinHandle<anyhow::Result<McpDraft>>,
@@ -303,13 +315,21 @@ impl Mcp {
         });
         cx.notify();
     }
+
     fn edit(&mut self, name: Option<String>, window: &mut Window, cx: &mut Context<Self>) {
         self.imported = false;
-        self.template = name
-            .as_ref()
-            .and_then(|name| self.draft.as_ref()?.servers().get(name).cloned());
+        self.template = name.as_ref().and_then(|name| {
+            self.draft
+                .as_ref()?
+                .servers()
+                .get(name)
+                .cloned()
+        });
         self.existing = name.clone();
-        self.enabled = self.template.as_ref().is_some_and(|s| s.enabled);
+        self.enabled = self
+            .template
+            .as_ref()
+            .is_some_and(|s| s.enabled);
         self.editing = true;
         self.error = None;
         self.saved = false;
@@ -369,8 +389,14 @@ impl Mcp {
         });
         cx.notify();
     }
+
     fn save(&mut self, cx: &mut Context<Self>) {
-        let name = self.name.read(cx).value().trim().to_string();
+        let name = self
+            .name
+            .read(cx)
+            .value()
+            .trim()
+            .to_string();
         if self.existing.is_none()
             && self
                 .draft
@@ -389,7 +415,12 @@ impl Mcp {
                 return;
             }
         };
-        let Ok(timeout_seconds) = self.timeout.read(cx).value().parse::<u64>() else {
+        let Ok(timeout_seconds) = self
+            .timeout
+            .read(cx)
+            .value()
+            .parse::<u64>()
+        else {
             self.error = Some("超时应为正整数（秒）。".into());
             cx.notify();
             return;
@@ -401,7 +432,12 @@ impl Mcp {
         }
         let server = McpServerConfig {
             transport: "stdio".into(),
-            command: self.command.read(cx).value().trim().into(),
+            command: self
+                .command
+                .read(cx)
+                .value()
+                .trim()
+                .into(),
             args: self
                 .args
                 .read(cx)
@@ -424,6 +460,7 @@ impl Mcp {
         };
         self.persist(name, Some(server), cx);
     }
+
     fn persist(&mut self, name: String, server: Option<McpServerConfig>, cx: &mut Context<Self>) {
         if self.busy {
             return;
@@ -462,6 +499,7 @@ impl Mcp {
         });
         cx.notify();
     }
+
     fn import_source(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(session) = self.session.clone() else {
             return;
@@ -512,7 +550,11 @@ impl Mcp {
                 .checked(allowed)
                 .disabled(self.startup_override)
                 .on_click(cx.listener(|view, allowed, _, cx| {
-                    view.startup_revision = Some(Preferences::set_mcp_start(&view.path, *allowed, cx));
+                    view
+                        .startup_revision = Some(Preferences::set_mcp_start(&view
+                        .path,
+                        *allowed,
+                        cx));
                     cx.notify();
                 })))
             .child(div().text_sm().whitespace_normal().text_color(cx.theme().muted_foreground)
@@ -585,6 +627,7 @@ impl Mcp {
         });
     }
 }
+
 impl Render for Mcp {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if let Some(importer) = &self.importer {
@@ -597,105 +640,166 @@ impl Render for Mcp {
         let mut content = v_flex().w_full().max_w(rems(60.)).gap_4()
             .child(self.startup_control(cx))
             .child(h_flex().gap_3()
-                .child(div().flex_1().min_w_0().whitespace_normal().text_sm().text_color(cx.theme().muted_foreground)
-                    .child("配置保存在本机，可应用到当前会话，也用于新建会话。支持 stdio 服务；SSH / WSL 会话在目标机器启动命令。参数、依赖和路径也须在目标机器可用。"))
+                .child(div()
+                    .flex_1()
+                    .min_w_0()
+                    .whitespace_normal()
+                    .text_sm()
+                    .text_color(cx
+                    .theme()
+                    .muted_foreground)
+                    .child("配置保存在本机，可应用到当前会话，也用于新建会话。支持 stdio 服务；SSH / WSL \
+                        会话在目标机器启动命令。参数、依赖和路径也须在目标机器可用。"))
                 .child(Button::new("mcp-refresh").ghost().small().label("刷新")
                     .disabled(self.busy || self.status_busy || self.editing)
                     .on_click(cx.listener(|view, _, _, cx| {
                         view.load(cx);
                         view.refresh_status(cx);
                     }))))
-            .when(self.saved && !self.applied, |view| view.child(div().text_sm().text_color(cx.theme().muted_foreground)
+            .when(self
+                .saved
+                && !self
+                .applied,
+                |view| view
+                .child(div()
+                .text_sm()
+                .text_color(cx
+                .theme()
+                .muted_foreground)
                 .child("已保存。点击“应用到当前会话”以重新连接。")))
-            .when(self.applied, |view| view.child(div().text_sm().text_color(cx.theme().muted_foreground)
+            .when(self
+                .applied,
+                |view| view
+                .child(div()
+                .text_sm()
+                .text_color(cx
+                .theme()
+                .muted_foreground)
                 .child("连接结果已更新，下一次发送将使用当前可用工具。")))
-            .when(self.base_reloaded, |view| view.child(div().text_sm().text_color(cx.theme().muted_foreground)
+            .when(self
+                .base_reloaded,
+                |view| view
+                .child(div()
+                .text_sm()
+                .text_color(cx
+                .theme()
+                .muted_foreground)
                 .child("已重载最新配置，表单内容已保留。请检查后再次保存。")))
-            .when_some(self.error.clone(), |view, error| view.child(div().text_sm().text_color(cx.theme().danger).child(error)))
+            .when_some(self
+                .error
+                .clone(),
+                |view,
+                error| view
+                .child(div()
+                .text_sm()
+                .text_color(cx
+                .theme()
+                .danger)
+                .child(error)))
             .when(self.editing && self.error.is_some(), |view| view.child(h_flex().child(
                 Button::new("mcp-reload-base").small().label("保留表单并重载配置")
-                    .disabled(self.busy).on_click(cx.listener(|view, _, _, cx| view.reload_base(cx))),
+                    .disabled(self
+                        .busy)
+                        .on_click(cx
+                        .listener(|view,
+                        _,
+                        _,
+                        cx| view
+                        .reload_base(cx))),
             )));
         if self.editing {
-            return content.child(
-                v_flex()
-                    .gap_3()
-                    .when(self.imported, |view| view.child(div().text_sm().whitespace_normal().text_color(cx.theme().muted_foreground).child("来源已准备好。请核对名称、启动参数和环境变量，再保存并启用。")))
-                    .child("服务器名称")
-                    .child(
-                        Input::new(&self.name)
-                            .aria_label("服务器名称")
-                            .disabled(self.busy || self.existing.is_some()),
-                    )
-                    .child("启动命令")
-                    .child(
-                        Input::new(&self.command)
-                            .aria_label("启动命令")
-                            .disabled(self.busy),
-                    )
-                    .child("参数 · 每行一个")
-                    .child(
-                        Textarea::new(&self.args)
-                            .aria_label("启动参数，每行一个")
-                            .disabled(self.busy),
-                    )
-                    .child("环境变量 · 每行 KEY=value，可加成对引号")
-                    .child(
-                        Textarea::new(&self.env)
-                            .aria_label("环境变量，每行一个 KEY=value")
-                            .disabled(self.busy),
-                    )
-                    .child("请求超时（秒）")
-                    .child(
-                        div()
-                            .w_32()
-                            .child(NumberInput::new(&self.timeout).disabled(self.busy)),
-                    )
-                    .child("允许的工具 · 每行一个原始工具名")
-                    .child(
-                        Textarea::new(&self.tools)
-                            .aria_label("允许的 MCP 工具，每行一个原始工具名")
-                            .disabled(self.busy),
-                    )
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(cx.theme().muted_foreground)
-                            .child("工具列表留空时允许所有工具；工具仍遵循当前会话的审批设置。"),
-                    )
-                    .child(
-                        Checkbox::new("mcp-enabled")
-                            .label("启用服务器")
-                            .checked(self.enabled)
-                            .disabled(self.busy)
-                            .on_click(cx.listener(|v, value, _, cx| {
-                                v.enabled = *value;
-                                cx.notify();
-                            })),
-                    )
-                    .child(
-                        h_flex()
-                            .gap_2()
-                            .child(
-                                Button::new("mcp-save")
-                                    .primary()
-                                    .label(if self.busy { "处理中…" } else { "保存" })
-                                    .disabled(self.busy)
-                                    .on_click(cx.listener(|v, _, _, cx| v.save(cx))),
-                            )
-                            .child(
-                                Button::new("mcp-cancel")
-                                    .label("返回列表")
-                                    .disabled(self.busy)
-                                    .on_click(cx.listener(|v, _, _, cx| {
-                                        v.editing = false;
-                                        v.error = None;
-                                        v.base_reloaded = false;
-                                        cx.notify();
-                                    })),
-                            ),
-                    ),
-            ).into_any_element();
+            return content
+                .child(
+                    v_flex()
+                        .gap_3()
+                        .when(self.imported, |view| {
+                            view
+                        .child(div()
+                        .text_sm()
+                        .whitespace_normal()
+                        .text_color(cx
+                        .theme()
+                        .muted_foreground)
+                        .child("来源已准备好。请核对名称、启动参数和环境变量，再保存并启用。"))
+                        })
+                        .child("服务器名称")
+                        .child(
+                            Input::new(&self.name)
+                                .aria_label("服务器名称")
+                                .disabled(self.busy || self.existing.is_some()),
+                        )
+                        .child("启动命令")
+                        .child(
+                            Input::new(&self.command)
+                                .aria_label("启动命令")
+                                .disabled(self.busy),
+                        )
+                        .child("参数 · 每行一个")
+                        .child(
+                            Textarea::new(&self.args)
+                                .aria_label("启动参数，每行一个")
+                                .disabled(self.busy),
+                        )
+                        .child("环境变量 · 每行 KEY=value，可加成对引号")
+                        .child(
+                            Textarea::new(&self.env)
+                                .aria_label("环境变量，每行一个 KEY=value")
+                                .disabled(self.busy),
+                        )
+                        .child("请求超时（秒）")
+                        .child(
+                            div()
+                                .w_32()
+                                .child(NumberInput::new(&self.timeout).disabled(self.busy)),
+                        )
+                        .child("允许的工具 · 每行一个原始工具名")
+                        .child(
+                            Textarea::new(&self.tools)
+                                .aria_label("允许的 MCP 工具，每行一个原始工具名")
+                                .disabled(self.busy),
+                        )
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(
+                                    "工具列表留空时允许所有工具；工具仍遵循当前会话的审批设置。",
+                                ),
+                        )
+                        .child(
+                            Checkbox::new("mcp-enabled")
+                                .label("启用服务器")
+                                .checked(self.enabled)
+                                .disabled(self.busy)
+                                .on_click(cx.listener(|v, value, _, cx| {
+                                    v.enabled = *value;
+                                    cx.notify();
+                                })),
+                        )
+                        .child(
+                            h_flex()
+                                .gap_2()
+                                .child(
+                                    Button::new("mcp-save")
+                                        .primary()
+                                        .label(if self.busy { "处理中…" } else { "保存" })
+                                        .disabled(self.busy)
+                                        .on_click(cx.listener(|v, _, _, cx| v.save(cx))),
+                                )
+                                .child(
+                                    Button::new("mcp-cancel")
+                                        .label("返回列表")
+                                        .disabled(self.busy)
+                                        .on_click(cx.listener(|v, _, _, cx| {
+                                            v.editing = false;
+                                            v.error = None;
+                                            v.base_reloaded = false;
+                                            cx.notify();
+                                        })),
+                                ),
+                        ),
+                )
+                .into_any_element();
         }
         let mut runtime = v_flex()
             .gap_3()
@@ -740,7 +844,12 @@ impl Render for Mcp {
                     )),
             )
             .when_some(self.status_error.clone(), |view, error| {
-                view.child(div().text_sm().text_color(cx.theme().danger).child(error))
+                view.child(
+                    div()
+                        .text_sm()
+                        .text_color(cx.theme().danger)
+                        .child(error),
+                )
             });
         if let Some(servers) = &self.statuses {
             if servers.is_empty() {
@@ -754,7 +863,10 @@ impl Render for Mcp {
             for server in servers {
                 let name = server.name.clone();
                 let expanded = self.expanded.contains(&name);
-                let detail = if server.detail.starts_with("启动需显式授权") {
+                let detail = if server
+                    .detail
+                    .starts_with("启动需显式授权")
+                {
                     if self.startup_override
                         || crate::preferences::Preferences::allows_mcp_start(&self.path, cx)
                     {
@@ -930,6 +1042,8 @@ impl Render for Mcp {
         } else if self.busy {
             content = content.child("正在加载…");
         }
-        content.child(runtime).into_any_element()
+        content
+            .child(runtime)
+            .into_any_element()
     }
 }

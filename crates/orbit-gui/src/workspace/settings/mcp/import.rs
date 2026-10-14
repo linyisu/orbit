@@ -20,6 +20,7 @@ pub(super) struct Importer {
     task: Task<()>,
     _source: Subscription,
 }
+
 impl EventEmitter<Event> for Importer {}
 impl Importer {
     pub(super) fn new(
@@ -41,7 +42,9 @@ impl Importer {
                 cx.notify();
             }
         });
-        source.focus_handle(cx).focus(window, cx);
+        source
+            .focus_handle(cx)
+            .focus(window, cx);
         Self {
             owner,
             session,
@@ -56,8 +59,14 @@ impl Importer {
             _source: events,
         }
     }
+
     fn scan(&mut self, cx: &mut Context<Self>) {
-        let source = self.source.read(cx).value().trim().to_owned();
+        let source = self
+            .source
+            .read(cx)
+            .value()
+            .trim()
+            .to_owned();
         if source.is_empty() || self.busy {
             return;
         }
@@ -65,6 +74,7 @@ impl Importer {
         self.selected = None;
         self.request(Action::ScanMcp { source }, cx);
     }
+
     fn install(&mut self, cx: &mut Context<Self>) {
         let Some((token, _)) = &self.scan else {
             return;
@@ -82,6 +92,7 @@ impl Importer {
             );
         }
     }
+
     fn request(&mut self, action: Action, cx: &mut Context<Self>) {
         let installing = matches!(action, Action::InstallMcp { .. });
         let session = self.session.clone();
@@ -127,14 +138,16 @@ impl Importer {
             let _ = entity.update(cx, |view, cx| {
                 view.busy = false;
                 view.installing = false;
-                let current = view.owner.upgrade().is_some_and(|owner| {
-                    let owner = owner.read(cx);
-                    owner.connected
-                        && owner
-                            .info
-                            .as_ref()
-                            .is_some_and(|info| info.id == session && info.workspace == workspace)
-                });
+                let current = view
+                    .owner
+                    .upgrade()
+                    .is_some_and(|owner| {
+                        let owner = owner.read(cx);
+                        owner.connected
+                            && owner.info.as_ref().is_some_and(|info| {
+                                info.id == session && info.workspace == workspace
+                            })
+                    });
                 if !current {
                     view.scan = None;
                     view.error =
@@ -170,62 +183,126 @@ impl Importer {
         cx.notify();
     }
 }
+
 impl Render for Importer {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let mut content = v_flex().w_full().min_w_0().gap_4()
-            .child(h_flex().child(Button::new("mcp-import-back").ghost().small().icon(IconName::ArrowLeft).label("返回 MCP 服务器")
-                .disabled(self.busy).on_click(cx.listener(|_, _, _, cx| cx.emit(Event::Closed)))))
-            .child(div().font_weight(FontWeight::SEMIBOLD).child("从来源导入 MCP"))
-            .child(div().text_sm().whitespace_normal().text_color(cx.theme().muted_foreground)
-                .child(format!("在 {} 获取来源。识别 .mcp.json / mcp.json 配置、Node.js bin 和 Python project.scripts；扫描时不运行仓库代码。", self.workspace)))
-            .child(h_flex().gap_2()
-                .child(div().flex_1().min_w_0().child(Input::new(&self.source).aria_label("MCP 来源").disabled(self.busy)))
-                .child(Button::new("mcp-scan-source").label("拉取并识别")
-                    .disabled(self.busy || self.source.read(cx).value().trim().is_empty())
-                    .on_click(cx.listener(|view, _, _, cx| view.scan(cx)))))
-            .when(self.busy, |view| view.child(h_flex().gap_2().child(Spinner::new().small()).child(if self.installing { "正在安装依赖，完成后进入配置…" } else { "正在获取并识别来源…" })))
-            .when_some(self.error.clone(), |view, error| view.child(div().text_sm().whitespace_normal().text_color(cx.theme().danger).child(error)));
+        let mut content = v_flex()
+            .w_full()
+            .min_w_0()
+            .gap_4()
+            .child(
+                h_flex().child(
+                    Button::new("mcp-import-back")
+                        .ghost()
+                        .small()
+                        .icon(IconName::ArrowLeft)
+                        .label("返回 MCP 服务器")
+                        .disabled(self.busy)
+                        .on_click(cx.listener(|_, _, _, cx| cx.emit(Event::Closed))),
+                ),
+            )
+            .child(
+                div()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child("从来源导入 MCP"),
+            )
+            .child(
+                div()
+                    .text_sm()
+                    .whitespace_normal()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(format!(
+                        "在 {} 获取来源。识别 .mcp.json / mcp.json 配置、Node.js bin 和 Python \
+                    project.scripts；扫描时不运行仓库代码。",
+                        self.workspace
+                    )),
+            )
+            .child(
+                h_flex()
+                    .gap_2()
+                    .child(
+                        div().flex_1().min_w_0().child(
+                            Input::new(&self.source)
+                                .aria_label("MCP 来源")
+                                .disabled(self.busy),
+                        ),
+                    )
+                    .child(
+                        Button::new("mcp-scan-source")
+                            .label("拉取并识别")
+                            .disabled(
+                                self.busy
+                                    || self
+                                        .source
+                                        .read(cx)
+                                        .value()
+                                        .trim()
+                                        .is_empty(),
+                            )
+                            .on_click(cx.listener(|view, _, _, cx| view.scan(cx))),
+                    ),
+            )
+            .when(self.busy, |view| {
+                view.child(
+                    h_flex()
+                        .gap_2()
+                        .child(Spinner::new().small())
+                        .child(if self.installing {
+                            "正在安装依赖，完成后进入配置…"
+                        } else {
+                            "正在获取并识别来源…"
+                        }),
+                )
+            })
+            .when_some(self.error.clone(), |view, error| {
+                view.child(
+                    div()
+                        .text_sm()
+                        .whitespace_normal()
+                        .text_color(cx.theme().danger)
+                        .child(error),
+                )
+            });
         if let Some((_, candidates)) = &self.scan {
             if candidates.is_empty() {
                 content = content.child("未发现可识别的 stdio 启动入口。可选择仓库子目录，或返回手动添加。HTTP / OAuth 服务暂不支持。");
             }
             for candidate in candidates {
                 let id = candidate.id.clone();
-                content =
-                    content.child(
-                        v_flex()
-                            .gap_1()
-                            .py_2()
-                            .border_b_1()
-                            .border_color(cx.theme().border)
-                            .child(
-                                h_flex().child(
-                                    Button::new(SharedString::from(format!(
-                                        "mcp-candidate:{}",
-                                        candidate.id
-                                    )))
-                                    .ghost()
-                                    .label(candidate.name.clone())
-                                    .icon(if self.selected.as_ref() == Some(&candidate.id) {
-                                        IconName::Check
-                                    } else {
-                                        IconName::Plus
-                                    })
-                                    .disabled(self.busy)
-                                    .on_click(cx.listener(move |view, _, _, cx| {
-                                        view.selected = Some(id.clone());
-                                        cx.notify();
-                                    })),
-                                ),
-                            )
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .whitespace_normal()
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child(candidate.description.clone()),
+                content = content.child(
+                    v_flex()
+                        .gap_1()
+                        .py_2()
+                        .border_b_1()
+                        .border_color(cx.theme().border)
+                        .child(
+                            h_flex().child(
+                                Button::new(SharedString::from(format!(
+                                    "mcp-candidate:{}",
+                                    candidate.id
+                                )))
+                                .ghost()
+                                .label(candidate.name.clone())
+                                .icon(if self.selected.as_ref() == Some(&candidate.id) {
+                                    IconName::Check
+                                } else {
+                                    IconName::Plus
+                                })
+                                .disabled(self.busy)
+                                .on_click(cx.listener(move |view, _, _, cx| {
+                                    view.selected = Some(id.clone());
+                                    cx.notify();
+                                })),
                             ),
-                    );
+                        )
+                        .child(
+                            div()
+                                .text_sm()
+                                .whitespace_normal()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(candidate.description.clone()),
+                        ),
+                );
             }
             if let Some(candidate) = candidates
                 .iter()
@@ -233,12 +310,56 @@ impl Render for Importer {
             {
                 content = content.child(v_flex().gap_2()
                     .child(div().font_weight(FontWeight::SEMIBOLD).child("确认启动与安装命令"))
-                    .child(div().text_sm().whitespace_normal().child(format!("启动：{} {}", candidate.launch.command, candidate.launch.args.join(" "))))
-                    .children(candidate.install.iter().map(|command| div().text_sm().whitespace_normal().child(command.join(" "))))
-                    .child(div().text_sm().whitespace_normal().text_color(cx.theme().muted_foreground)
-                        .child(if candidate.install.is_empty() { "此入口无需自动安装依赖。继续后可编辑参数与环境变量，保存时默认保持禁用。" } else { "确认后会在目标机器执行以上安装命令及仓库构建脚本。完成后仍可编辑参数与环境变量，保存时默认保持禁用。" }))
-                    .child(h_flex().child(Button::new("mcp-install-source").primary().label(if candidate.install.is_empty() { "使用此配置" } else { "确认安装并配置" })
-                        .disabled(self.busy).on_click(cx.listener(|view, _, _, cx| view.install(cx))))));
+                    .child(div()
+                        .text_sm()
+                        .whitespace_normal()
+                        .child(format!("启动：{} {}",
+                        candidate
+                        .launch
+                        .command,
+                        candidate
+                        .launch
+                        .args
+                        .join(" "))))
+                    .children(candidate
+                        .install
+                        .iter()
+                        .map(|command| div()
+                        .text_sm()
+                        .whitespace_normal()
+                        .child(command
+                        .join(" "))))
+                    .child(div()
+                        .text_sm()
+                        .whitespace_normal()
+                        .text_color(cx
+                        .theme()
+                        .muted_foreground)
+                        .child(if candidate
+                            .install
+                            .is_empty() {
+                            "此入口无需自动安装依赖。继续后可编辑参数与环境变量，保存时默认保持禁用。"
+                        } else {
+                            "确认后会在目标机器执行以上安装命令及仓库\
+                            构建脚本。完成后仍可编辑参数与环境变量，保存时默认保持禁用。" }))
+                    .child(h_flex()
+                        .child(Button::new("mcp-install-source")
+                        .primary()
+                        .label(if candidate
+                        .install
+                        .is_empty() {
+                        "使用此配置"
+                    } else {
+                        "确认安装并配置"
+                    })
+                        .disabled(self
+                            .busy)
+                            .on_click(cx
+                            .listener(|view,
+                            _,
+                            _,
+                            cx| view
+                            .install(cx))))));
             }
         }
         content

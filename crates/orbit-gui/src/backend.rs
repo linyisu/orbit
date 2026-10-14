@@ -84,7 +84,11 @@ impl Options {
         // Workspace and database paths are interpreted by the target service.
         // Prefixing ~/project with the desktop's cwd corrupts a remote target.
         if self.ssh.is_none() && self.wsl.is_none() {
-            for path in self.workspace.iter_mut().chain(self.database.iter_mut()) {
+            for path in self
+                .workspace
+                .iter_mut()
+                .chain(self.database.iter_mut())
+            {
                 if path.is_relative() {
                     *path = directory.join(&*path);
                 }
@@ -93,7 +97,10 @@ impl Options {
         if let Some(identity) = &mut self.identity {
             let path = PathBuf::from(&*identity);
             if path.is_relative() && !identity.starts_with('~') {
-                *identity = directory.join(path).to_string_lossy().into_owned();
+                *identity = directory
+                    .join(path)
+                    .to_string_lossy()
+                    .into_owned();
             }
         }
         Ok(())
@@ -101,16 +108,19 @@ impl Options {
 
     /// Session IDs and paths are meaningful only within the same service/data
     /// source. Never activate a local tab for an identically named remote one.
+    /// The service resolves an ordinary relative database against its workspace. Home-relative
+    /// paths instead identify one host-wide store.
     pub(crate) fn same_host(&self, other: &Self) -> bool {
-        // The service resolves an ordinary relative database against its
-        // workspace. Home-relative paths instead identify one host-wide store.
         let workspace_database = (self.ssh.is_some() || self.wsl.is_some())
-            && self.database.as_ref().is_some_and(|path| {
-                path.is_relative()
-                    && !path
-                        .to_str()
-                        .is_some_and(|path| path == "~" || path.starts_with("~/"))
-            });
+            && self
+                .database
+                .as_ref()
+                .is_some_and(|path| {
+                    path.is_relative()
+                        && !path
+                            .to_str()
+                            .is_some_and(|path| path == "~" || path.starts_with("~/"))
+                });
         self.ssh == other.ssh
             && self.ssh_user == other.ssh_user
             && self.ssh_port == other.ssh_port
@@ -241,7 +251,9 @@ impl Backend {
         let (events, receiver) = mpsc::channel(64);
         let task = runtime.spawn(async move {
             if let Err(error) = Box::pin(run(options, commands, &events)).await {
-                let _ = events.send(Event::Disconnected(format!("{error:#}"))).await;
+                let _ = events
+                    .send(Event::Disconnected(format!("{error:#}")))
+                    .await;
             }
         });
         (Self { sender, task }, receiver)
@@ -267,8 +279,13 @@ async fn run(
 ) -> Result<()> {
     let (progress, mut updates) = orbit_client::interaction::channel();
     let logs = updates.logs.clone();
-    let initial_stage = updates.stage.borrow_and_update().clone();
-    events.send(Event::ConnectionStage(initial_stage)).await?;
+    let initial_stage = updates
+        .stage
+        .borrow_and_update()
+        .clone();
+    events
+        .send(Event::ConnectionStage(initial_stage))
+        .await?;
     let prompts = events.clone();
     let mut forwarding = AbortTask(tokio::spawn(async move {
         let mut last_logs = Vec::new();
@@ -280,17 +297,42 @@ async fn run(
                     let logs = log_snapshot(&updates.logs);
                     if logs != last_logs {
                         last_logs.clone_from(&logs);
-                        if prompts.send(Event::ConnectionLogs(logs)).await.is_err() { break; }
+                        if prompts
+                            .send(Event::ConnectionLogs(logs))
+                            .await
+                            .is_err()
+                        {
+                            break;
+                        }
                     }
                 }
                 changed = updates.stage.changed() => {
-                    if changed.is_err() { break; }
-                    let stage = updates.stage.borrow_and_update().clone();
-                    if prompts.send(Event::ConnectionStage(stage)).await.is_err() { break; }
+                    if changed.is_err() {
+                        break;
+                    }
+                    let stage = updates
+                        .stage
+                        .borrow_and_update()
+                        .clone();
+                    if prompts
+                        .send(Event::ConnectionStage(stage))
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
                 }
                 challenge = updates.prompts.recv() => {
-                    let Some(challenge) = challenge else { break; };
-                    if prompts.send(Event::Challenge(challenge)).await.is_err() { break; }
+                    let Some(challenge) = challenge else {
+                        break;
+                    };
+                    if prompts
+                        .send(Event::Challenge(challenge))
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
                 }
             }
         }
@@ -331,10 +373,14 @@ async fn run_connection(
     )
     .await?;
     progress.report("启动工作区服务并等待握手");
-    let mut client = connection.connect_progress(Some(&progress)).await?;
+    let mut client = connection
+        .connect_progress(Some(&progress))
+        .await?;
     events.send(Event::Connected).await?;
     progress.report("读取会话并打开工作区");
-    let mut history = client.request(Request::AllSessions).await?;
+    let mut history = client
+        .request(Request::AllSessions)
+        .await?;
     if options.relink_on_resume {
         anyhow::ensure!(
             options.ssh.is_none() && options.wsl.is_none(),
@@ -363,11 +409,15 @@ async fn run_connection(
                 })
                 .await
                 .context("无法将原项目关联到所选目录")?;
-            history = client.request(Request::AllSessions).await?;
+            history = client
+                .request(Request::AllSessions)
+                .await?;
         }
     }
     let resume = recovered_session(options.resume, options.recover_draft, &history)?;
-    events.send(Event::Response(history)).await?;
+    events
+        .send(Event::Response(history))
+        .await?;
     // The service preserves a valid historical model. Send today's default as
     // its fallback instead of blindly recycling a stale tab's launch model.
     let preferred = if resume.is_some() {
@@ -428,37 +478,86 @@ async fn run_connection(
         tokio::select! {
             biased;
             command = commands.recv() => {
-                let Some(command) = command else { return Ok(()) };
+                let Some(command) = command else {
+                    return Ok(());
+                };
                 match command {
                     Command::WatchAgents(scope) => agent_watch.set(scope),
                     Command::Complete { session, input } => {
-                        let result = match client.request(Request::Complete { session: session.clone(), input: input.clone() }).await {
+                        let result = match client
+                            .request(Request::Complete {
+                                session: session.clone(),
+                                input: input.clone(),
+                            })
+                            .await
+                        {
                             Ok(Response::Completions { entries, .. }) => Ok(entries),
                             Ok(_) => Err("无法读取参数候选".into()),
                             Err(error) => Err(format!("{error:#}")),
                         };
-                        events.send(Event::Completions { session, input, result }).await?;
+                        events
+                            .send(Event::Completions {
+                                session,
+                                input,
+                                result,
+                            })
+                            .await?;
                     }
-                    Command::CloseSubagent => { subagent = None; }
+                    Command::CloseSubagent => {
+                        subagent = None;
+                    }
                     Command::RefreshModels => {
                         let result = async {
-                            let local = connection.local_configuration.as_ref().context("当前连接没有本地模型配置")?;
-                            let configuration = local.snapshot_with_refresh(true).await?;
-                            client.request(Request::ConfigureModels { session: session.clone(), configuration: Some(configuration) }).await
-                        }.await;
+                            let local = connection
+                                .local_configuration
+                                .as_ref()
+                                .context("当前连接没有本地模型配置")?;
+                            let configuration = local
+                                .snapshot_with_refresh(true)
+                                .await?;
+                            client
+                                .request(Request::ConfigureModels {
+                                    session: session.clone(),
+                                    configuration: Some(configuration),
+                                })
+                                .await
+                        }
+                        .await;
                         match result {
-                            Ok(response) => { deliver(response, &mut session, &mut cursor, events).await?; }
-                            Err(error) => { events.send(Event::Error(format!("{error:#}"))).await?; }
+                            Ok(response) => {
+                                deliver(response, &mut session, &mut cursor, events).await?;
+                            }
+                            Err(error) => {
+                                events
+                                    .send(Event::Error(format!("{error:#}")))
+                                    .await?;
+                            }
                         }
                     }
                     Command::ReadImage { session, path } => {
-                        let result = match client.request(Request::ReadFile { session: session.clone(), path: path.clone() }).await {
-                            Ok(Response::File(content)) => base64::engine::general_purpose::STANDARD.decode(content).map_err(|error| error.to_string()),
+                        let result = match client
+                            .request(Request::ReadFile {
+                                session: session.clone(),
+                                path: path.clone(),
+                            })
+                            .await
+                        {
+                            Ok(Response::File(content)) => {
+                                base64::engine::general_purpose::STANDARD
+                                    .decode(content)
+                                    .map_err(|error| error.to_string())
+                            }
                             Ok(Response::Error(error)) => Err(error),
                             Err(error) => Err(format!("{error:#}")),
                             _ => Err("无法读取图片".into()),
                         };
-                        events.send(Event::Image { session, path, result }).await?;
+                        events
+                            .send(Event::Image {
+                                session,
+                                path,
+                                result,
+                            })
+                            .await?;
                     }
                     Command::Request(Request::Usage { session }) => {
                         if quota_tasks.is_empty() {
@@ -467,129 +566,292 @@ async fn run_connection(
                             quota_tasks.spawn(async move {
                                 let result = async {
                                     let mut client = connection.connect().await?;
-                                    match client.request(Request::Usage { session: session.clone() }).await? {
+                                    match client
+                                        .request(Request::Usage {
+                                            session: session.clone(),
+                                        })
+                                        .await?
+                                    {
                                         Response::Usage(snapshot) => Ok(snapshot),
                                         Response::Error(error) => bail!(error),
                                         _ => bail!("无法读取账号额度"),
                                     }
-                                }.await.map_err(|error: anyhow::Error| format!("{error:#}"));
-                                let _ = events.send(Event::Usage { session, result }).await;
+                                }
+                                .await
+                                .map_err(|error: anyhow::Error| format!("{error:#}"));
+                                let _ = events
+                                    .send(Event::Usage { session, result })
+                                    .await;
                             });
                         }
                     }
-                    Command::Tasks { session, workspace, action } => {
-                        let result = match client.request(Request::Tasks { session: session.clone(), expected_workspace: Some(workspace), action }).await {
+                    Command::Tasks {
+                        session,
+                        workspace,
+                        action,
+                    } => {
+                        let result = match client
+                            .request(Request::Tasks {
+                                session: session.clone(),
+                                expected_workspace: Some(workspace),
+                                action,
+                            })
+                            .await
+                        {
                             Ok(Response::Tasks(tasks)) => Ok(tasks),
                             Ok(Response::Error(error)) => Err(error),
                             Ok(_) => Err("服务没有返回任务数据，请更新工作区服务后重试。".into()),
                             Err(error) => Err(format!("{error:#}")),
                         };
-                        events.send(Event::Tasks { session, result }).await?;
+                        events
+                            .send(Event::Tasks { session, result })
+                            .await?;
                     }
                     Command::Settings { request, result } => {
-                        if matches!(request,
+                        if matches!(
+                            request,
                             Request::ReadFile { .. }
-                            | Request::Review { action: orbit_protocol::review::Action::Undo { .. } | orbit_protocol::review::Action::Stage { .. } | orbit_protocol::review::Action::Unstage { .. }, .. }
-                            | Request::Resources { action: orbit_protocol::resources::Action::ReloadMcp { .. }
-                                | orbit_protocol::resources::Action::ScanMcp { .. }
-                                | orbit_protocol::resources::Action::InstallMcp { .. }, .. }
+                                | Request::Review {
+                                    action: orbit_protocol::review::Action::Undo { .. }
+                                        | orbit_protocol::review::Action::Stage { .. }
+                                        | orbit_protocol::review::Action::Unstage { .. },
+                                    ..
+                                }
+                                | Request::Resources {
+                                    action: orbit_protocol::resources::Action::ReloadMcp { .. }
+                                        | orbit_protocol::resources::Action::ScanMcp { .. }
+                                        | orbit_protocol::resources::Action::InstallMcp { .. },
+                                    ..
+                                }
                         ) {
                             // Long settings requests use a separate connection so
                             // chat keeps polling events and accepting decisions.
                             let connection = connection.clone();
                             review_tasks.spawn(async move {
                                 let response = async {
-                                    let mut client = connection.connect().await.map_err(|error| format!("{error:#}"))?;
+                                    let mut client = connection
+                                        .connect()
+                                        .await
+                                        .map_err(|error| format!("{error:#}"))?;
                                     match client.request(request).await {
                                         Ok(Response::Error(error)) => Err(error),
                                         Ok(response) => Ok(response),
                                         Err(error) => Err(format!("{error:#}")),
                                     }
-                                }.await;
+                                }
+                                .await;
                                 let _ = result.send(response);
                             });
                             continue;
                         }
-                        let queue_session = match &request { Request::InputQueue { session, .. } => Some(session.clone()), _ => None };
+                        let queue_session = match &request {
+                            Request::InputQueue { session, .. } => Some(session.clone()),
+                            _ => None,
+                        };
                         let response = match client.request(request).await {
                             Ok(Response::Error(error)) => Err(error),
                             Ok(mut response) => {
                                 if let Some(session) = queue_session {
-                                    queue_images::localize(&mut client, &session, &mut response, &mut queue_images, &queue_cache).await.map(|()| response).map_err(|error| format!("{error:#}"))
-                                } else { Ok(response) }
-                            },
+                                    queue_images::localize(
+                                        &mut client,
+                                        &session,
+                                        &mut response,
+                                        &mut queue_images,
+                                        &queue_cache,
+                                    )
+                                    .await
+                                    .map(|()| response)
+                                    .map_err(|error| format!("{error:#}"))
+                                } else {
+                                    Ok(response)
+                                }
+                            }
                             Err(error) => Err(format!("{error:#}")),
                         };
                         let _ = result.send(response);
                     }
                     Command::Request(request) => {
-                        if matches!(request, Request::CloseQuestions { .. }) { questions_revision = None; }
+                        if matches!(request, Request::CloseQuestions { .. }) {
+                            questions_revision = None;
+                        }
                         let remember = matches!(request, Request::SetModel { .. });
-                        let agent = if let Request::ReadSubagent { agent, .. } = &request { Some(agent.clone()) } else { None };
-                        let file_path = if let Request::ReadFile { path, .. } = &request { Some(path.clone()) } else { None };
-                        if matches!(request, Request::SetModel { .. }) { quota_tasks.shutdown().await; }
+                        let agent = if let Request::ReadSubagent { agent, .. } = &request {
+                            Some(agent.clone())
+                        } else {
+                            None
+                        };
+                        let file_path = if let Request::ReadFile { path, .. } = &request {
+                            Some(path.clone())
+                        } else {
+                            None
+                        };
+                        if matches!(request, Request::SetModel { .. }) {
+                            quota_tasks.shutdown().await;
+                        }
                         match client.request(request).await {
                             Ok(response) => {
-                                if let Some(agent) = agent && matches!(response, Response::Subagent(_)) {
-                                    let Response::Subagent(page) = response else { unreachable!() };
+                                if let Some(agent) = agent
+                                    && matches!(response, Response::Subagent(_))
+                                {
+                                    let Response::Subagent(page) = response else {
+                                        unreachable!()
+                                    };
                                     subagent = Some((agent.clone(), page.next));
-                                    events.send(Event::Subagent { agent, page, reset: true }).await?;
+                                    events
+                                        .send(Event::Subagent {
+                                            agent,
+                                            page,
+                                            reset: true,
+                                        })
+                                        .await?;
                                     continue;
                                 }
-                                if remember && let Response::Profile(info) = &response && let Some(local) = &connection.local_configuration
-                                    && let Err(error) = local.remember_model(&info.model) {
-                                    events.send(Event::Error(format!("模型已切换，但无法保存偏好：{error}"))).await?;
+                                if remember
+                                    && let Response::Profile(info) = &response
+                                    && let Some(local) = &connection.local_configuration
+                                    && let Err(error) = local.remember_model(&info.model)
+                                {
+                                    events
+                                        .send(Event::Error(format!(
+                                            "模型已切换，但无法保存偏好：{error}"
+                                        )))
+                                        .await?;
                                 }
-                                if let Response::Questions(questions) = &response { questions_revision = Some(questions.revision); }
-                                if let (Some(path), Response::File(content)) = (file_path, &response) {
-                                    match base64::engine::general_purpose::STANDARD.decode(content) {
-                                        Ok(bytes) => { events.send(Event::File { path, bytes }).await?; }
-                                        Err(error) => { events.send(Event::Error(format!("无法解码文件：{error}"))).await?; }
+                                if let Response::Questions(questions) = &response {
+                                    questions_revision = Some(questions.revision);
+                                }
+                                if let (Some(path), Response::File(content)) =
+                                    (file_path, &response)
+                                {
+                                    match base64::engine::general_purpose::STANDARD.decode(content)
+                                    {
+                                        Ok(bytes) => {
+                                            events
+                                                .send(Event::File { path, bytes })
+                                                .await?;
+                                        }
+                                        Err(error) => {
+                                            events
+                                                .send(Event::Error(format!(
+                                                    "无法解码文件：{error}"
+                                                )))
+                                                .await?;
+                                        }
                                     }
-                                } else { deliver(response, &mut session, &mut cursor, events).await?; }
-                            },
-                            Err(error) => { events.send(Event::Error(format!("{error:#}"))).await?; }
+                                } else {
+                                    deliver(response, &mut session, &mut cursor, events).await?;
+                                }
+                            }
+                            Err(error) => {
+                                events
+                                    .send(Event::Error(format!("{error:#}")))
+                                    .await?;
+                            }
                         }
                     }
-                    Command::Send { session, id, prompt, paths, steer } => {
-                        let result = send(&mut client, session, id.clone(), prompt, paths, steer).await;
+                    Command::Send {
+                        session,
+                        id,
+                        prompt,
+                        paths,
+                        steer,
+                    } => {
+                        let result =
+                            send(&mut client, session, id.clone(), prompt, paths, steer).await;
                         let event = match result {
                             Ok(()) => Event::Sent { id },
-                            Err(error) => Event::SendFailed { id, error: format!("{error:#}") },
+                            Err(error) => Event::SendFailed {
+                                id,
+                                error: format!("{error:#}"),
+                            },
                         };
                         events.send(event).await?;
                     }
                 }
-                if client.failed() { bail!("工作区连接已断开。") }
+                if client.failed() {
+                    bail!("工作区连接已断开。")
+                }
             }
             _ = quota_tasks.join_next(), if !quota_tasks.is_empty() => {}
             _ = review_tasks.join_next(), if !review_tasks.is_empty() => {}
-            _ = async { if !backlog { interval.tick().await; } }, if !session.is_empty() => {
-                let response = client.request(Request::Poll { session: session.clone(), after: cursor }).await?;
+            _ = async {
+                if !backlog {
+                    interval.tick().await;
+                }
+            }, if !session.is_empty() => {
+                let response = client
+                    .request(Request::Poll {
+                        session: session.clone(),
+                        after: cursor,
+                    })
+                    .await?;
                 backlog = matches!(&response, Response::Page(page) if page.more);
                 if let Response::Page(page) = &response {
-                    let state = serde_json::to_string(&(page.more, page.busy, &page.model, &page.approvals, &page.planning, &page.user_inputs, &page.tool_progress))?;
-                    let unchanged = !page.more && page.updates.is_empty() && last_page.as_ref() == Some(&state);
+                    let state = serde_json::to_string(&(
+                        page.more,
+                        page.busy,
+                        &page.model,
+                        &page.approvals,
+                        &page.planning,
+                        &page.user_inputs,
+                        &page.tool_progress,
+                    ))?;
+                    let unchanged =
+                        !page.more && page.updates.is_empty() && last_page.as_ref() == Some(&state);
                     last_page = Some(state);
-                    if !unchanged { deliver(response, &mut session, &mut cursor, events).await?; }
-                } else { deliver(response, &mut session, &mut cursor, events).await?; }
+                    if !unchanged {
+                        deliver(response, &mut session, &mut cursor, events).await?;
+                    }
+                } else {
+                    deliver(response, &mut session, &mut cursor, events).await?;
+                }
                 if let Some(revision) = questions_revision
-                    && let Response::Questions(questions) = client.request(Request::ReadQuestions { session: session.clone(), after: Some(revision) }).await? {
-                        questions_revision = Some(questions.revision);
-                        if questions.records.is_some() { events.send(Event::Response(Response::Questions(questions))).await?; }
+                    && let Response::Questions(questions) = client
+                        .request(Request::ReadQuestions {
+                            session: session.clone(),
+                            after: Some(revision),
+                        })
+                        .await?
+                {
+                    questions_revision = Some(questions.revision);
+                    if questions.records.is_some() {
+                        events
+                            .send(Event::Response(Response::Questions(questions)))
+                            .await?;
+                    }
                 }
                 if let Some((agent, after)) = subagent.clone() {
-                    match client.request(Request::ReadSubagent { session: session.clone(), agent: agent.clone(), after }).await? {
+                    match client
+                        .request(Request::ReadSubagent {
+                            session: session.clone(),
+                            agent: agent.clone(),
+                            after,
+                        })
+                        .await?
+                    {
                         Response::Subagent(page) => {
                             subagent = Some((agent.clone(), page.next));
-                            if !page.updates.is_empty() { events.send(Event::Subagent { agent, page, reset: false }).await?; }
+                            if !page.updates.is_empty() {
+                                events
+                                    .send(Event::Subagent {
+                                        agent,
+                                        page,
+                                        reset: false,
+                                    })
+                                    .await?;
+                            }
                         }
-                        Response::Error(error) => { subagent = None; events.send(Event::Error(error)).await?; }
+                        Response::Error(error) => {
+                            subagent = None;
+                            events.send(Event::Error(error)).await?;
+                        }
                         _ => {}
                     }
                 }
                 if !backlog {
-                    agent_watch.poll(&mut client, &session, events).await?;
+                    agent_watch
+                        .poll(&mut client, &session, events)
+                        .await?;
                 }
             }
         }
@@ -657,7 +919,11 @@ fn recovered_session(
     let Response::Sessions(sessions) = history else {
         bail!("无法确认未发送任务的会话记录");
     };
-    Ok(resume.filter(|id| sessions.iter().any(|session| &session.id == id)))
+    Ok(resume.filter(|id| {
+        sessions
+            .iter()
+            .any(|session| &session.id == id)
+    }))
 }
 
 async fn deliver(
@@ -676,6 +942,8 @@ async fn deliver(
         }
         _ => {}
     }
-    events.send(Event::Response(response)).await?;
+    events
+        .send(Event::Response(response))
+        .await?;
     Ok(())
 }

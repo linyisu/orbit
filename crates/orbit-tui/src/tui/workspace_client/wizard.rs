@@ -233,11 +233,19 @@ impl Wizard {
             return Action::None;
         }
         self.hover = None;
-        if key.code == KeyCode::Esc && self.form.as_ref().is_some_and(|config| config.picker) {
+        if key.code == KeyCode::Esc
+            && self
+                .form
+                .as_ref()
+                .is_some_and(|config| config.picker)
+        {
             return self.form.as_mut().unwrap().handle(key);
         }
         if key.code == KeyCode::Esc
-            || (key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL))
+            || (key.code == KeyCode::Char('c')
+                && key
+                    .modifiers
+                    .contains(KeyModifiers::CONTROL))
         {
             return Action::Cancel;
         }
@@ -256,7 +264,10 @@ impl Wizard {
                 .iter()
                 .position(|focus| *focus == self.focus)
                 .unwrap_or(0);
-            let back = key.code == KeyCode::BackTab || key.modifiers.contains(KeyModifiers::SHIFT);
+            let back = key.code == KeyCode::BackTab
+                || key
+                    .modifiers
+                    .contains(KeyModifiers::SHIFT);
             self.focus = order[if back {
                 (index + order.len() - 1) % order.len()
             } else {
@@ -320,7 +331,10 @@ impl Wizard {
         } else {
             24
         };
-        let height = bounds.height.saturating_sub(4).min(desired);
+        let height = bounds
+            .height
+            .saturating_sub(4)
+            .min(desired);
         let area = Rect::new(
             bounds.x + (bounds.width - width) / 2,
             bounds.y + (bounds.height - height) / 2,
@@ -404,7 +418,10 @@ impl Wizard {
             self.directory_offset = self
                 .directory_offset
                 .min(self.selected)
-                .max(self.selected.saturating_sub(count.saturating_sub(1)))
+                .max(
+                    self.selected
+                        .saturating_sub(count.saturating_sub(1)),
+                )
                 .min(entries.len().saturating_sub(count));
             let start = self.directory_offset;
             for (row, (index, name)) in entries
@@ -428,7 +445,9 @@ impl Wizard {
                         if index == self.selected { "›" } else { " " }
                     ))
                     .style(if index == self.selected {
-                        Style::default().fg(THEME.on_accent).bg(THEME.accent)
+                        Style::default()
+                            .fg(THEME.on_accent)
+                            .bg(THEME.accent)
                     } else {
                         Style::default()
                     }),
@@ -456,7 +475,10 @@ impl Wizard {
             let bottom = paragraph
                 .line_count(body.width)
                 .saturating_sub(body.height as usize);
-            let offset = self.scroll.unwrap_or(bottom).min(bottom);
+            let offset = self
+                .scroll
+                .unwrap_or(bottom)
+                .min(bottom);
             self.last_offset = offset;
             if offset == bottom {
                 self.scroll = None;
@@ -538,13 +560,28 @@ mod tests {
         let mut wizard = Wizard::new(Some(Spec::parse("/ssh").unwrap()));
         let config = wizard.form.as_mut().unwrap();
         assert!(matches!(config.start(), Action::None));
-        assert!(config.error.as_deref().unwrap().contains("主机"));
+        assert!(
+            config
+                .error
+                .as_deref()
+                .unwrap()
+                .contains("主机")
+        );
         config.fields[0].set("user@example".into());
         config.fields[2].set("70000".into());
         assert!(matches!(config.start(), Action::None));
-        assert!(config.error.as_deref().unwrap().contains("端口"));
+        assert!(
+            config
+                .error
+                .as_deref()
+                .unwrap()
+                .contains("端口")
+        );
         config.fields[2].set("2222".into());
-        assert!(matches!(config.start(), Action::Start(spec) if spec.fields()[2] == "2222"));
+        assert!(matches!(
+            config.start(),
+            Action::Start(spec) if spec.fields()[2] == "2222"
+        ));
         wizard.form = None;
         wizard.set_listing(Listing {
             path: "/home/me".into(),
@@ -552,7 +589,10 @@ mod tests {
         });
         let enter = Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         wizard.selected = 2;
-        assert!(matches!(wizard.handle(&enter), Action::Browse(path) if path == "/home/me/a b"));
+        assert!(matches!(
+            wizard.handle(&enter),
+            Action::Browse(path) if path == "/home/me/a b"
+        ));
         assert!(matches!(
             wizard.handle(&Event::Key(KeyEvent::new(
                 KeyCode::Enter,
@@ -561,7 +601,10 @@ mod tests {
             Action::None
         ));
         wizard.handle(&Event::Key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)));
-        assert!(matches!(wizard.handle(&enter), Action::Open(path) if path == "/home/me"));
+        assert!(matches!(
+            wizard.handle(&enter),
+            Action::Open(path) if path == "/home/me"
+        ));
     }
 
     #[test]
@@ -573,9 +616,10 @@ mod tests {
         });
         let key = |code| Event::Key(KeyEvent::new(code, KeyModifiers::NONE));
         wizard.handle(&key(KeyCode::Tab));
-        assert!(
-            matches!(wizard.handle(&key(KeyCode::Enter)), Action::Open(path) if path == "/work")
-        );
+        assert!(matches!(
+            wizard.handle(&key(KeyCode::Enter)),
+            Action::Open(path) if path == "/work"
+        ));
         wizard.handle(&key(KeyCode::Tab));
         wizard.handle(&key(KeyCode::Enter));
         assert!(wizard.hidden);
@@ -586,9 +630,10 @@ mod tests {
         ));
         wizard.handle(&key(KeyCode::Tab));
         wizard.path.set("/another".into());
-        assert!(
-            matches!(wizard.handle(&key(KeyCode::Enter)), Action::Browse(path) if path == "/another")
-        );
+        assert!(matches!(
+            wizard.handle(&key(KeyCode::Enter)),
+            Action::Browse(path) if path == "/another"
+        ));
     }
 
     fn mouse(kind: MouseEventKind, area: Rect) -> Event {
@@ -608,7 +653,9 @@ mod tests {
         let mut terminal =
             ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 34)).unwrap();
         wizard.form.as_mut().unwrap().suggestion = usize::MAX;
-        terminal.draw(|frame| wizard.draw(frame)).unwrap();
+        terminal
+            .draw(|frame| wizard.draw(frame))
+            .unwrap();
         let (candidate, candidate_id) = *wizard
             .areas
             .iter()
@@ -628,21 +675,41 @@ mod tests {
         let config = wizard.form.as_ref().unwrap();
         assert!(!config.picker);
         assert_eq!(config.focus, 0);
-        assert!(config.fields[..4].iter().all(|input| input.text.is_empty()));
+        assert!(
+            config.fields[..4]
+                .iter()
+                .all(|input| input.text.is_empty())
+        );
 
-        terminal.draw(|frame| wizard.draw(frame)).unwrap();
-        let field = wizard.areas.iter().find(|(_, id)| *id == 1).unwrap().0;
+        terminal
+            .draw(|frame| wizard.draw(frame))
+            .unwrap();
+        let field = wizard
+            .areas
+            .iter()
+            .find(|(_, id)| *id == 1)
+            .unwrap()
+            .0;
         wizard.handle(&mouse(MouseEventKind::Moved, field));
-        terminal.draw(|frame| wizard.draw(frame)).unwrap();
+        terminal
+            .draw(|frame| wizard.draw(frame))
+            .unwrap();
         assert_eq!(
             terminal.backend().buffer()[(field.x, field.y)].fg,
             THEME.accent
         );
         wizard.handle(&mouse(MouseEventKind::Down(MouseButton::Left), field));
         assert_eq!(wizard.form.as_ref().unwrap().focus, 1);
-        let button = wizard.areas.iter().find(|(_, id)| *id == 99).unwrap().0;
+        let button = wizard
+            .areas
+            .iter()
+            .find(|(_, id)| *id == 99)
+            .unwrap()
+            .0;
         wizard.handle(&mouse(MouseEventKind::Moved, button));
-        terminal.draw(|frame| wizard.draw(frame)).unwrap();
+        terminal
+            .draw(|frame| wizard.draw(frame))
+            .unwrap();
         assert_eq!(
             terminal.backend().buffer()[(button.x, button.y)].bg,
             THEME.accent
@@ -658,12 +725,16 @@ mod tests {
         let mut wizard = Wizard::new(None);
         wizard.set_listing(Listing {
             path: "/work".into(),
-            directories: (0..40).map(|i| format!("child-{i}")).collect(),
+            directories: (0..40)
+                .map(|i| format!("child-{i}"))
+                .collect(),
         });
         wizard.selected = 30;
         let mut terminal =
             ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 34)).unwrap();
-        terminal.draw(|frame| wizard.draw(frame)).unwrap();
+        terminal
+            .draw(|frame| wizard.draw(frame))
+            .unwrap();
         let offset = wizard.directory_offset;
         let id = 100 + offset;
         let row = wizard
@@ -673,14 +744,17 @@ mod tests {
             .unwrap()
             .0;
         wizard.handle(&mouse(MouseEventKind::Moved, row));
-        terminal.draw(|frame| wizard.draw(frame)).unwrap();
+        terminal
+            .draw(|frame| wizard.draw(frame))
+            .unwrap();
         assert_eq!(wizard.directory_offset, offset);
         assert_eq!(wizard.selected, offset);
         assert_eq!(terminal.backend().buffer()[(row.x, row.y)].bg, THEME.accent);
         let expected = format!("/work/child-{}", offset - 2);
-        assert!(
-            matches!(wizard.handle(&mouse(MouseEventKind::Down(MouseButton::Left), row)), Action::Browse(path) if path == expected)
-        );
+        assert!(matches!(
+            wizard.handle(&mouse(MouseEventKind::Down(MouseButton::Left), row)),
+            Action::Browse(path) if path == expected
+        ));
         wizard.handle(&Event::Key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)));
         assert_eq!(wizard.hover, None);
     }
@@ -695,10 +769,15 @@ mod tests {
                 path: "/work".into(),
                 directories: vec!["child".into()],
             });
-            assert!(matches!(wizard.handle(&enter), Action::Open(path) if path == "/work"));
+            assert!(matches!(
+                wizard.handle(&enter),
+                Action::Open(path) if path == "/work"
+            ));
             let mut terminal =
                 ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, height)).unwrap();
-            terminal.draw(|frame| wizard.draw(frame)).unwrap();
+            terminal
+                .draw(|frame| wizard.draw(frame))
+                .unwrap();
             for id in [100, 5] {
                 let (area, _) = wizard
                     .areas
@@ -711,13 +790,19 @@ mod tests {
                     row: area.y,
                     modifiers: KeyModifiers::NONE,
                 });
-                assert!(matches!(wizard.handle(&click), Action::Open(path) if path == "/work"));
+                assert!(matches!(
+                    wizard.handle(&click),
+                    Action::Open(path) if path == "/work"
+                ));
             }
-            wizard.path.set("/work/typed folder".into());
+            wizard
+                .path
+                .set("/work/typed folder".into());
             wizard.focus = 5;
-            assert!(
-                matches!(wizard.handle(&enter), Action::Open(path) if path == "/work/typed folder")
-            );
+            assert!(matches!(
+                wizard.handle(&enter),
+                Action::Open(path) if path == "/work/typed folder"
+            ));
         }
     }
 
@@ -737,8 +822,15 @@ mod tests {
             }
             let mut terminal =
                 ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 34)).unwrap();
-            terminal.draw(|frame| wizard.draw(frame)).unwrap();
-            let action = wizard.areas.iter().find(|(_, id)| *id == 5).unwrap().0;
+            terminal
+                .draw(|frame| wizard.draw(frame))
+                .unwrap();
+            let action = wizard
+                .areas
+                .iter()
+                .find(|(_, id)| *id == 5)
+                .unwrap()
+                .0;
             assert!(action.width > 0 && action.height == 1);
             assert!(
                 wizard
@@ -746,10 +838,25 @@ mod tests {
                     .iter()
                     .all(|(area, _)| area.right() <= 100 && area.bottom() <= 34)
             );
-            assert!(!wizard.areas.iter().any(|(_, id)| matches!(id, 80 | 81)));
+            assert!(
+                !wizard
+                    .areas
+                    .iter()
+                    .any(|(_, id)| matches!(id, 80 | 81))
+            );
             if let Ok(path) = std::env::var("ORBIT_WIZARD_PREVIEW") {
                 let buffer = terminal.backend().buffer();
-                let cells = buffer.content.iter().map(|cell| serde_json::json!({"text": cell.symbol(), "fg": format!("{:?}", cell.fg), "bg": format!("{:?}", cell.bg)})).collect::<Vec<_>>();
+                let cells = buffer
+                    .content
+                    .iter()
+                    .map(|cell| {
+                        serde_json::json!({
+                            "text": cell.symbol(),
+                            "fg": format!("{:?}", cell.fg),
+                            "bg": format!("{:?}", cell.bg)
+                        })
+                    })
+                    .collect::<Vec<_>>();
                 std::fs::write(
                     format!("{path}-{name}.json"),
                     serde_json::to_vec(&cells).unwrap(),
@@ -766,20 +873,29 @@ mod tests {
         wizard.status = "summary\nloader detail".into();
         let mut terminal =
             ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 34)).unwrap();
-        terminal.draw(|frame| wizard.draw(frame)).unwrap();
+        terminal
+            .draw(|frame| wizard.draw(frame))
+            .unwrap();
         let rows = terminal
             .backend()
             .buffer()
             .content
             .chunks(100)
-            .map(|row| row.iter().map(|cell| cell.symbol()).collect::<String>())
+            .map(|row| {
+                row.iter()
+                    .map(|cell| cell.symbol())
+                    .collect::<String>()
+            })
             .collect::<Vec<_>>();
         let summary = rows
             .iter()
             .position(|line| line.contains("summary"))
             .unwrap();
         assert!(rows[summary + 1].contains("loader detail"));
-        assert!(rows.iter().all(|line| !line.contains("\\n")));
+        assert!(
+            rows.iter()
+                .all(|line| !line.contains("\\n"))
+        );
     }
 
     #[test]
@@ -791,21 +907,31 @@ mod tests {
         for (width, height) in [(1, 1), (20, 10), (80, 24), (140, 40)] {
             let mut terminal =
                 ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, height)).unwrap();
-            terminal.draw(|frame| wizard.draw(frame)).unwrap();
+            terminal
+                .draw(|frame| wizard.draw(frame))
+                .unwrap();
         }
         wizard.form = None;
-        wizard.logs = (0..80).map(|index| format!("log {index}")).collect();
+        wizard.logs = (0..80)
+            .map(|index| format!("log {index}"))
+            .collect();
         let mut terminal =
             ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 40)).unwrap();
-        terminal.draw(|frame| wizard.draw(frame)).unwrap();
+        terminal
+            .draw(|frame| wizard.draw(frame))
+            .unwrap();
         wizard.handle(&Event::Key(KeyEvent::new(
             KeyCode::PageUp,
             KeyModifiers::NONE,
         )));
-        terminal.draw(|frame| wizard.draw(frame)).unwrap();
+        terminal
+            .draw(|frame| wizard.draw(frame))
+            .unwrap();
         let offset = wizard.last_offset;
         wizard.logs.push("another line".into());
-        terminal.draw(|frame| wizard.draw(frame)).unwrap();
+        terminal
+            .draw(|frame| wizard.draw(frame))
+            .unwrap();
         assert_eq!(wizard.last_offset, offset);
     }
 }

@@ -56,7 +56,9 @@ impl Strip {
         let mut next_y = 0;
         for (source, label) in images {
             let picture = context.cached_picture(&source, bounds.width, bounds.height);
-            let item_width = picture.as_ref().map_or(bounds.width, |p| p.size.width);
+            let item_width = picture
+                .as_ref()
+                .map_or(bounds.width, |p| p.size.width);
             if next_x > 0 && next_x.saturating_add(item_width) > width {
                 next_x = 0;
                 next_y += usize::from(size.height + ROW_GAP);
@@ -66,9 +68,11 @@ impl Strip {
             if y + usize::from(size.height) > usize::from(u16::MAX) {
                 break;
             }
-            strip.rows.resize_with(y + usize::from(size.height), || {
-                LinkedLine::chrome(Line::from(" ".repeat(usize::from(width))))
-            });
+            strip
+                .rows
+                .resize_with(y + usize::from(size.height), || {
+                    LinkedLine::chrome(Line::from(" ".repeat(usize::from(width))))
+                });
             let area = Rect::new(x, y as u16, item_width, size.height);
             strip.areas.push(area);
             if context.enabled() {
@@ -83,7 +87,11 @@ impl Strip {
             }
             if let Some(picture) = picture {
                 let left = x;
-                let top = y + usize::from(area.height.saturating_sub(picture.size.height) / 2);
+                let top = y + usize::from(
+                    area.height
+                        .saturating_sub(picture.size.height)
+                        / 2,
+                );
                 let text: Arc<str> = label.into();
                 for row in 0..picture.size.height {
                     let line = &mut strip.rows[top + usize::from(row)];

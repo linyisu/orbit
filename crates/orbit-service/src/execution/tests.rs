@@ -21,7 +21,10 @@ async fn compact_retry_restores_the_original_history_after_a_failed_retry() {
         .begin("original work".into(), "mock".into())
         .await
         .unwrap();
-    session.finish("cancelled", None).await.unwrap();
+    session
+        .finish("cancelled", None)
+        .await
+        .unwrap();
     let id = session
         .store
         .archive_context(session.id(), &original)

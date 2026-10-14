@@ -33,7 +33,8 @@ async fn commands_run_in_parallel_and_keep_their_own_logs_and_verification() {
     let mut outputs = Vec::new();
     for name in ["orbit-first", "orbit-second"] {
         let script = format!(
-            "printf '{name}\\n'; touch {name}.started; while [ ! -f release ]; do sleep 0.01; done; printf '{name} finished\\n'"
+            "printf '{name}\\n'; touch {name}.started; while [ ! -f release ]; do sleep 0.01; \
+                done; printf '{name} finished\\n'"
         );
         let output = tokio::time::timeout(
             Duration::from_secs(10),
@@ -41,7 +42,11 @@ async fn commands_run_in_parallel_and_keep_their_own_logs_and_verification() {
                 ToolCall::function(
                     name,
                     "run_command",
-                    json!({ "command":script, "background":true, "workspace_access":"read_write" }),
+                    json!({
+                        "command": script,
+                        "background": true,
+                        "workspace_access": "read_write"
+                    }),
                 ),
                 CancellationToken::new(),
             ),
@@ -51,17 +56,35 @@ async fn commands_run_in_parallel_and_keep_their_own_logs_and_verification() {
         .unwrap();
         let value: Value = serde_json::from_str(&output.content).unwrap();
         assert_eq!(value["running"], true);
-        ids.push(value["job_id"].as_str().unwrap().to_owned());
-        outputs.push(value["output_id"].as_str().unwrap().to_owned());
+        ids.push(
+            value["job_id"]
+                .as_str()
+                .unwrap()
+                .to_owned(),
+        );
+        outputs.push(
+            value["output_id"]
+                .as_str()
+                .unwrap()
+                .to_owned(),
+        );
     }
 
     tokio::time::timeout(Duration::from_secs(10), async {
-        while !root.path().join("orbit-first.started").exists()
-            || !root.path().join("orbit-second.started").exists()
+        while !root
+            .path()
+            .join("orbit-first.started")
+            .exists()
+            || !root
+                .path()
+                .join("orbit-second.started")
+                .exists()
         {
             let snapshots = jobs.snapshots(&ids, true).unwrap();
             assert!(
-                !snapshots.iter().any(|job| job.status == JobStatus::Failed),
+                !snapshots
+                    .iter()
+                    .any(|job| job.status == JobStatus::Failed),
                 "command launch failed: {snapshots:?}"
             );
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -131,18 +154,44 @@ async fn background_launch_still_requires_approval_and_denial_creates_no_job() {
     let command = RunCommand::new(Workspace::new(root.path()).unwrap(), sender)
         .with_background_jobs(jobs.clone());
     let launch = tokio::spawn(async move {
-        command.execute(ToolCall::function("denied", "run_command", json!({ "command":"touch orbit-denied", "background":true, "workspace_access":"read_write" })), CancellationToken::new()).await
+        command
+            .execute(
+                ToolCall::function(
+                    "denied",
+                    "run_command",
+                    json!({
+                        "command": "touch orbit-denied",
+                        "background": true,
+                        "workspace_access": "read_write"
+                    }),
+                ),
+                CancellationToken::new(),
+            )
+            .await
     });
     let request = approvals.recv().await.unwrap();
-    assert!(jobs.snapshots(&[], false).unwrap().is_empty());
+    assert!(
+        jobs.snapshots(&[], false)
+            .unwrap()
+            .is_empty()
+    );
     assert!(!launch.is_finished());
     request.decision.send(false).unwrap();
     assert!(matches!(
         launch.await.unwrap(),
         Err(ToolError::ExecutionFailed(_))
     ));
-    assert!(jobs.snapshots(&[], false).unwrap().is_empty());
-    assert!(!root.path().join("orbit-denied").exists());
+    assert!(
+        jobs.snapshots(&[], false)
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        !root
+            .path()
+            .join("orbit-denied")
+            .exists()
+    );
 }
 
 #[tokio::test]
@@ -168,7 +217,9 @@ async fn job_tools_validate_schema_and_cancellation_is_session_scoped() {
                 ToolCall::function(
                     "foreign",
                     "cancel_commands",
-                    json!({"job_ids":[job.job_id]})
+                    json!({
+                        "job_ids": [job.job_id]
+                    })
                 ),
                 CancellationToken::new()
             )
@@ -196,7 +247,13 @@ async fn job_tools_validate_schema_and_cancellation_is_session_scoped() {
     assert!(
         status
             .execute(
-                ToolCall::function("bad", "get_command_status", json!({"mode":"all"})),
+                ToolCall::function(
+                    "bad",
+                    "get_command_status",
+                    json!({
+                        "mode": "all"
+                    })
+                ),
                 CancellationToken::new()
             )
             .await
@@ -204,7 +261,13 @@ async fn job_tools_validate_schema_and_cancellation_is_session_scoped() {
     );
     cancel
         .execute(
-            ToolCall::function("cancel", "cancel_commands", json!({"job_ids":[job.job_id]})),
+            ToolCall::function(
+                "cancel",
+                "cancel_commands",
+                json!({
+                    "job_ids": [job.job_id]
+                }),
+            ),
             CancellationToken::new(),
         )
         .await
@@ -215,7 +278,10 @@ async fn job_tools_validate_schema_and_cancellation_is_session_scoped() {
             ToolCall::function(
                 "wait",
                 "wait_commands",
-                json!({"job_ids":[job.job_id],"mode":"all"}),
+                json!({
+                    "job_ids": [job.job_id],
+                    "mode": "all"
+                }),
             ),
             CancellationToken::new(),
         )
@@ -233,7 +299,13 @@ async fn cancelling_a_live_native_command_waits_for_process_cleanup() {
     let jobs = BackgroundJobs::default();
     let (sender, mut approvals) = approval::channel();
     let approver = tokio::spawn(async move {
-        approvals.recv().await.unwrap().decision.send(true).unwrap();
+        approvals
+            .recv()
+            .await
+            .unwrap()
+            .decision
+            .send(true)
+            .unwrap();
     });
     let command = RunCommand::new(Workspace::new(root.path()).unwrap(), sender)
         .with_background_jobs(jobs.clone())
@@ -244,8 +316,9 @@ async fn cancelling_a_live_native_command_waits_for_process_cleanup() {
                 "orbit-cancel",
                 "run_command",
                 json!({
-                    "command":"touch orbit.started; sleep 30; touch orbit.finished",
-                    "background":true, "workspace_access":"read_write",
+                    "command": "touch orbit.started; sleep 30; touch orbit.finished",
+                    "background": true,
+                    "workspace_access": "read_write",
                 }),
             ),
             CancellationToken::new(),
@@ -255,8 +328,14 @@ async fn cancelling_a_live_native_command_waits_for_process_cleanup() {
     approver.await.unwrap();
     let id = output.background_job.unwrap();
     tokio::time::timeout(Duration::from_secs(5), async {
-        while !root.path().join("orbit.started").exists() {
-            let snapshots = jobs.snapshots(std::slice::from_ref(&id), true).unwrap();
+        while !root
+            .path()
+            .join("orbit.started")
+            .exists()
+        {
+            let snapshots = jobs
+                .snapshots(std::slice::from_ref(&id), true)
+                .unwrap();
             assert_eq!(
                 snapshots[0].status,
                 JobStatus::Running,
@@ -267,7 +346,8 @@ async fn cancelling_a_live_native_command_waits_for_process_cleanup() {
     })
     .await
     .unwrap();
-    jobs.cancel(std::slice::from_ref(&id)).unwrap();
+    jobs.cancel(std::slice::from_ref(&id))
+        .unwrap();
     let completed = tokio::time::timeout(
         Duration::from_secs(5),
         jobs.wait(&[id], true, CancellationToken::new()),
@@ -278,8 +358,17 @@ async fn cancelling_a_live_native_command_waits_for_process_cleanup() {
 
     assert_eq!(completed[0].status, JobStatus::Cancelled);
     assert_eq!(completed[0].result.as_ref().unwrap()["cancelled"], true);
-    assert!(!root.path().join("orbit.finished").exists());
-    let directory = outputs.lease().unwrap().path().to_owned();
+    assert!(
+        !root
+            .path()
+            .join("orbit.finished")
+            .exists()
+    );
+    let directory = outputs
+        .lease()
+        .unwrap()
+        .path()
+        .to_owned();
     drop(task);
     assert!(!directory.exists());
 }
@@ -294,7 +383,13 @@ async fn background_completion_emits_original_verification_evidence() {
     std::fs::write(root.path().join("orbit.rs"), "fn orbit() {}\n").unwrap();
     let (sender, mut approvals) = approval::channel();
     let approver = tokio::spawn(async move {
-        approvals.recv().await.unwrap().decision.send(true).unwrap();
+        approvals
+            .recv()
+            .await
+            .unwrap()
+            .decision
+            .send(true)
+            .unwrap();
     });
     let mut tools = ToolRegistry::new();
     tools.register(
@@ -312,7 +407,10 @@ async fn background_completion_emits_original_verification_evidence() {
         response(ChatMessage::assistant_tool_calls(vec![ToolCall::function(
             "orbit-verify",
             "run_command",
-            json!({ "command":"printf 'Orbit verified\\n'", "background":true }),
+            json!({
+                "command": "printf 'Orbit verified\\n'",
+                "background": true
+            }),
         )])),
         response(ChatMessage::assistant("Orbit is checking.")),
         response(ChatMessage::assistant("Orbit checked.")),

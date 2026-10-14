@@ -6,6 +6,7 @@ impl MigrationName for Migration {
         "00000000000020_file_grants"
     }
 }
+
 #[async_trait::async_trait]
 impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
@@ -14,8 +15,16 @@ impl MigrationTrait for Migration {
                 Table::create()
                     .table(Alias::new("tui_file_grants"))
                     .if_not_exists()
-                    .col(ColumnDef::new(Alias::new("session_id")).text().not_null())
-                    .col(ColumnDef::new(Alias::new("path")).text().not_null())
+                    .col(
+                        ColumnDef::new(Alias::new("session_id"))
+                            .text()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(Alias::new("path"))
+                            .text()
+                            .not_null(),
+                    )
                     .primary_key(
                         Index::create()
                             .col(Alias::new("session_id"))
@@ -32,6 +41,7 @@ impl MigrationTrait for Migration {
             .await?;
         Ok(())
     }
+
     async fn down(&self, _: &SchemaManager) -> Result<(), DbErr> {
         super::forward_only()
     }

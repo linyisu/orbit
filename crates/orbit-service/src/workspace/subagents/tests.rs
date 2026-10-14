@@ -55,7 +55,10 @@ async fn catalogue_discovers_stored_children_and_their_own_workspace_without_exe
             )
             .await
             .unwrap();
-        child.move_to(&child_workspace, None).await.unwrap();
+        child
+            .move_to(&child_workspace, None)
+            .await
+            .unwrap();
         child
             .begin("stored child run".into(), "test::test".into())
             .await
@@ -75,7 +78,10 @@ async fn catalogue_discovers_stored_children_and_their_own_workspace_without_exe
     }
     // Listing is independent of model-tool visibility, while the capability
     // ceiling still applies to this native request.
-    setup.resources.tools.remove("read_agent");
+    setup
+        .resources
+        .tools
+        .remove("read_agent");
     let Snapshot::List { agents, next } = execute(&mut setup, Action::List { offset: 0 })
         .await
         .unwrap()
@@ -97,7 +103,11 @@ async fn catalogue_discovers_stored_children_and_their_own_workspace_without_exe
     assert_eq!(agents.len(), 3);
     assert_eq!(agents[2].id, ids[34]);
     assert!(next.is_none());
-    setup.resources.policy.disabled.push(Capability::Subagents);
+    setup
+        .resources
+        .policy
+        .disabled
+        .push(Capability::Subagents);
     assert!(
         execute(&mut setup, Action::List { offset: 0 })
             .await
@@ -143,19 +153,22 @@ async fn native_mutations_check_parent_and_sampled_run_before_calling_registered
         .unwrap();
     let calls = Arc::new(AtomicUsize::new(0));
     let count = calls.clone();
-    setup.resources.tools.register(ClosureTool::new(
-        "cancel_agents",
-        "test routing",
-        serde_json::json!({}),
-        move |arguments, _| {
-            let count = count.clone();
-            async move {
-                assert_eq!(arguments["expected_run_id"], run);
-                count.fetch_add(1, Ordering::SeqCst);
-                Ok("{}".into())
-            }
-        },
-    ));
+    setup
+        .resources
+        .tools
+        .register(ClosureTool::new(
+            "cancel_agents",
+            "test routing",
+            serde_json::json!({}),
+            move |arguments, _| {
+                let count = count.clone();
+                async move {
+                    assert_eq!(arguments["expected_run_id"], run);
+                    count.fetch_add(1, Ordering::SeqCst);
+                    Ok("{}".into())
+                }
+            },
+        ));
     assert!(
         execute(
             &mut setup,
@@ -214,11 +227,19 @@ async fn native_mutations_check_parent_and_sampled_run_before_calling_registered
     assert_eq!((stopped, sampled), (id.clone(), run));
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     assert_eq!(
-        store.session_revision(&id).await.unwrap().unwrap().status,
+        store
+            .session_revision(&id)
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
         "running",
         "acknowledgement must not forge terminal storage state"
     );
-    setup.resources.tools.remove("send_agent_message");
+    setup
+        .resources
+        .tools
+        .remove("send_agent_message");
     assert!(
         execute(
             &mut setup,
@@ -238,7 +259,12 @@ async fn native_mutations_check_parent_and_sampled_run_before_calling_registered
 async fn actor_rejects_a_child_catalogue_from_a_previous_workspace() {
     let root = tempfile::tempdir().unwrap();
     let setup = setup(root.path()).await;
-    let workspace = setup.session.snapshot.session.workspace.clone();
+    let workspace = setup
+        .session
+        .snapshot
+        .session
+        .workspace
+        .clone();
     let handle = crate::workspace::session::Handle::spawn(setup, None)
         .await
         .unwrap();
@@ -246,7 +272,11 @@ async fn actor_rejects_a_child_catalogue_from_a_previous_workspace() {
         .subagents(Action::List { offset: 0 }, "previous-workspace".into())
         .await
         .unwrap_err();
-    assert!(error.to_string().contains("工作区已切换"));
+    assert!(
+        error
+            .to_string()
+            .contains("工作区已切换")
+    );
     assert!(matches!(
         handle
             .subagents(Action::List { offset: 0 }, workspace)

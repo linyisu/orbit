@@ -8,7 +8,8 @@ pub(super) fn resolve(argument: &str, current: &Path, home: Option<&Path>) -> Re
         home.context("未配置用户主目录；请使用 /cd <路径>")?
             .to_path_buf()
     } else if let Some(relative) = argument.strip_prefix("~/") {
-        home.context("未配置用户主目录")?.join(relative)
+        home.context("未配置用户主目录")?
+            .join(relative)
     } else {
         let path = if argument.starts_with(['\'', '"']) {
             let words = shlex::split(argument).context("路径引号未闭合")?;

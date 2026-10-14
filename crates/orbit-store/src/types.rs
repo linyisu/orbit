@@ -38,11 +38,18 @@ pub struct RuntimeSnapshot {
 impl From<Snapshot> for RuntimeSnapshot {
     fn from(mut snapshot: Snapshot) -> Self {
         let files = orbit_agent::memory::FileActivity::from_events(
-            snapshot.runs.iter().flat_map(|run| &run.events),
+            snapshot
+                .runs
+                .iter()
+                .flat_map(|run| &run.events),
         );
         let mut calibration =
             std::collections::BTreeMap::<String, orbit_agent::calibration::TokenCalibration>::new();
-        for event in snapshot.runs.iter().flat_map(|run| &run.events) {
+        for event in snapshot
+            .runs
+            .iter()
+            .flat_map(|run| &run.events)
+        {
             if let AgentEvent::RequestMetrics {
                 profile,
                 estimated_input,
@@ -50,10 +57,15 @@ impl From<Snapshot> for RuntimeSnapshot {
                 ..
             } = event
             {
-                calibration.entry(profile.clone()).or_default().observe(
-                    *estimated_input,
-                    usage.as_ref().and_then(|usage| usage.prompt_tokens),
-                );
+                calibration
+                    .entry(profile.clone())
+                    .or_default()
+                    .observe(
+                        *estimated_input,
+                        usage
+                            .as_ref()
+                            .and_then(|usage| usage.prompt_tokens),
+                    );
             }
         }
         let last_completed = snapshot
@@ -78,7 +90,10 @@ impl RuntimeSnapshot {
     pub(crate) fn absorb(&mut self, evidence: crate::event_log::Evidence) {
         self.files.merge(&evidence.files);
         for (profile, samples) in evidence.calibration {
-            self.calibration.entry(profile).or_default().merge(&samples);
+            self.calibration
+                .entry(profile)
+                .or_default()
+                .merge(&samples);
         }
     }
 
@@ -93,7 +108,11 @@ impl RuntimeSnapshot {
         }
         newer.calibration = calibration;
         let mut runs = std::mem::take(&mut self.snapshot.runs);
-        if newer.runs.iter().any(|run| run.status == "completed") {
+        if newer
+            .runs
+            .iter()
+            .any(|run| run.status == "completed")
+        {
             for run in &mut runs {
                 run.events.clear();
             }

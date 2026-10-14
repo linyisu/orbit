@@ -9,6 +9,7 @@ pub struct Model {
     pub role: String,
     pub task: String,
 }
+
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
 pub enum Relation {
     #[sea_orm(
@@ -24,4 +25,5 @@ pub enum Relation {
     )]
     Session,
 }
+
 impl ActiveModelBehavior for ActiveModel {}

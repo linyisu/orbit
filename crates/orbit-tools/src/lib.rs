@@ -1,3 +1,5 @@
+//! Agent tool contracts backed by runtime permissions and bounded resource access.
+
 mod limits;
 
 pub mod approval;

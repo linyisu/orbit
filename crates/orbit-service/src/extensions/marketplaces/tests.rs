@@ -20,7 +20,10 @@ fn git(root: &Path, args: &[&str]) -> String {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    String::from_utf8(output.stdout).unwrap().trim().to_owned()
+    String::from_utf8(output.stdout)
+        .unwrap()
+        .trim()
+        .to_owned()
 }
 
 #[tokio::test]
@@ -67,12 +70,20 @@ async fn refresh_replaces_the_same_source_even_if_the_catalogue_name_changes() {
     )
     .unwrap();
 
-    let refreshed = store.refresh(source.clone()).await.unwrap();
+    let refreshed = store
+        .refresh(source.clone())
+        .await
+        .unwrap();
 
     assert_eq!(refreshed.name, "after");
     assert_eq!(refreshed.plugins.len(), 1);
     assert_eq!(store.list().unwrap(), vec![refreshed]);
-    assert!(store.refresh("missing/source".into()).await.is_err());
+    assert!(
+        store
+            .refresh("missing/source".into())
+            .await
+            .is_err()
+    );
 
     fs::write(&manifest, "invalid JSON").unwrap();
     assert!(store.refresh(source).await.is_err());
@@ -97,21 +108,33 @@ async fn remove_unregisters_only_the_requested_source_and_preserves_files() {
             .unwrap();
     }
     // Cached source files are retained too; removal is not a cache deletion.
-    let cached = store.root.join("source-existing-checkout");
+    let cached = store
+        .root
+        .join("source-existing-checkout");
     fs::create_dir(&cached).unwrap();
     fs::write(cached.join("package.txt"), "retained").unwrap();
     let first = temp.path().join("first");
 
-    store.remove(first.to_str().unwrap()).unwrap();
+    store
+        .remove(first.to_str().unwrap())
+        .unwrap();
 
     assert_eq!(store.list().unwrap().len(), 1);
     assert_eq!(store.list().unwrap()[0].name, "second");
-    assert!(first.join(".claude-plugin/marketplace.json").is_file());
+    assert!(
+        first
+            .join(".claude-plugin/marketplace.json")
+            .is_file()
+    );
     assert_eq!(
         fs::read_to_string(cached.join("package.txt")).unwrap(),
         "retained"
     );
-    assert!(store.remove(first.to_str().unwrap()).is_err());
+    assert!(
+        store
+            .remove(first.to_str().unwrap())
+            .is_err()
+    );
 }
 
 #[tokio::test]
@@ -129,9 +152,17 @@ async fn adding_a_same_named_source_does_not_replace_another_market() {
         .unwrap();
         sources.push(market.to_string_lossy().into_owned());
     }
-    let original = store.add(sources[0].clone()).await.unwrap();
+    let original = store
+        .add(sources[0].clone())
+        .await
+        .unwrap();
 
-    assert!(store.add(sources[1].clone()).await.is_err());
+    assert!(
+        store
+            .add(sources[1].clone())
+            .await
+            .is_err()
+    );
     assert_eq!(store.list().unwrap(), vec![original]);
 }
 
@@ -166,17 +197,35 @@ async fn a_new_git_revision_does_not_replace_an_existing_checkout() {
     let store = Store::at(temp.path().join("cache"));
     fs::create_dir_all(&store.root).unwrap();
     let url = source.to_str().unwrap();
-    let (first, first_revision) = store.clone_git_url("team/source", url).await.unwrap();
+    let (first, first_revision) = store
+        .clone_git_url("team/source", url)
+        .await
+        .unwrap();
 
     fs::write(&catalog, r#"{"name":"team","plugins":[{"name":"new"}]}"#).unwrap();
     git(&source, &["add", "."]);
     git(&source, &["commit", "-qm", "second"]);
-    let (second, second_revision) = store.clone_git_url("team/source", url).await.unwrap();
+    let (second, second_revision) = store
+        .clone_git_url("team/source", url)
+        .await
+        .unwrap();
 
     assert_ne!(first, second);
     assert_ne!(first_revision, second_revision);
-    assert_eq!(parse_catalog(&first).unwrap().plugins.len(), 0);
-    assert_eq!(parse_catalog(&second).unwrap().plugins.len(), 1);
+    assert_eq!(
+        parse_catalog(&first)
+            .unwrap()
+            .plugins
+            .len(),
+        0
+    );
+    assert_eq!(
+        parse_catalog(&second)
+            .unwrap()
+            .plugins
+            .len(),
+        1
+    );
 }
 
 #[test]
@@ -314,7 +363,8 @@ fn rejects_malformed_or_duplicate_plugin_entries() {
     let temp = tempfile::tempdir().unwrap();
     fs::create_dir_all(temp.path().join(".claude-plugin")).unwrap();
     fs::write(
-        temp.path().join(".claude-plugin/marketplace.json"),
+        temp.path()
+            .join(".claude-plugin/marketplace.json"),
         r#"{"name":"market","plugins":[{"name":"same"},{"name":"same"}]}"#,
     )
     .unwrap();
@@ -322,7 +372,8 @@ fn rejects_malformed_or_duplicate_plugin_entries() {
     assert!(parse_catalog(temp.path()).is_err());
 
     fs::write(
-        temp.path().join(".claude-plugin/marketplace.json"),
+        temp.path()
+            .join(".claude-plugin/marketplace.json"),
         r#"{"name":"market","plugins":[{"description":"no name"}]}"#,
     )
     .unwrap();
@@ -330,7 +381,8 @@ fn rejects_malformed_or_duplicate_plugin_entries() {
     assert!(parse_catalog(temp.path()).is_err());
 
     fs::write(
-        temp.path().join(".claude-plugin/marketplace.json"),
+        temp.path()
+            .join(".claude-plugin/marketplace.json"),
         r#"{"name":"market","plugins":[{"name":"safe","source":"../escape"}]}"#,
     )
     .unwrap();
@@ -358,8 +410,11 @@ fn write_catalog(root: &Path, plugins: serde_json::Value) {
     fs::create_dir_all(root.join(".claude-plugin")).unwrap();
     fs::write(
         root.join(".claude-plugin/marketplace.json"),
-        serde_json::to_vec(&serde_json::json!({"name":"inline-skills", "plugins":plugins}))
-            .unwrap(),
+        serde_json::to_vec(&serde_json::json!({
+            "name": "inline-skills",
+            "plugins": plugins
+        }))
+        .unwrap(),
     )
     .unwrap();
 }
@@ -392,9 +447,17 @@ async fn manifestless_cached_entries_enable_only_their_declared_skills() {
             for skill in skills {
                 write_skill(&root, &format!("skills/{skill}"));
             }
-            serde_json::json!({"name":name, "source":"./", "strict":false,
-            "description":"Inline skill bundle", "version":"1.0",
-            "skills":skills.iter().map(|skill| format!("./skills/{skill}")).collect::<Vec<_>>()})
+            serde_json::json!({
+                "name": name,
+                "source": "./",
+                "strict": false,
+                "description": "Inline skill bundle",
+                "version": "1.0",
+                "skills": skills
+                    .iter()
+                    .map(|skill| format!("./skills/{skill}"))
+                    .collect::<Vec<_>>()
+            })
         })
         .collect::<Vec<_>>();
     write_skill(&root, "skills/not-selected");
@@ -465,8 +528,13 @@ fn manifest_and_entry_skill_paths_preserve_defaults_and_metadata_precedence() {
     .unwrap();
     write_catalog(
         root,
-        serde_json::json!([{"name":"review","source":"plugins/review",
-        "version":"1.0","description":"Entry metadata","skills":["./catalog/selected"]}]),
+        serde_json::json!([{
+            "name": "review",
+            "source": "plugins/review",
+            "version": "1.0",
+            "description": "Entry metadata",
+            "skills": ["./catalog/selected"]
+        }]),
     );
     let market = parse_catalog(root).unwrap();
     let inspected = package::inspect(&market, &market.plugins[0]).unwrap();
@@ -480,8 +548,12 @@ fn manifest_and_entry_skill_paths_preserve_defaults_and_metadata_precedence() {
     // strict=false cannot combine an inline component declaration with plugin.json.
     write_catalog(
         root,
-        serde_json::json!([{"name":"review","source":"plugins/review",
-        "strict":false,"skills":["./catalog/selected"]}]),
+        serde_json::json!([{
+            "name": "review",
+            "source": "plugins/review",
+            "strict": false,
+            "skills": ["./catalog/selected"]
+        }]),
     );
     assert!(
         inspect_plugin(&market, &market.plugins[0])
@@ -505,18 +577,32 @@ fn root_skills_and_manifestless_standard_layout_work_without_strict_flag() {
     write_skill(&root, ".");
     write_catalog(
         &root,
-        serde_json::json!([{"name":"single","source":"./","skills":"."}]),
+        serde_json::json!([{
+            "name": "single",
+            "source": "./",
+            "skills": "."
+        }]),
     );
     let market = parse_catalog(&root).unwrap();
     assert_eq!(
-        inspect_plugin(&market, &market.plugins[0]).unwrap().skills,
+        inspect_plugin(&market, &market.plugins[0])
+            .unwrap()
+            .skills,
         ["single-skill"]
     );
     fs::remove_file(root.join("SKILL.md")).unwrap();
     write_skill(&root, "skills/standard");
-    write_catalog(&root, serde_json::json!([{"name":"single","source":"./"}]));
+    write_catalog(
+        &root,
+        serde_json::json!([{
+            "name": "single",
+            "source": "./"
+        }]),
+    );
     assert_eq!(
-        inspect_plugin(&market, &market.plugins[0]).unwrap().skills,
+        inspect_plugin(&market, &market.plugins[0])
+            .unwrap()
+            .skills,
         ["standard"]
     );
 }
@@ -535,14 +621,24 @@ fn invalid_inline_skill_declarations_never_fall_back_to_loading_all_skills() {
     ] {
         write_catalog(
             &root,
-            serde_json::json!([{"name":"bundle","source":"./","strict":false,"skills":skills}]),
+            serde_json::json!([{
+                "name": "bundle",
+                "source": "./",
+                "strict": false,
+                "skills": skills
+            }]),
         );
         let market = parse_catalog(&root).unwrap();
         assert!(inspect_plugin(&market, &market.plugins[0]).is_err());
     }
     write_catalog(
         &root,
-        serde_json::json!([{"name":"bundle","source":"./","strict":false,"skills":[]}]),
+        serde_json::json!([{
+            "name": "bundle",
+            "source": "./",
+            "strict": false,
+            "skills": []
+        }]),
     );
     let market = parse_catalog(&root).unwrap();
     assert!(
@@ -553,12 +649,19 @@ fn invalid_inline_skill_declarations_never_fall_back_to_loading_all_skills() {
     );
     write_catalog(
         &root,
-        serde_json::json!([{"name":"bundle","source":"./","strict":"false"}]),
+        serde_json::json!([{
+            "name": "bundle",
+            "source": "./",
+            "strict": "false"
+        }]),
     );
     assert!(inspect_plugin(&market, &market.plugins[0]).is_err());
     write_catalog(
         &root,
-        serde_json::json!([{"name":"bundle","source":"./changed"}]),
+        serde_json::json!([{
+            "name": "bundle",
+            "source": "./changed"
+        }]),
     );
     assert!(
         inspect_plugin(&market, &market.plugins[0])
@@ -578,13 +681,22 @@ fn declared_skill_symlinks_cannot_escape_the_plugin_package() {
     std::os::unix::fs::symlink(temp.path().join("outside"), root.join("skills/escaped")).unwrap();
     write_catalog(
         &root,
-        serde_json::json!([{"name":"bundle","source":"./","strict":false,"skills":["./skills/escaped"]}]),
+        serde_json::json!([{
+            "name": "bundle",
+            "source": "./",
+            "strict": false,
+            "skills": ["./skills/escaped"]
+        }]),
     );
     let market = parse_catalog(&root).unwrap();
     assert!(inspect_plugin(&market, &market.plugins[0]).is_err());
     write_catalog(
         &root,
-        serde_json::json!([{"name":"bundle","source":"./","skills":["./skills"]}]),
+        serde_json::json!([{
+            "name": "bundle",
+            "source": "./",
+            "skills": ["./skills"]
+        }]),
     );
     assert!(inspect_plugin(&market, &market.plugins[0]).is_err());
 }

@@ -6,6 +6,7 @@ impl MigrationName for Migration {
         "00000000000027_input_sequence"
     }
 }
+
 #[async_trait::async_trait]
 impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
@@ -19,8 +20,16 @@ impl MigrationTrait for Migration {
                             .primary_key()
                             .auto_increment(),
                     )
-                    .col(ColumnDef::new(Alias::new("session_id")).text().not_null())
-                    .col(ColumnDef::new(Alias::new("content")).text().not_null())
+                    .col(
+                        ColumnDef::new(Alias::new("session_id"))
+                            .text()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(Alias::new("content"))
+                            .text()
+                            .not_null(),
+                    )
                     .col(
                         ColumnDef::new(Alias::new("received"))
                             .integer()
@@ -45,7 +54,11 @@ impl MigrationTrait for Migration {
         )
         .await?;
         manager
-            .drop_table(Table::drop().table(Alias::new("agent_messages")).to_owned())
+            .drop_table(
+                Table::drop()
+                    .table(Alias::new("agent_messages"))
+                    .to_owned(),
+            )
             .await?;
         manager
             .rename_table(
@@ -69,6 +82,7 @@ impl MigrationTrait for Migration {
             .await?;
         Ok(())
     }
+
     async fn down(&self, _: &SchemaManager) -> Result<(), DbErr> {
         super::forward_only()
     }

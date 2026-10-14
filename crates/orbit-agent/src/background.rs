@@ -173,11 +173,15 @@ pub(crate) struct Completion {
 impl BackgroundJobs {
     /// An advisory wakes a waiting parent without finishing or cancelling the job.
     pub fn notify_progress(&self, content: String) {
-        let mut state = self.0.state.lock().expect("background jobs lock poisoned");
+        let mut state = self
+            .0
+            .state
+            .lock()
+            .expect("background jobs lock poisoned");
         if state.notices.len() < MAX_RETAINED_JOBS {
             state
                 .notices
-                .push_back((next_id(), bounded(&content, 8192)));
+                .push_back((next_id(), bounded(&content, 8_192)));
         }
 
         drop(state);
@@ -229,7 +233,11 @@ impl BackgroundJobs {
         label: String,
         output: ToolOutput,
     ) -> Result<JobSnapshot, ToolError> {
-        let mut state = self.0.state.lock().expect("background jobs lock poisoned");
+        let mut state = self
+            .0
+            .state
+            .lock()
+            .expect("background jobs lock poisoned");
         if state.active {
             return Err(ToolError::ExecutionFailed(
                 "restore task results before starting an Agent run".into(),
@@ -256,7 +264,11 @@ impl BackgroundJobs {
     }
 
     pub(crate) fn begin_run(&self) -> Result<RunGuard, ToolError> {
-        let mut state = self.0.state.lock().expect("background jobs lock poisoned");
+        let mut state = self
+            .0
+            .state
+            .lock()
+            .expect("background jobs lock poisoned");
         if state.active {
             return Err(ToolError::ExecutionFailed(
                 "this session already has an active Agent run".into(),
@@ -266,7 +278,11 @@ impl BackgroundJobs {
         state.generation += 1;
         state.active = true;
         let generation = state.generation;
-        for job in state.jobs.values_mut().filter(|job| !job.delivered) {
+        for job in state
+            .jobs
+            .values_mut()
+            .filter(|job| !job.delivered)
+        {
             job.generation = generation;
         }
         state.outputs.clear();
@@ -310,7 +326,11 @@ impl BackgroundJobs {
         let cancellation = parent.child_token();
         let id = next_id();
         let snapshot = {
-            let mut state = self.0.state.lock().expect("background jobs lock poisoned");
+            let mut state = self
+                .0
+                .state
+                .lock()
+                .expect("background jobs lock poisoned");
             if parent.is_cancelled() {
                 return Err(ToolError::Cancelled);
             }
@@ -371,7 +391,11 @@ impl BackgroundJobs {
                         "background command task panicked".into(),
                     ))
                 });
-            let mut state = jobs.0.state.lock().expect("background jobs lock poisoned");
+            let mut state = jobs
+                .0
+                .state
+                .lock()
+                .expect("background jobs lock poisoned");
             if let Some(job) = state.jobs.get_mut(&id) {
                 job.elapsed_ms = Some(millis(job.started.elapsed()));
                 job.cancelled = job.cancellation.is_cancelled();
@@ -389,7 +413,11 @@ impl BackgroundJobs {
         ids: &[String],
         include_result: bool,
     ) -> Result<Vec<JobSnapshot>, ToolError> {
-        let state = self.0.state.lock().expect("background jobs lock poisoned");
+        let state = self
+            .0
+            .state
+            .lock()
+            .expect("background jobs lock poisoned");
         let ids = selected_ids(&state, ids, self.0.capacity)?;
         Ok(ids
             .iter()
@@ -398,7 +426,11 @@ impl BackgroundJobs {
     }
 
     pub fn cancel(&self, ids: &[String]) -> Result<Vec<JobSnapshot>, ToolError> {
-        let state = self.0.state.lock().expect("background jobs lock poisoned");
+        let state = self
+            .0
+            .state
+            .lock()
+            .expect("background jobs lock poisoned");
         let ids = selected_ids(&state, ids, self.0.capacity)?;
         for id in &ids {
             if state.jobs[id].result.is_none() {
@@ -422,7 +454,11 @@ impl BackgroundJobs {
         cancellation: CancellationToken,
     ) -> Result<Vec<JobSnapshot>, ToolError> {
         let ids = {
-            let state = self.0.state.lock().expect("background jobs lock poisoned");
+            let state = self
+                .0
+                .state
+                .lock()
+                .expect("background jobs lock poisoned");
             if ids.is_empty() {
                 state
                     .jobs
@@ -445,10 +481,19 @@ impl BackgroundJobs {
                 return Err(ToolError::Cancelled);
             }
             {
-                let mut state = self.0.state.lock().expect("background jobs lock poisoned");
+                let mut state = self
+                    .0
+                    .state
+                    .lock()
+                    .expect("background jobs lock poisoned");
                 let ready = ids
                     .iter()
-                    .filter(|id| state.jobs.get(*id).is_some_and(|job| job.result.is_some()))
+                    .filter(|id| {
+                        state
+                            .jobs
+                            .get(*id)
+                            .is_some_and(|job| job.result.is_some())
+                    })
                     .count();
 
                 if ids.is_empty()
@@ -458,7 +503,10 @@ impl BackgroundJobs {
                 {
                     let mut snapshots = Vec::new();
                     for id in &ids {
-                        let job = state.jobs.get_mut(id).ok_or_else(|| unknown(id))?;
+                        let job = state
+                            .jobs
+                            .get_mut(id)
+                            .ok_or_else(|| unknown(id))?;
                         if job.result.is_some() {
                             job.observed = true;
                         }
@@ -468,7 +516,10 @@ impl BackgroundJobs {
                     return Ok(snapshots);
                 }
 
-                if ids.iter().any(|id| !state.jobs.contains_key(id)) {
+                if ids
+                    .iter()
+                    .any(|id| !state.jobs.contains_key(id))
+                {
                     return Err(ToolError::ExecutionFailed(
                         "a waited command result was evicted".into(),
                     ));
@@ -477,13 +528,17 @@ impl BackgroundJobs {
             tokio::select! {
                 biased;
                 _ = cancellation.cancelled() => return Err(ToolError::Cancelled),
-                _ = notified => {},
+                _ = notified => {}
             }
         }
     }
 
     pub(crate) fn pending_ids(&self) -> Vec<String> {
-        let state = self.0.state.lock().expect("background jobs lock poisoned");
+        let state = self
+            .0
+            .state
+            .lock()
+            .expect("background jobs lock poisoned");
         state
             .jobs
             .iter()
@@ -504,7 +559,11 @@ impl BackgroundJobs {
                 return Err(ToolError::Cancelled);
             }
             {
-                let state = self.0.state.lock().expect("background jobs lock poisoned");
+                let state = self
+                    .0
+                    .state
+                    .lock()
+                    .expect("background jobs lock poisoned");
                 if !state.notices.is_empty()
                     || !state
                         .jobs
@@ -520,13 +579,17 @@ impl BackgroundJobs {
             tokio::select! {
                 biased;
                 _ = cancellation.cancelled() => return Err(ToolError::Cancelled),
-                _ = notified => {},
+                _ = notified => {}
             }
         }
     }
 
     pub(crate) fn completions(&self) -> Vec<Completion> {
-        let state = self.0.state.lock().expect("background jobs lock poisoned");
+        let state = self
+            .0
+            .state
+            .lock()
+            .expect("background jobs lock poisoned");
         state
             .jobs
             .iter()
@@ -573,7 +636,9 @@ impl Job {
                 } else if result.as_ref().is_some_and(|value| {
                     value["timed_out"] == true
                         || matches!(value["status"].as_str(), Some("failed" | "interrupted"))
-                        || value.get("exit_code").is_some_and(|code| code != 0)
+                        || value
+                            .get("exit_code")
+                            .is_some_and(|code| code != 0)
                 }) {
                     JobStatus::Failed
                 } else {
@@ -582,10 +647,14 @@ impl Job {
             }
         };
         let result = if include_result {
-            self.result.as_ref().map(|result| match result {
-                Ok(output) => compact_output(&output.content),
-                Err(error) => serde_json::json!({ "error": error.to_string() }),
-            })
+            self.result
+                .as_ref()
+                .map(|result| match result {
+                    Ok(output) => compact_output(&output.content),
+                    Err(error) => serde_json::json!({
+                        "error": error.to_string()
+                    }),
+                })
         } else {
             None
         };
@@ -643,7 +712,9 @@ fn next_id() -> String {
 }
 
 fn millis(duration: std::time::Duration) -> u64 {
-    duration.as_millis().min(u64::MAX as u128) as u64
+    duration
+        .as_millis()
+        .min(u64::MAX as u128) as u64
 }
 
 fn bounded(text: &str, limit: usize) -> String {
@@ -659,11 +730,14 @@ fn bounded(text: &str, limit: usize) -> String {
 
 fn compact_output(content: &str) -> serde_json::Value {
     let Ok(mut value) = serde_json::from_str::<serde_json::Value>(content) else {
-        return serde_json::Value::String(bounded(content, 4096));
+        return serde_json::Value::String(bounded(content, 4_096));
     };
     for field in ["stdout", "stderr"] {
-        if let Some(text) = value.get(field).and_then(serde_json::Value::as_str) {
-            let preview = bounded(text, 2048);
+        if let Some(text) = value
+            .get(field)
+            .and_then(serde_json::Value::as_str)
+        {
+            let preview = bounded(text, 2_048);
             if preview != text {
                 value["completion_preview_truncated"] = true.into();
             }
@@ -684,7 +758,13 @@ mod tests {
         let (release, gate) = oneshot::channel();
         let snapshot = jobs
             .start(
-                ToolCall::function(name, "run_command", serde_json::json!({"command":name})),
+                ToolCall::function(
+                    name,
+                    "run_command",
+                    serde_json::json!({
+                        "command": name
+                    }),
+                ),
                 name.into(),
                 None,
                 CancellationToken::new(),
@@ -717,7 +797,10 @@ mod tests {
         let waiting = tokio::spawn({
             let jobs = jobs.clone();
             let ids = ids.clone();
-            async move { jobs.wait(&ids, true, CancellationToken::new()).await }
+            async move {
+                jobs.wait(&ids, true, CancellationToken::new())
+                    .await
+            }
         });
 
         tokio::task::yield_now().await;
@@ -740,7 +823,10 @@ mod tests {
             .await
             .is_err()
         );
-        assert!(jobs.cancel(&[ids[0].clone(), ids[0].clone()]).is_err());
+        assert!(
+            jobs.cancel(&[ids[0].clone(), ids[0].clone()])
+                .is_err()
+        );
         assert!(
             jobs.completions()
                 .iter()
@@ -773,7 +859,10 @@ mod tests {
         let waiting = tokio::spawn({
             let jobs = jobs.clone();
             let ids = ids.clone();
-            async move { jobs.wait(&ids, true, CancellationToken::new()).await }
+            async move {
+                jobs.wait(&ids, true, CancellationToken::new())
+                    .await
+            }
         });
 
         tokio::task::yield_now().await;
@@ -858,7 +947,11 @@ mod tests {
             .wait(&ids, true, CancellationToken::new())
             .await
             .unwrap();
-        assert!(result.iter().all(|job| job.status == JobStatus::Cancelled));
+        assert!(
+            result
+                .iter()
+                .all(|job| job.status == JobStatus::Cancelled)
+        );
         let panic = jobs
             .start(
                 ToolCall::function("panic", "run_command", serde_json::json!({})),
@@ -886,8 +979,11 @@ mod tests {
     fn completion_preview_preserves_utf8_and_exit_metadata() {
         let value = compact_output(
             &serde_json::json!({
-                "exit_code": 7, "stdout": "轨道".repeat(3000), "stderr": "轨道".repeat(3000),
-                "output_id": "cmd-orbit", "timed_out": false,
+                "exit_code": 7,
+                "stdout": "轨道".repeat(3_000),
+                "stderr": "轨道".repeat(3_000),
+                "output_id": "cmd-orbit",
+                "timed_out": false,
             })
             .to_string(),
         );
@@ -895,7 +991,7 @@ mod tests {
         assert_eq!(value["exit_code"], 7);
         assert_eq!(value["output_id"], "cmd-orbit");
         assert_eq!(value["completion_preview_truncated"], true);
-        assert!(value["stdout"].as_str().unwrap().len() < 2100);
-        assert!(value["stderr"].as_str().unwrap().len() < 2100);
+        assert!(value["stdout"].as_str().unwrap().len() < 2_100);
+        assert!(value["stderr"].as_str().unwrap().len() < 2_100);
     }
 }

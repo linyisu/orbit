@@ -95,7 +95,10 @@ impl AuthStore {
 
         for entry in fs::read_dir(&self.directory)? {
             let path = entry?.path();
-            if path.extension().is_none_or(|extension| extension != "json") {
+            if path
+                .extension()
+                .is_none_or(|extension| extension != "json")
+            {
                 continue;
             }
             let name = path
@@ -168,19 +171,28 @@ impl AuthStore {
         }
         Ok(Some(crate::UsageAuthorization {
             provider,
-            account: credential.account.clone().unwrap_or_else(|| name.into()),
+            account: credential
+                .account
+                .clone()
+                .unwrap_or_else(|| name.into()),
             auth,
         }))
     }
 
     fn path(&self, name: &str) -> PathBuf {
-        self.directory.join(format!("{name}.json"))
+        self.directory
+            .join(format!("{name}.json"))
     }
 
     async fn lock(&self, name: &str) -> Result<File> {
         validate_name(name)?;
         self.create_directory()?;
-        let file = private_file(&self.directory.join(format!("{name}.lock")), true)?;
+        let file = private_file(
+            &self
+                .directory
+                .join(format!("{name}.lock")),
+            true,
+        )?;
         let deadline = tokio::time::Instant::now() + Duration::from_secs(45);
 
         loop {
@@ -207,7 +219,8 @@ impl AuthStore {
             Err(error) => return Err(error.into()),
         };
         let mut content = Vec::new();
-        file.take(65_537).read_to_end(&mut content)?;
+        file.take(65_537)
+            .read_to_end(&mut content)?;
         if content.len() > 65_536 {
             return Err(AuthError::Storage);
         }
@@ -308,6 +321,7 @@ fn validate_owner(metadata: &fs::Metadata) -> std::io::Result<()> {
             ));
         }
     }
+
     #[cfg(not(unix))]
     let _ = metadata;
     Ok(())
@@ -379,7 +393,9 @@ mod tests {
         assert_eq!(updated.headers["authorization"], "Bearer second-secret");
         assert!(store.remove("test").await.unwrap());
         assert!(matches!(
-            store.resolve("test", &endpoint, AuthTarget::Openai).await,
+            store
+                .resolve("test", &endpoint, AuthTarget::Openai)
+                .await,
             Err(AuthError::Missing)
         ));
         assert!(!store.remove("test").await.unwrap());
@@ -438,7 +454,11 @@ mod tests {
             0o700
         );
         assert_eq!(
-            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            fs::metadata(&path)
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
             0o600
         );
 

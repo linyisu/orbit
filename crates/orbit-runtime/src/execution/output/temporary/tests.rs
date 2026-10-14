@@ -16,9 +16,19 @@ async fn task_end_expires_access_but_keeps_outstanding_io_alive() {
     let path = lease.path().to_owned();
     assert!(path.starts_with(CommandOutputs::root()));
     assert!(path.starts_with(std::env::temp_dir()));
-    assert_eq!(path.metadata().unwrap().permissions().mode() & 0o777, 0o700);
+    assert_eq!(
+        path.metadata()
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o700
+    );
     let (id, mut stdout, stderr) = log.split();
-    stdout.append(b"first page").await.unwrap();
+    stdout
+        .append(b"first page")
+        .await
+        .unwrap();
     let file = path.join(format!("{id}.stdout"));
     assert_eq!(std::fs::read(&file).unwrap(), b"first page");
 
@@ -26,7 +36,10 @@ async fn task_end_expires_access_but_keeps_outstanding_io_alive() {
     assert!(outputs.lease().is_none());
     assert!(outputs.create_log().await.is_err());
     // A late writer or an already-started page read owns its directory.
-    stdout.append(b"; final page").await.unwrap();
+    stdout
+        .append(b"; final page")
+        .await
+        .unwrap();
     drop(stdout);
     drop(stderr);
     assert_eq!(std::fs::read(&file).unwrap(), b"first page; final page");
@@ -45,7 +58,11 @@ async fn task_end_expires_access_but_keeps_outstanding_io_alive() {
     drop(lease);
     assert!(!path.exists());
     drop(next_log);
-    let next_path = outputs.lease().unwrap().path().to_owned();
+    let next_path = outputs
+        .lease()
+        .unwrap()
+        .path()
+        .to_owned();
     drop(next);
     assert!(!next_path.exists());
 }
@@ -59,7 +76,8 @@ fn orphan_collection_keeps_live_directories_unknown_files_and_symlinks() {
     let RunDirectory { directory, _lock } = create_directory(&root).unwrap();
     let orphan = directory.keep();
     std::fs::write(orphan.join("cmd-old.stdout"), b"orphan").unwrap();
-    drop(_lock); // Model abrupt process exit while leaving the files behind.
+    // Model abrupt process exit while leaving the files behind.
+    drop(_lock);
 
     let external = tempfile::tempdir().unwrap();
     std::fs::write(external.path().join("keep"), b"user file").unwrap();

@@ -6,6 +6,7 @@ impl MigrationName for Migration {
         "00000000000021_subagents"
     }
 }
+
 #[async_trait::async_trait]
 impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
@@ -26,7 +27,11 @@ impl MigrationTrait for Migration {
                             .not_null()
                             .check(Expr::col(Alias::new("role")).is_in(["explore", "review"])),
                     )
-                    .col(ColumnDef::new(Alias::new("task")).text().not_null())
+                    .col(
+                        ColumnDef::new(Alias::new("task"))
+                            .text()
+                            .not_null(),
+                    )
                     .foreign_key(
                         ForeignKey::create()
                             .from(Alias::new("agent_sessions"), Alias::new("session_id"))
@@ -81,7 +86,11 @@ impl MigrationTrait for Migration {
                             .text()
                             .not_null(),
                     )
-                    .col(ColumnDef::new(Alias::new("call")).text().not_null())
+                    .col(
+                        ColumnDef::new(Alias::new("call"))
+                            .text()
+                            .not_null(),
+                    )
                     .col(ColumnDef::new(Alias::new("result")).text())
                     .col(
                         ColumnDef::new(Alias::new("delivered"))
@@ -139,8 +148,16 @@ impl MigrationTrait for Migration {
                             .primary_key()
                             .auto_increment(),
                     )
-                    .col(ColumnDef::new(Alias::new("session_id")).text().not_null())
-                    .col(ColumnDef::new(Alias::new("content")).text().not_null())
+                    .col(
+                        ColumnDef::new(Alias::new("session_id"))
+                            .text()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(Alias::new("content"))
+                            .text()
+                            .not_null(),
+                    )
                     .col(
                         ColumnDef::new(Alias::new("received"))
                             .integer()
@@ -159,6 +176,7 @@ impl MigrationTrait for Migration {
             .await?;
         Ok(())
     }
+
     async fn down(&self, _: &SchemaManager) -> Result<(), DbErr> {
         super::forward_only()
     }

@@ -23,23 +23,52 @@ pub(crate) const API_BASE: &str = "https://daily-cloudcode-pa.googleapis.com/";
 static CLIENT_VERSION: tokio::sync::OnceCell<String> = tokio::sync::OnceCell::const_new();
 
 pub async fn refresh_client_version() {
-    let _ = CLIENT_VERSION.get_or_try_init(|| async {
-        let response = crate::http::client()?.get("https://antigravity-hub-auto-updater-974169037036.us-central1.run.app/manifest/latest-arm64-mac.yml")
-            .header("user-agent", "electron-builder").header("cache-control", "no-cache")
-            .timeout(std::time::Duration::from_secs(5)).send().await.map_err(|_| crate::AuthError::Transport)?;
-        if !response.status().is_success() { return Err(crate::AuthError::Transport); }
-        let text = response.text().await.map_err(|_| crate::AuthError::Transport)?;
-        text.lines().find_map(|line| {
-            let value = line.trim().strip_prefix("version:")?.split('#').next()?.trim().trim_matches(['\"', '\'']);
-            let parts = value.split('.').collect::<Vec<_>>();
-            (parts.len() == 3 && parts.iter().all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit())))
-                .then(|| value.to_owned())
-        }).ok_or(crate::AuthError::Transport)
-    }).await;
+    let _ = CLIENT_VERSION
+        .get_or_try_init(|| async {
+            let response = crate::http::client()?
+                .get(
+                    "https://antigravity-hub-auto-updater-97416903703\
+            6.us-central1.run.app/manifest/latest-arm64-mac.yml",
+                )
+                .header("user-agent", "electron-builder")
+                .header("cache-control", "no-cache")
+                .timeout(std::time::Duration::from_secs(5))
+                .send()
+                .await
+                .map_err(|_| crate::AuthError::Transport)?;
+            if !response.status().is_success() {
+                return Err(crate::AuthError::Transport);
+            }
+            let text = response
+                .text()
+                .await
+                .map_err(|_| crate::AuthError::Transport)?;
+            text.lines()
+                .find_map(|line| {
+                    let value = line
+                        .trim()
+                        .strip_prefix("version:")?
+                        .split('#')
+                        .next()?
+                        .trim()
+                        .trim_matches(['\"', '\'']);
+                    let parts = value.split('.').collect::<Vec<_>>();
+                    (parts.len() == 3
+                        && parts.iter().all(|part| {
+                            !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit())
+                        }))
+                    .then(|| value.to_owned())
+                })
+                .ok_or(crate::AuthError::Transport)
+        })
+        .await;
 }
 
 pub(crate) fn user_agent() -> String {
-    let version = CLIENT_VERSION.get().map(String::as_str).unwrap_or("2.8.0");
+    let version = CLIENT_VERSION
+        .get()
+        .map(String::as_str)
+        .unwrap_or("2.8.0");
     format!("antigravity/hub/{version} (aidev_client; os_type=darwin; arch=arm64; cl=963137146)")
 }
 
@@ -88,11 +117,17 @@ async fn load(base: &str, token: &str) -> Result<Value> {
         base,
         "loadCodeAssist",
         token,
-        json!({ "metadata": { "ideType": "ANTIGRAVITY" } }),
+        json!({
+            "metadata": {
+                "ideType": "ANTIGRAVITY"
+            }
+        }),
     )
     .await?;
 
-    if data.get("paidTier").is_none_or(Value::is_null)
+    if data
+        .get("paidTier")
+        .is_none_or(Value::is_null)
         && let Some(project) = data["cloudaicompanionProject"]
             .as_str()
             .filter(|id| !id.is_empty())
@@ -103,7 +138,9 @@ async fn load(base: &str, token: &str) -> Result<Value> {
             token,
             json!({
                 "cloudaicompanionProject": project,
-                "metadata": { "ideType": "ANTIGRAVITY" }
+                "metadata": {
+                    "ideType": "ANTIGRAVITY"
+                }
             }),
         )
         .await?;
@@ -118,14 +155,20 @@ async fn onboard(base: &str, token: &str) -> Result<()> {
         "onboardUser",
         token,
         json!({
-            "tierId": "free-tier", "metadata": { "ideType": "ANTIGRAVITY" }
+            "tierId": "free-tier",
+            "metadata": {
+                "ideType": "ANTIGRAVITY"
+            }
         }),
     )
     .await?;
 
     loop {
         if operation["done"] == true {
-            if operation.get("error").is_some_and(|error| !error.is_null()) {
+            if operation
+                .get("error")
+                .is_some_and(|error| !error.is_null())
+            {
                 return Err(AuthError::Configuration(
                     "Antigravity project initialization failed",
                 ));
@@ -137,7 +180,9 @@ async fn onboard(base: &str, token: &str) -> Result<()> {
             return Ok(());
         }
 
-        let name = operation["name"].as_str().ok_or(AuthError::InvalidToken)?;
+        let name = operation["name"]
+            .as_str()
+            .ok_or(AuthError::InvalidToken)?;
         if !name.starts_with("operations/")
             || !name
                 .bytes()
@@ -163,14 +208,22 @@ async fn onboard(base: &str, token: &str) -> Result<()> {
 fn check_eligibility(data: &Value, token: &str) -> Result<()> {
     let allowed = data["allowedTiers"]
         .as_array()
-        .is_some_and(|tiers| tiers.iter().any(|tier| tier["id"] == "free-tier"));
+        .is_some_and(|tiers| {
+            tiers
+                .iter()
+                .any(|tier| tier["id"] == "free-tier")
+        });
     if allowed {
         return Ok(());
     }
 
     let tier = data["ineligibleTiers"]
         .as_array()
-        .and_then(|tiers| tiers.iter().find(|tier| tier["tierId"] == "free-tier"));
+        .and_then(|tiers| {
+            tiers
+                .iter()
+                .find(|tier| tier["tierId"] == "free-tier")
+        });
     let Some(tier) = tier else {
         return Ok(());
     };
@@ -191,7 +244,7 @@ fn check_eligibility(data: &Value, token: &str) -> Result<()> {
         redacted
             .chars()
             .filter(|character| !character.is_control())
-            .take(2048)
+            .take(2_048)
             .collect::<String>()
     };
     let message = safe_text(reason);
@@ -203,7 +256,7 @@ fn check_eligibility(data: &Value, token: &str) -> Result<()> {
         && url.username().is_empty()
         && url.password().is_none()
         && !raw.chars().any(char::is_control)
-        && raw.len() <= 4096
+        && raw.len() <= 4_096
     {
         // Preserve the complete signed URL; truncating it makes verification fail.
         if token.is_empty() || !raw.contains(token) {
@@ -220,7 +273,10 @@ fn check_eligibility(data: &Value, token: &str) -> Result<()> {
 async fn discover_project(base: &str, token: &str) -> Result<String> {
     let data = load(base, token).await?;
     check_eligibility(&data, token)?;
-    if data.get("currentTier").is_none_or(Value::is_null) {
+    if data
+        .get("currentTier")
+        .is_none_or(Value::is_null)
+    {
         tokio::time::timeout(Duration::from_secs(30), onboard(base, token))
             .await
             .map_err(|_| AuthError::Timeout)??;
@@ -243,27 +299,47 @@ mod tests {
     // Expected wire header transcribed from OMP v18.2.8 gemini-headers.ts,
     // independently of Orbit's user_agent() implementation.
     async fn server(responses: Vec<Value>) -> (String, tokio::task::JoinHandle<Vec<Value>>) {
-        crate::google::tests::server_with_headers(responses, &[
-            "user-agent: antigravity/hub/2.8.0 (aidev_client; os_type=darwin; arch=arm64; cl=963137146)",
-            "authorization: bearer fake-token",
-            "content-type: application/json",
-        ]).await
+        crate::google::tests::server_with_headers(
+            responses,
+            &[
+                "user-agent: antigravity/hub/2.8.0 (aidev_client; os_type=darwin; arch=arm64; \
+                cl=963137146)",
+                "authorization: bearer fake-token",
+                "content-type: application/json",
+            ],
+        )
+        .await
     }
 
     #[tokio::test]
     async fn pending_onboarding_polls_with_the_same_client_headers() {
         let (base, task) = server(vec![
-            json!({ "name": "operations/setup", "done": false }),
-            json!({ "done": true, "response": { "@type": "OnboardUserResponse" } }),
+            json!({
+                "name": "operations/setup",
+                "done": false
+            }),
+            json!({
+                "done": true,
+                "response": {
+                    "@type": "OnboardUserResponse"
+                }
+            }),
         ])
         .await;
 
-        onboard(&base, "fake-token").await.unwrap();
+        onboard(&base, "fake-token")
+            .await
+            .unwrap();
 
         let requests = task.await.unwrap();
         assert_eq!(
             requests[0],
-            json!({ "tierId": "free-tier", "metadata": { "ideType": "ANTIGRAVITY" } })
+            json!({
+                "tierId": "free-tier",
+                "metadata": {
+                    "ideType": "ANTIGRAVITY"
+                }
+            })
         );
         assert_eq!(requests[1], Value::Null);
     }
@@ -271,27 +347,58 @@ mod tests {
     #[tokio::test]
     async fn new_accounts_are_onboarded_and_the_managed_project_is_reloaded() {
         let (base, task) = server(vec![
-            json!({ "allowedTiers": [{ "id": "free-tier" }] }),
-            json!({ "done": true, "response": { "@type": "OnboardUserResponse" } }),
-            json!({ "currentTier": { "id": "free-tier" }, "paidTier": { "id": "paid" }, "cloudaicompanionProject": "managed-project" }),
-        ]).await;
+            json!({
+                "allowedTiers": [{
+                    "id": "free-tier"
+                }]
+            }),
+            json!({
+                "done": true,
+                "response": {
+                    "@type": "OnboardUserResponse"
+                }
+            }),
+            json!({
+                "currentTier": {
+                    "id": "free-tier"
+                },
+                "paidTier": {
+                    "id": "paid"
+                },
+                "cloudaicompanionProject": "managed-project"
+            }),
+        ])
+        .await;
 
-        let project = discover_project(&base, "fake-token").await.unwrap();
+        let project = discover_project(&base, "fake-token")
+            .await
+            .unwrap();
 
         assert_eq!(project, "managed-project");
         let requests = task.await.unwrap();
         assert_eq!(requests.len(), 3);
         assert_eq!(requests[0]["metadata"]["ideType"], "ANTIGRAVITY");
         assert_eq!(requests[1]["tierId"], "free-tier");
-        assert!(requests[1].get("cloudaicompanionProject").is_none());
+        assert!(
+            requests[1]
+                .get("cloudaicompanionProject")
+                .is_none()
+        );
     }
 
     #[tokio::test]
     async fn existing_free_accounts_use_project_scoped_discovery_without_onboarding() {
-        let loaded = json!({ "currentTier": { "id": "free-tier" }, "cloudaicompanionProject": "existing-project" });
+        let loaded = json!({
+            "currentTier": {
+                "id": "free-tier"
+            },
+            "cloudaicompanionProject": "existing-project"
+        });
         let (base, task) = server(vec![loaded.clone(); 4]).await;
 
-        let project = discover_project(&base, "fake-token").await.unwrap();
+        let project = discover_project(&base, "fake-token")
+            .await
+            .unwrap();
 
         assert_eq!(project, "existing-project");
         let requests = task.await.unwrap();
@@ -306,13 +413,20 @@ mod tests {
 
     #[tokio::test]
     async fn ineligible_accounts_do_not_attempt_onboarding_or_request_a_user_project() {
-        let (base, task) = server(vec![json!({ "ineligibleTiers": [{ "tierId": "free-tier", "reasonMessage": "unavailable" }] })]).await;
+        let (base, task) = server(vec![json!({
+            "ineligibleTiers": [{
+                "tierId": "free-tier",
+                "reasonMessage": "unavailable"
+            }]
+        })])
+        .await;
 
         let result = discover_project(&base, "fake-token").await;
 
-        assert!(
-            matches!(result, Err(AuthError::AntigravityAccount(reason)) if reason == "unavailable")
-        );
+        assert!(matches!(
+            result,
+            Err(AuthError::AntigravityAccount(reason)) if reason == "unavailable"
+        ));
         assert_eq!(task.await.unwrap().len(), 1);
     }
 
@@ -340,34 +454,58 @@ mod tests {
     fn verification_urls_remain_complete_even_when_longer_than_display_messages() {
         let url = format!(
             "https://accounts.google.com/signin/continue?flow={}&authuser=0",
-            "x".repeat(2500)
+            "x".repeat(2_500)
         );
-        let response = json!({ "ineligibleTiers": [{
-            "tierId": "free-tier", "reasonMessage": "Verify your account",
-            "validationUrl": url
-        }] });
+        let response = json!({
+            "ineligibleTiers": [{
+                "tierId": "free-tier",
+                "reasonMessage": "Verify your account",
+                "validationUrl": url
+            }]
+        });
 
         let error = check_eligibility(&response, "fake-token").unwrap_err();
 
-        assert!(
-            matches!(error, AuthError::AntigravityVerification { url: actual, .. } if actual == url)
-        );
+        assert!(matches!(
+            error,
+            AuthError::AntigravityVerification { url: actual, .. } if actual == url
+        ));
     }
 
     #[test]
     fn eligibility_does_not_invent_a_denial_or_open_unsafe_validation_urls() {
         for response in [
-            json!({ "ineligibleTiers": [{ "tierId": "free-tier" }] }),
-            json!({ "ineligibleTiers": [{ "tierId": "free-tier", "reasonMessage": "" }] }),
-            json!({ "allowedTiers": [{ "id": "free-tier" }], "ineligibleTiers": [{ "tierId": "free-tier", "reasonMessage": "old denial" }] }),
+            json!({
+                "ineligibleTiers": [{
+                    "tierId": "free-tier"
+                }]
+            }),
+            json!({
+                "ineligibleTiers": [{
+                    "tierId": "free-tier",
+                    "reasonMessage": ""
+                }]
+            }),
+            json!({
+                "allowedTiers": [{
+                    "id": "free-tier"
+                }],
+                "ineligibleTiers": [{
+                    "tierId": "free-tier",
+                    "reasonMessage": "old denial"
+                }]
+            }),
         ] {
             assert!(check_eligibility(&response, "token").is_ok());
         }
 
-        let response = json!({ "ineligibleTiers": [{
-            "tierId": "free-tier", "reasonMessage": "verification needed",
-            "validationUrl": "javascript:alert(1)"
-        }] });
+        let response = json!({
+            "ineligibleTiers": [{
+                "tierId": "free-tier",
+                "reasonMessage": "verification needed",
+                "validationUrl": "javascript:alert(1)"
+            }]
+        });
         let error = check_eligibility(&response, "token")
             .unwrap_err()
             .to_string();

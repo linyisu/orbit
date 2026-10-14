@@ -60,7 +60,7 @@ impl SearchProvider {
 
 pub(super) fn normalize_arguments(args: &mut SearchArguments) -> Result<(), ToolError> {
     if args.query.chars().count() > 512
-        || args.query.len() > 2048
+        || args.query.len() > 2_048
         || !(1..=10).contains(&args.max_results)
     {
         return Err(ToolError::InvalidArguments {
@@ -71,7 +71,11 @@ pub(super) fn normalize_arguments(args: &mut SearchArguments) -> Result<(), Tool
         });
     }
     // Do not remove quotes/operators: they express the caller's search intent.
-    args.query = args.query.split_whitespace().collect::<Vec<_>>().join(" ");
+    args.query = args
+        .query
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
     if args.query.is_empty() {
         return Err(ToolError::InvalidArguments {
             tool: "web_search".into(),
@@ -82,10 +86,15 @@ pub(super) fn normalize_arguments(args: &mut SearchArguments) -> Result<(), Tool
     if let Some(language) = &mut args.language {
         let parts: Vec<_> = language.split('-').collect();
         if !(2..=3).contains(&parts[0].len())
-            || !parts[0].bytes().all(|b| b.is_ascii_alphabetic())
+            || !parts[0]
+                .bytes()
+                .all(|b| b.is_ascii_alphabetic())
             || parts.len() > 2
             || (parts.len() == 2
-                && (parts[1].len() != 2 || !parts[1].bytes().all(|b| b.is_ascii_alphabetic())))
+                && (parts[1].len() != 2
+                    || !parts[1]
+                        .bytes()
+                        .all(|b| b.is_ascii_alphabetic())))
         {
             return Err(ToolError::InvalidArguments {
                 tool: "web_search".into(),
@@ -97,7 +106,11 @@ pub(super) fn normalize_arguments(args: &mut SearchArguments) -> Result<(), Tool
     }
 
     if let Some(region) = &mut args.region {
-        if region.len() != 2 || !region.bytes().all(|b| b.is_ascii_alphabetic()) {
+        if region.len() != 2
+            || !region
+                .bytes()
+                .all(|b| b.is_ascii_alphabetic())
+        {
             return Err(ToolError::InvalidArguments {
                 tool: "web_search".into(),
                 message: "region must be a two-letter country code".into(),
@@ -169,7 +182,10 @@ pub(super) async fn run(
     providers: &[SearchProvider],
     cooldown: &Mutex<HashMap<SearchProvider, Option<Instant>>>,
 ) -> Result<String, ToolError> {
-    let endpoints: Vec<_> = providers.iter().map(|&p| (p, p.endpoint())).collect();
+    let endpoints: Vec<_> = providers
+        .iter()
+        .map(|&p| (p, p.endpoint()))
+        .collect();
     route(args, client, &endpoints, cooldown).await
 }
 
@@ -247,12 +263,30 @@ fn output(
     reasons: &[String],
 ) -> String {
     let results = search_results::select(page.results, args.max_results);
-    let result_values: Vec<_> = results.iter().map(|r| json!({"title": r.title, "url": r.url, "snippet": r.snippet, "snippet_empty": r.snippet.is_empty()})).collect();
-    let mut value = json!({"query": args.query, "provider": provider.name(), "results": result_values,
-        "results_returned": results.len(), "requested_max_results": args.max_results,
-        "fewer_results": results.len() < args.max_results, "source_kind": "untrusted_web_search_results",
-        "request_url": page.request_url, "response_url": page.response_url,
-        "query_match_unconfirmed": page.unconfirmed, "warnings": page.warnings});
+    let result_values: Vec<_> = results
+        .iter()
+        .map(|r| {
+            json!({
+                "title": r.title,
+                "url": r.url,
+                "snippet": r.snippet,
+                "snippet_empty": r.snippet.is_empty()
+            })
+        })
+        .collect();
+    let mut value = json!({
+        "query": args.query,
+        "provider": provider.name(),
+        "results": result_values,
+        "results_returned": results.len(),
+        "requested_max_results": args.max_results,
+        "fewer_results": results.len() < args.max_results,
+        "source_kind": "untrusted_web_search_results",
+        "request_url": page.request_url,
+        "response_url": page.response_url,
+        "query_match_unconfirmed": page.unconfirmed,
+        "warnings": page.warnings
+    });
     if !reasons.is_empty() {
         value["fallback_reason"] = reasons.join("; ").into();
     }

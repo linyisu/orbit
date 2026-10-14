@@ -95,7 +95,11 @@ pub async fn start(
         .local_limit(options.config.context_tokens, max_output_tokens as usize);
     let inbox = orbit_agent::inbox::AgentInbox::default();
     if !compacting {
-        for message in session.store.pending_agent_messages(session.id()).await? {
+        for message in session
+            .store
+            .pending_agent_messages(session.id())
+            .await?
+        {
             inbox.push(message).await?;
         }
     }
@@ -176,7 +180,9 @@ pub async fn start(
             });
         }
 
-        agent.run_with_agent_events(request, token, sender).await
+        agent
+            .run_with_agent_events(request, token, sender)
+            .await
     });
 
     Ok(StartedRun {
@@ -192,21 +198,27 @@ pub async fn start(
 // the user retries immediately, summarize the immutable source snapshot rather
 // than trying to compress the already small projection a second time.
 fn retry_archive_id(runs: &[Run], history: &[ChatMessage]) -> Option<i64> {
-    let last_completed = runs.iter().rev().find(|run| run.status == "completed")?;
+    let last_completed = runs
+        .iter()
+        .rev()
+        .find(|run| run.status == "completed")?;
 
     if last_completed.prompt != "/compact" {
         return None;
     }
 
-    let reference = last_completed.events.iter().find_map(|event| match event {
-        AgentEvent::CompactionRecorded { record }
-            if record.strategy == CompactionStrategy::ArchiveProjection =>
-        {
-            record.archive.as_deref()
-        }
+    let reference = last_completed
+        .events
+        .iter()
+        .find_map(|event| match event {
+            AgentEvent::CompactionRecorded { record }
+                if record.strategy == CompactionStrategy::ArchiveProjection =>
+            {
+                record.archive.as_deref()
+            }
 
-        _ => None,
-    })?;
+            _ => None,
+        })?;
     let id = reference
         .strip_prefix("read_history archive_id=")?
         .split(';')
@@ -262,7 +274,20 @@ pub fn outcome(
     cancellation: Option<&CancellationToken>,
 ) -> (&'static str, AgentEvent, Option<Vec<ChatMessage>>) {
     match result {
-        Ok(Ok(result)) if matches!(&result.final_message, ChatMessage::Assistant { content, tool_calls } if content.as_deref().unwrap_or_default().trim().is_empty() && tool_calls.is_empty()) => {
+        Ok(Ok(result))
+            if matches!(
+                &result.final_message,
+                ChatMessage::Assistant {
+                    content,
+                    tool_calls,
+                } if content
+                    .as_deref()
+                    .unwrap_or_default()
+                    .trim()
+                    .is_empty()
+                    && tool_calls.is_empty()
+            ) =>
+        {
             (
                 "failed",
                 AgentEvent::Failed {

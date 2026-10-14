@@ -78,7 +78,10 @@ pub(crate) async fn load_by_session(
                     _ => continue,
                 }
             }
-            grouped.entry(event.run_id).or_default().push(event);
+            grouped
+                .entry(event.run_id)
+                .or_default()
+                .push(event);
         }
     }
     Ok((grouped, evidence))
@@ -94,7 +97,10 @@ pub(crate) async fn append(
     }
     let mut compacted = Vec::new();
     for event in incoming {
-        if !compacted.last_mut().is_some_and(|last| merge(last, &event)) {
+        if !compacted
+            .last_mut()
+            .is_some_and(|last| merge(last, &event))
+        {
             compacted.push(event);
         }
     }
@@ -106,7 +112,10 @@ pub(crate) async fn append(
         .await?
     {
         let mut tail: AgentEvent = serde_json::from_str(&row.payload)?;
-        if incoming.peek().is_some_and(|first| merge(&mut tail, first)) {
+        if incoming
+            .peek()
+            .is_some_and(|first| merge(&mut tail, first))
+        {
             incoming.next();
             let mut row = row.into_active_model();
             row.payload = Set(serde_json::to_string(&tail)?);
@@ -147,16 +156,23 @@ mod tests {
             .unwrap();
         let journal = writer.execution_journal().unwrap();
         for _ in 0..3 {
-            for _ in 0..1000 {
+            for _ in 0..1_000 {
                 journal.record(AgentEvent::Model(StreamEvent::TextDelta("甲".into())));
             }
             journal.flush().await.unwrap();
         }
-        let partial = Store::open(&path).await.unwrap().load(&id).await.unwrap();
+        let partial = Store::open(&path)
+            .await
+            .unwrap()
+            .load(&id)
+            .await
+            .unwrap();
         assert_eq!(partial.runs[0].events.len(), 1);
-        assert!(
-            matches!(&partial.runs[0].events[0], AgentEvent::Model(StreamEvent::TextDelta(text)) if text == &"甲".repeat(3000))
-        );
+        assert!(matches!(
+            &partial.runs[0].events[0],
+            AgentEvent::Model(StreamEvent::TextDelta(text))
+                if text == &"甲".repeat(3_000)
+        ));
         journal.record(AgentEvent::ReasoningFinished { elapsed_ms: 12 });
         journal.record(AgentEvent::Model(StreamEvent::TextDelta(
             "after barrier".into(),
@@ -169,7 +185,12 @@ mod tests {
             .finish("cancelled", vec![AgentEvent::Cancelled], None)
             .await
             .unwrap();
-        let snapshot = Store::open(path).await.unwrap().load(&id).await.unwrap();
+        let snapshot = Store::open(path)
+            .await
+            .unwrap()
+            .load(&id)
+            .await
+            .unwrap();
         assert_eq!(snapshot.runs[0].events.len(), 5);
         assert!(matches!(
             snapshot.runs[0].events[1],

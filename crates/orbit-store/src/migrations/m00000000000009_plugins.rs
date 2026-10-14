@@ -6,6 +6,7 @@ impl MigrationName for Migration {
         "00000000000009_plugins"
     }
 }
+
 #[async_trait::async_trait]
 impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
@@ -13,7 +14,11 @@ impl MigrationTrait for Migration {
             .create_table(
                 Table::create()
                     .table(Alias::new("project_plugins"))
-                    .col(ColumnDef::new(Alias::new("project_id")).text().not_null())
+                    .col(
+                        ColumnDef::new(Alias::new("project_id"))
+                            .text()
+                            .not_null(),
+                    )
                     .col(
                         ColumnDef::new(Alias::new("marketplace_source"))
                             .text()
@@ -22,7 +27,7 @@ impl MigrationTrait for Migration {
                                 Expr::expr(Func::char_length(Expr::col(Alias::new(
                                     "marketplace_source",
                                 ))))
-                                .between(1, 4096),
+                                .between(1, 4_096),
                             ),
                     )
                     .col(
@@ -42,16 +47,20 @@ impl MigrationTrait for Migration {
                                 Expr::expr(Func::char_length(Expr::col(Alias::new(
                                     "package_source",
                                 ))))
-                                .between(1, 4096),
+                                .between(1, 4_096),
                             ),
                     )
                     .col(
-                        ColumnDef::new(Alias::new("version")).text().check(
-                            Expr::col(Alias::new("version")).is_null().or(Expr::expr(
-                                Func::char_length(Expr::col(Alias::new("version"))),
-                            )
-                            .between(1, 256)),
-                        ),
+                        ColumnDef::new(Alias::new("version"))
+                            .text()
+                            .check(
+                                Expr::col(Alias::new("version"))
+                                    .is_null()
+                                    .or(Expr::expr(Func::char_length(Expr::col(Alias::new(
+                                        "version",
+                                    ))))
+                                    .between(1, 256)),
+                            ),
                     )
                     .col(
                         ColumnDef::new(Alias::new("enabled_at"))
@@ -87,6 +96,7 @@ impl MigrationTrait for Migration {
             .await?;
         Ok(())
     }
+
     async fn down(&self, _: &SchemaManager) -> Result<(), DbErr> {
         super::forward_only()
     }

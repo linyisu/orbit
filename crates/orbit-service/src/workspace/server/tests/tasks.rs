@@ -98,11 +98,18 @@ async fn tasks_workspace_guard_rejects_stale_creates_in_the_actor() {
     fixture
         .handle
         .action(orbit_protocol::SessionAction::ChangeDirectory {
-            path: fixture.external.to_string_lossy().into_owned(),
+            path: fixture
+                .external
+                .to_string_lossy()
+                .into_owned(),
         })
         .await
         .unwrap();
-    let current = fixture.handle.current_info().await.workspace;
+    let current = fixture
+        .handle
+        .current_info()
+        .await
+        .workspace;
     assert_ne!(previous, current);
 
     let create = || TaskAction::Create {
@@ -119,7 +126,11 @@ async fn tasks_workspace_guard_rejects_stale_creates_in_the_actor() {
         .tasks(create(), Some(previous.clone()))
         .await
         .unwrap_err();
-    assert!(error.to_string().contains("工作区已切换"));
+    assert!(
+        error
+            .to_string()
+            .contains("工作区已切换")
+    );
     let error = fixture
         .request(Request::Tasks {
             session: fixture.handle.info.id.clone(),
@@ -128,7 +139,11 @@ async fn tasks_workspace_guard_rejects_stale_creates_in_the_actor() {
         })
         .await
         .unwrap_err();
-    assert!(error.to_string().contains("工作区已切换"));
+    assert!(
+        error
+            .to_string()
+            .contains("工作区已切换")
+    );
 
     let Response::Tasks(snapshot) = fixture
         .request(Request::Tasks {

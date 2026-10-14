@@ -6,7 +6,11 @@ impl Workspace {
         if self.opening || self.choosing_project {
             return;
         }
-        let Some(entry) = self.sessions.iter().find(|entry| entry.id.as_ref() == id) else {
+        let Some(entry) = self
+            .sessions
+            .iter()
+            .find(|entry| entry.id.as_ref() == id)
+        else {
             return;
         };
         let path = PathBuf::from(entry.workspace.as_ref());
@@ -48,7 +52,9 @@ pub(super) fn scrolling_title(title: SharedString, started: Instant) -> impl Int
     canvas(
         move |_, window, _| {
             let style = window.text_style();
-            let font_size = style.font_size.to_pixels(window.rem_size());
+            let font_size = style
+                .font_size
+                .to_pixels(window.rem_size());
             window.text_system().shape_line(
                 title.clone(),
                 font_size,
@@ -109,7 +115,10 @@ pub(super) fn project_items(sessions: &[SessionEntry], previous: &[TreeItem]) ->
             session.title.clone()
         };
         let child = TreeItem::new(format!("session:{}", session.id), title);
-        if let Some(group) = groups.iter_mut().find(|group| group.id == id) {
+        if let Some(group) = groups
+            .iter_mut()
+            .find(|group| group.id == id)
+        {
             group.children.push(child);
         } else {
             let label = PathBuf::from(session.workspace.as_ref())
@@ -120,7 +129,11 @@ pub(super) fn project_items(sessions: &[SessionEntry], previous: &[TreeItem]) ->
                 .iter()
                 .find(|group| group.id == id)
                 .is_some_and(TreeItem::is_expanded);
-            groups.push(TreeItem::new(id, label).expanded(expanded).child(child));
+            groups.push(
+                TreeItem::new(id, label)
+                    .expanded(expanded)
+                    .child(child),
+            );
         }
     }
     // The server returns sessions by recent activity. Project navigation must
@@ -145,7 +158,7 @@ mod tests {
         assert!((marquee_offset(80., 1.8, 16.) - 40.).abs() < 0.001);
         assert_eq!(marquee_offset(80., 3.2, 16.), 80.);
         assert!((marquee_offset(80., 4.6, 16.) - 40.).abs() < 0.001);
-        for tick in 0..2000 {
+        for tick in 0..2_000 {
             assert!((0. ..=80.).contains(&marquee_offset(80., tick as f32 / 60., 16.)));
         }
         // Doubling UI scale preserves the visual speed in rems.
@@ -185,8 +198,14 @@ mod tests {
         for previous in [&[][..], initial.as_slice()] {
             let refreshed = project_items(&entries, previous);
             assert_eq!(
-                refreshed.iter().map(|group| &group.id).collect::<Vec<_>>(),
-                initial.iter().map(|group| &group.id).collect::<Vec<_>>()
+                refreshed
+                    .iter()
+                    .map(|group| &group.id)
+                    .collect::<Vec<_>>(),
+                initial
+                    .iter()
+                    .map(|group| &group.id)
+                    .collect::<Vec<_>>()
             );
         }
     }

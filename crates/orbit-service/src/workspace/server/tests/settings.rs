@@ -32,9 +32,21 @@ async fn configured_capability_ceiling_does_not_change_reconnect_identity() {
         panic!("expected reopened session");
     };
     assert_eq!(reopened.id, first.id);
-    let handle = fixture.service.session(&first.id).await.unwrap();
-    assert!(handle.policy.disabled(orbit_protocol::Capability::Web));
-    assert!(handle.policy.disabled(orbit_protocol::Capability::Mcp));
+    let handle = fixture
+        .service
+        .session(&first.id)
+        .await
+        .unwrap();
+    assert!(
+        handle
+            .policy
+            .disabled(orbit_protocol::Capability::Web)
+    );
+    assert!(
+        handle
+            .policy
+            .disabled(orbit_protocol::Capability::Mcp)
+    );
     assert_eq!(handle.requested_policy, Default::default());
     let changed = orbit_protocol::SessionPolicy {
         read_only: true,
@@ -44,7 +56,11 @@ async fn configured_capability_ceiling_does_not_change_reconnect_identity() {
         .request(open(Some(first.id), changed))
         .await
         .unwrap_err();
-    assert!(error.to_string().contains("different capability policy"));
+    assert!(
+        error
+            .to_string()
+            .contains("different capability policy")
+    );
 }
 
 #[tokio::test]
@@ -55,11 +71,18 @@ async fn settings_workspace_guard_is_checked_by_the_resource_actor() {
     fixture
         .handle
         .action(SessionAction::ChangeDirectory {
-            path: fixture.external.to_string_lossy().into_owned(),
+            path: fixture
+                .external
+                .to_string_lossy()
+                .into_owned(),
         })
         .await
         .unwrap();
-    let current = fixture.handle.current_info().await.workspace;
+    let current = fixture
+        .handle
+        .current_info()
+        .await
+        .workspace;
     assert_ne!(previous, current);
 
     // Bypass dispatch: a guard checked only before enqueuing the actor command
@@ -69,7 +92,11 @@ async fn settings_workspace_guard_is_checked_by_the_resource_actor() {
         .resources(resources::Action::Skills, Some(previous.clone()))
         .await
         .unwrap_err();
-    assert!(error.to_string().contains("工作区已切换"));
+    assert!(
+        error
+            .to_string()
+            .contains("工作区已切换")
+    );
 
     let save = || resources::Action::SaveSkill {
         name: "scope-check".into(),
@@ -84,10 +111,22 @@ async fn settings_workspace_guard_is_checked_by_the_resource_actor() {
         })
         .await
         .unwrap_err();
-    assert!(error.to_string().contains("工作区已切换"));
+    assert!(
+        error
+            .to_string()
+            .contains("工作区已切换")
+    );
     let relative = ".orbit/skills/scope-check/SKILL.md";
-    assert!(!Path::new(&previous).join(relative).exists());
-    assert!(!Path::new(&current).join(relative).exists());
+    assert!(
+        !Path::new(&previous)
+            .join(relative)
+            .exists()
+    );
+    assert!(
+        !Path::new(&current)
+            .join(relative)
+            .exists()
+    );
 
     fixture
         .request(Request::Resources {
@@ -97,7 +136,11 @@ async fn settings_workspace_guard_is_checked_by_the_resource_actor() {
         })
         .await
         .unwrap();
-    assert!(Path::new(&current).join(relative).is_file());
+    assert!(
+        Path::new(&current)
+            .join(relative)
+            .is_file()
+    );
     let Response::Resources(resources::Snapshot::Skills(skills)) = fixture
         .request(Request::Resources {
             session: fixture.handle.info.id.clone(),
@@ -109,7 +152,11 @@ async fn settings_workspace_guard_is_checked_by_the_resource_actor() {
     else {
         panic!("missing legacy resource response");
     };
-    assert!(skills.iter().any(|skill| skill.name == "scope-check"));
+    assert!(
+        skills
+            .iter()
+            .any(|skill| skill.name == "scope-check")
+    );
 }
 
 #[tokio::test]
@@ -119,7 +166,10 @@ async fn settings_workspace_guard_rejects_stale_plugin_mutations() {
     fixture
         .handle
         .action(SessionAction::ChangeDirectory {
-            path: fixture.external.to_string_lossy().into_owned(),
+            path: fixture
+                .external
+                .to_string_lossy()
+                .into_owned(),
         })
         .await
         .unwrap();
@@ -136,5 +186,9 @@ async fn settings_workspace_guard_rejects_stale_plugin_mutations() {
         })
         .await
         .unwrap_err();
-    assert!(error.to_string().contains("工作区已切换"));
+    assert!(
+        error
+            .to_string()
+            .contains("工作区已切换")
+    );
 }

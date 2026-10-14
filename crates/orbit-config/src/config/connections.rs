@@ -48,11 +48,15 @@ fn append_account(
     let mut config: crate::config::FileConfig = toml::from_str(&original)?;
     config.auth_directory = Some(auth_directory.to_path_buf());
 
-    if config.providers.values().any(|provider| {
-        provider.credential.as_deref() == Some(credential)
-            && provider.base_url.trim_end_matches('/') == spec.base_url.trim_end_matches('/')
-            && provider.api_format == spec.api_format
-    }) {
+    if config
+        .providers
+        .values()
+        .any(|provider| {
+            provider.credential.as_deref() == Some(credential)
+                && provider.base_url.trim_end_matches('/') == spec.base_url.trim_end_matches('/')
+                && provider.api_format == spec.api_format
+        })
+    {
         return config.model_options();
     }
 
@@ -133,7 +137,9 @@ pub(super) fn persist(path: &std::path::Path, original: &str, updated: &str) -> 
         read_config(path)? == original,
         "配置已被其他程序修改，请重试"
     );
-    temporary.persist(path).context("无法保存配置")?;
+    temporary
+        .persist(path)
+        .context("无法保存配置")?;
 
     Ok(())
 }
@@ -178,7 +184,10 @@ pub async fn save_api_key(
     store
         .set_api_key(provider.name(), secret, provider.base_url())
         .await?;
-    let models = ids.into_iter().map(ModelProfile::new).collect::<Vec<_>>();
+    let models = ids
+        .into_iter()
+        .map(ModelProfile::new)
+        .collect::<Vec<_>>();
     append_profile_models(
         path,
         auth_directory,

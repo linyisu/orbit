@@ -55,7 +55,11 @@ async fn reads_numbered_unicode_lines_and_reports_remaining_content() {
     let output = root
         .tool()
         .execute(
-            call(json!({ "path": "source.rs", "start_line": 2, "max_lines": 1 })),
+            call(json!({
+                "path": "source.rs",
+                "start_line": 2,
+                "max_lines": 1
+            })),
             CancellationToken::new(),
         )
         .await
@@ -75,7 +79,9 @@ async fn a_long_unicode_line_can_be_read_without_losing_its_tail() {
     let tool = root.tool();
     let first = tool
         .execute(
-            call(json!({ "path": "long.txt" })),
+            call(json!({
+                "path": "long.txt"
+            })),
             CancellationToken::new(),
         )
         .await
@@ -84,7 +90,11 @@ async fn a_long_unicode_line_can_be_read_without_losing_its_tail() {
 
     let second = tool
         .execute(
-            call(json!({ "path": "long.txt", "start_line": first["next_start_line"], "start_char": first["next_start_char"] })),
+            call(json!({
+                "path": "long.txt",
+                "start_line": first["next_start_line"],
+                "start_char": first["next_start_char"]
+            })),
             CancellationToken::new(),
         )
         .await
@@ -129,7 +139,12 @@ async fn rejects_escape_paths_symlinks_and_private_metadata() {
     ] {
         let result = root
             .tool()
-            .execute(call(json!({ "path": path })), CancellationToken::new())
+            .execute(
+                call(json!({
+                    "path": path
+                })),
+                CancellationToken::new(),
+            )
             .await;
 
         assert!(result.is_err(), "must reject {path}");
@@ -145,7 +160,9 @@ async fn permits_non_protected_hidden_metadata() {
     let output = root
         .tool()
         .execute(
-            call(json!({ "path": ".agent-state/session" })),
+            call(json!({
+                "path": ".agent-state/session"
+            })),
             CancellationToken::new(),
         )
         .await
@@ -163,7 +180,9 @@ async fn permits_ordinary_configuration_filenames() {
     let output = root
         .tool()
         .execute(
-            call(json!({ "path": "config.toml" })),
+            call(json!({
+                "path": "config.toml"
+            })),
             CancellationToken::new(),
         )
         .await
@@ -179,12 +198,19 @@ async fn protects_custom_config_and_its_hard_links() {
     fs::write(root.0.join("credentials.toml"), "private").unwrap();
     fs::hard_link(root.0.join("credentials.toml"), root.0.join("alias.txt")).unwrap();
     let mut workspace = Workspace::new(&root.0).unwrap();
-    workspace.protect(root.0.join("credentials.toml")).unwrap();
+    workspace
+        .protect(root.0.join("credentials.toml"))
+        .unwrap();
     let tool = ReadFile::new(workspace);
 
     for path in ["credentials.toml", "alias.txt"] {
         let error = tool
-            .execute(call(json!({ "path": path })), CancellationToken::new())
+            .execute(
+                call(json!({
+                    "path": path
+                })),
+                CancellationToken::new(),
+            )
             .await
             .unwrap_err();
 
@@ -197,17 +223,35 @@ async fn validates_ranges_and_rejects_binary_oversized_and_nonregular_files() {
     let root = Fixture::new();
     fs::write(root.0.join("text"), "hello").unwrap();
     fs::write(root.0.join("binary"), b"a\0b").unwrap();
-    fs::write(root.0.join("large"), vec![b'a'; 1024 * 1024 + 1]).unwrap();
+    fs::write(root.0.join("large"), vec![b'a'; 1_024 * 1_024 + 1]).unwrap();
     fs::create_dir(root.0.join("directory")).unwrap();
 
     for args in [
-        json!({ "path": "text", "start_line": 0 }),
-        json!({ "path": "text", "start_line": 2 }),
-        json!({ "path": "text", "max_lines": 501 }),
-        json!({ "path": "text", "extra": true }),
-        json!({ "path": "binary" }),
-        json!({ "path": "directory" }),
-        json!({ "path": "missing" }),
+        json!({
+            "path": "text",
+            "start_line": 0
+        }),
+        json!({
+            "path": "text",
+            "start_line": 2
+        }),
+        json!({
+            "path": "text",
+            "max_lines": 501
+        }),
+        json!({
+            "path": "text",
+            "extra": true
+        }),
+        json!({
+            "path": "binary"
+        }),
+        json!({
+            "path": "directory"
+        }),
+        json!({
+            "path": "missing"
+        }),
     ] {
         assert!(
             root.tool()
@@ -222,12 +266,14 @@ async fn validates_ranges_and_rejects_binary_oversized_and_nonregular_files() {
 #[tokio::test]
 async fn bounds_unicode_output_and_honors_cancellation() {
     let root = Fixture::new();
-    fs::write(root.0.join("long.txt"), "中".repeat(20000)).unwrap();
+    fs::write(root.0.join("long.txt"), "中".repeat(20_000)).unwrap();
     let value: Value = serde_json::from_str(
         &root
             .tool()
             .execute(
-                call(json!({ "path": "long.txt" })),
+                call(json!({
+                    "path": "long.txt"
+                })),
                 CancellationToken::new(),
             )
             .await
@@ -235,7 +281,7 @@ async fn bounds_unicode_output_and_honors_cancellation() {
     )
     .unwrap();
 
-    assert!(value["content"].as_str().unwrap().len() <= 32 * 1024);
+    assert!(value["content"].as_str().unwrap().len() <= 32 * 1_024);
     assert_eq!(value["truncated"], true);
 
     let token = CancellationToken::new();
@@ -243,7 +289,12 @@ async fn bounds_unicode_output_and_honors_cancellation() {
 
     assert_eq!(
         root.tool()
-            .execute(call(json!({ "path": "long.txt" })), token)
+            .execute(
+                call(json!({
+                    "path": "long.txt"
+                })),
+                token
+            )
             .await
             .unwrap_err(),
         ToolError::Cancelled
@@ -258,7 +309,9 @@ async fn actual_file_result_and_lifecycle_events_flow_through_agent() {
         ChatCompletion {
             id: None,
             model: None,
-            message: ChatMessage::assistant_tool_calls(vec![call(json!({ "path": "source.rs" }))]),
+            message: ChatMessage::assistant_tool_calls(vec![call(json!({
+                "path": "source.rs"
+            }))]),
             finish_reason: Some("tool_calls".into()),
             usage: None,
         },
@@ -285,9 +338,10 @@ async fn actual_file_result_and_lifecycle_events_flow_through_agent() {
 
     assert_eq!(result.turns, 2);
     assert_eq!(result.tool_calls, 1);
-    assert!(
-        matches!(&model.requests()[1].messages[2], ChatMessage::Tool { content, .. } if content.contains("fn main()"))
-    );
+    assert!(matches!(
+        &model.requests()[1].messages[2],
+        ChatMessage::Tool { content, .. } if content.contains("fn main()")
+    ));
 
     let mut lifecycle = Vec::new();
 
@@ -324,7 +378,11 @@ fn protects_database_sidecars_created_after_registry_initialization() {
 
     fs::hard_link(&sidecar, root.0.join("alias")).unwrap();
 
-    assert!(workspace.open_read(std::path::Path::new("alias")).is_err());
+    assert!(
+        workspace
+            .open_read(std::path::Path::new("alias"))
+            .is_err()
+    );
 }
 
 #[tokio::test]
@@ -339,13 +397,18 @@ async fn read_file_can_read_granted_outside_path() {
     let tool = ReadFile::new(workspace.clone());
     let err = tool
         .execute(
-            call(json!({ "path": outside_file.display().to_string() })),
+            call(json!({
+                "path": outside_file.display().to_string()
+            })),
             CancellationToken::new(),
         )
         .await
         .unwrap_err();
 
-    assert!(err.to_string().contains("permission denied"));
+    assert!(
+        err.to_string()
+            .contains("permission denied")
+    );
 
     let resolved = orbit_runtime::filesystem::ResolvedPath::resolve(&outside_file, None).unwrap();
     workspace
@@ -359,7 +422,9 @@ async fn read_file_can_read_granted_outside_path() {
 
     let output = tool
         .execute(
-            call(json!({ "path": outside_file.display().to_string() })),
+            call(json!({
+                "path": outside_file.display().to_string()
+            })),
             CancellationToken::new(),
         )
         .await
@@ -378,7 +443,11 @@ async fn reads_middle_of_large_files_and_resumes_versioned_cursor() {
     let first: Value = serde_json::from_str(
         &tool
             .execute(
-                call(json!({"path":"large.txt", "start_line":200_000, "max_lines":2})),
+                call(json!({
+                    "path": "large.txt",
+                    "start_line": 200_000,
+                    "max_lines": 2
+                })),
                 CancellationToken::new(),
             )
             .await
@@ -390,7 +459,11 @@ async fn reads_middle_of_large_files_and_resumes_versioned_cursor() {
     let second: Value = serde_json::from_str(
         &tool
             .execute(
-                call(json!({"path":"large.txt", "cursor":first["next_cursor"], "max_lines":1})),
+                call(json!({
+                    "path": "large.txt",
+                    "cursor": first["next_cursor"],
+                    "max_lines": 1
+                })),
                 CancellationToken::new(),
             )
             .await
@@ -402,7 +475,10 @@ async fn reads_middle_of_large_files_and_resumes_versioned_cursor() {
     fs::write(root.0.join("large.txt"), "changed").unwrap();
     assert!(
         tool.execute(
-            call(json!({"path":"large.txt", "cursor":first["next_cursor"]})),
+            call(json!({
+                "path": "large.txt",
+                "cursor": first["next_cursor"]
+            })),
             CancellationToken::new()
         )
         .await
@@ -423,16 +499,26 @@ async fn permits_internal_links_and_rejects_secret_targets_and_loops() {
     std::os::unix::fs::symlink("loop", root.0.join("loop")).unwrap();
     let tool = root.tool();
     assert!(
-        tool.execute(call(json!({"path":"alias/file"})), CancellationToken::new())
-            .await
-            .unwrap()
-            .contains("inside")
+        tool.execute(
+            call(json!({
+                "path": "alias/file"
+            })),
+            CancellationToken::new()
+        )
+        .await
+        .unwrap()
+        .contains("inside")
     );
     for path in ["secret-alias", "loop"] {
         assert!(
-            tool.execute(call(json!({"path":path})), CancellationToken::new())
-                .await
-                .is_err()
+            tool.execute(
+                call(json!({
+                    "path": path
+                })),
+                CancellationToken::new()
+            )
+            .await
+            .is_err()
         );
     }
 }
@@ -486,20 +572,28 @@ fn template_trust_is_exact_and_read_write_is_separate() {
 #[tokio::test]
 async fn four_byte_unicode_at_eof_never_exceeds_content_budget() {
     let root = Fixture::new();
-    let original = format!("a{}", "😀".repeat(8191));
+    let original = format!("a{}", "😀".repeat(8_191));
     fs::write(root.0.join("exact.txt"), &original).unwrap();
     let output: Value = serde_json::from_str(
         &root
             .tool()
-            .execute(call(json!({"path":"exact.txt"})), CancellationToken::new())
+            .execute(
+                call(json!({
+                    "path": "exact.txt"
+                })),
+                CancellationToken::new(),
+            )
             .await
             .unwrap(),
     )
     .unwrap();
     let content = output["content"].as_str().unwrap();
-    assert!(content.len() <= 32 * 1024);
+    assert!(content.len() <= 32 * 1_024);
     assert_eq!(
-        content.strip_prefix("1: ").unwrap().trim_end_matches('\n'),
+        content
+            .strip_prefix("1: ")
+            .unwrap()
+            .trim_end_matches('\n'),
         original
     );
     assert_eq!(output["truncated"], false);

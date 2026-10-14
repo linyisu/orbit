@@ -10,7 +10,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-const MAX_RESPONSE_BYTES: usize = 512 * 1024;
+const MAX_RESPONSE_BYTES: usize = 512 * 1_024;
 const QUERY_TIMEOUT: Duration = Duration::from_secs(20);
 
 pub(super) async fn snapshot(
@@ -114,9 +114,12 @@ async fn fetch(authorization: &UsageAuthorization) -> Result<Value> {
             summary.is_ok() || catalog.is_ok(),
             "Antigravity 额度服务暂不可用，请稍后刷新"
         );
-        return Ok(
-            serde_json::json!({"summary": summary.ok(), "models": catalog.ok().and_then(|value| value.get("models").cloned())}),
-        );
+        return Ok(serde_json::json!({
+            "summary": summary.ok(),
+            "models": catalog
+                .ok()
+                .and_then(|value| value.get("models").cloned())
+        }));
     }
     query(&client, authorization, authorization.provider.endpoint()).await
 }
@@ -127,9 +130,13 @@ async fn query(
     endpoint: &'static str,
 ) -> Result<Value> {
     let request = match authorization.provider {
-        UsageProvider::Gemini | UsageProvider::Antigravity => client
-            .post(endpoint)
-            .json(&serde_json::json!({"project": authorization.auth.project_id})),
+        UsageProvider::Gemini | UsageProvider::Antigravity => {
+            client
+                .post(endpoint)
+                .json(&serde_json::json!({
+                    "project": authorization.auth.project_id
+                }))
+        }
         _ => client.get(endpoint),
     };
     let response = request
@@ -193,12 +200,18 @@ mod tests {
 
         let mut writer = store
             .create(
-                directory.path().to_string_lossy().into_owned(),
+                directory
+                    .path()
+                    .to_string_lossy()
+                    .into_owned(),
                 "test".into(),
             )
             .await
             .unwrap();
-        writer.begin("hello".into(), "test".into()).await.unwrap();
+        writer
+            .begin("hello".into(), "test".into())
+            .await
+            .unwrap();
         writer
             .append(vec![AgentEvent::Model(StreamEvent::Completed {
                 finish_reason: None,
@@ -290,12 +303,15 @@ mod tests {
             }])
             .await
             .unwrap();
-        writer.finish("failed", vec![], None).await.unwrap();
+        writer
+            .finish("failed", vec![], None)
+            .await
+            .unwrap();
         let result = session_usage(&store, writer.id(), true).await;
         assert_eq!(result.runs, 2);
         assert_eq!(result.runs_with_usage, 1);
         assert_eq!(result.requests, 23);
-        assert_eq!(result.input, Some(2300));
+        assert_eq!(result.input, Some(2_300));
         assert_eq!(result.output, Some(450));
         assert_eq!(result.cached_input, None);
         assert_eq!(result.cache_write, Some(0));

@@ -54,7 +54,11 @@ impl CommandPreview {
     pub fn git_grant_key(&self, workspace: &Path) -> Option<String> {
         use std::io::Read;
         let root = workspace.canonicalize().ok()?;
-        let cwd = self.cwd.as_deref().map(Path::new).unwrap_or(workspace);
+        let cwd = self
+            .cwd
+            .as_deref()
+            .map(Path::new)
+            .unwrap_or(workspace);
         let cwd = if cwd.is_absolute() {
             cwd.to_owned()
         } else {
@@ -78,10 +82,10 @@ impl CommandPreview {
                 }
                 std::fs::File::open(config)
                     .ok()?
-                    .take(1024 * 1024 + 1)
+                    .take(1_024 * 1_024 + 1)
                     .read_to_end(&mut bytes)
                     .ok()?;
-                if bytes.len() > 1024 * 1024 {
+                if bytes.len() > 1_024 * 1_024 {
                     return None;
                 }
             }
@@ -200,12 +204,19 @@ mod tests {
 
         assert!(workspace_local_file("src/ui.rs", root.path()));
         assert!(workspace_local_file(
-            root.path().join("src/ui.rs").to_str().unwrap(),
+            root.path()
+                .join("src/ui.rs")
+                .to_str()
+                .unwrap(),
             root.path()
         ));
         assert!(!workspace_local_file("../outside.txt", root.path()));
         assert!(!workspace_local_file(
-            outside.path().join("data.txt").to_str().unwrap(),
+            outside
+                .path()
+                .join("data.txt")
+                .to_str()
+                .unwrap(),
             root.path()
         ));
 

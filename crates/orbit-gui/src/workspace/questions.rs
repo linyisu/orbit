@@ -23,6 +23,7 @@ pub(super) struct QuestionForm {
     pending: bool,
     _subscriptions: Vec<Subscription>,
 }
+
 impl QuestionForm {
     pub(super) fn disconnected(&mut self, cx: &mut Context<Self>) {
         if self.pending {
@@ -32,13 +33,16 @@ impl QuestionForm {
         }
         cx.notify();
     }
+
     pub(super) fn hidden(&self) -> bool {
         self.hidden
     }
+
     pub(super) fn retry(&mut self, cx: &mut Context<Self>) {
         self.pending = false;
         cx.notify();
     }
+
     fn new(
         owner: WeakEntity<Workspace>,
         session: String,
@@ -104,11 +108,15 @@ impl QuestionForm {
             _subscriptions: subscriptions,
         }
     }
+
     fn advance(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         if self.pending {
             return;
         }
-        self.answers[self.current].text = self.inputs[self.current].read(cx).value().to_string();
+        self.answers[self.current].text = self.inputs[self.current]
+            .read(cx)
+            .value()
+            .to_string();
         let form = orbit_protocol::user_input::Form {
             questions: vec![self.record.form.questions[self.current].clone()],
         };
@@ -125,32 +133,47 @@ impl QuestionForm {
             self.submit(false, cx);
         }
     }
+
     fn submit(&mut self, decline: bool, cx: &mut Context<Self>) {
         if self.pending {
             return;
         }
-        let current = self.owner.upgrade().is_some_and(|owner| {
-            let workspace = owner.read(cx);
-            workspace.connected
-                && !workspace.opening
-                && workspace
-                    .info
-                    .as_ref()
-                    .is_some_and(|info| info.id == self.session)
-                && workspace
-                    .user_inputs
-                    .iter()
-                    .any(|record| record.id == self.record.id && record.status == Status::Pending)
-        });
+        let current = self
+            .owner
+            .upgrade()
+            .is_some_and(|owner| {
+                let workspace = owner.read(cx);
+                workspace.connected
+                    && !workspace.opening
+                    && workspace
+                        .info
+                        .as_ref()
+                        .is_some_and(|info| info.id == self.session)
+                    && workspace
+                        .user_inputs
+                        .iter()
+                        .any(|record| {
+                            record.id == self.record.id && record.status == Status::Pending
+                        })
+            });
         if !current {
             self.error = Some("请等待会话恢复并确认问题仍待回答。输入内容已保留。".into());
             cx.notify();
             return;
         }
-        for (answer, input) in self.answers.iter_mut().zip(&self.inputs) {
+        for (answer, input) in self
+            .answers
+            .iter_mut()
+            .zip(&self.inputs)
+        {
             answer.text = input.read(cx).value().to_string();
         }
-        if !decline && let Err(error) = self.record.form.validate_answers(&self.answers) {
+        if !decline
+            && let Err(error) = self
+                .record
+                .form
+                .validate_answers(&self.answers)
+        {
             self.error = Some(error);
             cx.notify();
             return;
@@ -170,11 +193,15 @@ impl QuestionForm {
         cx.notify();
     }
 }
+
 impl Render for QuestionForm {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let ix = self.current;
         let mut answer = self.answers[ix].clone();
-        answer.text = self.inputs[ix].read(cx).value().to_string();
+        answer.text = self.inputs[ix]
+            .read(cx)
+            .value()
+            .to_string();
         let ready = orbit_protocol::user_input::Form {
             questions: vec![self.record.form.questions[ix].clone()],
         }
@@ -183,7 +210,10 @@ impl Render for QuestionForm {
         let question = &self.record.form.questions[ix];
         let single = question.kind == Kind::Single;
         let custom = question.allow_custom || question.kind == Kind::Text;
-        let focused = self.inputs[ix].read(cx).focus_handle(cx).is_focused(window);
+        let focused = self.inputs[ix]
+            .read(cx)
+            .focus_handle(cx)
+            .is_focused(window);
         v_flex()
             .id("agent-question-card")
             .on_action(cx.listener(|view, _: &SendMessage, window, cx| view.advance(window, cx)))
@@ -234,7 +264,11 @@ impl Render for QuestionForm {
                                     .px_2()
                                     .pb_2()
                                     .font_weight(FontWeight::MEDIUM)
-                                    .child(SelectableText::new(("question-prompt", ix), question.prompt.clone())),
+                                    .child(SelectableText::new(("question-prompt",
+                                        ix),
+                                        question
+                                        .prompt
+                                        .clone())),
                             )
                             .children(question.options.iter().enumerate().map(
                                 |(index, option)| {
@@ -245,7 +279,9 @@ impl Render for QuestionForm {
                                         .text_color(cx.theme().foreground)
                                         .hover(|style| style.bg(cx.theme().accent))
                                         .focus_visible(|style| style.bg(cx.theme().accent))
-                                        .styles(|styles| styles.disabled(|style| style.opacity(0.5)))
+                                        .styles(|styles| styles
+                                            .disabled(|style| style
+                                            .opacity(0.5)))
                                         .w_full()
                                         .h_auto()
                                         .py_2()
@@ -284,7 +320,11 @@ impl Render for QuestionForm {
                                                         .child(
                                                             div()
                                                                 .whitespace_normal()
-                                                                .child(SelectableText::new(("question-label", index), option.label.clone())),
+                                                                .child(SelectableText::new(("question-label",
+                                                                    index),
+                                                                    option
+                                                                    .label
+                                                                    .clone())),
                                                         )
                                                         .when(
                                                             !option.description.is_empty(),
@@ -298,7 +338,11 @@ impl Render for QuestionForm {
                                                                                 .muted_foreground,
                                                                         )
                                                                         .child(
-                                                                            SelectableText::new(("question-description", index), option.description.clone()),
+                                                                            SelectableText::new(("question-description",
+                                                                                index),
+                                                                                option
+                                                                                .description
+                                                                                .clone()),
                                                                         ),
                                                                 )
                                                             },
@@ -316,7 +360,14 @@ impl Render for QuestionForm {
                                                 }),
                                         )
                                         .on_click(cx.listener(move |view, event, window, cx| {
-                                            if view.pending || view.current != ix || (matches!(event, ClickEvent::Mouse(_)) && TextSelection::has_selection(window, cx)) {
+                                            if view
+                                                .pending
+                                                || view
+                                                .current != ix
+                                                || (matches!(event,
+                                                ClickEvent::Mouse(_))
+                                                && TextSelection::has_selection(window,
+                                                cx)) {
                                                 return;
                                             }
                                             if single {
@@ -418,6 +469,7 @@ impl Render for QuestionForm {
             )
     }
 }
+
 impl Workspace {
     pub(super) fn sync_questions(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(info) = &self.info else {
@@ -432,10 +484,14 @@ impl Workspace {
             self.question_form = None;
             return;
         };
-        if self.question_form.as_ref().is_some_and(|form| {
-            let form = form.read(cx);
-            form.record.id == record.id && form.session == info.id
-        }) {
+        if self
+            .question_form
+            .as_ref()
+            .is_some_and(|form| {
+                let form = form.read(cx);
+                form.record.id == record.id && form.session == info.id
+            })
+        {
             return;
         }
         let owner = cx.weak_entity();
@@ -444,6 +500,7 @@ impl Workspace {
         self.question_form =
             Some(cx.new(|cx| QuestionForm::new(owner, session, record, window, cx)));
     }
+
     pub(super) fn questions(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.sync_questions(window, cx);
         if let Some(form) = &self.question_form {
@@ -454,6 +511,7 @@ impl Workspace {
         }
         cx.notify();
     }
+
     pub(super) fn show_plugins(
         &self,
         catalog: orbit_protocol::plugins::Catalog,
@@ -471,110 +529,120 @@ impl Workspace {
             dialog
                 .title("项目插件")
                 .child(
-                    v_flex()
-                        .gap_3()
-                        .children(catalog.marketplaces.iter().flat_map(|market| {
-                            let source = market.source.clone();
-                            market
-                                .plugins
-                                .iter()
-                                .map(|plugin| {
-                                    let name = plugin.name.clone();
-                                    let source = source.clone();
-                                    let owner = owner.clone();
-                                    let session = session.clone();
-                                    let workspace = workspace.clone();
-                                    let enabled = catalog.enabled.iter().any(|entry| {
-                                        entry.plugin_name == name
-                                            && entry.marketplace_source == source
-                                    });
-                                    let inspected = catalog
-                                        .inspections
-                                        .iter()
-                                        .find(|entry| entry.source == source && entry.name == name)
-                                        .and_then(|entry| entry.package.as_ref().ok());
-                                    let package = orbit_protocol::project::ProjectPlugin {
-                                        project_id: catalog.project_id.clone(),
-                                        marketplace_source: source.clone(),
-                                        plugin_name: name.clone(),
-                                        package_source: plugin.source.clone().unwrap_or_default(),
-                                        version: inspected
-                                            .and_then(|package| package.version.clone()),
-                                        marketplace_revision: market.revision.clone(),
-                                        enabled_at: 0,
-                                    };
-                                    v_flex()
-                                        .gap_1()
-                                        .child(
-                                            Checkbox::new(SharedString::from(format!(
-                                                "{source}:{name}"
-                                            )))
-                                            .label(name.clone())
-                                            .checked(enabled)
-                                            .disabled(
-                                                !enabled
-                                                    && (inspected.is_none()
-                                                        || plugin.source.is_none()),
+                    v_flex().gap_3().children(
+                        catalog
+                            .marketplaces
+                            .iter()
+                            .flat_map(|market| {
+                                let source = market.source.clone();
+                                market
+                                    .plugins
+                                    .iter()
+                                    .map(|plugin| {
+                                        let name = plugin.name.clone();
+                                        let source = source.clone();
+                                        let owner = owner.clone();
+                                        let session = session.clone();
+                                        let workspace = workspace.clone();
+                                        let enabled = catalog.enabled.iter().any(|entry| {
+                                            entry.plugin_name == name
+                                                && entry.marketplace_source == source
+                                        });
+                                        let inspected = catalog
+                                            .inspections
+                                            .iter()
+                                            .find(|entry| {
+                                                entry.source == source && entry.name == name
+                                            })
+                                            .and_then(|entry| entry.package.as_ref().ok());
+                                        let package = orbit_protocol::project::ProjectPlugin {
+                                            project_id: catalog.project_id.clone(),
+                                            marketplace_source: source.clone(),
+                                            plugin_name: name.clone(),
+                                            package_source: plugin
+                                                .source
+                                                .clone()
+                                                .unwrap_or_default(),
+                                            version: inspected
+                                                .and_then(|package| package.version.clone()),
+                                            marketplace_revision: market.revision.clone(),
+                                            enabled_at: 0,
+                                        };
+                                        v_flex()
+                                            .gap_1()
+                                            .child(
+                                                Checkbox::new(SharedString::from(format!(
+                                                    "{source}:{name}"
+                                                )))
+                                                .label(name.clone())
+                                                .checked(enabled)
+                                                .disabled(
+                                                    !enabled
+                                                        && (inspected.is_none()
+                                                            || plugin.source.is_none()),
+                                                )
+                                                .on_change(move |checked, window, cx| {
+                                                    let action = if *checked {
+                                                        orbit_protocol::plugins::Action::Enable {
+                                                            plugin: package.clone(),
+                                                        }
+                                                    } else {
+                                                        orbit_protocol::plugins::Action::Disable {
+                                                            marketplace_source: source.clone(),
+                                                            plugin_name: name.clone(),
+                                                        }
+                                                    };
+                                                    let _ = owner.update(cx, |view, cx| {
+                                                        view.command(
+                                                            Command::Request(Request::Plugins {
+                                                                session: session.clone(),
+                                                                expected_workspace: Some(
+                                                                    workspace.clone(),
+                                                                ),
+                                                                action,
+                                                            }),
+                                                            cx,
+                                                        )
+                                                    });
+                                                    window.close_dialog(cx);
+                                                }),
                                             )
-                                            .on_change(move |checked, window, cx| {
-                                                let action = if *checked {
-                                                    orbit_protocol::plugins::Action::Enable {
-                                                        plugin: package.clone(),
-                                                    }
-                                                } else {
-                                                    orbit_protocol::plugins::Action::Disable {
-                                                        marketplace_source: source.clone(),
-                                                        plugin_name: name.clone(),
-                                                    }
-                                                };
-                                                let _ = owner.update(cx, |view, cx| {
-                                                    view.command(
-                                                        Command::Request(Request::Plugins {
-                                                            session: session.clone(),
-                                                            expected_workspace: Some(
-                                                                workspace.clone(),
-                                                            ),
-                                                            action,
-                                                        }),
-                                                        cx,
-                                                    )
-                                                });
-                                                window.close_dialog(cx);
-                                            }),
-                                        )
-                                        .child(
-                                            div()
-                                                .text_sm()
-                                                .text_color(cx.theme().muted_foreground)
-                                                .child(plugin.description.clone()),
-                                        )
-                                })
-                                .collect::<Vec<_>>()
-                        })),
-                )
-                .footer(Button::new("add-marketplace").label("添加来源…").on_click(
-                    move |_, window, cx| {
-                        window.close_dialog(cx);
-                        let session = session2.clone();
-                        let workspace = workspace2.clone();
-                        let _ = owner2.update(cx, |view, cx| {
-                            view.prompt(
-                                ("添加插件来源", "Git 地址或本地目录"),
-                                "",
-                                "添加",
-                                move |source| {
-                                    Ok(Request::Plugins {
-                                        session: session.clone(),
-                                        expected_workspace: Some(workspace.clone()),
-                                        action: orbit_protocol::plugins::Action::Add { source },
+                                            .child(
+                                                div()
+                                                    .text_sm()
+                                                    .text_color(cx.theme().muted_foreground)
+                                                    .child(plugin.description.clone()),
+                                            )
                                     })
-                                },
-                                window,
-                                cx,
-                            )
-                        });
-                    },
-                ))
+                                    .collect::<Vec<_>>()
+                            }),
+                    ),
+                )
+                .footer(
+                    Button::new("add-marketplace")
+                        .label("添加来源…")
+                        .on_click(move |_, window, cx| {
+                            window.close_dialog(cx);
+                            let session = session2.clone();
+                            let workspace = workspace2.clone();
+                            let _ = owner2.update(cx, |view, cx| {
+                                view.prompt(
+                                    ("添加插件来源", "Git 地址或本地目录"),
+                                    "",
+                                    "添加",
+                                    move |source| {
+                                        Ok(Request::Plugins {
+                                            session: session.clone(),
+                                            expected_workspace: Some(workspace.clone()),
+                                            action: orbit_protocol::plugins::Action::Add { source },
+                                        })
+                                    },
+                                    window,
+                                    cx,
+                                )
+                            });
+                        }),
+                )
         });
     }
 }

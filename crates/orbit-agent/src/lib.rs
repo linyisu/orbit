@@ -1,3 +1,6 @@
+//! Model and tool execution, streaming events, checkpoints and context compaction.
+//! The host supplies persistence, permissions and execution resources.
+
 pub mod agent;
 pub mod archive;
 pub mod autocompact;

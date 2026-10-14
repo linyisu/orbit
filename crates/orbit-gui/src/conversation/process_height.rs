@@ -14,9 +14,9 @@ impl ProcessHeight {
         self.rows = vec![None; count];
     }
 
+    /// Keep the last measured extent until replacement measurements arrive, rather than bouncing
+    /// short groups up to the cap on every text delta.
     pub(super) fn refresh(&mut self) {
-        // Keep the last measured extent until replacement measurements arrive,
-        // rather than bouncing short groups up to the cap on every text delta.
         self.revision += 1;
     }
 
@@ -35,9 +35,9 @@ impl ProcessHeight {
         self.rows[index] = Some(size.height);
     }
 
+    /// Start with enough space to measure short groups. Large groups remain virtualized at the cap;
+    /// they need no full-history measurement pass.
     pub(super) fn height(&self, limit: Pixels) -> Pixels {
-        // Start with enough space to measure short groups. Large groups remain
-        // virtualized at the cap; they need no full-history measurement pass.
         let total: Option<Pixels> = self.rows.iter().copied().sum();
         total.map_or(limit, |height| height.ceil().min(limit))
     }
@@ -52,7 +52,10 @@ mod tests {
     fn short_rows_include_all_padding_instead_of_a_line_count_estimate() {
         let mut layout = ProcessHeight::default();
         layout.invalidate(4);
-        for (index, height) in [39., 39., 39., 47.].into_iter().enumerate() {
+        for (index, height) in [39., 39., 39., 47.]
+            .into_iter()
+            .enumerate()
+        {
             layout.record(layout.revision(), index, size(px(800.), px(height)));
         }
         assert_eq!(layout.height(px(300.)), px(164.));

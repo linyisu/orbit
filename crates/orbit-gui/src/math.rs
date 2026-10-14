@@ -15,10 +15,12 @@ use ratex_types::math_style::MathStyle;
 pub(crate) struct MathPlugin {
     display: bool,
 }
+
 impl MathPlugin {
     pub(crate) fn inline() -> Self {
         Self { display: false }
     }
+
     pub(crate) fn display() -> Self {
         Self { display: true }
     }
@@ -29,10 +31,11 @@ struct Formula {
     height: f32,
     baseline: f32,
 }
+
 impl Formula {
+    /// Bound expensive layout work on model-supplied expressions.
     fn parse(source: &str, display: bool) -> Option<Self> {
-        // Bound expensive layout work on model-supplied expressions.
-        if source.len() > 8192 {
+        if source.len() > 8_192 {
             return None;
         }
         let ast = ratex_parser::parse(source).ok()?;
@@ -73,7 +76,8 @@ impl Formula {
         }
         let body = svg.get(svg.find('>')? + 1..)?;
         let cropped = format!(
-            "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{}\" height=\"{}\" viewBox=\"{} {} {} {}\">{body}",
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{}\" height=\"{}\" viewBox=\"{} {} \
+                {} {}\">{body}",
             bounds.width(),
             bounds.height(),
             bounds.x(),
@@ -89,10 +93,12 @@ impl Formula {
         })
     }
 }
+
 impl MarkdownPlugin for MathPlugin {
     fn is_block(&self) -> bool {
         self.display
     }
+
     fn name(&self) -> &str {
         if self.display {
             "orbit-math-block"
@@ -100,6 +106,7 @@ impl MarkdownPlugin for MathPlugin {
             "orbit-math-inline"
         }
     }
+
     fn parse(
         &self,
         node: &markdown_ast::Node,
@@ -114,17 +121,25 @@ impl MarkdownPlugin for MathPlugin {
         Some(
             MarkdownNode::new(self.name().to_string(), formula)
                 .text(source.clone())
-                .markdown(context.node_source(node).unwrap_or(source)),
+                .markdown(
+                    context
+                        .node_source(node)
+                        .unwrap_or(source),
+                ),
         )
     }
+
     fn render(&self, node: &MarkdownNode, _: &mut Window, cx: &mut App) -> impl IntoElement {
-        let formula = node.data::<Formula>().expect("formula node");
+        let formula = node
+            .data::<Formula>()
+            .expect("formula node");
         svg()
             .data(&formula.svg)
             .w(rems(formula.width))
             .h(rems(formula.height))
             .text_color(cx.theme().foreground)
     }
+
     fn render_inline(
         &self,
         node: &MarkdownNode,
@@ -140,7 +155,9 @@ impl MarkdownPlugin for MathPlugin {
             &[context.text_style().to_run(2)],
             None,
         );
-        let line_height = context.line_height().max(line.ascent + line.descent);
+        let line_height = context
+            .line_height()
+            .max(line.ascent + line.descent);
         let text_baseline = (line_height - line.ascent - line.descent) / 2. + line.ascent;
         let formula_baseline = font_size * formula.baseline;
         let baseline = text_baseline.max(formula_baseline);
@@ -168,6 +185,7 @@ impl MarkdownPlugin for MathPlugin {
         )
     }
 }
+
 #[cfg(test)]
 mod tests {
     use super::Formula;
@@ -179,7 +197,7 @@ mod tests {
         let fraction = Formula::parse("\\frac{a}{b}", true).unwrap();
         assert!(fraction.height > plain.height);
         assert!(fraction.baseline > 0. && fraction.baseline < fraction.height);
-        assert!(Formula::parse(&"x".repeat(8193), false).is_none());
+        assert!(Formula::parse(&"x".repeat(8_193), false).is_none());
     }
 
     #[test]

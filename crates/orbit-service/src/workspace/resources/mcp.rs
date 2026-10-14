@@ -23,7 +23,13 @@ impl Startup {
         approvals: Option<orbit_tools::approval::ApprovalSender>,
         allow_start: bool,
     ) -> Option<Self> {
-        if !allow_start || approvals.is_none() || !config.servers.values().any(|s| s.enabled) {
+        if !allow_start
+            || approvals.is_none()
+            || !config
+                .servers
+                .values()
+                .any(|s| s.enabled)
+        {
             return None;
         }
         let statuses = config
@@ -69,7 +75,10 @@ impl Startup {
 }
 
 fn apply(setup: &mut PreparedWorkspace, (tools, statuses): Catalog) {
-    setup.resources.tools.replace_prefix("mcp__", &tools);
+    setup
+        .resources
+        .tools
+        .replace_prefix("mcp__", &tools);
     super::super::setup::filter_configured_tools(
         &mut setup.resources.tools,
         &setup.resources.policy,
@@ -93,7 +102,10 @@ impl Reload {
         result: oneshot::Sender<Result<Snapshot>>,
     ) -> Result<Self> {
         ensure!(
-            !setup.resources.policy.disabled(Capability::Mcp),
+            !setup
+                .resources
+                .policy
+                .disabled(Capability::Mcp),
             "MCP 工具已禁用"
         );
         ensure!(
@@ -102,7 +114,12 @@ impl Reload {
         );
         let config: McpConfig = serde_json::from_value(config)?;
         config.validate()?;
-        let workspace = setup.session.snapshot.session.workspace.clone();
+        let workspace = setup
+            .session
+            .snapshot
+            .session
+            .workspace
+            .clone();
         let directory = std::path::PathBuf::from(&workspace);
         let approvals = setup.resources.mcp_approvals.clone();
         let allow_start = allow_start || setup.resources.options.allow_mcp_start;
@@ -130,7 +147,10 @@ impl Reload {
             );
             ensure!(
                 !setup.resources.policy.read_only
-                    && !setup.resources.policy.disabled(Capability::Mcp),
+                    && !setup
+                        .resources
+                        .policy
+                        .disabled(Capability::Mcp),
                 "当前会话不允许 MCP 工具"
             );
             apply(setup, (tools, statuses));

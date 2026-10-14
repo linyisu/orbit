@@ -1,7 +1,7 @@
 //! DOM primitives shared by search providers; provider selection stays separate.
 use html2text::{Element, Handle};
 
-const TEXT_PROJECTION_WIDTH: usize = 4096;
+const TEXT_PROJECTION_WIDTH: usize = 4_096;
 
 pub(super) fn attribute(node: &Handle, key: &str) -> Option<String> {
     let Element { attrs, .. } = &node.data else {

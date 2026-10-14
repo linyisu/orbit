@@ -70,16 +70,24 @@ fn directory_grant_inherits_to_children_and_merges() {
         resolved_models.clone(),
     ));
 
-    let child_read =
-        FilesystemCapability::local_read(tmp_models.path().join("llama").join("weights.bin"));
+    let child_read = FilesystemCapability::local_read(
+        tmp_models
+            .path()
+            .join("llama")
+            .join("weights.bin"),
+    );
 
     assert_eq!(
         engine.check_filesystem(&child_read),
         PolicyDecision::Granted
     );
 
-    let child_write =
-        FilesystemCapability::local_write(tmp_models.path().join("llama").join("weights.bin"));
+    let child_write = FilesystemCapability::local_write(
+        tmp_models
+            .path()
+            .join("llama")
+            .join("weights.bin"),
+    );
 
     assert!(matches!(
         engine.check_filesystem(&child_write),
@@ -144,7 +152,10 @@ fn rejects_ancestor_of_workspace_as_capability() {
 fn rejects_protected_path_and_its_ancestor_and_descendant() {
     let tmp_ws = tempfile::tempdir().unwrap();
     let tmp_ext = tempfile::tempdir().unwrap();
-    let secret = tmp_ext.path().join("nested").join("orbit.db");
+    let secret = tmp_ext
+        .path()
+        .join("nested")
+        .join("orbit.db");
     std::fs::create_dir_all(secret.parent().unwrap()).unwrap();
     std::fs::write(&secret, "database").unwrap();
 
@@ -218,7 +229,13 @@ fn persistent_permissions_upfront_validation_and_overlap_rejection() {
     let perms_ancestor = WorkspacePermissions {
         read_templates: Vec::new(),
         write_templates: Vec::new(),
-        read: vec![tmp_ws.path().parent().unwrap().to_path_buf()],
+        read: vec![
+            tmp_ws
+                .path()
+                .parent()
+                .unwrap()
+                .to_path_buf(),
+        ],
         read_write: Vec::new(),
     };
 
@@ -263,7 +280,13 @@ fn persistent_permissions_upfront_validation_and_overlap_rejection() {
     let engine =
         PolicyEngine::try_with_permissions(ws, perms_redundant, NetworkPolicy::Allow).unwrap();
 
-    assert_eq!(engine.effective_policy().persistent_read_write.len(), 1);
+    assert_eq!(
+        engine
+            .effective_policy()
+            .persistent_read_write
+            .len(),
+        1
+    );
 }
 
 #[cfg(target_os = "linux")]

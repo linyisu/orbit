@@ -67,7 +67,9 @@ fn retries_only_transient_status_and_understands_retry_after_dates() {
 #[tokio::test]
 async fn rate_limit_falls_back_and_next_call_skips_cooling_provider() {
     use tokio::io::AsyncWriteExt;
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .unwrap();
     let proxy = reqwest::Proxy::all(format!("http://{}", listener.local_addr().unwrap())).unwrap();
     let server = tokio::spawn(async move {
         for index in 0..3 {
@@ -75,11 +77,27 @@ async fn rate_limit_falls_back_and_next_call_skips_cooling_provider() {
             let (req, _) = test_support::read_request(&mut stream).await;
             if index == 0 {
                 assert!(req.contains("parallel.invalid"));
-                stream.write_all(b"HTTP/1.1 429 Too Many Requests\r\nRetry-After: 120\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await.unwrap();
+                stream
+                    .write_all(
+                        b"HTTP/1.1 429 Too Many Requests\r\nRetry-After: \
+                    120\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                    )
+                    .await
+                    .unwrap();
             } else {
                 assert!(req.contains("ddg.invalid"));
                 let body = "<a class='result__a' href='https://example.org/'>Example</a>";
-                stream.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).as_bytes()).await.unwrap();
+                stream
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: \
+                    close\r\n\r\n{body}",
+                            body.len()
+                        )
+                        .as_bytes(),
+                    )
+                    .await
+                    .unwrap();
             }
         }
     });
@@ -109,7 +127,11 @@ async fn rate_limit_falls_back_and_next_call_skips_cooling_provider() {
                 .unwrap()
                 .contains("tool execution failed")
         );
-        assert!(result["fewer_results"].as_bool().unwrap());
+        assert!(
+            result["fewer_results"]
+                .as_bool()
+                .unwrap()
+        );
         assert_eq!(result["results"][0]["snippet_empty"], true);
         assert!(
             result["fallback_reason"]
@@ -126,14 +148,16 @@ async fn rate_limit_falls_back_and_next_call_skips_cooling_provider() {
 async fn forbidden_is_not_replayed_and_transient_server_error_is_retried() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     for code in [403, 503] {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .unwrap();
         let proxy =
             reqwest::Proxy::all(format!("http://{}", listener.local_addr().unwrap())).unwrap();
         let server = tokio::spawn(async move {
             let count = if code == 403 { 1 } else { 2 };
             for _ in 0..count {
                 let (mut s, _) = listener.accept().await.unwrap();
-                let mut bytes = [0; 4096];
+                let mut bytes = [0; 4_096];
                 assert!(s.read(&mut bytes).await.unwrap() > 0);
                 s.write_all(
                     format!(

@@ -11,48 +11,49 @@ impl Workspace {
         {
             return form.clone().into_any_element();
         }
-        let model_names = self
-            .info
-            .as_ref()
-            .map(|info| info.models.clone())
-            .unwrap_or_default();
-        let model_groups = super::models::groups(&model_names);
-        let current_model = self.model.clone();
-        let weak = cx.weak_entity();
-        let session = self
-            .info
-            .as_ref()
-            .map(|info| info.id.clone())
-            .unwrap_or_default();
-        let controls_disabled =
-            !self.connected || self.opening || self.busy || self.pending.is_some();
-        let show_stop =
-            self.busy && !draft_ready(&self.input.read(cx).value(), &self.paths, self.busy);
-        let mode = self.info.as_ref().map(|info| info.mode).unwrap_or_default();
-        let mode_owner = cx.weak_entity();
-        let mode_session = session.clone();
         let paste_owner = cx.weak_entity();
-        let work_owner = cx.weak_entity();
-        let planning = self.planning.mode == orbit_protocol::plan::WorkMode::Plan;
         v_flex()
             .id("composer")
             .key_context("OrbitComposer")
-            .capture_action(cx.listener(|view, _: &gpui_kit::component::input::MoveUp, window, cx| view.history_arrow(true, window, cx)))
-            .capture_action(cx.listener(|view, _: &gpui_kit::component::input::MoveDown, window, cx| view.history_arrow(false, window, cx)))
-            .on_action(cx.listener(|view, _: &InputHistoryPrevious, window, cx| view.input_history(true, window, cx)))
-            .on_action(cx.listener(|view, _: &InputHistoryNext, window, cx| view.input_history(false, window, cx)))
+            .capture_action(cx.listener(
+                |view, _: &gpui_kit::component::input::MoveUp, window, cx| {
+                    view.history_arrow(true, window, cx)
+                },
+            ))
+            .capture_action(cx.listener(
+                |view, _: &gpui_kit::component::input::MoveDown, window, cx| {
+                    view.history_arrow(false, window, cx)
+                },
+            ))
+            .on_action(cx.listener(|view, _: &InputHistoryPrevious, window, cx| {
+                view.input_history(true, window, cx)
+            }))
+            .on_action(cx.listener(|view, _: &InputHistoryNext, window, cx| {
+                view.input_history(false, window, cx)
+            }))
             .relative()
-            .when(self.command_open, |view| view.key_context("OrbitComposer ComposerCompletions")
-                .on_action(cx.listener(|view, _: &CompletionNext, window, cx| view.move_completion(1, window, cx)))
-                .on_action(cx.listener(|view, _: &CompletionPrevious, window, cx| view.move_completion(-1, window, cx)))
-                .on_action(cx.listener(|view, _: &CompletionSubmit, window, cx| view.submit_completion(window, cx)))
-                .on_action(cx.listener(|view, _: &CompletionConfirm, window, cx| view.confirm_completion(window, cx)))
-                .on_action(cx.listener(|view, _: &CompletionDismiss, _, cx| view.dismiss_completions(cx)))
-                .child(deferred(self.completion_menu(window, cx)).with_priority(1))
-            )
-            .on_drop(
-                cx.listener(|view, paths: &ExternalPaths, window, cx| view.add_paths(&paths.0, window, cx)),
-            )
+            .when(self.command_open, |view| {
+                view.key_context("OrbitComposer ComposerCompletions")
+                    .on_action(cx.listener(|view, _: &CompletionNext, window, cx| {
+                        view.move_completion(1, window, cx)
+                    }))
+                    .on_action(cx.listener(|view, _: &CompletionPrevious, window, cx| {
+                        view.move_completion(-1, window, cx)
+                    }))
+                    .on_action(cx.listener(|view, _: &CompletionSubmit, window, cx| {
+                        view.submit_completion(window, cx)
+                    }))
+                    .on_action(cx.listener(|view, _: &CompletionConfirm, window, cx| {
+                        view.confirm_completion(window, cx)
+                    }))
+                    .on_action(cx.listener(|view, _: &CompletionDismiss, _, cx| {
+                        view.dismiss_completions(cx)
+                    }))
+                    .child(deferred(self.completion_menu(window, cx)).with_priority(1))
+            })
+            .on_drop(cx.listener(|view, paths: &ExternalPaths, window, cx| {
+                view.add_paths(&paths.0, window, cx)
+            }))
             .w_full()
             .gap_2()
             .child(
@@ -64,48 +65,66 @@ impl Workspace {
                     .border_1()
                     .border_color(cx.theme().border)
                     .when(
-                        self.input.read(cx).focus_handle(cx).is_focused(window),
+                        self.input
+                            .read(cx)
+                            .focus_handle(cx)
+                            .is_focused(window),
                         |view| view.border_color(cx.theme().ring),
                     )
                     .rounded(cx.theme().radius_lg)
                     .when(!self.paths.is_empty(), |view| {
-                        view.child(h_flex().gap_2().flex_wrap().children(self.paths.iter().map(
-                            |path| {
-                                let remove = path.clone();
-                                let preview = path.clone();
-                                let preview_owner = cx.weak_entity();
-                                Attachment::new()
-                                    .id(SharedString::from(path.to_string_lossy().into_owned()))
-                                    .axis(Axis::Vertical)
-                                    .w(rems(7.))
-                                    .h(rems(5.))
-                                    .media(
-                                        AttachmentMedia::new().aspect_ratio(7. / 5.).child(
-                                            img(path.clone())
-                                                .size_full()
-                                                .object_fit(ObjectFit::Contain),
-                                        ),
-                                    )
-                                    .when(self.pending.is_none(), |attachment| {
-                                        attachment.on_remove(cx.listener(move |view, _, _, cx| {
-                                            // The card's preview layer must not handle this click.
-                                            cx.stop_propagation();
-                                            view.paths.retain(|path| path != &remove);
-                                            cx.emit(WorkspaceEvent::DraftChanged);
-                                            cx.notify();
-                                        }))
-                                    })
-                                    .on_click(move |_, window, cx| {
-                                        // A removed card can still have a queued click in this frame.
-                                        if preview_owner
-                                            .read_with(cx, |view, _| view.paths.contains(&preview))
-                                            .unwrap_or(false)
-                                        {
-                                            crate::image_preview::open_path(preview.clone(), window, cx);
-                                        }
-                                    })
-                            },
-                        )))
+                        view.child(
+                            h_flex()
+                                .gap_2()
+                                .flex_wrap()
+                                .children(self.paths.iter().map(|path| {
+                                    let remove = path.clone();
+                                    let preview = path.clone();
+                                    let preview_owner = cx.weak_entity();
+                                    Attachment::new()
+                                        .id(SharedString::from(path.to_string_lossy().into_owned()))
+                                        .axis(Axis::Vertical)
+                                        .w(rems(7.))
+                                        .h(rems(5.))
+                                        .media(
+                                            AttachmentMedia::new()
+                                                .aspect_ratio(7. / 5.)
+                                                .child(
+                                                    img(path.clone())
+                                                        .size_full()
+                                                        .object_fit(ObjectFit::Contain),
+                                                ),
+                                        )
+                                        .when(self.pending.is_none(), |attachment| {
+                                            attachment.on_remove(cx.listener(
+                                                move |view, _, _, cx| {
+                                                    // Keep this click out of the card preview.
+                                                    cx.stop_propagation();
+                                                    view.paths
+                                                        .retain(|path| path != &remove);
+                                                    cx.emit(WorkspaceEvent::DraftChanged);
+                                                    cx.notify();
+                                                },
+                                            ))
+                                        })
+                                        .on_click(move |_, window, cx| {
+                                            // A removed card can still have a queued click in this
+                                            // frame.
+                                            if preview_owner
+                                                .read_with(cx, |view, _| {
+                                                    view.paths.contains(&preview)
+                                                })
+                                                .unwrap_or(false)
+                                            {
+                                                crate::image_preview::open_path(
+                                                    preview.clone(),
+                                                    window,
+                                                    cx,
+                                                );
+                                            }
+                                        })
+                                })),
+                        )
                     })
                     .child(
                         Textarea::new(&self.input)
@@ -118,251 +137,52 @@ impl Workspace {
                             .bordered(false)
                             .aria_label("消息输入框"),
                     )
-                    .child(
-                        h_flex()
-                            .gap_1()
-                            .flex_wrap()
-                            .child(
-                                Button::new("attach")
-                                    .ghost()
-                                    .small()
-                                    .icon(IconName::Plus)
-                                    .accessibility_label("添加图片")
-                                    .tooltip("添加图片")
-                                    .disabled(
-                                        self.pending.is_some()
-                                            || self.opening
-                                            || !self
-                                                .info
-                                                .as_ref()
-                                                .is_some_and(|info| info.supports_vision),
-                                    )
-                                    .on_click(cx.listener(|view, _, _, cx| view.attach(cx))),
-                            )
-                            .child(
-                                Button::new("work-mode")
-                                    .ghost()
-                                    .small()
-                                    .compact()
-                                    .icon(IconName::SquareTerminal)
-                                    .label(
-                                        if self.planning.mode
-                                            == orbit_protocol::plan::WorkMode::Plan
-                                        {
-                                            "计划"
-                                        } else {
-                                            "执行"
-                                        },
-                                    )
-                                    .disabled(controls_disabled)
-                                    .dropdown_caret(true)
-                                    .tooltip("工作模式：执行任务或先制定计划")
-                                    .dropdown_menu_with_anchor(Anchor::BottomLeft, move |mut menu, _, _| {
-                                        menu = menu.check_side(gpui_kit::component::Side::Right);
-                                        for (is_plan, label) in [(false, "执行"), (true, "计划")] {
-                                            let owner = work_owner.clone();
-                                            menu = menu.item(PopupMenuItem::new(label).checked(planning == is_plan)
-                                                .on_click(move |_, _, cx| {
-                                                    let _ = owner.update(cx, |view, cx| view.plan_action(
-                                                        if is_plan { orbit_protocol::plan::Action::Enter } else { orbit_protocol::plan::Action::Leave }, cx));
-                                                }));
-                                        }
-                                        menu
-                                    }),
-                            )
-                            .child(
-                                Button::new("mode")
-                                    .ghost()
-                                    .small()
-                                    .compact()
-                                    .dropdown_caret(true)
-                                    .tooltip("工具操作的审批方式")
-                                    .label(match mode {
-                                        Mode::Ask => "每次询问",
-                                        Mode::Auto => "自动审批",
-                                        Mode::Yolo => "全部允许",
-                                    })
-                                    .disabled(!self.connected || self.opening || self.pending.is_some())
-                                    .dropdown_menu_with_anchor(Anchor::BottomLeft, move |mut menu, _, _| {
-                                        menu = menu.check_side(gpui_kit::component::Side::Right);
-                                        for (choice, label) in [
-                                            (Mode::Ask, "每次询问"),
-                                            (Mode::Auto, "自动审批"),
-                                            (Mode::Yolo, "全部允许"),
-                                        ] {
-                                            let owner = mode_owner.clone();
-                                            let session = mode_session.clone();
-                                            menu = menu.item(PopupMenuItem::new(label).checked(mode == choice).on_click(
-                                                move |_, _, cx| {
-                                                    let _ = owner.update(cx, |view, cx| {
-                                                        view.command(
-                                                            Command::Request(Request::SetMode {
-                                                                session: session.clone(),
-                                                                mode: choice,
-                                                            }),
-                                                            cx,
-                                                        )
-                                                    });
-                                                },
-                                            ));
-                                        }
-                                        menu
-                                    }),
-                            )
-
-                            .child(div().flex_1())
-                            .when_some(
-                                self.info
-                                    .as_ref()
-                                    .filter(|info| !info.reasoning_efforts.is_empty()),
-                                |row, info| {
-                                    let owner = cx.weak_entity();
-                                    let session = info.id.clone();
-                                    let model = info.model.clone();
-                                    let efforts = info.reasoning_efforts.clone();
-                                    row.child(
-                                        Button::new("reasoning-effort")
-                                            .ghost()
-                                            .small()
-                                            .dropdown_caret(true)
-                                            .label(
-                                                info.reasoning_effort
-                                                    .clone()
-                                                    .unwrap_or_else(|| "思考强度".into()),
-                                            )
-                                            .disabled(controls_disabled)
-                                            .dropdown_menu_with_anchor(Anchor::BottomLeft, move |mut menu, _, _| {
-                                                for effort in &efforts {
-                                                    let owner = owner.clone();
-                                                    let session = session.clone();
-                                                    let model = model.clone();
-                                                    let effort = effort.clone();
-                                                    menu = menu.item(
-                                                        PopupMenuItem::new(effort.clone())
-                                                            .on_click(move |_, _, cx| {
-                                                                let _ =
-                                                                    owner.update(cx, |view, cx| {
-                                                                        view.command(
-                                                                    Command::Request(
-                                                                        Request::SetModel {
-                                                                            session: session
-                                                                                .clone(),
-                                                                            model: model.clone(),
-                                                                            effort: Some(
-                                                                                effort.clone(),
-                                                                            ),
-                                                                        },
-                                                                    ),
-                                                                    cx,
-                                                                )
-                                                                    });
-                                                            }),
-                                                    );
-                                                }
-                                                menu
-                                            }),
-                                    )
-                                },
-                            )
-                            .child(
-                                Button::new("model")
-                                    .ghost()
-                                    .small()
-                                    .dropdown_caret(true)
-                                    .label(
-                                        self.model
-                                            .rsplit("::")
-                                            .next()
-                                            .unwrap_or(&self.model)
-                                            .to_owned(),
-                                    )
-                                    .disabled(controls_disabled)
-                                    .dropdown_menu_with_anchor(Anchor::BottomLeft, move |mut menu, window, cx| {
-                                        for (provider, models) in &model_groups {
-                                            let models = models.clone();
-                                            let weak = weak.clone();
-                                            let session = session.clone();
-                                            let current = current_model.clone();
-                                            let active = models.iter().any(|model| model == current.as_ref());
-                                            menu = menu.submenu_with_icon(
-                                                active.then(|| Icon::new(IconName::Check)),
-                                                format!("{provider} · {}", models.len()), window, cx,
-                                                move |mut menu, _, _| {
-                                                    for model in &models {
-                                                        let model = model.clone();
-                                                        let weak = weak.clone();
-                                                        let session = session.clone();
-                                                        let label = model.split_once("::").map_or(model.as_str(), |(_, name)| name).to_owned();
-                                                        menu = menu.item(PopupMenuItem::new(label).checked(model == current.as_ref())
-                                                            .on_click(move |_, _, cx| {
-                                                                let _ = weak.update(cx, |view, cx| view.command(Command::Request(Request::SetModel {
-                                                                    session: session.clone(), model: model.clone(), effort: None,
-                                                                }), cx));
-                                                            }));
-                                                    }
-                                                    menu
-                                                });
-                                        }
-                                        menu
-                                    }),
-                            )
-                            .child(
-                                Button::new("composer-action")
-                                    .small()
-                                    .when(!show_stop, |button| button.primary())
-                                    .icon(Icon::new(if show_stop {
-                                        IconName::Square
-                                    } else {
-                                        IconName::ArrowUp
-                                    }))
-                                    .accessibility_label(if show_stop { "停止" } else { "发送" })
-                                    .tooltip(if show_stop {
-                                        crate::keymap::tooltip("停止", "stop_task", cx)
-                                    } else {
-                                        crate::keymap::tooltip(
-                                            if self.busy { "补充指令" } else { "发送" },
-                                            "composer_send",
-                                            cx,
-                                        )
-                                    })
-                                    .disabled(!show_stop && !self.can_send(cx))
-                                    .on_click(cx.listener(|view, _, window, cx| {
-                                        if view.busy
-                                            && !draft_ready(
-                                                &view.input.read(cx).value(),
-                                                &view.paths,
-                                                view.busy,
-                                            )
-                                        {
-                                            view.stop_task(cx);
-                                        } else {
-                                            view.send(&SendMessage, window, cx);
-                                        }
-                                    })),
-                            ),
-                    ),
+                    .child(self.composer_toolbar(cx)),
             )
             .child(
                 h_flex()
                     .w_full()
                     .gap_2()
                     .flex_wrap()
-                    .when(self.recovery.is_active(), |row| row.child(
-                        div().text_xs().text_color(cx.theme().muted_foreground).child(self.recovery.label())
-                    ))
-                    .when(!self.connected && !self.opening && !self.recovery.is_active() && self.info.is_some(), |row| row.child(
-                        Button::new("reconnect-task").ghost().xsmall().label("重新连接")
-                            .on_click(cx.listener(|view, _, window, cx| view.connect(window, cx)))
-                    ))
-                    .when(self.options.ssh.is_some() || self.options.wsl.is_some(), |row| row.child(
-                        Button::new("retained-connection-logs")
-                            .ghost()
-                            .xsmall()
-                            .label("连接日志")
-                            .on_click(cx.listener(|view, _, window, cx| {
-                                view.open_connection_logs(window, cx)
-                            })),
-                    ))
+                    .when(self.recovery.is_active(), |row| {
+                        row.child(
+                            div()
+                                .text_xs()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(self.recovery.label()),
+                        )
+                    })
+                    .when(
+                        !self.connected
+                            && !self.opening
+                            && !self.recovery.is_active()
+                            && self.info.is_some(),
+                        |row| {
+                            row.child(
+                                Button::new("reconnect-task")
+                                    .ghost()
+                                    .xsmall()
+                                    .label("重新连接")
+                                    .on_click(
+                                        cx.listener(|view, _, window, cx| view.connect(window, cx)),
+                                    ),
+                            )
+                        },
+                    )
+                    .when(
+                        self.options.ssh.is_some() || self.options.wsl.is_some(),
+                        |row| {
+                            row.child(
+                                Button::new("retained-connection-logs")
+                                    .ghost()
+                                    .xsmall()
+                                    .label("连接日志")
+                                    .on_click(cx.listener(|view, _, window, cx| {
+                                        view.open_connection_logs(window, cx)
+                                    })),
+                            )
+                        },
+                    )
                     .child(
                         Button::new("composer-context")
                             .ghost()
@@ -401,7 +221,285 @@ impl Workspace {
                                 cx.listener(|view, _, window, cx| view.show_usage(window, cx)),
                             ),
                     ),
-            ).into_any_element()
+            )
+            .into_any_element()
+    }
+
+    fn composer_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let controls_disabled =
+            !self.connected || self.opening || self.busy || self.pending.is_some();
+        let show_stop =
+            self.busy && !draft_ready(&self.input.read(cx).value(), &self.paths, self.busy);
+        let mode = self
+            .info
+            .as_ref()
+            .map(|info| info.mode)
+            .unwrap_or_default();
+        let mode_owner = cx.weak_entity();
+        let mode_session = self
+            .info
+            .as_ref()
+            .map(|info| info.id.clone())
+            .unwrap_or_default();
+        let work_owner = cx.weak_entity();
+        let planning = self.planning.mode == orbit_protocol::plan::WorkMode::Plan;
+        h_flex()
+            .gap_1()
+            .flex_wrap()
+            .child(
+                Button::new("attach")
+                    .ghost()
+                    .small()
+                    .icon(IconName::Plus)
+                    .accessibility_label("添加图片")
+                    .tooltip("添加图片")
+                    .disabled(
+                        self.pending.is_some()
+                            || self.opening
+                            || !self
+                                .info
+                                .as_ref()
+                                .is_some_and(|info| info.supports_vision),
+                    )
+                    .on_click(cx.listener(|view, _, _, cx| view.attach(cx))),
+            )
+            .child(
+                Button::new("work-mode")
+                    .ghost()
+                    .small()
+                    .compact()
+                    .icon(IconName::SquareTerminal)
+                    .label(
+                        if self.planning.mode == orbit_protocol::plan::WorkMode::Plan {
+                            "计划"
+                        } else {
+                            "执行"
+                        },
+                    )
+                    .disabled(controls_disabled)
+                    .dropdown_caret(true)
+                    .tooltip("工作模式：执行任务或先制定计划")
+                    .dropdown_menu_with_anchor(Anchor::BottomLeft, move |mut menu, _, _| {
+                        menu = menu.check_side(gpui_kit::component::Side::Right);
+                        for (is_plan, label) in [(false, "执行"), (true, "计划")] {
+                            let owner = work_owner.clone();
+                            menu = menu.item(
+                                PopupMenuItem::new(label)
+                                    .checked(planning == is_plan)
+                                    .on_click(move |_, _, cx| {
+                                        let _ = owner.update(cx, |view, cx| {
+                                            view.plan_action(
+                                                if is_plan {
+                                                    orbit_protocol::plan::Action::Enter
+                                                } else {
+                                                    orbit_protocol::plan::Action::Leave
+                                                },
+                                                cx,
+                                            )
+                                        });
+                                    }),
+                            );
+                        }
+                        menu
+                    }),
+            )
+            .child(
+                Button::new("mode")
+                    .ghost()
+                    .small()
+                    .compact()
+                    .dropdown_caret(true)
+                    .tooltip("工具操作的审批方式")
+                    .label(match mode {
+                        Mode::Ask => "每次询问",
+                        Mode::Auto => "自动审批",
+                        Mode::Yolo => "全部允许",
+                    })
+                    .disabled(!self.connected || self.opening || self.pending.is_some())
+                    .dropdown_menu_with_anchor(Anchor::BottomLeft, move |mut menu, _, _| {
+                        menu = menu.check_side(gpui_kit::component::Side::Right);
+                        for (choice, label) in [
+                            (Mode::Ask, "每次询问"),
+                            (Mode::Auto, "自动审批"),
+                            (Mode::Yolo, "全部允许"),
+                        ] {
+                            let owner = mode_owner.clone();
+                            let session = mode_session.clone();
+                            menu = menu.item(
+                                PopupMenuItem::new(label)
+                                    .checked(mode == choice)
+                                    .on_click(move |_, _, cx| {
+                                        let _ = owner.update(cx, |view, cx| {
+                                            view.command(
+                                                Command::Request(Request::SetMode {
+                                                    session: session.clone(),
+                                                    mode: choice,
+                                                }),
+                                                cx,
+                                            )
+                                        });
+                                    }),
+                            );
+                        }
+                        menu
+                    }),
+            )
+            .child(div().flex_1())
+            .when_some(
+                self.info
+                    .as_ref()
+                    .filter(|info| !info.reasoning_efforts.is_empty()),
+                |row, info| {
+                    let owner = cx.weak_entity();
+                    let session = info.id.clone();
+                    let model = info.model.clone();
+                    let efforts = info.reasoning_efforts.clone();
+                    row.child(
+                        Button::new("reasoning-effort")
+                            .ghost()
+                            .small()
+                            .dropdown_caret(true)
+                            .label(
+                                info.reasoning_effort
+                                    .clone()
+                                    .unwrap_or_else(|| "思考强度".into()),
+                            )
+                            .disabled(controls_disabled)
+                            .dropdown_menu_with_anchor(
+                                Anchor::BottomLeft,
+                                move |mut menu, _, _| {
+                                    for effort in &efforts {
+                                        let owner = owner.clone();
+                                        let session = session.clone();
+                                        let model = model.clone();
+                                        let effort = effort.clone();
+                                        menu =
+                                            menu.item(PopupMenuItem::new(effort.clone()).on_click(
+                                                move |_, _, cx| {
+                                                    let _ = owner.update(cx, |view, cx| {
+                                                        view.command(
+                                                            Command::Request(Request::SetModel {
+                                                                session: session.clone(),
+                                                                model: model.clone(),
+                                                                effort: Some(effort.clone()),
+                                                            }),
+                                                            cx,
+                                                        )
+                                                    });
+                                                },
+                                            ));
+                                    }
+                                    menu
+                                },
+                            ),
+                    )
+                },
+            )
+            .child(self.composer_model_button(controls_disabled, cx))
+            .child(
+                Button::new("composer-action")
+                    .small()
+                    .when(!show_stop, |button| button.primary())
+                    .icon(Icon::new(if show_stop {
+                        IconName::Square
+                    } else {
+                        IconName::ArrowUp
+                    }))
+                    .accessibility_label(if show_stop { "停止" } else { "发送" })
+                    .tooltip(if show_stop {
+                        crate::keymap::tooltip("停止", "stop_task", cx)
+                    } else {
+                        crate::keymap::tooltip(
+                            if self.busy { "补充指令" } else { "发送" },
+                            "composer_send",
+                            cx,
+                        )
+                    })
+                    .disabled(!show_stop && !self.can_send(cx))
+                    .on_click(cx.listener(|view, _, window, cx| {
+                        if view.busy
+                            && !draft_ready(&view.input.read(cx).value(), &view.paths, view.busy)
+                        {
+                            view.stop_task(cx);
+                        } else {
+                            view.send(&SendMessage, window, cx);
+                        }
+                    })),
+            )
+    }
+
+    fn composer_model_button(&self, disabled: bool, cx: &mut Context<Self>) -> impl IntoElement {
+        let model_names = self
+            .info
+            .as_ref()
+            .map(|info| info.models.clone())
+            .unwrap_or_default();
+        let model_groups = super::models::groups(&model_names);
+        let current_model = self.model.clone();
+        let weak = cx.weak_entity();
+        let session = self
+            .info
+            .as_ref()
+            .map(|info| info.id.clone())
+            .unwrap_or_default();
+        Button::new("model")
+            .ghost()
+            .small()
+            .dropdown_caret(true)
+            .label(
+                self.model
+                    .rsplit("::")
+                    .next()
+                    .unwrap_or(&self.model)
+                    .to_owned(),
+            )
+            .disabled(disabled)
+            .dropdown_menu_with_anchor(Anchor::BottomLeft, move |mut menu, window, cx| {
+                for (provider, models) in &model_groups {
+                    let models = models.clone();
+                    let weak = weak.clone();
+                    let session = session.clone();
+                    let current = current_model.clone();
+                    let active = models
+                        .iter()
+                        .any(|model| model == current.as_ref());
+                    menu = menu.submenu_with_icon(
+                        active.then(|| Icon::new(IconName::Check)),
+                        format!("{provider} · {}", models.len()),
+                        window,
+                        cx,
+                        move |mut menu, _, _| {
+                            for model in &models {
+                                let model = model.clone();
+                                let weak = weak.clone();
+                                let session = session.clone();
+                                let label = model
+                                    .split_once("::")
+                                    .map_or(model.as_str(), |(_, name)| name)
+                                    .to_owned();
+                                menu = menu.item(
+                                    PopupMenuItem::new(label)
+                                        .checked(model == current.as_ref())
+                                        .on_click(move |_, _, cx| {
+                                            let _ = weak.update(cx, |view, cx| {
+                                                view.command(
+                                                    Command::Request(Request::SetModel {
+                                                        session: session.clone(),
+                                                        model: model.clone(),
+                                                        effort: None,
+                                                    }),
+                                                    cx,
+                                                )
+                                            });
+                                        }),
+                                );
+                            }
+                            menu
+                        },
+                    );
+                }
+                menu
+            })
     }
 }
 
@@ -424,7 +522,11 @@ impl Render for Workspace {
                             .justify_center()
                             .gap_2()
                             .child(gpui_kit::component::spinner::Spinner::new())
-                            .child(div().text_sm().child(self.connection_stage.clone()))
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .child(self.connection_stage.clone()),
+                            )
                             .child(
                                 div()
                                     .text_xs()
@@ -450,20 +552,24 @@ impl Render for Workspace {
                             )
                             .into_any_element()
                     } else if self.info.is_none() && self.error.is_some() {
-                        self.connection_failure(cx).into_any_element()
+                        self.connection_failure(cx)
+                            .into_any_element()
                     } else if empty {
                         v_flex()
                             .size_full()
                             .items_center()
                             .justify_center()
                             .gap_3()
-                            .child(div().text_xl().font_weight(FontWeight::MEDIUM).child(
-                                if self.info.is_some() {
-                                    "开始新任务"
-                                } else {
-                                    "打开项目，开始工作"
-                                },
-                            ))
+                            .child(
+                                div()
+                                    .text_xl()
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .child(if self.info.is_some() {
+                                        "开始新任务"
+                                    } else {
+                                        "打开项目，开始工作"
+                                    }),
+                            )
                             .child(
                                 div()
                                     .text_sm()
@@ -486,7 +592,9 @@ impl Render for Workspace {
                             })
                             .into_any_element()
                     } else {
-                        self.conversation.clone().into_any_element()
+                        self.conversation
+                            .clone()
+                            .into_any_element()
                     }),
             )
             .when(
@@ -532,9 +640,12 @@ impl Render for Workspace {
                                 },
                             )
                             .when(
-                                self.planning.plan.as_ref().is_some_and(|p| {
-                                    p.status == orbit_protocol::plan::Status::Review
-                                }),
+                                self.planning
+                                    .plan
+                                    .as_ref()
+                                    .is_some_and(|p| {
+                                        p.status == orbit_protocol::plan::Status::Review
+                                    }),
                                 |view| {
                                     view.child(
                                         Button::new("review-plan")
@@ -613,7 +724,11 @@ impl Render for Workspace {
                                     .absolute()
                                     .right_0()
                                     .bottom(rems(3.))
-                                    .child(self.conversation.read(cx).navigation_controls()),
+                                    .child(
+                                        self.conversation
+                                            .read(cx)
+                                            .navigation_controls(),
+                                    ),
                             ),
                     )
                 },
@@ -623,12 +738,17 @@ impl Render for Workspace {
             .as_ref()
             .map(|panel| panel.clone().into_any_element())
             .or_else(|| {
-                self.inspector
-                    .map(|_| self.inspector_view(cx).into_any_element())
+                self.inspector.map(|_| {
+                    self.inspector_view(cx)
+                        .into_any_element()
+                })
             });
         let body = if let Some(accessory) = accessory {
             if window.viewport_size().width < window.rem_size() * 72. {
-                div().size_full().child(accessory).into_any_element()
+                div()
+                    .size_full()
+                    .child(accessory)
+                    .into_any_element()
             } else {
                 h_resizable("document-panes")
                     .child(resizable_panel().child(body))
@@ -680,7 +800,12 @@ impl Render for Workspace {
                                 .child(self.location.clone()),
                         ),
                 )
-                .child(div().flex_1().min_h_0().children(self.tasks.clone()))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_h_0()
+                        .children(self.tasks.clone()),
+                )
                 .into_any_element()
         } else {
             body
@@ -728,7 +853,8 @@ impl Render for Workspace {
                 }),
             )
             .on_action(cx.listener(|view, _: &ToggleSidebar, _, cx| {
-                view.sidebar.update(cx, |sidebar, cx| sidebar.toggle(cx));
+                view.sidebar
+                    .update(cx, |sidebar, cx| sidebar.toggle(cx));
             }))
             .on_action(
                 cx.listener(|view, _: &FocusComposer, window, cx| view.focus_composer(window, cx)),

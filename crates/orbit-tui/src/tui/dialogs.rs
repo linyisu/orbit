@@ -58,7 +58,9 @@ impl From<orbit_protocol::ModelSummary> for ModelChoice {
             provider: model.provider,
             model: model.model,
             supports_vision: model.supports_vision,
-            reasoning_effort: model.reasoning_effort.and_then(|value| value.parse().ok()),
+            reasoning_effort: model
+                .reasoning_effort
+                .and_then(|value| value.parse().ok()),
             reasoning_efforts: model
                 .reasoning_efforts
                 .into_iter()
@@ -166,7 +168,9 @@ impl MarketplaceDialog {
         if catalog.project_id != self.project_id {
             return false;
         }
-        let source = self.selected_market().map(|market| market.source.clone());
+        let source = self
+            .selected_market()
+            .map(|market| market.source.clone());
         let plugin = self
             .selected_plugin()
             .map(|(_, plugin)| plugin.name.clone());
@@ -178,8 +182,11 @@ impl MarketplaceDialog {
                 .position(|market| market.source == source)
         });
         next.selected_market = selected.unwrap_or(
-            self.selected_market
-                .min(next.marketplaces.len().saturating_sub(1)),
+            self.selected_market.min(
+                next.marketplaces
+                    .len()
+                    .saturating_sub(1),
+            ),
         );
         next.viewing_plugins = self.viewing_plugins && selected.is_some();
         next.query = self.query.clone();
@@ -233,8 +240,14 @@ impl MarketplaceDialog {
                                 .enabled
                                 .contains_key(&(market.source.clone(), plugin.name.clone())))
                             && (query.is_empty()
-                                || plugin.name.to_lowercase().contains(&query)
-                                || plugin.description.to_lowercase().contains(&query))
+                                || plugin
+                                    .name
+                                    .to_lowercase()
+                                    .contains(&query)
+                                || plugin
+                                    .description
+                                    .to_lowercase()
+                                    .contains(&query))
                     })
                     .map(|(index, _)| index)
                     .collect()
@@ -270,11 +283,15 @@ impl MarketplaceDialog {
     }
 
     fn selected_market(&self) -> Option<&Marketplace> {
-        self.marketplaces.get(self.selected_market)
+        self.marketplaces
+            .get(self.selected_market)
     }
 
     fn selected_plugin(&self) -> Option<(&Marketplace, &crate::marketplaces::Plugin)> {
-        if !self.plugin_indices().contains(&self.selected_plugin) {
+        if !self
+            .plugin_indices()
+            .contains(&self.selected_plugin)
+        {
             return None;
         }
         let market = self.selected_market()?;
@@ -295,7 +312,11 @@ impl MarketplaceDialog {
 
     fn selected_change(&self) -> Option<ProjectPluginChange> {
         let (market, plugin) = self.selected_plugin()?;
-        let package = self.inspection.as_ref()?.as_ref().ok()?;
+        let package = self
+            .inspection
+            .as_ref()?
+            .as_ref()
+            .ok()?;
 
         if self.is_enabled(market, plugin)
             && self
@@ -362,11 +383,22 @@ impl ModelPicker {
         current: String,
         effort: Option<orbit_model::types::ReasoningEffort>,
     ) -> Self {
-        let mut models: Vec<ModelChoice> = models.into_iter().map(Into::into).collect();
-        models.sort_by(|a, b| a.model.cmp(&b.model).then(a.provider.cmp(&b.provider)));
-        let current_provider = current.split_once("::").map(|(provider, _)| provider);
-        let providers: std::collections::BTreeSet<_> =
-            models.iter().map(|model| model.provider.as_str()).collect();
+        let mut models: Vec<ModelChoice> = models
+            .into_iter()
+            .map(Into::into)
+            .collect();
+        models.sort_by(|a, b| {
+            a.model
+                .cmp(&b.model)
+                .then(a.provider.cmp(&b.provider))
+        });
+        let current_provider = current
+            .split_once("::")
+            .map(|(provider, _)| provider);
+        let providers: std::collections::BTreeSet<_> = models
+            .iter()
+            .map(|model| model.provider.as_str())
+            .collect();
         let selected = providers
             .iter()
             .position(|provider| Some(*provider) == current_provider)
@@ -388,10 +420,13 @@ impl ModelPicker {
     fn providers(&self) -> Vec<(String, usize)> {
         let mut groups = std::collections::BTreeMap::<String, usize>::new();
         for model in self.matches() {
-            *groups.entry(model.provider.clone()).or_default() += 1;
+            *groups
+                .entry(model.provider.clone())
+                .or_default() += 1;
         }
         groups.into_iter().collect()
     }
+
     fn row_count(&self) -> usize {
         if self.provider.is_some() {
             self.matches().len()
@@ -399,11 +434,16 @@ impl ModelPicker {
             self.providers().len()
         }
     }
+
     fn enter_provider(&mut self) {
         if self.provider.is_some() {
             return;
         }
-        let Some((provider, _)) = self.providers().get(self.selected).cloned() else {
+        let Some((provider, _)) = self
+            .providers()
+            .get(self.selected)
+            .cloned()
+        else {
             return;
         };
         self.provider = Some(provider);
@@ -415,6 +455,7 @@ impl ModelPicker {
         self.offset = 0;
         self.normalize_effort();
     }
+
     fn back(&mut self) -> bool {
         let Some(provider) = self.provider.take() else {
             return false;
@@ -429,7 +470,9 @@ impl ModelPicker {
     }
 
     fn first_visible(&mut self, height: usize) -> usize {
-        let selected = self.selected.min(self.row_count().saturating_sub(1));
+        let selected = self
+            .selected
+            .min(self.row_count().saturating_sub(1));
         let mut first = self.offset.min(selected);
         while first < selected {
             let required = selected - first + 1;
@@ -466,7 +509,9 @@ impl ModelPicker {
     fn move_by(&mut self, down: bool) {
         let count = self.row_count();
         self.selected = if down {
-            self.selected.saturating_add(1).min(count.saturating_sub(1))
+            self.selected
+                .saturating_add(1)
+                .min(count.saturating_sub(1))
         } else {
             self.selected.saturating_sub(1)
         };
@@ -490,7 +535,10 @@ impl ModelPicker {
 
         if efforts.is_empty() {
             self.effort = None;
-        } else if !efforts.iter().any(|effort| Some(*effort) == self.effort) {
+        } else if !efforts
+            .iter()
+            .any(|effort| Some(*effort) == self.effort)
+        {
             let matches = self.matches();
             let default = matches
                 .get(self.selected)
@@ -548,7 +596,11 @@ impl SessionPicker {
         let Some((_, _, since)) = &self.title_scroll else {
             return false;
         };
-        let tick = since.elapsed().as_millis().saturating_sub(100) / 120;
+        let tick = since
+            .elapsed()
+            .as_millis()
+            .saturating_sub(100)
+            / 120;
         let changed = tick != self.title_scroll_tick;
         self.title_scroll_tick = tick;
         changed
@@ -563,7 +615,9 @@ impl SessionPicker {
     fn move_by(&mut self, down: bool) {
         let count = self.matches().len();
         self.selected = if down {
-            self.selected.saturating_add(1).min(count.saturating_sub(1))
+            self.selected
+                .saturating_add(1)
+                .min(count.saturating_sub(1))
         } else {
             self.selected.saturating_sub(1)
         };
@@ -576,11 +630,11 @@ fn format_session_time(updated_at: i64) -> String {
         return "—".into();
     }
     let local_secs = (updated_at + local_utc_offset_secs()).max(0) as u64;
-    let secs_per_day = 86400u64;
+    let secs_per_day = 86_400u64;
     let days = local_secs / secs_per_day;
     let tod = local_secs % secs_per_day;
-    let hh = tod / 3600;
-    let mm = (tod % 3600) / 60;
+    let hh = tod / 3_600;
+    let mm = (tod % 3_600) / 60;
     let (year, month, day) = days_to_ymd(days);
     format!("{year:04}-{month:02}-{day:02} {hh:02}:{mm:02}")
 }
@@ -604,6 +658,7 @@ fn local_utc_offset_secs() -> i64 {
             -offset
         }
     }
+
     #[cfg(not(target_os = "linux"))]
     {
         0
@@ -613,10 +668,10 @@ fn local_utc_offset_secs() -> i64 {
 /// Convert a count of days since the Unix epoch (1970-01-01) to (year, month, day).
 /// Uses Howard Hinnant's "civil_from_days" algorithm — exact for all Gregorian dates.
 const fn days_to_ymd(days: u64) -> (u64, u64, u64) {
-    let z = days + 719468;
-    let era = z / 146097;
-    let doe = z % 146097;
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let z = days + 719_468;
+    let era = z / 146_097;
+    let doe = z % 146_097;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
     let y = yoe + era * 400;
     let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
     let mp = (5 * doy + 2) / 153;
@@ -630,7 +685,9 @@ fn fit_hit_rows(rows: &mut [(Rect, usize)], lines: &[Line<'_>], body: Rect) {
     for (area, _) in rows {
         let row = area.y.saturating_sub(body.y) as usize;
         if let Some(line) = lines.get(row) {
-            area.width = area.width.min(line.width().min(u16::MAX as usize) as u16);
+            area.width = area
+                .width
+                .min(line.width().min(u16::MAX as usize) as u16);
             area.height = area.height.min(1);
         }
     }
@@ -678,7 +735,9 @@ impl InfoDialog {
     }
 
     pub(super) fn pages(&mut self, pages: Vec<ReportPage>) {
-        self.selected_page = self.selected_page.min(pages.len().saturating_sub(1));
+        self.selected_page = self
+            .selected_page
+            .min(pages.len().saturating_sub(1));
         self.content = pages
             .get(self.selected_page)
             .map(|page| page.content.to_string())
@@ -699,11 +758,25 @@ impl InfoDialog {
         match event {
             Event::Key(key) if key.kind != KeyEventKind::Release => match key.code {
                 KeyCode::Esc | KeyCode::Enter => return true,
-                KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return true,
+                KeyCode::Char('c')
+                    if key
+                        .modifiers
+                        .contains(KeyModifiers::CONTROL) =>
+                {
+                    return true;
+                }
                 KeyCode::Up => self.scroll = self.scroll.saturating_sub(1),
                 KeyCode::Down => self.scroll = self.scroll.saturating_add(1),
-                KeyCode::PageUp => self.scroll = self.scroll.saturating_sub(self.page_rows),
-                KeyCode::PageDown => self.scroll = self.scroll.saturating_add(self.page_rows),
+                KeyCode::PageUp => {
+                    self.scroll = self
+                        .scroll
+                        .saturating_sub(self.page_rows)
+                }
+                KeyCode::PageDown => {
+                    self.scroll = self
+                        .scroll
+                        .saturating_add(self.page_rows)
+                }
                 KeyCode::Home => self.scroll = 0,
                 KeyCode::End => self.scroll = self.max_scroll,
                 KeyCode::Tab | KeyCode::Right if !self.pages.is_empty() => {
@@ -729,10 +802,14 @@ impl InfoDialog {
                     }
                 }
                 MouseEventKind::ScrollUp => {
-                    self.scroll = self.scroll.saturating_sub(super::wheel::LINES)
+                    self.scroll = self
+                        .scroll
+                        .saturating_sub(super::wheel::LINES)
                 }
                 MouseEventKind::ScrollDown => {
-                    self.scroll = self.scroll.saturating_add(super::wheel::LINES)
+                    self.scroll = self
+                        .scroll
+                        .saturating_add(super::wheel::LINES)
                 }
                 _ => {}
             },
@@ -757,8 +834,16 @@ pub fn handle(state: &mut UiState, event: Event) -> Option<String> {
         .as_ref()
         .is_some_and(MarketplaceDialog::pending)
     {
-        if matches!(&event, Event::Key(key) if key.kind != KeyEventKind::Release && (key.code == KeyCode::Esc || key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL)))
-        {
+        if matches!(
+            &event,
+            Event::Key(key)
+                if key.kind != KeyEventKind::Release
+                    && (key.code == KeyCode::Esc
+                        || key.code == KeyCode::Char('c')
+                            && key
+                                .modifiers
+                                .contains(KeyModifiers::CONTROL))
+        ) {
             state.marketplace_dialog = None;
         }
         return None;
@@ -814,7 +899,9 @@ pub fn handle(state: &mut UiState, event: Event) -> Option<String> {
         let down = mouse.kind == MouseEventKind::ScrollDown;
         let scroll = |offset: &mut usize, count: usize| {
             *offset = if down {
-                offset.saturating_add(3).min(count.saturating_sub(visible))
+                offset
+                    .saturating_add(3)
+                    .min(count.saturating_sub(visible))
             } else {
                 offset.saturating_sub(3)
             };
@@ -878,7 +965,10 @@ pub fn handle(state: &mut UiState, event: Event) -> Option<String> {
         }
 
         if key.code == KeyCode::Esc
-            || (key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL))
+            || (key.code == KeyCode::Char('c')
+                && key
+                    .modifiers
+                    .contains(KeyModifiers::CONTROL))
         {
             state.show_help = false;
             state.picker = None;
@@ -957,12 +1047,18 @@ pub fn handle(state: &mut UiState, event: Event) -> Option<String> {
                     if let Some(id) = picker.pending_delete.take() {
                         state.delete_request = Some(id);
                     } else {
-                        return picker.matches().get(picker.selected).map(|s| s.id.clone());
+                        return picker
+                            .matches()
+                            .get(picker.selected)
+                            .map(|s| s.id.clone());
                     }
                 }
 
                 KeyCode::Delete => {
-                    let selected_id = picker.matches().get(picker.selected).map(|s| s.id.clone());
+                    let selected_id = picker
+                        .matches()
+                        .get(picker.selected)
+                        .map(|s| s.id.clone());
                     if let Some(id) = selected_id {
                         if picker.pending_delete.as_deref() == Some(&id) {
                             picker.pending_delete = None;
@@ -1090,7 +1186,11 @@ pub fn handle(state: &mut UiState, event: Event) -> Option<String> {
                         dialog.query.pop();
                         dialog.normalize_plugin();
                     }
-                    KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    KeyCode::Char('u')
+                        if key
+                            .modifiers
+                            .contains(KeyModifiers::CONTROL) =>
+                    {
                         dialog.query.clear();
                         dialog.normalize_plugin();
                     }
@@ -1151,8 +1251,9 @@ pub fn handle(state: &mut UiState, event: Event) -> Option<String> {
                             .modifiers
                             .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
                 {
-                    if let Some(source) =
-                        dialog.selected_market().map(|market| market.source.clone())
+                    if let Some(source) = dialog
+                        .selected_market()
+                        .map(|market| market.source.clone())
                     {
                         dialog.start("正在刷新市场源", &source);
                         state.pending_plugin_action =
@@ -1162,7 +1263,9 @@ pub fn handle(state: &mut UiState, event: Event) -> Option<String> {
                 KeyCode::Delete
                     if !dialog.adding && dialog.inspection.is_none() && !dialog.viewing_plugins =>
                 {
-                    dialog.removing = dialog.selected_market().map(|market| market.source.clone());
+                    dialog.removing = dialog
+                        .selected_market()
+                        .map(|market| market.source.clone());
                     dialog.error = None;
                 }
 
@@ -1177,7 +1280,10 @@ pub fn handle(state: &mut UiState, event: Event) -> Option<String> {
                 }
 
                 KeyCode::Char('e')
-                    if dialog.inspection.as_ref().is_some_and(Result::is_ok)
+                    if dialog
+                        .inspection
+                        .as_ref()
+                        .is_some_and(Result::is_ok)
                         && !key
                             .modifiers
                             .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
@@ -1292,7 +1398,9 @@ pub fn handle(state: &mut UiState, event: Event) -> Option<String> {
             },
 
             Event::Mouse(mouse) if mouse.kind == MouseEventKind::ScrollUp => {
-                state.help_scroll = state.help_scroll.saturating_sub(super::wheel::LINES)
+                state.help_scroll = state
+                    .help_scroll
+                    .saturating_sub(super::wheel::LINES)
             }
             Event::Mouse(mouse) if mouse.kind == MouseEventKind::ScrollDown => {
                 state.help_scroll += super::wheel::LINES
@@ -1315,10 +1423,16 @@ pub(super) fn centered_area(full: Rect) -> Rect {
 }
 
 pub(super) fn transcript_area(full: Rect) -> Rect {
-    let width = full.width.saturating_sub(full.width / 5).max(96);
+    let width = full
+        .width
+        .saturating_sub(full.width / 5)
+        .max(96);
     // Keep the half-screen proportions, then grow with the width for long records.
     let height = (width / 4)
-        .min(full.height.saturating_sub(full.height / 5))
+        .min(
+            full.height
+                .saturating_sub(full.height / 5),
+        )
         .max(24);
     centered_size(full, width, height)
 }
@@ -1387,7 +1501,10 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
         centered_size(
             frame.area(),
             96,
-            picker.row_count().saturating_add(8).min(28) as u16,
+            picker
+                .row_count()
+                .saturating_add(8)
+                .min(28) as u16,
         )
     } else {
         centered_area(frame.area())
@@ -1408,7 +1525,9 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
         state.ime_cursor = None;
         let mut media = state.media.clone();
         media.workspace = state.workspace.clone().into();
-        state.btw.draw(frame, area, inner, media);
+        state
+            .btw
+            .draw(frame, area, inner, media);
         state.ime_cursor = state.btw.cursor();
         return;
     }
@@ -1441,7 +1560,9 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
                 .saturating_add(1 + page_header_rows)
                 .min(inner.bottom()),
             title.width,
-            inner.height.saturating_sub(4 + page_header_rows),
+            inner
+                .height
+                .saturating_sub(4 + page_header_rows),
         );
         let footer = Rect::new(
             title.x,
@@ -1473,7 +1594,9 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
                 };
                 frame.render_widget(Paragraph::new(label).style(style), area);
                 dialog.page_areas.push((area, index));
-                x = x.saturating_add(width + 2).min(title.right());
+                x = x
+                    .saturating_add(width + 2)
+                    .min(title.right());
             }
         }
         let mut text = dialog
@@ -1526,7 +1649,10 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
                 } else {
                     dialog.scroll + 1
                 },
-                dialog.scroll.saturating_add(body.height as usize).min(rows),
+                dialog
+                    .scroll
+                    .saturating_add(body.height as usize)
+                    .min(rows),
                 rows,
             )
         } else {
@@ -1559,7 +1685,10 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
     let footer = Rect::new(header.x, inner.bottom().saturating_sub(2), header.width, 2);
 
     if let Some(picker) = &mut state.picker {
-        let feedback = picker.error.as_deref().or(state.resume_loading.as_deref());
+        let feedback = picker
+            .error
+            .as_deref()
+            .or(state.resume_loading.as_deref());
         let feedback_rows = feedback.map_or(0, |text| {
             unicode_width::UnicodeWidthStr::width(clean(text).as_str())
                 .div_ceil(usize::from(header.width).max(1))
@@ -1618,10 +1747,11 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
         let title_elapsed = picker.prepare_title_scroll(title_width);
         let visible = (body.height as usize / 2).max(1);
         if !state.dialog_manual_scroll {
-            picker.offset = picker
-                .offset
-                .min(picker.selected)
-                .max(picker.selected.saturating_sub(visible - 1));
+            picker.offset = picker.offset.min(picker.selected).max(
+                picker
+                    .selected
+                    .saturating_sub(visible - 1),
+            );
         }
 
         let first = picker.offset;
@@ -1629,7 +1759,12 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
         let mut lines = Vec::new();
         let pending_delete_id = picker.pending_delete.clone();
 
-        for (index, session) in rows.iter().enumerate().skip(first).take(visible) {
+        for (index, session) in rows
+            .iter()
+            .enumerate()
+            .skip(first)
+            .take(visible)
+        {
             state.dialog_rows.push((
                 Rect::new(body.x, body.y + ((index - first) * 2) as u16, body.width, 2)
                     .intersection(body),
@@ -1710,7 +1845,9 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
         };
         let body = Rect {
             y: body.y + column_header.height,
-            height: body.height.saturating_sub(column_header.height),
+            height: body
+                .height
+                .saturating_sub(column_header.height),
             ..body
         };
         frame.render_widget(
@@ -1768,7 +1905,9 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
         state.model_update_area = super::components::button(
             frame,
             Rect::new(
-                header.right().saturating_sub(update_width),
+                header
+                    .right()
+                    .saturating_sub(update_width),
                 header.y,
                 update_width,
                 header.height.min(1),
@@ -1785,7 +1924,9 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
                 Rect::new(
                     header.x,
                     header.y,
-                    header.width.saturating_sub(update_width + 1),
+                    header
+                        .width
+                        .saturating_sub(update_width + 1),
                     header.height.min(1),
                 ),
                 &format!("‹ 供应商 · {}", clean(provider)),
@@ -1827,7 +1968,12 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
                 .collect()
         };
         let mut lines = Vec::new();
-        for (index, model) in rows.iter().enumerate().skip(first).take(visible) {
+        for (index, model) in rows
+            .iter()
+            .enumerate()
+            .skip(first)
+            .take(visible)
+        {
             state.dialog_rows.push((
                 Rect::new(body.x, body.y + lines.len() as u16, body.width, 1).intersection(body),
                 index,
@@ -1928,7 +2074,15 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
                 )),
                 header,
             );
-            frame.render_widget(Paragraph::new(format!("{}\n\n只移除市场登记，保留本地缓存与目录。\n项目正在使用的市场不能移除，请先停用其中的插件。", clean(source))).wrap(Wrap { trim: false }), body);
+            frame.render_widget(
+                Paragraph::new(format!(
+                    "{}\n\n只移除市场登记，保留本地缓存与目录。\n项目正在使用的市场不能移除，请先停\
+                用其中的插件。",
+                    clean(source)
+                ))
+                .wrap(Wrap { trim: false }),
+                body,
+            );
             frame.render_widget(Paragraph::new("Enter 确认移除 · Esc 返回"), footer);
         } else if dialog.adding {
             let source = super::render::fit_label(
@@ -1957,7 +2111,15 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
                 header,
             );
             frame.render_widget(
-                Paragraph::new(format!("可输入本地目录、GitHub owner/repo 或 HTTPS Git URL。\n下载只保存到 Orbit 用户数据目录；安装插件前仍会展示其内容。{}", dialog.error.as_ref().map(|error| format!("\n\n{}", clean(error))).unwrap_or_default()))
+                Paragraph::new(format!(
+                    "可输入本地目录、GitHub owner/repo 或 HTTPS Git URL。\n下载只保存到 Orbit \
+                    用户数据目录；安装插件前仍会展示其内容。{}",
+                    dialog
+                        .error
+                        .as_ref()
+                        .map(|error| format!("\n\n{}", clean(error)))
+                        .unwrap_or_default()
+                ))
                 .wrap(Wrap { trim: false }),
                 body,
             );
@@ -1972,16 +2134,22 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
                         .as_deref()
                         .map(|value| format!("版本 {value}"))
                         .unwrap_or_else(|| "未声明版本".into());
-                    let description = package.description.as_deref().unwrap_or("未声明描述");
+                    let description = package
+                        .description
+                        .as_deref()
+                        .unwrap_or("未声明描述");
                     frame.render_widget(
                         Paragraph::new(vec![
                             Line::styled(
                                 format!(
                                     "{} · {}",
                                     clean(&package.name),
-                                    if dialog.selected_plugin().is_some_and(|(market, plugin)| {
-                                        dialog.is_enabled(market, plugin)
-                                    }) {
+                                    if dialog
+                                        .selected_plugin()
+                                        .is_some_and(|(market, plugin)| {
+                                            dialog.is_enabled(market, plugin)
+                                        })
+                                    {
                                         "当前项目已启用"
                                     } else {
                                         "包声明"
@@ -2268,7 +2436,11 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
                 dialog.market_offset = dialog
                     .market_offset
                     .min(dialog.selected_market)
-                    .max(dialog.selected_market.saturating_sub(visible - 1));
+                    .max(
+                        dialog
+                            .selected_market
+                            .saturating_sub(visible - 1),
+                    );
             }
 
             let first = dialog.market_offset;

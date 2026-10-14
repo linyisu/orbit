@@ -42,7 +42,10 @@ pub struct RestorePicker {
 
 impl RestorePicker {
     pub fn from_tabs(tabs: &[crate::workspace::windows::SavedTab]) -> Self {
-        let targets: std::collections::HashSet<_> = tabs.iter().map(|tab| &tab.target).collect();
+        let targets: std::collections::HashSet<_> = tabs
+            .iter()
+            .map(|tab| &tab.target)
+            .collect();
         let show_target = targets.len() > 1;
         Self {
             entries: tabs
@@ -53,7 +56,10 @@ impl RestorePicker {
                     title: {
                         let label = tab.target.label();
                         let prefix = format!("{label} · ");
-                        let title = tab.title.strip_prefix(&prefix).unwrap_or(&tab.title);
+                        let title = tab
+                            .title
+                            .strip_prefix(&prefix)
+                            .unwrap_or(&tab.title);
                         if show_target {
                             format!("{label} · {title}")
                         } else {
@@ -97,18 +103,27 @@ impl RestorePicker {
                 .rows
                 .iter()
                 .find(|(rect, _)| rect.contains(point.into()))
-            && let Some(position) = self.filtered().iter().position(|i| i == index)
+            && let Some(position) = self
+                .filtered()
+                .iter()
+                .position(|i| i == index)
         {
             self.cursor = position;
         }
     }
 
     fn prepare_title_scroll(&mut self, width: usize) -> Option<Duration> {
-        let focused = self.filtered().get(self.cursor).copied().filter(|index| {
-            self.rows.iter().any(|(_, row)| row == index)
-                && width > 0
-                && self.entries[*index].title.width() > width
-        });
+        let focused = self
+            .filtered()
+            .get(self.cursor)
+            .copied()
+            .filter(|index| {
+                self.rows
+                    .iter()
+                    .any(|(_, row)| row == index)
+                    && width > 0
+                    && self.entries[*index].title.width() > width
+            });
         let Some(index) = focused else {
             self.title_scroll = None;
             return None;
@@ -159,7 +174,11 @@ impl RestorePicker {
             return None;
         }
         let total = self.entries.len();
-        let selected = self.entries.iter().filter(|entry| entry.selected).count();
+        let selected = self
+            .entries
+            .iter()
+            .filter(|entry| entry.selected)
+            .count();
         components::title(
             frame,
             inner,
@@ -195,7 +214,9 @@ impl RestorePicker {
             ("清空", self.none, true),
             ("恢复", self.confirm, selected > 0),
         ] {
-            let hovered = self.pointer.is_some_and(|point| hit.contains(point.into()));
+            let hovered = self
+                .pointer
+                .is_some_and(|point| hit.contains(point.into()));
             components::button(
                 frame,
                 hit,
@@ -214,9 +235,18 @@ impl RestorePicker {
         );
         let ids = self.filtered();
         let slots = self.area.height as usize;
-        self.offset = self.offset.min(ids.len().saturating_sub(slots));
-        self.cursor = self.cursor.min(ids.len().saturating_sub(1));
-        for (row, &index) in ids.iter().skip(self.offset).take(slots).enumerate() {
+        self.offset = self
+            .offset
+            .min(ids.len().saturating_sub(slots));
+        self.cursor = self
+            .cursor
+            .min(ids.len().saturating_sub(1));
+        for (row, &index) in ids
+            .iter()
+            .skip(self.offset)
+            .take(slots)
+            .enumerate()
+        {
             self.rows.push((
                 Rect::new(self.area.x, self.area.y + row as u16, self.area.width, 1),
                 index,
@@ -281,7 +311,9 @@ pub(super) fn handle(state: &mut UiState, event: &Event) -> bool {
         Event::Key(key) if key.kind == KeyEventKind::Release => return true,
         Event::Key(key)
             if key.code == KeyCode::Esc
-                || (key.modifiers.contains(KeyModifiers::CONTROL)
+                || (key
+                    .modifiers
+                    .contains(KeyModifiers::CONTROL)
                     && key.code == KeyCode::Char('c')) =>
         {
             state.restore_picker = None;
@@ -314,15 +346,27 @@ pub(super) fn handle(state: &mut UiState, event: &Event) -> bool {
                     }
                 }
 
-                KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => picker
-                    .entries
-                    .iter_mut()
-                    .for_each(|entry| entry.selected = true),
+                KeyCode::Char('a')
+                    if key
+                        .modifiers
+                        .contains(KeyModifiers::CONTROL) =>
+                {
+                    picker
+                        .entries
+                        .iter_mut()
+                        .for_each(|entry| entry.selected = true)
+                }
 
-                KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => picker
-                    .entries
-                    .iter_mut()
-                    .for_each(|entry| entry.selected = false),
+                KeyCode::Char('d')
+                    if key
+                        .modifiers
+                        .contains(KeyModifiers::CONTROL) =>
+                {
+                    picker
+                        .entries
+                        .iter_mut()
+                        .for_each(|entry| entry.selected = false)
+                }
 
                 KeyCode::Char(c)
                     if !key
@@ -403,7 +447,9 @@ pub(super) fn handle(state: &mut UiState, event: &Event) -> bool {
         }
 
         Event::Paste(text) => {
-            picker.query.push_str(&text.replace(['\n', '\r'], " "));
+            picker
+                .query
+                .push_str(&text.replace(['\n', '\r'], " "));
             picker.cursor = 0;
             picker.offset = 0;
             picker.title_scroll = None;
@@ -484,7 +530,11 @@ mod tests {
             state.input.set("/restore ".into());
             let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
             draw(&mut state, &mut terminal);
-            let hit = state.restore_picker.as_ref().unwrap().none;
+            let hit = state
+                .restore_picker
+                .as_ref()
+                .unwrap()
+                .none;
             assert_eq!(hit.width, 6);
             let original = terminal.backend().buffer()[(hit.x + 1, hit.y)].clone();
 
@@ -539,10 +589,15 @@ mod tests {
                 terminal.backend().buffer()[(row.x + 3, row.y)].symbol(),
                 "✓"
             );
-            let text: String = buffer.content.iter().map(|cell| cell.symbol()).collect();
+            let text: String = buffer
+                .content
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect();
             if picker.area.width >= 31 {
                 assert!(
-                    text.replace(' ', "").contains("已选15/15"),
+                    text.replace(' ', "")
+                        .contains("已选15/15"),
                     "{width}x{height}"
                 );
             }
@@ -566,7 +621,12 @@ mod tests {
         picker.entries[1].title = "Orbit another long session title that needs to scroll".into();
         let mut terminal = Terminal::new(TestBackend::new(40, 24)).unwrap();
         let before = draw(&mut state, &mut terminal);
-        let row = state.restore_picker.as_ref().unwrap().rows[0].0;
+        let row = state
+            .restore_picker
+            .as_ref()
+            .unwrap()
+            .rows[0]
+            .0;
         let picker = state.restore_picker.as_mut().unwrap();
         assert_eq!(picker.title_scroll.as_ref().unwrap().0, 0);
         picker.title_scroll.as_mut().unwrap().2 = Instant::now() - Duration::from_millis(500);
@@ -606,7 +666,15 @@ mod tests {
         draw(&mut state, &mut terminal);
         let picker = state.restore_picker.as_ref().unwrap();
         assert_eq!(picker.title_scroll_tick, 0);
-        assert!(picker.title_scroll.as_ref().unwrap().2.elapsed() < Duration::from_secs(1));
+        assert!(
+            picker
+                .title_scroll
+                .as_ref()
+                .unwrap()
+                .2
+                .elapsed()
+                < Duration::from_secs(1)
+        );
         assert_eq!(
             picker.title_scroll.as_ref().unwrap().1,
             picker.area.width as usize - 8
@@ -642,8 +710,17 @@ mod tests {
             assert!(!picker.rows.is_empty());
             assert!(state.dialog_open());
             assert!(state.ime_cursor.unwrap().y < picker.area.y);
-            assert!(!state.input_area.contains(state.ime_cursor.unwrap()));
-            assert!(picker.rows.iter().all(|(area, _)| area.right() <= width));
+            assert!(
+                !state
+                    .input_area
+                    .contains(state.ime_cursor.unwrap())
+            );
+            assert!(
+                picker
+                    .rows
+                    .iter()
+                    .all(|(area, _)| area.right() <= width)
+            );
             assert!(state.picker.is_none());
         }
     }
@@ -652,7 +729,14 @@ mod tests {
     fn enter_restores_all_by_default_and_escape_does_not_restore() {
         let mut state = state();
         key(&mut state, KeyCode::Enter);
-        assert_eq!(state.restore_selection.as_ref().unwrap().len(), 15);
+        assert_eq!(
+            state
+                .restore_selection
+                .as_ref()
+                .unwrap()
+                .len(),
+            15
+        );
         assert!(state.restore_picker.is_none());
         let mut state = self::state();
         key(&mut state, KeyCode::Esc);
@@ -669,7 +753,12 @@ mod tests {
                 let mut state = state();
                 state.input.set("/restore ".into());
                 if empty {
-                    state.restore_picker.as_mut().unwrap().entries.clear();
+                    state
+                        .restore_picker
+                        .as_mut()
+                        .unwrap()
+                        .entries
+                        .clear();
                 }
                 if busy {
                     state.begin_run();
@@ -699,11 +788,18 @@ mod tests {
     #[test]
     fn filtering_preserves_selection_in_hidden_rows() {
         let mut state = state();
-        key(&mut state, KeyCode::Char(' ')); // deselect 00
+        key(&mut state, KeyCode::Char(' '));
         key(&mut state, KeyCode::Char('1'));
         key(&mut state, KeyCode::Char('4'));
-        assert_eq!(state.restore_picker.as_ref().unwrap().filtered(), [14]);
-        key(&mut state, KeyCode::Char(' ')); // deselect 14
+        assert_eq!(
+            state
+                .restore_picker
+                .as_ref()
+                .unwrap()
+                .filtered(),
+            [14]
+        );
+        key(&mut state, KeyCode::Char(' '));
         key(&mut state, KeyCode::Backspace);
         key(&mut state, KeyCode::Backspace);
         key(&mut state, KeyCode::Enter);
@@ -721,13 +817,23 @@ mod tests {
             terminal
                 .draw(|frame| {
                     let area = frame.area();
-                    state.restore_picker.as_mut().unwrap().draw(frame, area);
+                    state
+                        .restore_picker
+                        .as_mut()
+                        .unwrap()
+                        .draw(frame, area);
                 })
                 .unwrap();
         };
 
         draw(&mut state, &mut terminal);
-        let row_y = state.restore_picker.as_ref().unwrap().rows[1].0.y;
+        let row_y = state
+            .restore_picker
+            .as_ref()
+            .unwrap()
+            .rows[1]
+            .0
+            .y;
         let mouse = |kind, column| {
             Event::Mouse(MouseEvent {
                 kind,
@@ -748,12 +854,26 @@ mod tests {
             &mut state,
             &mouse(MouseEventKind::Down(MouseButton::Left), 50),
         );
-        assert_ne!(state.restore_picker.as_ref().unwrap().selected(), before);
+        assert_ne!(
+            state
+                .restore_picker
+                .as_ref()
+                .unwrap()
+                .selected(),
+            before
+        );
         handle(
             &mut state,
             &mouse(MouseEventKind::Down(MouseButton::Left), 4),
         );
-        assert!(state.restore_picker.as_ref().unwrap().entries[4].selected);
+        assert!(
+            state
+                .restore_picker
+                .as_ref()
+                .unwrap()
+                .entries[4]
+                .selected
+        );
     }
 
     #[test]
@@ -784,7 +904,12 @@ mod tests {
             let picker = RestorePicker::from_tabs(std::slice::from_ref(&saved));
             assert_eq!(picker.entries[0].title, "会话标题");
             let picker = RestorePicker::from_tabs(&[saved.clone(), saved.clone()]);
-            assert!(picker.entries.iter().all(|entry| entry.title == "会话标题"));
+            assert!(
+                picker
+                    .entries
+                    .iter()
+                    .all(|entry| entry.title == "会话标题")
+            );
             tabs.push(saved);
         }
         let picker = RestorePicker::from_tabs(&tabs);
@@ -797,14 +922,22 @@ mod tests {
         let mut state = state();
         let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
         draw(&mut state, &mut terminal);
-        let none = state.restore_picker.as_ref().unwrap().none;
+        let none = state
+            .restore_picker
+            .as_ref()
+            .unwrap()
+            .none;
         mouse(
             &mut state,
             MouseEventKind::Down(MouseButton::Left),
             none.x,
             none.y,
         );
-        let confirm = state.restore_picker.as_ref().unwrap().confirm;
+        let confirm = state
+            .restore_picker
+            .as_ref()
+            .unwrap()
+            .confirm;
         mouse(
             &mut state,
             MouseEventKind::Down(MouseButton::Left),
@@ -813,7 +946,12 @@ mod tests {
         );
         assert!(state.restore_picker.is_some());
         assert!(state.restore_selection.is_none());
-        let row = state.restore_picker.as_ref().unwrap().rows[1].0;
+        let row = state
+            .restore_picker
+            .as_ref()
+            .unwrap()
+            .rows[1]
+            .0;
         mouse(&mut state, MouseEventKind::Moved, row.right() - 1, row.y);
         draw(&mut state, &mut terminal);
         assert_eq!(
@@ -822,7 +960,11 @@ mod tests {
         );
         let focused = &terminal.backend().buffer()[(row.x + 4, row.y)];
         assert_eq!(focused.fg, THEME.on_accent);
-        assert!(focused.modifier.contains(Modifier::BOLD));
+        assert!(
+            focused
+                .modifier
+                .contains(Modifier::BOLD)
+        );
         mouse(
             &mut state,
             MouseEventKind::Down(MouseButton::Left),

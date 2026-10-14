@@ -11,7 +11,7 @@ fn replay_preserves_compaction_and_queued_input_semantics() {
         images: Vec::new(),
         prompt: "/compact".into(),
         status: "completed".into(),
-        elapsed_ms: Some(1234),
+        elapsed_ms: Some(1_234),
         events: vec![],
     };
     assert!(presentation(&compact).compact);
@@ -52,9 +52,22 @@ fn idle_and_live_pages_carry_service_clock_without_changing_the_event_cursor() {
     assert!(page.timing.is_some());
     let clock = view.clock.as_mut().unwrap();
     clock.pause();
-    assert!(view.page(0).unwrap().timing.unwrap().paused);
+    assert!(
+        view.page(0)
+            .unwrap()
+            .timing
+            .unwrap()
+            .paused
+    );
     view.clock.as_mut().unwrap().resume();
-    assert!(!view.page(0).unwrap().timing.unwrap().paused);
+    assert!(
+        !view
+            .page(0)
+            .unwrap()
+            .timing
+            .unwrap()
+            .paused
+    );
     view.clock = None;
     view.busy = false;
     assert!(view.page(0).unwrap().timing.is_none());
@@ -83,7 +96,12 @@ fn dense_streams_coalesce_without_mutating_published_cursors_or_crossing_barrier
     let fast = view.page(0).unwrap();
     assert!(fast.updates.len() < 16);
     for (update, size) in view.updates.cached() {
-        assert_eq!(*size, serde_json::to_vec(update).unwrap().len());
+        assert_eq!(
+            *size,
+            serde_json::to_vec(update)
+                .unwrap()
+                .len()
+        );
     }
     let barrier = AgentEvent::InputReceived {
         attachments: vec![],
@@ -96,7 +114,10 @@ fn dense_streams_coalesce_without_mutating_published_cursors_or_crossing_barrier
     let suffix = view.page(fast.next).unwrap();
     assert_eq!(suffix.updates.len(), 3);
     assert!(
-        matches!(&suffix.updates[1], Update::Agent(event) if matches!(event.as_ref(), AgentEvent::InputReceived { message_id: 42, .. }))
+        matches!(&suffix.updates[1], Update::Agent(event) if matches!(
+            event.as_ref(),
+            AgentEvent::InputReceived { message_id: 42, .. }
+        ))
     );
     let slow = view.page(0).unwrap();
     let concatenate = |updates: &[Update]| {
@@ -116,7 +137,12 @@ fn dense_streams_coalesce_without_mutating_published_cursors_or_crossing_barrier
         concatenate(&fast.updates) + &concatenate(&suffix.updates)
     );
     assert_eq!(concatenate(&fast.updates), "中\"\n".repeat(100_000));
-    assert!(view.page(suffix.next).unwrap().updates.is_empty());
+    assert!(
+        view.page(suffix.next)
+            .unwrap()
+            .updates
+            .is_empty()
+    );
 }
 
 #[tokio::test]
@@ -152,7 +178,9 @@ async fn image_only_submission_reaches_the_service_and_its_attachment_is_present
     let setup = crate::workspace::setup::prepare_workspace(&options, root, None)
         .await
         .unwrap();
-    let handle = Handle::spawn(setup, None).await.unwrap();
+    let handle = Handle::spawn(setup, None)
+        .await
+        .unwrap();
     let mut png = std::io::Cursor::new(Vec::new());
     image::DynamicImage::new_rgb8(1, 1)
         .write_to(&mut png, image::ImageFormat::Png)
@@ -170,7 +198,12 @@ async fn image_only_submission_reaches_the_service_and_its_attachment_is_present
         })
         .await
         .unwrap();
-    let page = handle.view.lock().await.page(0).unwrap();
+    let page = handle
+        .view
+        .lock()
+        .await
+        .page(0)
+        .unwrap();
     let images = page
         .updates
         .iter()
@@ -185,7 +218,11 @@ async fn image_only_submission_reaches_the_service_and_its_attachment_is_present
     assert_eq!(images.len(), 1);
     assert_eq!(images[0].name, "one.png");
     assert!(handle.has_image(&images[0].path).await);
-    assert!(!handle.has_image("/another/session/image.png").await);
+    assert!(
+        !handle
+            .has_image("/another/session/image.png")
+            .await
+    );
     let assets = orbit_tools::image_assets::ImageAssets::for_database(&options.database);
     assert!(
         assets
@@ -195,7 +232,11 @@ async fn image_only_submission_reaches_the_service_and_its_attachment_is_present
     );
     tokio::time::timeout(std::time::Duration::from_secs(3), async {
         loop {
-            let snapshot = handle.store.load(&handle.info.id).await.unwrap();
+            let snapshot = handle
+                .store
+                .load(&handle.info.id)
+                .await
+                .unwrap();
             if snapshot
                 .runs
                 .first()
@@ -209,7 +250,10 @@ async fn image_only_submission_reaches_the_service_and_its_attachment_is_present
     })
     .await
     .unwrap();
-    handle.command(Command::Cancel).await.unwrap();
+    handle
+        .command(Command::Cancel)
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
@@ -225,7 +269,10 @@ async fn remembered_file_grant_survives_reopen_and_matches_changed_content() {
         .begin("edit file".into(), "test".into())
         .await
         .unwrap();
-    session.finish("cancelled", None).await.unwrap();
+    session
+        .finish("cancelled", None)
+        .await
+        .unwrap();
     let id = session.id().to_owned();
     let first = ApprovalPreview::Write(WritePreview {
         path: "file.txt".into(),
@@ -233,13 +280,20 @@ async fn remembered_file_grant_survives_reopen_and_matches_changed_content() {
         after: "first".into(),
     });
     let key = approval_key(&first, root).unwrap();
-    session.store.grant_tui_file(&id, &key).await.unwrap();
+    session
+        .store
+        .grant_tui_file(&id, &key)
+        .await
+        .unwrap();
     drop(session);
     std::fs::write(root.join("file.txt"), "first").unwrap();
     let store = orbit_store::store::Store::open(root.join("sessions.db"))
         .await
         .unwrap();
-    let granted = store.tui_file_grants(&id).await.unwrap();
+    let granted = store
+        .tui_file_grants(&id)
+        .await
+        .unwrap();
     for preview in [
         ApprovalPreview::Write(WritePreview {
             path: "file.txt".into(),
@@ -276,8 +330,12 @@ async fn switching_to_a_smaller_context_starts_compaction_in_the_service() {
                         .endpoint("http://127.0.0.1:1/v1")
                         .key("test-only")
                         .models([
-                            TestModel::new("large").input_context(64000).output(512),
-                            TestModel::new("small").input_context(8192).output(512)
+                            TestModel::new("large")
+                                .input_context(64_000)
+                                .output(512),
+                            TestModel::new("small")
+                                .input_context(8_192)
+                                .output(512)
                         ])
                 )
                 .providers_toml()
@@ -303,12 +361,14 @@ async fn switching_to_a_smaller_context_starts_compaction_in_the_service() {
     setup
         .session
         .append_context(orbit_model::types::ChatMessage::user(
-            "earlier context ".repeat(6000),
+            "earlier context ".repeat(6_000),
         ))
         .await
         .unwrap();
     assert!(setup.resources.budget.auto_compact);
-    let handle = Handle::spawn(setup, None).await.unwrap();
+    let handle = Handle::spawn(setup, None)
+        .await
+        .unwrap();
     handle
         .command(Command::SetModel {
             model: "test::small".into(),
@@ -316,16 +376,40 @@ async fn switching_to_a_smaller_context_starts_compaction_in_the_service() {
         })
         .await
         .unwrap();
-    tokio::time::timeout(std::time::Duration::from_secs(3),async {
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
         loop {
-            let updates = handle.view.lock().await.page(0).unwrap().updates;
-            let started = updates.iter().any(|update| matches!(update, Update::Started { presentation, .. } if presentation.compact));
-            let announced = updates.iter().any(|update| matches!(update, Update::Agent(event) if matches!(event.as_ref(), AgentEvent::CompactionStarted)));
-            if started && announced { break; }
+            let updates = handle
+                .view
+                .lock()
+                .await
+                .page(0)
+                .unwrap()
+                .updates;
+            let started = updates.iter().any(|update| {
+                matches!(
+                    update,
+                    Update::Started { presentation, .. } if presentation.compact
+                )
+            });
+            let announced = updates.iter().any(|update| {
+                matches!(
+                    update,
+                    Update::Agent(event)
+                        if matches!(event.as_ref(), AgentEvent::CompactionStarted)
+                )
+            });
+            if started && announced {
+                break;
+            }
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
-    }).await.unwrap();
-    handle.command(Command::Cancel).await.unwrap();
+    })
+    .await
+    .unwrap();
+    handle
+        .command(Command::Cancel)
+        .await
+        .unwrap();
 }
 
 #[test]
@@ -400,16 +484,28 @@ async fn user_input_shared_session_pages_wait_for_explicit_answer_in_yolo() {
         .unwrap();
     setup.start_session().await.unwrap();
     let tools = setup.resources.tools.clone();
-    let handle = Handle::spawn(setup, None).await.unwrap();
+    let handle = Handle::spawn(setup, None)
+        .await
+        .unwrap();
     handle
         .command(Command::SetMode { mode: Mode::Yolo })
         .await
         .unwrap();
-    handle.command(Command::EnableUserInput).await.unwrap();
+    handle
+        .command(Command::EnableUserInput)
+        .await
+        .unwrap();
     let call = orbit_model::types::ToolCall::function(
         "ask",
         "ask_user",
-        serde_json::json!({"questions":[{"id":"q","title":"说明","prompt":"需要什么？","kind":"text"}]}),
+        serde_json::json!({
+            "questions": [{
+                "id": "q",
+                "title": "说明",
+                "prompt": "需要什么？",
+                "kind": "text"
+            }]
+        }),
     );
     let task = tokio::spawn(async move {
         tools
@@ -436,7 +532,12 @@ async fn user_input_shared_session_pages_wait_for_explicit_answer_in_yolo() {
     .await
     .unwrap();
     assert!(!task.is_finished(), "YOLO must still await user answers");
-    let second = handle.view.lock().await.page(0).unwrap();
+    let second = handle
+        .view
+        .lock()
+        .await
+        .page(0)
+        .unwrap();
     assert_eq!(second.user_inputs[0].id, record.id);
     let answers = vec![orbit_protocol::user_input::Answer {
         question_id: "q".into(),
@@ -459,7 +560,10 @@ async fn user_input_shared_session_pages_wait_for_explicit_answer_in_yolo() {
         })
         .await
         .unwrap();
-    handle.command(Command::Close).await.unwrap();
+    handle
+        .command(Command::Close)
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
@@ -499,7 +603,9 @@ async fn planning_tool_review_and_client_decisions_share_authoritative_session_s
         .unwrap();
     setup.start_session().await.unwrap();
     let tools = setup.resources.tools.clone();
-    let handle = Handle::spawn(setup, None).await.unwrap();
+    let handle = Handle::spawn(setup, None)
+        .await
+        .unwrap();
     handle
         .command(Command::Plan {
             action: Action::Enable,
@@ -514,7 +620,16 @@ async fn planning_tool_review_and_client_decisions_share_authoritative_session_s
         .await
         .unwrap();
     tokio::time::timeout(std::time::Duration::from_secs(3), async {
-        while handle.view.lock().await.page(0).unwrap().planning.mode != WorkMode::Plan {
+        while handle
+            .view
+            .lock()
+            .await
+            .page(0)
+            .unwrap()
+            .planning
+            .mode
+            != WorkMode::Plan
+        {
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
     })
@@ -534,7 +649,10 @@ async fn planning_tool_review_and_client_decisions_share_authoritative_session_s
                 ToolCall::function(
                     "write",
                     "write_file",
-                    serde_json::json!({"path":"should-not-exist","content":"forbidden"})
+                    serde_json::json!({
+                        "path": "should-not-exist",
+                        "content": "forbidden"
+                    })
                 ),
                 CancellationToken::new()
             )
@@ -542,7 +660,22 @@ async fn planning_tool_review_and_client_decisions_share_authoritative_session_s
             .is_err()
     );
     assert!(!root.join("should-not-exist").exists());
-    let result=tools.execute(ToolCall::function("draft","update_plan",serde_json::json!({"generation":generation,"title":"Feature plan","markdown":"Investigate, implement and verify.","steps":["Implement","Verify"]})),CancellationToken::new()).await.unwrap();
+    let result = tools
+        .execute(
+            ToolCall::function(
+                "draft",
+                "update_plan",
+                serde_json::json!({
+                    "generation": generation,
+                    "title": "Feature plan",
+                    "markdown": "Investigate, implement and verify.",
+                    "steps": ["Implement", "Verify"]
+                }),
+            ),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
     let state: orbit_protocol::plan::State = serde_json::from_str(&result.content).unwrap();
     let submission = tokio::spawn(async move {
         tools
@@ -550,7 +683,9 @@ async fn planning_tool_review_and_client_decisions_share_authoritative_session_s
                 ToolCall::function(
                     "review",
                     "submit_plan",
-                    serde_json::json!({"generation":state.generation}),
+                    serde_json::json!({
+                        "generation": state.generation
+                    }),
                 ),
                 CancellationToken::new(),
             )
@@ -558,7 +693,13 @@ async fn planning_tool_review_and_client_decisions_share_authoritative_session_s
     });
     let generation = tokio::time::timeout(std::time::Duration::from_secs(3), async {
         loop {
-            let state = handle.view.lock().await.page(0).unwrap().planning;
+            let state = handle
+                .view
+                .lock()
+                .await
+                .page(0)
+                .unwrap()
+                .planning;
             if state
                 .plan
                 .as_ref()
@@ -586,8 +727,18 @@ async fn planning_tool_review_and_client_decisions_share_authoritative_session_s
     assert_eq!(state.mode, WorkMode::Build);
     assert_eq!(state.plan.unwrap().task_ids.len(), 2);
     assert_eq!(
-        handle.view.lock().await.page(0).unwrap().planning.mode,
+        handle
+            .view
+            .lock()
+            .await
+            .page(0)
+            .unwrap()
+            .planning
+            .mode,
         WorkMode::Build
     );
-    handle.command(Command::Close).await.unwrap();
+    handle
+        .command(Command::Close)
+        .await
+        .unwrap();
 }

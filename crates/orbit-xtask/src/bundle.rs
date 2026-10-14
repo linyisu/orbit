@@ -94,7 +94,9 @@ pub async fn build(root: &Path, profile: Profile) -> Result<()> {
         output.status
     );
     let files = artifacts(&output.stdout)?;
-    let output = target_directory(root).await?.join("bundle");
+    let output = target_directory(root)
+        .await?
+        .join("bundle");
     fs::create_dir_all(&output)?;
     for obsolete in [
         "orbit-server-x86_64-linux-musl",
@@ -141,11 +143,34 @@ mod tests {
     #[test]
     fn uses_cargo_artifacts_instead_of_assuming_a_target_layout() {
         let messages = [
-            serde_json::json!({"reason":"compiler-artifact", "target":{"name":"orbit-build"}, "executable":null}),
-            serde_json::json!({"reason":"compiler-artifact", "target":{"name":"orbit"}, "executable":"/custom-target/triple/release/orbit"}),
-            serde_json::json!({"reason":"compiler-artifact", "target":{"name":"orbit-cli"}, "executable":"/custom-target/triple/release/orbit-cli"}),
-            serde_json::json!({"reason":"build-finished", "success":true}),
-        ].map(|message| message.to_string()).join("\n");
+            serde_json::json!({
+                "reason": "compiler-artifact",
+                "target": {
+                    "name": "orbit-build"
+                },
+                "executable": null
+            }),
+            serde_json::json!({
+                "reason": "compiler-artifact",
+                "target": {
+                    "name": "orbit"
+                },
+                "executable": "/custom-target/triple/release/orbit"
+            }),
+            serde_json::json!({
+                "reason": "compiler-artifact",
+                "target": {
+                    "name": "orbit-cli"
+                },
+                "executable": "/custom-target/triple/release/orbit-cli"
+            }),
+            serde_json::json!({
+                "reason": "build-finished",
+                "success": true
+            }),
+        ]
+        .map(|message| message.to_string())
+        .join("\n");
         let files = artifacts(messages.as_bytes()).unwrap();
         assert_eq!(
             files["orbit"],

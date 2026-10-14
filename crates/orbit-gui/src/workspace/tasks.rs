@@ -57,7 +57,11 @@ impl Tasks {
             window,
             |_, input, event: &NumberInputEvent, window, cx| {
                 let NumberInputEvent::Step(step) = event;
-                let current = input.read(cx).value().parse::<i64>().unwrap_or(0);
+                let current = input
+                    .read(cx)
+                    .value()
+                    .parse::<i64>()
+                    .unwrap_or(0);
                 let next = match step {
                     StepAction::Increment => current.saturating_add(1),
                     StepAction::Decrement => current.saturating_sub(1),
@@ -210,7 +214,12 @@ impl Tasks {
                     self.editing = false;
                     self.creating = false;
                 }
-                if !self.editing && !self.tasks.iter().any(|task| Some(task.id) == self.selected) {
+                if !self.editing
+                    && !self
+                        .tasks
+                        .iter()
+                        .any(|task| Some(task.id) == self.selected)
+                {
                     self.selected = self
                         .tasks
                         .iter()
@@ -231,7 +240,8 @@ impl Tasks {
 
     pub(super) fn start_create(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.editing {
-            self.title.update(cx, |input, cx| input.focus(window, cx));
+            self.title
+                .update(cx, |input, cx| input.focus(window, cx));
             return;
         }
         self.selected = None;
@@ -269,25 +279,43 @@ impl Tasks {
         self.priority.update(cx, |input, cx| {
             input.set_value(task.priority.to_string(), window, cx)
         });
-        self.dependencies = task.depends_on.iter().copied().collect();
+        self.dependencies = task
+            .depends_on
+            .iter()
+            .copied()
+            .collect();
         self.editing = true;
         self.creating = false;
         self.error = None;
         self.saved = false;
-        self.title.update(cx, |input, cx| input.focus(window, cx));
+        self.title
+            .update(cx, |input, cx| input.focus(window, cx));
         self.sync_list(window, cx);
         cx.notify();
     }
 
     fn save(&mut self, cx: &mut Context<Self>) {
-        let title = self.title.read(cx).value().trim().to_string();
-        let details = self.details.read(cx).value().to_string();
-        let priority = self.priority.read(cx).value().parse::<i64>();
+        let title = self
+            .title
+            .read(cx)
+            .value()
+            .trim()
+            .to_string();
+        let details = self
+            .details
+            .read(cx)
+            .value()
+            .to_string();
+        let priority = self
+            .priority
+            .read(cx)
+            .value()
+            .parse::<i64>();
         let error = if title.is_empty() {
             Some("请填写任务标题")
         } else if title.len() > 512 {
             Some("任务标题不能超过 512 字节")
-        } else if details.len() > 8192 {
+        } else if details.len() > 8_192 {
             Some("任务说明不能超过 8192 字节")
         } else if !priority
             .as_ref()
@@ -305,7 +333,11 @@ impl Tasks {
             return;
         }
         let priority = priority.unwrap();
-        let depends_on = self.dependencies.iter().copied().collect();
+        let depends_on = self
+            .dependencies
+            .iter()
+            .copied()
+            .collect();
         let action = if self.creating {
             TaskAction::Create {
                 title,
@@ -331,15 +363,26 @@ impl Tasks {
     }
 
     fn visible_tasks(&self, cx: &App) -> Vec<usize> {
-        let query = self.query.read(cx).value().trim().to_lowercase();
+        let query = self
+            .query
+            .read(cx)
+            .value()
+            .trim()
+            .to_lowercase();
         self.tasks
             .iter()
             .enumerate()
             .filter(|(_, task)| {
                 (self.show_completed || !closed(task.status))
                     && (query.is_empty()
-                        || task.title.to_lowercase().contains(&query)
-                        || task.details.to_lowercase().contains(&query)
+                        || task
+                            .title
+                            .to_lowercase()
+                            .contains(&query)
+                        || task
+                            .details
+                            .to_lowercase()
+                            .contains(&query)
                         || task.id.to_string().contains(&query))
             })
             .map(|(ix, _)| ix)
@@ -409,12 +452,15 @@ impl Tasks {
                     ),
             )
             .child(
-                v_flex().gap_1().child("依赖任务").child(
-                    div()
-                        .text_sm()
-                        .text_color(cx.theme().muted_foreground)
-                        .child("所有依赖完成后，才能开始或完成此任务。"),
-                ),
+                v_flex()
+                    .gap_1()
+                    .child("依赖任务")
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(cx.theme().muted_foreground)
+                            .child("所有依赖完成后，才能开始或完成此任务。"),
+                    ),
             );
         let dependencies = self
             .tasks
@@ -425,21 +471,25 @@ impl Tasks {
                 .id("task-dependencies")
                 .max_h(rems(14.))
                 .overflow_y_scroll()
-                .child(v_flex().gap_2().children(dependencies.map(|task| {
-                    let id = task.id;
-                    Checkbox::new(SharedString::from(format!("task-dependency-{id}")))
-                        .label(format!("{} · {}", task.title, status_label(task.status)))
-                        .checked(self.dependencies.contains(&id))
-                        .disabled(self.busy)
-                        .on_change(cx.listener(move |view, checked: &bool, _, cx| {
-                            if *checked {
-                                view.dependencies.insert(id);
-                            } else {
-                                view.dependencies.remove(&id);
-                            }
-                            cx.notify();
-                        }))
-                }))),
+                .child(
+                    v_flex()
+                        .gap_2()
+                        .children(dependencies.map(|task| {
+                            let id = task.id;
+                            Checkbox::new(SharedString::from(format!("task-dependency-{id}")))
+                                .label(format!("{} · {}", task.title, status_label(task.status)))
+                                .checked(self.dependencies.contains(&id))
+                                .disabled(self.busy)
+                                .on_change(cx.listener(move |view, checked: &bool, _, cx| {
+                                    if *checked {
+                                        view.dependencies.insert(id);
+                                    } else {
+                                        view.dependencies.remove(&id);
+                                    }
+                                    cx.notify();
+                                }))
+                        })),
+                ),
         );
         if self.tasks.is_empty() {
             body = body.child(
@@ -556,41 +606,55 @@ impl Tasks {
                     .child(format!("任务 #{} · 优先级 {}", id, task.priority)),
             )
             .when_some(task.owner_session_id.as_ref(), |body, session| {
-                body.child(div().text_sm().child(format!("认领会话：{session}")))
+                body.child(
+                    div()
+                        .text_sm()
+                        .child(format!("认领会话：{session}")),
+                )
             })
             .when(!task.details.is_empty(), |body| {
-                body.child(div().whitespace_normal().child(task.details.clone()))
+                body.child(
+                    div()
+                        .whitespace_normal()
+                        .child(task.details.clone()),
+                )
             })
             .when(!task.depends_on.is_empty(), |body| {
                 body.child(
                     v_flex()
                         .gap_2()
                         .child("依赖任务")
-                        .children(task.depends_on.iter().map(|dependency| {
-                            let dependency = *dependency;
-                            let label = self
-                                .tasks
+                        .children(
+                            task.depends_on
                                 .iter()
-                                .find(|task| task.id == dependency)
-                                .map(|task| {
-                                    format!("{} · {}", task.title, status_label(task.status))
-                                })
-                                .unwrap_or_else(|| format!("任务 #{dependency}"));
-                            Button::new(SharedString::from(format!(
-                                "open-task-dependency-{dependency}"
-                            )))
-                            .ghost()
-                            .small()
-                            .label(label)
-                            .disabled(self.busy)
-                            .on_click(cx.listener(
-                                move |view, _, window, cx| {
-                                    view.selected = Some(dependency);
-                                    view.sync_list(window, cx);
-                                    cx.notify();
-                                },
-                            ))
-                        })),
+                                .map(|dependency| {
+                                    let dependency = *dependency;
+                                    let label = self
+                                        .tasks
+                                        .iter()
+                                        .find(|task| task.id == dependency)
+                                        .map(|task| {
+                                            format!(
+                                                "{} · {}",
+                                                task.title,
+                                                status_label(task.status)
+                                            )
+                                        })
+                                        .unwrap_or_else(|| format!("任务 #{dependency}"));
+                                    Button::new(SharedString::from(format!(
+                                        "open-task-dependency-{dependency}"
+                                    )))
+                                    .ghost()
+                                    .small()
+                                    .label(label)
+                                    .disabled(self.busy)
+                                    .on_click(cx.listener(move |view, _, window, cx| {
+                                        view.selected = Some(dependency);
+                                        view.sync_list(window, cx);
+                                        cx.notify();
+                                    }))
+                                }),
+                        ),
                 )
             })
             .when(!task.blocked_by.is_empty(), |body| {
@@ -607,7 +671,12 @@ impl Tasks {
 
 impl Render for Tasks {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let count = self.list.read(cx).delegate().items.len();
+        let count = self
+            .list
+            .read(cx)
+            .delegate()
+            .items
+            .len();
         let narrow = self
             .width
             .is_none_or(|width| width < window.rem_size() * 60.);
@@ -711,7 +780,12 @@ impl Render for Tasks {
                     ),
             )
             .when_some(self.error.clone(), |body, error| {
-                body.child(div().text_sm().text_color(cx.theme().danger).child(error))
+                body.child(
+                    div()
+                        .text_sm()
+                        .text_color(cx.theme().danger)
+                        .child(error),
+                )
             })
             .when(self.saved, |body| {
                 body.child(
@@ -803,7 +877,12 @@ impl ListDelegate for TaskList {
                         .w_full()
                         .min_w_0()
                         .gap_1()
-                        .child(div().text_sm().text_ellipsis().child(task.title.clone()))
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_ellipsis()
+                                .child(task.title.clone()),
+                        )
                         .child(
                             div()
                                 .text_xs()
@@ -834,7 +913,10 @@ impl ListDelegate for TaskList {
     }
 
     fn confirm(&mut self, _: bool, _: &mut Window, cx: &mut Context<ListState<Self>>) {
-        let Some(task) = self.selected.and_then(|index| self.items.get(index.row)) else {
+        let Some(task) = self
+            .selected
+            .and_then(|index| self.items.get(index.row))
+        else {
             return;
         };
         let id = task.id;
@@ -853,6 +935,7 @@ impl ListDelegate for TaskList {
 fn closed(status: TaskStatus) -> bool {
     matches!(status, TaskStatus::Completed | TaskStatus::Cancelled)
 }
+
 fn status_label(status: TaskStatus) -> &'static str {
     match status {
         TaskStatus::Pending => "待处理",

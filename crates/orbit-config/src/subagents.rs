@@ -23,7 +23,7 @@ impl Default for SubagentConfig {
             max_concurrent: 8,
             max_turns: agent.max_turns,
             max_tool_calls: agent.max_tool_calls,
-            timeout_seconds: 1800,
+            timeout_seconds: 1_800,
             explore_model: None,
             review_model: None,
         }
@@ -37,7 +37,7 @@ impl SubagentConfig {
             "subagents.max_concurrent must be between 1 and 128"
         );
         ensure!(
-            self.timeout_seconds <= 86400,
+            self.timeout_seconds <= 86_400,
             "subagents.timeout_seconds must be between 0 and 86400 (0 disables progress reminders)"
         );
         for model in [&self.explore_model, &self.review_model]

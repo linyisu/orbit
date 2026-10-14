@@ -4,7 +4,9 @@ use super::*;
 const RESOURCE_TIMEOUT: Duration = Duration::from_secs(15);
 
 pub async fn fetch_image(value: &str) -> Result<Vec<u8>, ToolError> {
-    WebClient::default().fetch_image(value).await
+    WebClient::default()
+        .fetch_image(value)
+        .await
 }
 
 impl WebClient {
@@ -153,7 +155,10 @@ mod tests {
         ] {
             assert!(fetch_image(url).await.is_err(), "{url}");
             assert!(
-                WebClient::default().fetch_json(url, 1024).await.is_err(),
+                WebClient::default()
+                    .fetch_json(url, 1_024)
+                    .await
+                    .is_err(),
                 "{url}"
             );
         }
@@ -166,7 +171,7 @@ mod tests {
             (
                 "Content-Type: application/json",
                 r#"{"models":[]}"#,
-                1024,
+                1_024,
                 None,
             ),
             (
@@ -178,23 +183,25 @@ mod tests {
             (
                 "Content-Type: text/html",
                 "<html></html>",
-                1024,
+                1_024,
                 Some("不是 JSON"),
             ),
             (
                 "Content-Type: application/json\r\nContent-Encoding: gzip",
                 "compressed",
-                1024,
+                1_024,
                 Some("压缩"),
             ),
             (
                 "Location: http://127.0.0.1/private",
                 "",
-                1024,
+                1_024,
                 Some("non-public"),
             ),
         ] {
-            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+                .await
+                .unwrap();
             let proxy =
                 reqwest::Proxy::all(format!("http://{}", listener.local_addr().unwrap())).unwrap();
             let server = tokio::spawn(async move {
@@ -203,14 +210,26 @@ mod tests {
                 while !request.ends_with(b"\r\n\r\n") {
                     request.push(stream.read_u8().await.unwrap());
                 }
-                let request = String::from_utf8(request).unwrap().to_ascii_lowercase();
+                let request = String::from_utf8(request)
+                    .unwrap()
+                    .to_ascii_lowercase();
                 assert!(!request.contains("authorization:"));
                 let status = if headers.starts_with("Location") {
                     "302 Found"
                 } else {
                     "200 OK"
                 };
-                stream.write_all(format!("HTTP/1.1 {status}\r\n{headers}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+                stream
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 {status}\r\n{headers}\r\nContent-Length: \
+                    {}\r\nConnection: close\r\n\r\n{body}",
+                            body.len()
+                        )
+                        .as_bytes(),
+                    )
+                    .await
+                    .unwrap();
             });
             let result = WebClient::for_test(Some(&proxy))
                 .fetch_json("http://catalog.invalid/api.json", limit)
@@ -219,7 +238,12 @@ mod tests {
                 let error = result.unwrap_err().to_string();
                 assert!(error.contains(expected), "{error}");
             } else {
-                assert_eq!(result.unwrap(), serde_json::json!({"models": []}));
+                assert_eq!(
+                    result.unwrap(),
+                    serde_json::json!({
+                        "models": []
+                    })
+                );
             }
             server.await.unwrap();
         }

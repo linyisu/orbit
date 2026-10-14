@@ -25,6 +25,7 @@ impl UsageProvider {
             Self::Zhipu => "https://open.bigmodel.cn/api/monitor/usage/quota/limit",
         }
     }
+
     pub fn label(self) -> &'static str {
         match self {
             Self::Chatgpt => "ChatGPT",
@@ -35,6 +36,7 @@ impl UsageProvider {
             Self::Zhipu => "智谱 Coding Plan",
         }
     }
+
     pub(crate) fn select(kind: CredentialKind, base: &str) -> Result<Option<(Self, AuthTarget)>> {
         let base = endpoint_scope(base)?;
         Ok(match kind {
@@ -94,7 +96,11 @@ mod tests {
             "http://api.deepseek.com/v1",
             "https://example.com/v1",
         ] {
-            assert!(usage_api_key(base, "secret").unwrap().is_none());
+            assert!(
+                usage_api_key(base, "secret")
+                    .unwrap()
+                    .is_none()
+            );
         }
         let auth = usage_api_key("https://api.deepseek.com/v1", "secret")
             .unwrap()
@@ -130,8 +136,15 @@ mod tests {
                 account_id: Some("test-id".into()),
                 project_id: None,
             };
-            store.save("test", &credential).await.unwrap();
-            let usage = store.resolve_usage("test").await.unwrap().unwrap();
+            store
+                .save("test", &credential)
+                .await
+                .unwrap();
+            let usage = store
+                .resolve_usage("test")
+                .await
+                .unwrap()
+                .unwrap();
             assert_eq!(usage.auth.headers["authorization"], "Bearer fake-token");
             if kind == CredentialKind::ChatgptOAuth {
                 assert_eq!(usage.auth.headers["chatgpt-account-id"], "test-id");
@@ -143,8 +156,16 @@ mod tests {
             );
             let mut forged = credential;
             forged.endpoint = "https://example.com/v1/".into();
-            store.save("test", &forged).await.unwrap();
-            assert!(store.resolve_usage("test").await.is_err());
+            store
+                .save("test", &forged)
+                .await
+                .unwrap();
+            assert!(
+                store
+                    .resolve_usage("test")
+                    .await
+                    .is_err()
+            );
         }
     }
 }

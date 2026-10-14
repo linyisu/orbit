@@ -97,7 +97,10 @@ mod tests {
                 .unwrap();
         };
         write([255, 0, 0, 255]);
-        let modified = std::fs::metadata(&path).unwrap().modified().unwrap();
+        let modified = std::fs::metadata(&path)
+            .unwrap()
+            .modified()
+            .unwrap();
         let mut assets = Assets::default();
         let bytes = assets.bytes(&path).unwrap();
         let image = assets.raster(&bytes).unwrap();

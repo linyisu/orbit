@@ -30,25 +30,35 @@ async fn session_grants_are_ephemeral_and_clearable() {
     let cap = FilesystemCapability::local_read(&external_file);
 
     assert!(matches!(
-        workspace.policy().check_filesystem(&cap),
+        workspace
+            .policy()
+            .check_filesystem(&cap),
         PolicyDecision::NeedsApproval(_)
     ));
 
     let resolved_ext = ResolvedPath::resolve(&external_file, None).unwrap();
-    workspace.policy().record_grant(FilesystemGrant::read_only(
-        EnvironmentId::Local,
-        resolved_ext,
-    ));
+    workspace
+        .policy()
+        .record_grant(FilesystemGrant::read_only(
+            EnvironmentId::Local,
+            resolved_ext,
+        ));
 
     assert_eq!(
-        workspace.policy().check_filesystem(&cap),
+        workspace
+            .policy()
+            .check_filesystem(&cap),
         PolicyDecision::Granted
     );
 
-    workspace.policy().clear_session_grants();
+    workspace
+        .policy()
+        .clear_session_grants();
 
     assert!(matches!(
-        workspace.policy().check_filesystem(&cap),
+        workspace
+            .policy()
+            .check_filesystem(&cap),
         PolicyDecision::NeedsApproval(_)
     ));
 
@@ -57,21 +67,27 @@ async fn session_grants_are_ephemeral_and_clearable() {
     let persistent_cap = FilesystemCapability::local_read(&persistent_file);
 
     assert_eq!(
-        workspace.policy().check_filesystem(&persistent_cap),
+        workspace
+            .policy()
+            .check_filesystem(&persistent_cap),
         PolicyDecision::Granted
     );
 
     let ws_cap = FilesystemCapability::local_read_write(ws_temp.path().join("src/lib.rs"));
 
     assert_eq!(
-        workspace.policy().check_filesystem(&ws_cap),
+        workspace
+            .policy()
+            .check_filesystem(&ws_cap),
         PolicyDecision::Granted
     );
 
     let fresh_workspace = Workspace::new(ws_temp.path()).unwrap();
 
     assert!(matches!(
-        fresh_workspace.policy().check_filesystem(&cap),
+        fresh_workspace
+            .policy()
+            .check_filesystem(&cap),
         PolicyDecision::NeedsApproval(_)
     ));
     assert_eq!(

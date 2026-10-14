@@ -23,7 +23,7 @@ use tokio_util::sync::CancellationToken;
 use crate::approval::{ApprovalPreview, ApprovalRequest, ApprovalSender, McpPreview};
 mod diagnostics;
 
-const MAX_MESSAGE_BYTES: usize = 4 * 1024 * 1024;
+const MAX_MESSAGE_BYTES: usize = 4 * 1_024 * 1_024;
 const PROTOCOL_VERSION: &str = "2025-11-25";
 
 #[derive(Clone, Debug, Default, Deserialize, serde::Serialize)]
@@ -68,13 +68,15 @@ impl McpConfig {
         for (name, server) in &self.servers {
             if !valid_component(name) {
                 bail!(
-                    "MCP server name {name:?} must use ASCII letters, digits, _ or - and be at most 48 characters"
+                    "MCP server name {name:?} must use ASCII letters, digits, _ or - and be at \
+                        most 48 characters"
                 );
             }
 
             if server.transport != "stdio" {
                 bail!(
-                    "MCP server {name:?}: only local stdio is supported currently; remote transports require explicit credential and OAuth handling"
+                    "MCP server {name:?}: only local stdio is supported currently; remote \
+                        transports require explicit credential and OAuth handling"
                 );
             }
 
@@ -244,7 +246,8 @@ impl Tool for McpTool {
         ToolDefinition::function(
             self.exposed_name.clone(),
             format!(
-                "MCP server {} · {} External process: each invocation is subject to the selected approval mode; inspect arguments before allowing it.",
+                "MCP server {} · {} External process: each invocation is subject to the selected \
+                    approval mode; inspect arguments before allowing it.",
                 self.server,
                 self.definition.description.trim()
             ),
@@ -276,7 +279,8 @@ impl Tool for McpTool {
             tokio::select! {
                 biased;
                 _ = cancellation.cancelled() => return Err(ToolError::Cancelled),
-                result = self.approvals.send(request) => result.map_err(|_| ToolError::ExecutionFailed("MCP approval unavailable".into()))?,
+                result = self.approvals.send(request) => result
+                    .map_err(|_| ToolError::ExecutionFailed("MCP approval unavailable".into()))?,
             }
             let approved = tokio::select! {
                 biased;
@@ -395,20 +399,29 @@ impl StdioClient {
                 json!({
                     "protocolVersion": PROTOCOL_VERSION,
                     "capabilities": {
-                        "roots": { "listChanged": false }
+                        "roots": {
+                            "listChanged": false
+                        }
                     },
-                    "clientInfo": { "name": "orbit", "version": env!("CARGO_PKG_VERSION") }
+                    "clientInfo": {
+                        "name": "orbit",
+                        "version": env!("CARGO_PKG_VERSION")
+                    }
                 }),
                 CancellationToken::new(),
             )
             .await
             .context("MCP initialize failed")?;
 
-        if initialized.get("capabilities").is_none() {
+        if initialized
+            .get("capabilities")
+            .is_none()
+        {
             bail!("MCP initialize response has no capabilities");
         }
 
-        self.notify("notifications/initialized", json!({})).await?;
+        self.notify("notifications/initialized", json!({}))
+            .await?;
         let listed = self
             .request("tools/list", json!({}), CancellationToken::new())
             .await
@@ -433,22 +446,35 @@ impl StdioClient {
         let result = self
             .request(
                 "tools/call",
-                json!({ "name": name, "arguments": arguments }),
+                json!({
+                    "name": name,
+                    "arguments": arguments
+                }),
                 cancellation,
             )
             .await?;
-        let content = result.get("content").cloned().unwrap_or_else(|| json!([]));
+        let content = result
+            .get("content")
+            .cloned()
+            .unwrap_or_else(|| json!([]));
 
         Ok(json!({
             "server_result": content,
-            "is_error": result.get("isError").and_then(Value::as_bool).unwrap_or(false),
+            "is_error": result
+                .get("isError")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
             "source_kind": "untrusted_mcp_tool_result"
         }))
     }
 
     async fn notify(&mut self, method: &str, params: Value) -> Result<()> {
-        self.write(json!({ "jsonrpc": "2.0", "method": method, "params": params }))
-            .await
+        self.write(json!({
+            "jsonrpc": "2.0",
+            "method": method,
+            "params": params
+        }))
+        .await
     }
 
     async fn request(
@@ -463,8 +489,13 @@ impl StdioClient {
 
         let id = self.next_id;
         self.next_id += 1;
-        self.write(json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params }))
-            .await?;
+        self.write(json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": method,
+            "params": params
+        }))
+        .await?;
         let timeout = self.timeout;
         let response = async {
             loop {
@@ -481,25 +512,35 @@ impl StdioClient {
                         .context("response has no result");
                 }
 
-                if message.get("method").and_then(Value::as_str) == Some("roots/list")
+                if message
+                    .get("method")
+                    .and_then(Value::as_str)
+                    == Some("roots/list")
                     && let Some(request_id) = message.get("id").cloned()
                 {
                     self.write(json!({
                         "jsonrpc": "2.0",
                         "id": request_id,
                         "result": {
-                            "roots": [{ "uri": file_uri(&self.workspace), "name": self.workspace.file_name().and_then(|name| name.to_str()).unwrap_or("workspace") }]
+                            "roots": [{
+                                "uri": file_uri(&self.workspace),
+                                "name": self
+                                    .workspace
+                                    .file_name()
+                                    .and_then(|name| name.to_str())
+                                    .unwrap_or("workspace")
+                            }]
                         }
-                    })).await?;
+                    }))
+                    .await?;
                 }
             }
         };
         let outcome = tokio::select! {
             _ = cancellation.cancelled() => Err(anyhow::anyhow!("cancelled")),
-            result = time::timeout(timeout, response) => {
-                result.map_err(|_| anyhow::anyhow!("MCP request timed out"))
-                    .and_then(|response| response)
-            },
+            result = time::timeout(timeout, response) => result
+                .map_err(|_| anyhow::anyhow!("MCP request timed out"))
+                .and_then(|response| response),
         };
 
         if outcome.is_err() {
@@ -571,7 +612,11 @@ fn parse_tool(value: &Value) -> Option<RemoteTool> {
     let schema = value
         .get("inputSchema")
         .cloned()
-        .unwrap_or_else(|| json!({ "type": "object" }));
+        .unwrap_or_else(|| {
+            json!({
+                "type": "object"
+            })
+        });
 
     (schema.is_object()).then(|| RemoteTool {
         name: name.to_owned(),

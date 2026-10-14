@@ -50,8 +50,12 @@ pub(super) fn keyboard_action(state: &mut UiState, event: Event, busy: bool) -> 
     }
 
     let was_history = state.input.browsing_history();
-    let control = key.modifiers.contains(KeyModifiers::CONTROL);
-    let selecting = key.modifiers.contains(KeyModifiers::SHIFT);
+    let control = key
+        .modifiers
+        .contains(KeyModifiers::CONTROL);
+    let selecting = key
+        .modifiers
+        .contains(KeyModifiers::SHIFT);
     if control
         && key.code == KeyCode::Char('c')
         && let Some(text) = state.input.selected_text()
@@ -77,7 +81,9 @@ pub(super) fn keyboard_action(state: &mut UiState, event: Event, busy: bool) -> 
         && let Some(motion) = motion
     {
         state.attachment_cursor = None;
-        state.input.navigate(motion, state.input_width, selecting);
+        state
+            .input
+            .navigate(motion, state.input_width, selecting);
         return Action::None;
     }
 
@@ -140,39 +146,47 @@ pub(super) fn keyboard_action(state: &mut UiState, event: Event, busy: bool) -> 
             KeyCode::Char('v') => return Action::PasteClipboard,
 
             KeyCode::Char('o') => {
-                let offset = state.max_scroll.saturating_sub(state.scroll);
+                let offset = state
+                    .max_scroll
+                    .saturating_sub(state.scroll);
 
                 if let Some(index) = state
                     .expanded
                     .iter()
                     .rev()
                     .copied()
-                    .find(|index| state.transcript_layout.tool_offset(*index).is_some())
+                    .find(|index| {
+                        state
+                            .transcript_layout
+                            .tool_offset(*index)
+                            .is_some()
+                    })
                 {
                     toggle_transcript_item(state, index);
-                } else if let Some(index) =
-                    state
-                        .expanded_tool_groups
-                        .iter()
-                        .rev()
-                        .copied()
-                        .find(|index| {
-                            state
-                                .transcript_layout
-                                .group_range(*index)
-                                .is_some_and(|range| range.start == *index)
-                        })
+                } else if let Some(index) = state
+                    .expanded_tool_groups
+                    .iter()
+                    .rev()
+                    .copied()
+                    .find(|index| {
+                        state
+                            .transcript_layout
+                            .group_range(*index)
+                            .is_some_and(|range| range.start == *index)
+                    })
                 {
                     toggle_transcript_group(state, index);
                 } else {
                     let group = state
                         .transcript_layout
                         .visible_group(offset, state.selection.viewport.height as usize);
-                    let item = state.transcript_layout.visible_collapsible(
-                        &state.transcript,
-                        offset,
-                        state.selection.viewport.height as usize,
-                    );
+                    let item = state
+                        .transcript_layout
+                        .visible_collapsible(
+                            &state.transcript,
+                            offset,
+                            state.selection.viewport.height as usize,
+                        );
 
                     match (group, item) {
                         (Some(group), item) if item.is_none_or(|item| group >= item) => {
@@ -205,7 +219,11 @@ pub(super) fn keyboard_action(state: &mut UiState, event: Event, busy: bool) -> 
         return Action::None;
     }
 
-    if key.code == KeyCode::Char('v') && key.modifiers.contains(KeyModifiers::ALT) {
+    if key.code == KeyCode::Char('v')
+        && key
+            .modifiers
+            .contains(KeyModifiers::ALT)
+    {
         return Action::PasteClipboard;
     }
 
@@ -257,7 +275,9 @@ pub(super) fn keyboard_action(state: &mut UiState, event: Event, busy: bool) -> 
                     ""
                 };
 
-                state.input.set(format!("{}{suffix}", candidate.name));
+                state
+                    .input
+                    .set(format!("{}{suffix}", candidate.name));
                 state.menu_index = 0;
                 return Action::None;
             }
@@ -273,32 +293,35 @@ pub(super) fn keyboard_action(state: &mut UiState, event: Event, busy: bool) -> 
                     && !candidate.name.starts_with("/cd ")
                     && !candidate.name.ends_with("::")
                 {
-                    state.input.set(format!("{} ", candidate.name));
+                    state
+                        .input
+                        .set(format!("{} ", candidate.name));
                     state.menu_index = 0;
                     return Action::None;
                 }
                 // An exact directory can be submitted even while its children are suggested.
-                let exact_directory =
-                    state
-                        .input
-                        .text
-                        .strip_prefix("/cd ")
-                        .is_some_and(|argument| {
-                            if state.connection_label.is_some() {
-                                argument.trim_end_matches(['\'', '"']).ends_with('/')
-                                    || menu.iter().any(|entry| {
-                                        entry.name.trim_end_matches('/')
-                                            == state.input.text.trim_end_matches('/')
-                                    })
-                            } else {
-                                directory::resolve(
-                                    argument,
-                                    std::path::Path::new(&state.workspace),
-                                    state.completion_home.as_deref(),
-                                )
-                                .is_ok()
-                            }
-                        });
+                let exact_directory = state
+                    .input
+                    .text
+                    .strip_prefix("/cd ")
+                    .is_some_and(|argument| {
+                        if state.connection_label.is_some() {
+                            argument
+                                .trim_end_matches(['\'', '"'])
+                                .ends_with('/')
+                                || menu.iter().any(|entry| {
+                                    entry.name.trim_end_matches('/')
+                                        == state.input.text.trim_end_matches('/')
+                                })
+                        } else {
+                            directory::resolve(
+                                argument,
+                                std::path::Path::new(&state.workspace),
+                                state.completion_home.as_deref(),
+                            )
+                            .is_ok()
+                        }
+                    });
                 if !exact_directory || state.menu_index != 0 {
                     state.input.set(candidate.name.clone());
                 }
@@ -355,7 +378,11 @@ pub(super) fn keyboard_action(state: &mut UiState, event: Event, busy: bool) -> 
             state.help_scroll = 0;
         }
 
-        KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::ALT) => {
+        KeyCode::Char(c)
+            if !key
+                .modifiers
+                .contains(KeyModifiers::ALT) =>
+        {
             if state.attachment_cursor.take().is_some() {
                 state.input.set_cursor(0);
             }
@@ -435,7 +462,12 @@ pub(super) fn keyboard_action(state: &mut UiState, event: Event, busy: bool) -> 
             if state.attachment_cursor.is_some()
                 || (!state.attachments.is_empty()
                     && state.input.selection().is_none()
-                    && state.input.visual_lines(state.input_width).1.row == 0)
+                    && state
+                        .input
+                        .visual_lines(state.input_width)
+                        .1
+                        .row
+                        == 0)
             {
                 attachments::move_attachment_vertical(state, false);
             } else {

@@ -46,7 +46,10 @@ pub async fn refresh(config: &mut FileConfig, force: bool) -> UpdateReport {
     let gate: Gate = {
         let mut gates = GATES.lock().unwrap();
         gates.retain(|_, gate| gate.strong_count() > 0);
-        match gates.get(&directory).and_then(std::sync::Weak::upgrade) {
+        match gates
+            .get(&directory)
+            .and_then(std::sync::Weak::upgrade)
+        {
             Some(gate) => gate,
             None => {
                 let gate = Arc::new(tokio::sync::Mutex::new(None));
@@ -66,11 +69,13 @@ pub async fn refresh(config: &mut FileConfig, force: bool) -> UpdateReport {
         super::account_models::refresh_connections(config, force, force_download, true).await
     {
         if force {
-            report.notices.push(if diagnostics.is_empty() {
-                format!("{name}：模型目录已更新")
-            } else {
-                format!("{name}：更新未完成，沿用可用缓存或配置")
-            });
+            report
+                .notices
+                .push(if diagnostics.is_empty() {
+                    format!("{name}：模型目录已更新")
+                } else {
+                    format!("{name}：更新未完成，沿用可用缓存或配置")
+                });
         }
         report.diagnostics.extend(diagnostics);
     }
@@ -78,7 +83,9 @@ pub async fn refresh(config: &mut FileConfig, force: bool) -> UpdateReport {
     if force {
         report.notices.push(metadata.status);
     }
-    report.diagnostics.extend(metadata.error);
+    report
+        .diagnostics
+        .extend(metadata.error);
     if force {
         *completed = Some(Instant::now());
     }

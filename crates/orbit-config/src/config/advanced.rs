@@ -85,8 +85,13 @@ impl AdvancedDraft {
     pub fn save(&self, path: &Path, auth: &Path, settings: AgentSettings) -> Result<Self> {
         validate_disabled(&settings.disabled_capabilities, &settings.disabled_tools)?;
         settings.subagents.validate()?;
-        settings.command.validate().map_err(anyhow::Error::msg)?;
-        let mut document = self.source.parse::<toml_edit::DocumentMut>()?;
+        settings
+            .command
+            .validate()
+            .map_err(anyhow::Error::msg)?;
+        let mut document = self
+            .source
+            .parse::<toml_edit::DocumentMut>()?;
         set(&mut document, "max_turns", &settings.max_turns)?;
         set(&mut document, "max_tool_calls", &settings.max_tool_calls)?;
         set(&mut document, "auto_compact", &settings.auto_compact)?;
@@ -148,7 +153,9 @@ fn set(
     values.insert(name.to_string(), toml::Value::try_from(value)?);
     let encoded = toml::to_string(&values)?.parse::<toml_edit::DocumentMut>()?;
     if let Some(existing) = document.get_mut(name) {
-        let decor = existing.as_value().map(|value| value.decor().clone());
+        let decor = existing
+            .as_value()
+            .map(|value| value.decor().clone());
         *existing = encoded[name].clone();
         if let (Some(decor), Some(value)) = (decor, existing.as_value_mut()) {
             *value.decor_mut() = decor;
@@ -198,10 +205,15 @@ mod tests {
     fn persistent_ceilings_parse_with_defaults_and_reject_invalid_entries() {
         let auth = tempfile::tempdir().unwrap();
         let defaults = FileConfig::parse("[providers]\n", auth.path()).unwrap();
-        assert!(defaults.disabled_capabilities.is_empty());
+        assert!(
+            defaults
+                .disabled_capabilities
+                .is_empty()
+        );
         assert!(defaults.disabled_tools.is_empty());
         let configured = FileConfig::parse(
-            "disabled_capabilities = ['all', 'write']\ndisabled_tools = ['mcp__server__tool']\n[providers]\n",
+            "disabled_capabilities = ['all', 'write']\ndisabled_tools = \
+                ['mcp__server__tool']\n[providers]\n",
             auth.path(),
         )
         .unwrap();
@@ -229,7 +241,14 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("config.toml");
         let auth = directory.path().join("auth");
-        std::fs::write(&path, "# retain this\nmax_turns = 0 # retain inline\n[providers.demo]\nbase_url='http://localhost/v1'\nmodels=['model']\nauto_refresh_models=false\n[command]\nmax_scan_entries=1234\n[command.verification_commands]\ncheck='cargo check'\n[permissions]\nread_templates=['.env.example']\n").unwrap();
+        std::fs::write(
+            &path,
+            "# retain this\nmax_turns = 0 # retain \
+            inline\n[providers.demo]\nbase_url='http://localhost/v1'\nmodels=['model']\nauto_refre\
+            sh_models=false\n[command]\nmax_scan_entries=1234\n[command.verification_commands]\nch\
+            eck='cargo check'\n[permissions]\nread_templates=['.env.example']\n",
+        )
+        .unwrap();
         let draft = AdvancedDraft::load(&path, &auth).unwrap();
         let mut settings = draft.settings().clone();
         settings.max_turns = 25;
@@ -240,13 +259,15 @@ mod tests {
         settings.subagents.max_tool_calls = 80;
         settings.subagents.explore_model = Some("demo::model".into());
         settings.command.default_timeout_seconds = 30;
-        let saved = draft.save(&path, &auth, settings).unwrap();
+        let saved = draft
+            .save(&path, &auth, settings)
+            .unwrap();
         let config = FileConfig::load(&path, &auth).unwrap();
         assert_eq!(config.agent_config().max_turns, 25);
         assert_eq!(config.agent_config().max_tool_calls, 500);
         assert_eq!(config.subagents.max_concurrent, 3);
         assert_eq!(config.command.default_timeout_seconds, 30);
-        assert_eq!(config.command.max_scan_entries, 1234);
+        assert_eq!(config.command.max_scan_entries, 1_234);
         assert_eq!(config.command.verification_commands["check"], "cargo check");
         assert_eq!(
             config.permissions.read_templates,
@@ -260,7 +281,9 @@ mod tests {
         cleared.subagents.explore_model = None;
         cleared.disabled_capabilities.clear();
         cleared.disabled_tools.clear();
-        saved.save(&path, &auth, cleared).unwrap();
+        saved
+            .save(&path, &auth, cleared)
+            .unwrap();
         let config = FileConfig::load(&path, &auth).unwrap();
         assert!(config.disabled_capabilities.is_empty());
         assert!(config.disabled_tools.is_empty());
@@ -278,19 +301,39 @@ mod tests {
         let draft = AdvancedDraft::load(&path, &auth).unwrap();
         let mut values = draft.settings().clone();
         values.subagents.max_concurrent = 0;
-        assert!(draft.save(&path, &auth, values).is_err());
+        assert!(
+            draft
+                .save(&path, &auth, values)
+                .is_err()
+        );
         let mut values = draft.settings().clone();
         values.command.default_timeout_seconds = values.command.max_timeout_seconds + 1;
-        assert!(draft.save(&path, &auth, values).is_err());
+        assert!(
+            draft
+                .save(&path, &auth, values)
+                .is_err()
+        );
         let mut values = draft.settings().clone();
         values.disabled_tools = vec!["read_file".into(), "read_file".into()];
-        assert!(draft.save(&path, &auth, values).is_err());
+        assert!(
+            draft
+                .save(&path, &auth, values)
+                .is_err()
+        );
         let mut values = draft.settings().clone();
         values.subagents.review_model = Some("missing::model".into());
-        assert!(draft.save(&path, &auth, values).is_err());
+        assert!(
+            draft
+                .save(&path, &auth, values)
+                .is_err()
+        );
         assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
         std::fs::write(&path, "# external edit\n[providers]\n").unwrap();
-        assert!(draft.save(&path, &auth, draft.settings().clone()).is_err());
+        assert!(
+            draft
+                .save(&path, &auth, draft.settings().clone())
+                .is_err()
+        );
         assert!(
             std::fs::read_to_string(&path)
                 .unwrap()

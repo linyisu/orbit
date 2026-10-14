@@ -203,7 +203,11 @@ impl Advanced {
         self.auto_compact = settings.auto_compact;
         self.network_allowed = settings.command.network.is_allowed();
         self.subagents_enabled = settings.subagents.enabled;
-        self.disabled = settings.disabled_capabilities.iter().copied().collect();
+        self.disabled = settings
+            .disabled_capabilities
+            .iter()
+            .copied()
+            .collect();
         self.draft = Some(draft);
     }
 
@@ -248,7 +252,7 @@ impl Advanced {
             "并行子 Agent 上限必须在 1–128 之间。"
         );
         anyhow::ensure!(
-            settings.subagents.timeout_seconds <= 86400,
+            settings.subagents.timeout_seconds <= 86_400,
             "子 Agent 进度提醒间隔必须在 0–86400 秒之间。"
         );
         anyhow::ensure!(
@@ -322,15 +326,41 @@ fn form_fields(settings: &AgentSettings) -> [String; FIELDS.len()] {
     [
         settings.max_turns.to_string(),
         settings.max_tool_calls.to_string(),
-        settings.command.default_timeout_seconds.to_string(),
-        settings.command.max_timeout_seconds.to_string(),
-        settings.command.read_file_scan_bytes.to_string(),
-        settings.subagents.max_concurrent.to_string(),
+        settings
+            .command
+            .default_timeout_seconds
+            .to_string(),
+        settings
+            .command
+            .max_timeout_seconds
+            .to_string(),
+        settings
+            .command
+            .read_file_scan_bytes
+            .to_string(),
+        settings
+            .subagents
+            .max_concurrent
+            .to_string(),
         settings.subagents.max_turns.to_string(),
-        settings.subagents.max_tool_calls.to_string(),
-        settings.subagents.timeout_seconds.to_string(),
-        settings.subagents.explore_model.clone().unwrap_or_default(),
-        settings.subagents.review_model.clone().unwrap_or_default(),
+        settings
+            .subagents
+            .max_tool_calls
+            .to_string(),
+        settings
+            .subagents
+            .timeout_seconds
+            .to_string(),
+        settings
+            .subagents
+            .explore_model
+            .clone()
+            .unwrap_or_default(),
+        settings
+            .subagents
+            .review_model
+            .clone()
+            .unwrap_or_default(),
     ]
 }
 
@@ -343,7 +373,10 @@ fn same_form_values(current: &AgentSettings, saved: &AgentSettings) -> bool {
             .disabled_capabilities
             .iter()
             .collect::<BTreeSet<_>>()
-            == saved.disabled_capabilities.iter().collect::<BTreeSet<_>>()
+            == saved
+                .disabled_capabilities
+                .iter()
+                .collect::<BTreeSet<_>>()
         && current.disabled_tools == saved.disabled_tools
 }
 
@@ -469,7 +502,13 @@ impl Render for Advanced {
         )
         .child(
             section("禁用能力", "选中的能力不会提供给 Agent。它们会与会话自身的限制合并，能力禁用优先于上方功能开关。", cx)
-                .child(v_flex().gap_3().children(CAPABILITIES.into_iter().map(|(capability, key, label)| {
+                .child(v_flex()
+                    .gap_3()
+                    .children(CAPABILITIES
+                    .into_iter()
+                    .map(|(capability,
+                    key,
+                    label)| {
                     let owner = owner.clone();
                     let all = self.disabled.contains(&Capability::All);
                     Checkbox::new(SharedString::from(format!("advanced-disabled:{key}")))
@@ -502,7 +541,7 @@ mod tests {
     fn saved_settings() -> AgentSettings {
         AgentSettings {
             max_turns: 0,
-            max_tool_calls: 2000,
+            max_tool_calls: 2_000,
             auto_compact: true,
             command: Default::default(),
             subagents: Default::default(),

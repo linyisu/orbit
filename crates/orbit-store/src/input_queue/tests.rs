@@ -5,8 +5,13 @@ use orbit_model::types::ChatMessage;
 #[tokio::test]
 async fn queue_uses_current_project_path_and_rejects_legacy_workspace() {
     let root = tempfile::tempdir().unwrap();
-    let store = Store::open(root.path().join("sessions.db")).await.unwrap();
-    let workspace = root.path().to_string_lossy().into_owned();
+    let store = Store::open(root.path().join("sessions.db"))
+        .await
+        .unwrap();
+    let workspace = root
+        .path()
+        .to_string_lossy()
+        .into_owned();
     let writer = store
         .create(workspace.clone(), "test".into())
         .await
@@ -31,9 +36,20 @@ async fn queue_uses_current_project_path_and_rejects_legacy_workspace() {
         })
         .await
         .unwrap();
-    assert_eq!(store.session(&session).await.unwrap().workspace, workspace);
     assert_eq!(
-        store.input_queue(&session).await.unwrap().workspace,
+        store
+            .session(&session)
+            .await
+            .unwrap()
+            .workspace,
+        workspace
+    );
+    assert_eq!(
+        store
+            .input_queue(&session)
+            .await
+            .unwrap()
+            .workspace,
         workspace
     );
     assert!(
@@ -70,7 +86,10 @@ async fn queue_uses_current_project_path_and_rejects_legacy_workspace() {
 async fn exact_content_cas_preserves_ids_order_and_durable_removal() {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("sessions.db");
-    let workspace = root.path().to_string_lossy().into_owned();
+    let workspace = root
+        .path()
+        .to_string_lossy()
+        .into_owned();
     let store = Store::open(&path).await.unwrap();
     let writer = store
         .create(workspace.clone(), "test".into())
@@ -95,9 +114,16 @@ async fn exact_content_cas_preserves_ids_order_and_durable_removal() {
         .edit_queued_input(&workspace, first, "  原文\n第二行  ", "修改内容".into())
         .await
         .unwrap();
-    let entries = store.input_queue(&session).await.unwrap().messages;
+    let entries = store
+        .input_queue(&session)
+        .await
+        .unwrap()
+        .messages;
     assert_eq!(
-        entries.iter().map(|message| message.id).collect::<Vec<_>>(),
+        entries
+            .iter()
+            .map(|message| message.id)
+            .collect::<Vec<_>>(),
         [first, second]
     );
     assert_eq!(entries[0].content, "修改内容");
@@ -114,7 +140,11 @@ async fn exact_content_cas_preserves_ids_order_and_durable_removal() {
     drop(writer);
     drop(store);
     let reopened = Store::open(&path).await.unwrap();
-    let entries = reopened.input_queue(&session).await.unwrap().messages;
+    let entries = reopened
+        .input_queue(&session)
+        .await
+        .unwrap()
+        .messages;
     assert_eq!(entries.len(), 1);
     assert_eq!(
         (entries[0].id, entries[0].content.as_str()),
@@ -125,8 +155,13 @@ async fn exact_content_cas_preserves_ids_order_and_durable_removal() {
 #[tokio::test]
 async fn concurrent_edit_cas_has_one_winner_and_rejects_foreign_session_or_workspace() {
     let root = tempfile::tempdir().unwrap();
-    let store = Store::open(root.path().join("sessions.db")).await.unwrap();
-    let workspace = root.path().to_string_lossy().into_owned();
+    let store = Store::open(root.path().join("sessions.db"))
+        .await
+        .unwrap();
+    let workspace = root
+        .path()
+        .to_string_lossy()
+        .into_owned();
     let writer = store
         .create(workspace.clone(), "test".into())
         .await
@@ -156,7 +191,11 @@ async fn concurrent_edit_cas_has_one_winner_and_rejects_foreign_session_or_works
         writer.edit_queued_input(&workspace, id, "original", "second".into()),
     );
     assert_ne!(first.is_ok(), second.is_ok());
-    let pending = store.input_queue(writer.id()).await.unwrap().messages;
+    let pending = store
+        .input_queue(writer.id())
+        .await
+        .unwrap()
+        .messages;
     assert_eq!(pending[0].id, id);
     assert!(matches!(pending[0].content.as_str(), "first" | "second"));
 }
@@ -164,13 +203,21 @@ async fn concurrent_edit_cas_has_one_winner_and_rejects_foreign_session_or_works
 #[tokio::test]
 async fn checkpoint_consumed_input_cannot_be_edited_or_removed() {
     let root = tempfile::tempdir().unwrap();
-    let store = Store::open(root.path().join("sessions.db")).await.unwrap();
-    let workspace = root.path().to_string_lossy().into_owned();
+    let store = Store::open(root.path().join("sessions.db"))
+        .await
+        .unwrap();
+    let workspace = root
+        .path()
+        .to_string_lossy()
+        .into_owned();
     let mut writer = store
         .create(workspace.clone(), "test".into())
         .await
         .unwrap();
-    writer.begin("initial".into(), "test".into()).await.unwrap();
+    writer
+        .begin("initial".into(), "test".into())
+        .await
+        .unwrap();
     let id = store
         .queue_session_input(writer.id(), "consumed".into())
         .await
@@ -223,7 +270,10 @@ async fn writer_lease_and_external_move_protect_idle_persistent_input() {
     let path = root.path().join("sessions.db");
     let store = Store::open(&path).await.unwrap();
     let external = Store::open(&path).await.unwrap();
-    let workspace = root.path().to_string_lossy().into_owned();
+    let workspace = root
+        .path()
+        .to_string_lossy()
+        .into_owned();
     let writer = store
         .create(workspace.clone(), "test".into())
         .await
@@ -233,12 +283,23 @@ async fn writer_lease_and_external_move_protect_idle_persistent_input() {
         .queue_session_input(&session, "pending".into())
         .await
         .unwrap();
-    assert!(external.acquire(&session).await.is_err());
+    assert!(
+        external
+            .acquire(&session)
+            .await
+            .is_err()
+    );
     drop(writer);
-    let writer = external.acquire(&session).await.unwrap();
+    let writer = external
+        .acquire(&session)
+        .await
+        .unwrap();
     let moved = root.path().join("moved");
     std::fs::create_dir(&moved).unwrap();
-    writer.move_to(&moved, None).await.unwrap();
+    writer
+        .move_to(&moved, None)
+        .await
+        .unwrap();
     assert!(
         writer
             .remove_queued_input(&workspace, id, "pending")
@@ -246,7 +307,12 @@ async fn writer_lease_and_external_move_protect_idle_persistent_input() {
             .is_err()
     );
     assert_eq!(
-        store.input_queue(&session).await.unwrap().messages[0].content,
+        store
+            .input_queue(&session)
+            .await
+            .unwrap()
+            .messages[0]
+            .content,
         "pending"
     );
     writer
@@ -254,7 +320,12 @@ async fn writer_lease_and_external_move_protect_idle_persistent_input() {
         .await
         .unwrap();
     assert_eq!(
-        store.input_queue(&session).await.unwrap().messages[0].content,
+        store
+            .input_queue(&session)
+            .await
+            .unwrap()
+            .messages[0]
+            .content,
         "after move"
     );
 }
@@ -262,8 +333,13 @@ async fn writer_lease_and_external_move_protect_idle_persistent_input() {
 #[tokio::test]
 async fn image_only_queue_survives_reload_and_atomic_withdrawal() {
     let root = tempfile::tempdir().unwrap();
-    let store = Store::open(root.path().join("sessions.db")).await.unwrap();
-    let workspace = root.path().to_string_lossy().into_owned();
+    let store = Store::open(root.path().join("sessions.db"))
+        .await
+        .unwrap();
+    let workspace = root
+        .path()
+        .to_string_lossy()
+        .into_owned();
     let writer = store
         .create(workspace.clone(), "test".into())
         .await
@@ -278,11 +354,17 @@ async fn image_only_queue_survives_reload_and_atomic_withdrawal() {
         .queue_session_input_with_attachments(writer.id(), String::new(), vec![image.clone()])
         .await
         .unwrap();
-    let pending = store.pending_agent_messages(writer.id()).await.unwrap();
+    let pending = store
+        .pending_agent_messages(writer.id())
+        .await
+        .unwrap();
     assert_eq!(pending.len(), 1);
     assert_eq!(pending[0].attachments[0].path(), image.path());
     assert!(pending[0].content.is_empty());
-    let queue = store.input_queue(writer.id()).await.unwrap();
+    let queue = store
+        .input_queue(writer.id())
+        .await
+        .unwrap();
     assert_eq!(queue.messages[0].attachments[0].name(), "queued.png");
     writer
         .remove_queued_input(&workspace, id, "")

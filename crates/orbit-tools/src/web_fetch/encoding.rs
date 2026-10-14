@@ -12,7 +12,7 @@ pub(super) fn text(body: &[u8], media: &str, html: bool) -> Result<String, ToolE
         .and_then(|c| c.get(1))
         .map(|m| m.as_str().to_owned());
     let meta = if html && declared.is_none() {
-        let prefix = String::from_utf8_lossy(&body[..body.len().min(4096)]);
+        let prefix = String::from_utf8_lossy(&body[..body.len().min(4_096)]);
         let tags = Regex::new(r"(?is)<meta\b[^>]*>").expect("constant meta pattern");
         tags.find_iter(&prefix).find_map(|tag| {
             charset

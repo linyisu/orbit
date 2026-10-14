@@ -5,7 +5,7 @@ use orbit_protocol::input_queue::{Action, Entry, Snapshot, State};
 
 use crate::PreparedWorkspace;
 
-const PAGE_INPUT_BYTES: usize = 4 * 1024 * 1024;
+const PAGE_INPUT_BYTES: usize = 4 * 1_024 * 1_024;
 
 pub(super) async fn execute(
     setup: &mut PreparedWorkspace,
@@ -35,7 +35,11 @@ pub(super) async fn execute(
                 Some(inbox) => Some(inbox.snapshot().await),
                 None => None,
             };
-            let stored = setup.session.store.input_queue(setup.session.id()).await?;
+            let stored = setup
+                .session
+                .store
+                .input_queue(setup.session.id())
+                .await?;
             ensure!(
                 stored.workspace == expected_workspace,
                 "工作区已切换，请刷新输入队列"
@@ -53,8 +57,10 @@ pub(super) async fn execute(
                         State::Unavailable
                     } else if live.closed {
                         State::Finishing
-                    } else if let Some(queued) =
-                        live.messages.iter().find(|queued| queued.id == message.id)
+                    } else if let Some(queued) = live
+                        .messages
+                        .iter()
+                        .find(|queued| queued.id == message.id)
                     {
                         if queued.content == message.content {
                             State::Queued
@@ -75,7 +81,10 @@ pub(super) async fn execute(
                         .iter()
                         .map(|image| orbit_protocol::MessageImage {
                             name: image.name().into(),
-                            path: image.path().to_string_lossy().into_owned(),
+                            path: image
+                                .path()
+                                .to_string_lossy()
+                                .into_owned(),
                         })
                         .collect(),
                     id: message.id,
@@ -86,11 +95,13 @@ pub(super) async fn execute(
                 // A legal 1MiB input may expand to 6MiB under JSON escaping;
                 // allow one such row, while keeping a multi-row page bounded.
                 ensure!(
-                    size < orbit_protocol::MAX_FRAME_BYTES - 4096,
+                    size < orbit_protocol::MAX_FRAME_BYTES - 4_096,
                     "queued input is too large to inspect safely"
                 );
                 if !entries.is_empty() && bytes + size > PAGE_INPUT_BYTES {
-                    next = entries.last().map(|entry: &Entry| entry.id);
+                    next = entries
+                        .last()
+                        .map(|entry: &Entry| entry.id);
                     break;
                 }
                 bytes += size;
@@ -110,7 +121,7 @@ pub(super) async fn execute(
             );
             let content = content.trim().to_owned();
             ensure!(
-                !content.is_empty() && content.len() <= 1024 * 1024,
+                !content.is_empty() && content.len() <= 1_024 * 1_024,
                 "消息需要 1–1048576 字节"
             );
             let state = if let Some(inbox) = inbox {
@@ -151,7 +162,10 @@ pub(super) async fn execute(
                                 .iter()
                                 .map(|image| orbit_protocol::MessageImage {
                                     name: image.name().into(),
-                                    path: image.path().to_string_lossy().into_owned(),
+                                    path: image
+                                        .path()
+                                        .to_string_lossy()
+                                        .into_owned(),
                                 })
                                 .collect()
                         })

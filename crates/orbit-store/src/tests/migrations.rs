@@ -31,7 +31,11 @@ async fn schema(db: &DatabaseConnection) -> BTreeMap<String, Schema> {
         .and_where(Expr::col(id("name")).ne("seaql_migrations"))
         .to_owned();
     let mut result = BTreeMap::new();
-    for row in db.query_all(backend.build(&query)).await.unwrap() {
+    for row in db
+        .query_all(backend.build(&query))
+        .await
+        .unwrap()
+    {
         let table: String = row.try_get("", "name").unwrap();
         let query = pragma_query("pragma_table_info", &table)
             .columns(["name", "type", "notnull", "dflt_value", "pk"].map(id))
@@ -45,7 +49,9 @@ async fn schema(db: &DatabaseConnection) -> BTreeMap<String, Schema> {
             .map(|r| {
                 (
                     r.try_get("", "name").unwrap(),
-                    r.try_get::<String>("", "type").unwrap().to_uppercase(),
+                    r.try_get::<String>("", "type")
+                        .unwrap()
+                        .to_uppercase(),
                     r.try_get("", "notnull").unwrap(),
                     r.try_get("", "dflt_value").unwrap(),
                     r.try_get("", "pk").unwrap(),
@@ -75,7 +81,11 @@ async fn schema(db: &DatabaseConnection) -> BTreeMap<String, Schema> {
             .columns(["name", "unique", "partial"].map(id))
             .to_owned();
         let mut indexes = Vec::new();
-        for r in db.query_all(backend.build(&query)).await.unwrap() {
+        for r in db
+            .query_all(backend.build(&query))
+            .await
+            .unwrap()
+        {
             let name: String = r.try_get("", "name").unwrap();
             let query = pragma_query("pragma_index_xinfo", &name)
                 .columns(["name", "desc"].map(id))
@@ -188,7 +198,7 @@ async fn rust_schema_retains_domain_checks() {
                 ("session_id", "session".into()),
                 ("category", "fact".into()),
                 ("title", "title".into()),
-                ("content", "x".repeat(8193).into()),
+                ("content", "x".repeat(8_193).into()),
             ],
         ),
         (
@@ -218,9 +228,13 @@ async fn rust_schema_retains_domain_checks() {
         ),
     ];
     for (table, values) in cases {
-        let error = insert(&db, table, &values).await.unwrap_err();
+        let error = insert(&db, table, &values)
+            .await
+            .unwrap_err();
         assert!(
-            error.to_string().contains("CHECK constraint failed"),
+            error
+                .to_string()
+                .contains("CHECK constraint failed"),
             "{table}: {error}"
         );
     }
@@ -231,7 +245,11 @@ async fn rust_schema_retains_domain_checks() {
 async fn every_released_schema_upgrades_without_losing_history_and_reopens_idempotently() {
     let reference_dir = tempfile::tempdir().unwrap();
     let reference_path = reference_dir.path().join("current.db");
-    drop(Store::open(&reference_path).await.unwrap());
+    drop(
+        Store::open(&reference_path)
+            .await
+            .unwrap(),
+    );
     let reference = support::connect(reference_path).await;
     let expected_schema = schema(&reference).await;
     assert!(
@@ -244,7 +262,10 @@ async fn every_released_schema_upgrades_without_losing_history_and_reopens_idemp
     // Cover databases made before SeaORM and databases that already have its ledger.
     for ledger in [false, true] {
         let latest: u32 = if ledger {
-            Migrator::migrations().len().try_into().unwrap()
+            Migrator::migrations()
+                .len()
+                .try_into()
+                .unwrap()
         } else {
             27
         };
@@ -253,8 +274,12 @@ async fn every_released_schema_upgrades_without_losing_history_and_reopens_idemp
             let path = dir.path().join("legacy.db");
             let legacy = support::connect(&path).await;
             if ledger {
-                Migrator::up(&legacy, Some(version)).await.unwrap();
-                sqlite::set_schema_version(&legacy, version).await.unwrap();
+                Migrator::up(&legacy, Some(version))
+                    .await
+                    .unwrap();
+                sqlite::set_schema_version(&legacy, version)
+                    .await
+                    .unwrap();
             } else {
                 support::legacy_schema(&legacy, version as usize).await;
             }
@@ -284,7 +309,9 @@ async fn every_released_schema_upgrades_without_losing_history_and_reopens_idemp
                 if version >= 2 {
                     values.push(("project_id", "project".into()));
                 }
-                insert(&legacy, "sessions", &values).await.unwrap();
+                insert(&legacy, "sessions", &values)
+                    .await
+                    .unwrap();
                 insert(
                     &legacy,
                     "runs",
@@ -325,7 +352,10 @@ async fn every_released_schema_upgrades_without_losing_history_and_reopens_idemp
                     assert_eq!(snapshot.session.title, "Keep me", "v{version}");
                     assert_eq!(snapshot.runs[0].prompt, "original prompt", "v{version}");
                     assert_eq!(snapshot.runs[0].events.len(), 1);
-                    let (gap, _) = store.canonical_messages("session", None, 1).await.unwrap();
+                    let (gap, _) = store
+                        .canonical_messages("session", None, 1)
+                        .await
+                        .unwrap();
                     assert_eq!(gap, version < 14);
                 }
                 drop(store);
@@ -341,7 +371,9 @@ async fn every_released_schema_upgrades_without_losing_history_and_reopens_idemp
                 Migrator::migrations().len() as i64
             );
             assert_eq!(
-                sqlite::schema_version(&db).await.unwrap(),
+                sqlite::schema_version(&db)
+                    .await
+                    .unwrap(),
                 Migrator::migrations().len() as i64
             );
             db.close().await.unwrap();
@@ -380,7 +412,12 @@ async fn upgrade_failure_rolls_back_schema_data_version_and_ledger() {
     db.close().await.unwrap();
     assert!(Store::open(&path).await.is_err());
     let db = support::connect(&path).await;
-    assert_eq!(sqlite::schema_version(&db).await.unwrap(), 1);
+    assert_eq!(
+        sqlite::schema_version(&db)
+            .await
+            .unwrap(),
+        1
+    );
     for table in ["projects", "project_paths", "seaql_migrations"] {
         assert!(!support::table_exists(&db, table).await);
     }
@@ -399,7 +436,11 @@ async fn upgrade_failure_rolls_back_schema_data_version_and_ledger() {
         "/workspace"
     );
     SchemaManager::new(&db)
-        .drop_table(Table::drop().table(id("project_tasks")).to_owned())
+        .drop_table(
+            Table::drop()
+                .table(id("project_tasks"))
+                .to_owned(),
+        )
         .await
         .unwrap();
     db.close().await.unwrap();
@@ -443,11 +484,13 @@ async fn inconsistent_ledger_and_broken_references_are_rejected_without_adopting
             .err()
             .expect("invalid state rejected");
         assert!(
-            error.to_string().contains(if broken_reference {
-                "broken references"
-            } else {
-                "ledger"
-            }),
+            error
+                .to_string()
+                .contains(if broken_reference {
+                    "broken references"
+                } else {
+                    "ledger"
+                }),
             "{error:#}"
         );
         let db = support::connect(path).await;

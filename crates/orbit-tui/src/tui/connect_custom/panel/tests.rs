@@ -22,9 +22,15 @@ fn inline_edits_survive_collapsing_and_filtering() {
     panel.add(model::blank("first"), true);
     panel.add(model::blank("second"), true);
     panel.expanded = Some(0);
-    panel.models[0].fields[1].input.set("65536".into());
-    panel.models[0].fields[3].input.set("4096".into());
-    panel.models[0].fields[4].input.set("支持".into());
+    panel.models[0].fields[1]
+        .input
+        .set("65536".into());
+    panel.models[0].fields[3]
+        .input
+        .set("4096".into());
+    panel.models[0].fields[4]
+        .input
+        .set("支持".into());
 
     panel.expanded = Some(1);
     panel.query.input.set("second".into());
@@ -33,10 +39,15 @@ fn inline_edits_survive_collapsing_and_filtering() {
 
     assert_eq!(draft.models[0].id, "first");
     assert_eq!(draft.models[1].id, "second");
-    assert_eq!(draft.models[0].max_output_tokens, Some(4096));
-    assert_eq!(draft.models[0].context_tokens, Some(65536));
+    assert_eq!(draft.models[0].max_output_tokens, Some(4_096));
+    assert_eq!(draft.models[0].context_tokens, Some(65_536));
     assert_eq!(draft.models[0].supports_vision, Some(true));
-    assert!(!directory.path().join("config.toml").exists());
+    assert!(
+        !directory
+            .path()
+            .join("config.toml")
+            .exists()
+    );
 }
 
 #[test]
@@ -113,7 +124,7 @@ fn unchanged_reasoning_preserves_provider_adapter_and_extra() {
         restored.adapter,
         orbit_model::types::ReasoningAdapter::AnthropicMessages
     );
-    assert_eq!(restored.extra["budget_tokens"].as_integer(), Some(4096));
+    assert_eq!(restored.extra["budget_tokens"].as_integer(), Some(4_096));
 }
 
 #[test]
@@ -121,16 +132,31 @@ fn reasoning_buttons_share_a_row_and_keep_default_enabled() {
     let (_directory, mut draft, mut panel) = setup();
     panel.add(model::blank("custom"), true);
     panel.expanded = Some(0);
-    assert!(panel.models[0].fields[1].value().is_empty());
-    assert!(panel.models[0].fields[1].hint.is_empty());
-    assert!(panel.models[0].reasoning[8].value().is_empty());
+    assert!(
+        panel.models[0].fields[1]
+            .value()
+            .is_empty()
+    );
+    assert!(
+        panel.models[0].fields[1]
+            .hint
+            .is_empty()
+    );
+    assert!(
+        panel.models[0].reasoning[8]
+            .value()
+            .is_empty()
+    );
 
     panel.toggle_effort(0, 3);
     panel.toggle_effort(0, 5);
     panel.toggle_effort(0, 3);
     panel.apply_models(&mut draft).unwrap();
 
-    let reasoning = draft.models[0].reasoning.as_ref().unwrap();
+    let reasoning = draft.models[0]
+        .reasoning
+        .as_ref()
+        .unwrap();
     assert_eq!(
         reasoning.efforts,
         vec![orbit_model::types::ReasoningEffort::High]
@@ -182,7 +208,11 @@ fn toolbar_and_single_choices_are_inline_and_focused_label_is_accented() {
             .0
     });
 
-    assert!(buttons.iter().all(|rect| rect.y == buttons[0].y));
+    assert!(
+        buttons
+            .iter()
+            .all(|rect| rect.y == buttons[0].y)
+    );
     let choices = hits
         .iter()
         .filter(|(_, target)| matches!(target, Target::Choice(FieldId::Service(2), _)))
@@ -277,11 +307,15 @@ fn default_effort_only_offers_enabled_values() {
 fn editing_saved_key_preserves_it_until_replacement_is_entered() {
     let (_directory, _draft, mut panel) = setup();
     panel.saved_auth = true;
-    panel.service[3].input.set(String::new());
+    panel.service[3]
+        .input
+        .set(String::new());
     panel.service[3].hint = "输入 API Key".into();
     assert!(matches!(panel.key(), KeyChange::Keep));
 
-    panel.service[3].input.set("replacement-key".into());
+    panel.service[3]
+        .input
+        .set("replacement-key".into());
     assert!(matches!(panel.key(), KeyChange::Replace("replacement-key")));
 
     panel.service[3].input.clear();
@@ -316,7 +350,10 @@ async fn changing_protocol_converts_reasoning_before_saving() {
     .unwrap();
 
     assert_eq!(options.len(), 1);
-    let reasoning = draft.models[0].reasoning.as_ref().unwrap();
+    let reasoning = draft.models[0]
+        .reasoning
+        .as_ref()
+        .unwrap();
     assert_eq!(reasoning.adapter, ReasoningAdapter::OpenaiChat);
     assert_eq!(
         reasoning.efforts,
@@ -329,7 +366,9 @@ async fn changing_protocol_converts_reasoning_before_saving() {
 #[test]
 fn caret_follows_the_focused_field_and_hides_on_buttons_or_during_loading() {
     let (_directory, _draft, mut panel) = setup();
-    panel.service[0].input.set("Orbit你好".into());
+    panel.service[0]
+        .input
+        .set("Orbit你好".into());
     let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
     let mut field_area = None;
     terminal

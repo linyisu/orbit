@@ -19,14 +19,20 @@ pub(super) async fn execute(
 ) -> Result<Snapshot> {
     if matches!(action, Action::Mcp) {
         ensure!(
-            !setup.resources.policy.disabled(Capability::Mcp),
+            !setup
+                .resources
+                .policy
+                .disabled(Capability::Mcp),
             "MCP 工具已禁用"
         );
         return Ok(mcp::snapshot(setup));
     }
     if matches!(action, Action::Memories | Action::Memory(_)) {
         ensure!(
-            !setup.resources.policy.disabled(Capability::ProjectState),
+            !setup
+                .resources
+                .policy
+                .disabled(Capability::ProjectState),
             "记忆功能已禁用"
         );
         if let Action::Memory(memory) = action {
@@ -41,7 +47,10 @@ pub(super) async fn execute(
         ));
     }
     ensure!(
-        !setup.resources.policy.disabled(Capability::Skills),
+        !setup
+            .resources
+            .policy
+            .disabled(Capability::Skills),
         "技能功能已禁用"
     );
     if matches!(
@@ -50,7 +59,10 @@ pub(super) async fn execute(
     ) {
         ensure!(!setup.resources.policy.read_only, "只读会话不能修改技能");
         ensure!(
-            !setup.resources.policy.disabled(Capability::Write),
+            !setup
+                .resources
+                .policy
+                .disabled(Capability::Write),
             "文件写入已禁用"
         );
     }
@@ -119,12 +131,19 @@ pub(super) async fn execute(
                 skill.path.clone()
             } else {
                 ensure!(
-                    setup.resources.budget.skills.get(&name).is_none(),
+                    setup
+                        .resources
+                        .budget
+                        .skills
+                        .get(&name)
+                        .is_none(),
                     "技能名称已存在"
                 );
                 let root =
                     crate::instructions::project_root(cwd).unwrap_or_else(|| cwd.to_path_buf());
-                root.join(".orbit/skills").join(&name).join("SKILL.md")
+                root.join(".orbit/skills")
+                    .join(&name)
+                    .join("SKILL.md")
             };
             // Disk IO is bounded (1 MiB), off the GUI thread and serialized by the session actor.
             save_skill(&path, &name, original.as_deref(), &content)?;
@@ -135,6 +154,7 @@ pub(super) async fn execute(
         _ => unreachable!(),
     }
 }
+
 fn skill_names(setup: &PreparedWorkspace) -> std::collections::HashSet<String> {
     setup
         .resources
@@ -145,9 +165,11 @@ fn skill_names(setup: &PreparedWorkspace) -> std::collections::HashSet<String> {
         .map(|(name, _)| name)
         .collect()
 }
+
 fn editable(source: SkillSource) -> bool {
     matches!(source, SkillSource::OrbitUser | SkillSource::OrbitProject)
 }
+
 fn skills(setup: &PreparedWorkspace) -> Snapshot {
     Snapshot::Skills(
         setup
@@ -157,7 +179,11 @@ fn skills(setup: &PreparedWorkspace) -> Snapshot {
             .completions()
             .into_iter()
             .filter_map(|(name, _)| {
-                let skill = setup.resources.budget.skills.get(&name)?;
+                let skill = setup
+                    .resources
+                    .budget
+                    .skills
+                    .get(&name)?;
                 Some(Skill {
                     name,
                     title: skill.title.clone(),
@@ -176,6 +202,7 @@ fn skills(setup: &PreparedWorkspace) -> Snapshot {
             .collect(),
     )
 }
+
 fn save_skill(path: &Path, name: &str, original: Option<&str>, content: &str) -> Result<()> {
     ensure!(
         !name.is_empty()
@@ -200,7 +227,8 @@ fn save_skill(path: &Path, name: &str, original: Option<&str>, content: &str) ->
     fs::create_dir_all(parent)?;
     let mut file = tempfile::NamedTempFile::new_in(parent)?;
     if let Ok(meta) = fs::metadata(path) {
-        file.as_file().set_permissions(meta.permissions())?;
+        file.as_file()
+            .set_permissions(meta.permissions())?;
     }
     file.write_all(content.as_bytes())?;
     file.as_file().sync_all()?;
@@ -216,6 +244,7 @@ fn save_skill(path: &Path, name: &str, original: Option<&str>, content: &str) ->
     }
     Ok(())
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -227,7 +256,11 @@ mod tests {
         let root = directory.path();
         fs::create_dir(root.join(".git")).unwrap();
         TestConfig::new()
-            .provider(TestProvider::new("test").key("test").models(["mock"]))
+            .provider(
+                TestProvider::new("test")
+                    .key("test")
+                    .models(["mock"]),
+            )
             .write(root.join("config.toml"))
             .unwrap();
         let options = crate::WorkspaceOptions {
@@ -258,27 +291,48 @@ mod tests {
                 connected: false,
                 tools: Vec::new(),
             });
-        let Snapshot::Mcp(servers) = execute(&mut setup, Action::Mcp, false).await.unwrap() else {
+        let Snapshot::Mcp(servers) = execute(&mut setup, Action::Mcp, false)
+            .await
+            .unwrap()
+        else {
             panic!("MCP snapshot expected")
         };
         assert_eq!(servers[0].name, "blocked");
         assert!(!servers[0].connected);
         assert!(servers[0].tools.is_empty());
-        setup.resources.policy.disabled.push(Capability::Mcp);
-        assert!(execute(&mut setup, Action::Mcp, false).await.is_err());
+        setup
+            .resources
+            .policy
+            .disabled
+            .push(Capability::Mcp);
+        assert!(
+            execute(&mut setup, Action::Mcp, false)
+                .await
+                .is_err()
+        );
         setup.resources.policy.disabled.clear();
         let save = || Action::SaveSkill {
             name: "review".into(),
             original: None,
             content: "---\ndescription: Review code\n---\nRead the diff carefully.\n".into(),
         };
-        assert!(execute(&mut setup, save(), true).await.is_err());
-        let Snapshot::Skills(skills) = execute(&mut setup, save(), false).await.unwrap() else {
+        assert!(
+            execute(&mut setup, save(), true)
+                .await
+                .is_err()
+        );
+        let Snapshot::Skills(skills) = execute(&mut setup, save(), false)
+            .await
+            .unwrap()
+        else {
             panic!("skills expected")
         };
         assert_eq!(skills.len(), 1);
         assert_eq!(skills[0].name, "review");
-        assert!(root.join(".orbit/skills/review/SKILL.md").is_file());
+        assert!(
+            root.join(".orbit/skills/review/SKILL.md")
+                .is_file()
+        );
         let Snapshot::Skill {
             content, editable, ..
         } = execute(
@@ -306,9 +360,14 @@ mod tests {
         let scan = || Action::ScanSkills {
             source: source.display().to_string(),
         };
-        assert!(execute(&mut setup, scan(), true).await.is_err());
-        let Snapshot::SkillSource { token, skills, .. } =
-            execute(&mut setup, scan(), false).await.unwrap()
+        assert!(
+            execute(&mut setup, scan(), true)
+                .await
+                .is_err()
+        );
+        let Snapshot::SkillSource { token, skills, .. } = execute(&mut setup, scan(), false)
+            .await
+            .unwrap()
         else {
             panic!("skill source expected")
         };
@@ -318,11 +377,22 @@ mod tests {
             token: token.clone(),
             paths: vec![".".into()],
         };
-        assert!(execute(&mut setup, install(), true).await.is_err());
+        assert!(
+            execute(&mut setup, install(), true)
+                .await
+                .is_err()
+        );
         setup.resources.policy.read_only = true;
-        assert!(execute(&mut setup, install(), false).await.is_err());
+        assert!(
+            execute(&mut setup, install(), false)
+                .await
+                .is_err()
+        );
         setup.resources.policy.read_only = false;
-        let Snapshot::Skills(skills) = execute(&mut setup, install(), false).await.unwrap() else {
+        let Snapshot::Skills(skills) = execute(&mut setup, install(), false)
+            .await
+            .unwrap()
+        else {
             panic!("installed skills expected")
         };
         assert_eq!(skills.len(), 2);
@@ -330,7 +400,11 @@ mod tests {
             root.join(".orbit/skills/verification/references/checks.md")
                 .is_file()
         );
-        assert!(execute(&mut setup, install(), false).await.is_err());
+        assert!(
+            execute(&mut setup, install(), false)
+                .await
+                .is_err()
+        );
         setup
             .session
             .begin("settings test".into(), "test::mock".into())
@@ -346,8 +420,9 @@ mod tests {
         )
         .await
         .unwrap();
-        let Snapshot::Memories(memories) =
-            execute(&mut setup, Action::Memories, false).await.unwrap()
+        let Snapshot::Memories(memories) = execute(&mut setup, Action::Memories, false)
+            .await
+            .unwrap()
         else {
             panic!("memories expected")
         };

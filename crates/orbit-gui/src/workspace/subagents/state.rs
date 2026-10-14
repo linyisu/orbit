@@ -97,7 +97,9 @@ mod tests {
 
     fn ready() -> Requests {
         let mut requests = Requests::new();
-        let first = requests.begin(Operation::Refresh).unwrap();
+        let first = requests
+            .begin(Operation::Refresh)
+            .unwrap();
         assert!(requests.refreshed(first));
         requests
     }
@@ -119,7 +121,9 @@ mod tests {
         );
         assert!(!requests.can_mutate());
         assert!(requests.begin(send.clone()).is_none());
-        let refresh = requests.begin(Operation::Refresh).unwrap();
+        let refresh = requests
+            .begin(Operation::Refresh)
+            .unwrap();
         assert!(
             !requests.finish(old),
             "an old receipt cannot clear the new refresh"
@@ -146,22 +150,36 @@ mod tests {
         assert!(!requests.finish(old));
         assert!(requests.pending.is_none());
         assert!(requests.needs_refresh);
-        assert!(Uncertain::Cancel { run: 42 }.message().contains("尚未确认"));
+        assert!(
+            Uncertain::Cancel { run: 42 }
+                .message()
+                .contains("尚未确认")
+        );
     }
 
     #[test]
     fn interrupted_or_failed_refresh_can_retry_and_old_pages_cannot_mark_it_ready() {
         let mut requests = Requests::new();
-        let old = requests.begin(Operation::Refresh).unwrap();
+        let old = requests
+            .begin(Operation::Refresh)
+            .unwrap();
         assert_eq!(requests.disconnected(), Some(Operation::Refresh));
-        assert!(requests.begin(Operation::Refresh).is_none());
+        assert!(
+            requests
+                .begin(Operation::Refresh)
+                .is_none()
+        );
         requests.reconnected();
-        let retry = requests.begin(Operation::Refresh).unwrap();
+        let retry = requests
+            .begin(Operation::Refresh)
+            .unwrap();
         assert!(!requests.refreshed(old));
         assert_eq!(requests.pending, Some(Operation::Refresh));
         assert!(requests.finish(retry));
         assert!(requests.needs_refresh);
-        let final_retry = requests.begin(Operation::Refresh).unwrap();
+        let final_retry = requests
+            .begin(Operation::Refresh)
+            .unwrap();
         assert!(requests.refreshed(final_retry));
         assert!(requests.can_mutate());
     }
@@ -176,7 +194,9 @@ mod tests {
             })
             .unwrap();
         assert!(requests.finish(first));
-        let second = requests.begin(Operation::Refresh).unwrap();
+        let second = requests
+            .begin(Operation::Refresh)
+            .unwrap();
         assert!(!requests.finish(first));
         assert!(requests.accepts(second));
         assert!(requests.refreshed(second));

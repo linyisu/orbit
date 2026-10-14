@@ -30,7 +30,10 @@ pub fn ranked<T>(items: impl IntoIterator<Item = T>, score: impl Fn(&T) -> Optio
         .filter_map(|item| score(&item).map(|rank| (rank, item)))
         .collect::<Vec<_>>();
     matches.sort_by_key(|(rank, _)| *rank);
-    matches.into_iter().map(|(_, item)| item).collect()
+    matches
+        .into_iter()
+        .map(|(_, item)| item)
+        .collect()
 }
 
 #[cfg(test)]

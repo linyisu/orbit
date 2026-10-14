@@ -21,6 +21,7 @@ struct Draft {
     custom: bool,
     text: InputState,
 }
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Focus {
     Tab(usize),
@@ -34,6 +35,7 @@ enum Focus {
     History(usize),
     More,
 }
+
 #[derive(Debug)]
 struct FormView {
     id: String,
@@ -44,11 +46,13 @@ struct FormView {
     sending: bool,
     error: Option<String>,
 }
+
 #[derive(Debug)]
 enum Dialog {
     Form(FormView),
     History { cursor: usize, offset: usize },
 }
+
 #[derive(Debug, Default)]
 pub(super) struct State {
     records: Vec<Record>,
@@ -74,16 +78,21 @@ pub(super) enum Action {
     },
     History(Option<i64>),
 }
+
 impl State {
     pub fn visible(&self) -> bool {
         self.dialog.is_some()
     }
+
     pub fn sync(&mut self, pending: Vec<Record>) -> bool {
         let removed = self
             .pending
             .iter()
             .any(|id| !pending.iter().any(|r| &r.id == id));
-        self.pending = pending.iter().map(|r| r.id.clone()).collect();
+        self.pending = pending
+            .iter()
+            .map(|r| r.id.clone())
+            .collect();
         for r in pending {
             self.upsert(r);
         }
@@ -99,17 +108,24 @@ impl State {
         }
         removed
     }
+
     fn upsert(&mut self, record: Record) {
         if record.status != Status::Pending {
             let was_pending = self
                 .records
                 .iter()
                 .any(|r| r.id == record.id && r.status == Status::Pending);
-            if was_pending && matches!(&self.dialog, Some(Dialog::Form(v)) if v.id == record.id) {
+            if was_pending
+                && matches!(
+                    &self.dialog,
+                    Some(Dialog::Form(v)) if v.id == record.id
+                )
+            {
                 self.dialog = None;
                 self.clear_geometry();
             }
-            self.pending.retain(|id| id != &record.id);
+            self.pending
+                .retain(|id| id != &record.id);
         }
         if !self.drafts.contains_key(&record.id) || record.status != Status::Pending {
             self.drafts.insert(
@@ -120,7 +136,11 @@ impl State {
                     .iter()
                     .map(|q| {
                         let mut d = Draft::default();
-                        if let Some(a) = record.answers.iter().find(|a| a.question_id == q.id) {
+                        if let Some(a) = record
+                            .answers
+                            .iter()
+                            .find(|a| a.question_id == q.id)
+                        {
                             d.selected = a.selected.clone();
                             d.custom = !a.text.is_empty();
                             d.text.set(a.text.clone());
@@ -130,15 +150,23 @@ impl State {
                     .collect(),
             );
         }
-        if let Some(old) = self.records.iter_mut().find(|r| r.id == record.id) {
+        if let Some(old) = self
+            .records
+            .iter_mut()
+            .find(|r| r.id == record.id)
+        {
             *old = record;
         } else {
             self.records.push(record);
         }
     }
+
     pub fn receive(&mut self, history: History) {
         let cursor_id = match &self.dialog {
-            Some(Dialog::History { cursor, .. }) => self.records.get(*cursor).map(|r| r.id.clone()),
+            Some(Dialog::History { cursor, .. }) => self
+                .records
+                .get(*cursor)
+                .map(|r| r.id.clone()),
             _ => None,
         };
         let ordering = history
@@ -162,7 +190,11 @@ impl State {
         if let Some(id) = cursor_id
             && let Some(Dialog::History { cursor, .. }) = &mut self.dialog
         {
-            *cursor = self.records.iter().position(|r| r.id == id).unwrap_or(0);
+            *cursor = self
+                .records
+                .iter()
+                .position(|r| r.id == id)
+                .unwrap_or(0);
         }
         if self.history_requested {
             self.dialog = Some(Dialog::History {
@@ -172,9 +204,11 @@ impl State {
             self.history_requested = false;
         }
     }
+
     pub fn history(&mut self) {
         self.history_requested = true;
     }
+
     pub fn open_next(&mut self) {
         if self.dialog.is_none()
             && let Some(id) = self
@@ -186,6 +220,7 @@ impl State {
             self.open(&id);
         }
     }
+
     pub fn open_tool(&mut self, call_id: &str, output: &str) -> bool {
         if let Ok(record) = serde_json::from_str::<Record>(output) {
             if record.form.validate().is_err() {
@@ -208,12 +243,14 @@ impl State {
             false
         }
     }
+
     pub(super) fn clear_geometry(&mut self) {
         self.hits.clear();
         self.pointer.invalidate();
         self.editor_rows.clear();
         self.editor_area = Rect::default();
     }
+
     fn open(&mut self, id: &str) {
         self.clear_geometry();
         self.pointer.keyboard();
@@ -241,14 +278,20 @@ impl State {
             }));
         }
     }
+
     pub fn submission_succeeded(&mut self, id: &str) {
         self.dismissed.insert(id.into());
-        self.pending.retain(|pending| pending != id);
-        if matches!(&self.dialog, Some(Dialog::Form(v)) if v.id == id && v.sending) {
+        self.pending
+            .retain(|pending| pending != id);
+        if matches!(
+            &self.dialog,
+            Some(Dialog::Form(v)) if v.id == id && v.sending
+        ) {
             self.dialog = None;
             self.clear_geometry();
         }
     }
+
     pub fn submission_error(&mut self, id: &str, error: String) {
         if let Some(Dialog::Form(v)) = &mut self.dialog
             && v.id == id
@@ -257,8 +300,13 @@ impl State {
             v.error = Some(error);
         }
     }
+
     fn answers(&self, id: &str) -> Vec<Answer> {
-        let r = self.records.iter().find(|r| r.id == id).unwrap();
+        let r = self
+            .records
+            .iter()
+            .find(|r| r.id == id)
+            .unwrap();
         r.form
             .questions
             .iter()
@@ -275,8 +323,13 @@ impl State {
             })
             .collect()
     }
+
     fn controls(&self, v: &FormView) -> Vec<Focus> {
-        let r = self.records.iter().find(|r| r.id == v.id).unwrap();
+        let r = self
+            .records
+            .iter()
+            .find(|r| r.id == v.id)
+            .unwrap();
         let mut result = Vec::new();
         if v.page < r.form.questions.len() && r.status == Status::Pending {
             let q = &r.form.questions[v.page];
@@ -300,9 +353,14 @@ impl State {
         }
         result
     }
+
     fn activate(&mut self, focus: Focus) -> Action {
         if let Focus::History(i) = focus {
-            if let Some(id) = self.records.get(i).map(|r| r.id.clone()) {
+            if let Some(id) = self
+                .records
+                .get(i)
+                .map(|r| r.id.clone())
+            {
                 self.open(&id);
             }
             return Action::None;
@@ -314,7 +372,12 @@ impl State {
         let Some(Dialog::Form(mut v)) = self.dialog.take() else {
             return Action::None;
         };
-        let r = self.records.iter().find(|r| r.id == v.id).unwrap().clone();
+        let r = self
+            .records
+            .iter()
+            .find(|r| r.id == v.id)
+            .unwrap()
+            .clone();
         let editable = r.status == Status::Pending && self.pending.contains(&r.id) && !v.sending;
         let mut action = Action::None;
         let previous_page = v.page;
@@ -354,9 +417,15 @@ impl State {
                     }
                     Err(error) => {
                         v.error = Some(error);
-                        if let Some(i) = r.form.questions.iter().zip(&answers).position(|(q, a)| {
-                            q.required && a.selected.is_empty() && a.text.trim().is_empty()
-                        }) {
+                        if let Some(i) = r
+                            .form
+                            .questions
+                            .iter()
+                            .zip(&answers)
+                            .position(|(q, a)| {
+                                q.required && a.selected.is_empty() && a.text.trim().is_empty()
+                            })
+                        {
                             v.page = i;
                             v.offset = 0;
                         }
@@ -414,11 +483,14 @@ impl State {
         self.dialog = Some(Dialog::Form(v));
         action
     }
+
     pub fn handle(&mut self, event: &Event) -> Action {
         if self.dialog.is_none() {
             if let Event::Mouse(m) = event
                 && m.kind == MouseEventKind::Down(MouseButton::Left)
-                && self.badge.contains(Position::new(m.column, m.row))
+                && self
+                    .badge
+                    .contains(Position::new(m.column, m.row))
                 && let Some(id) = self.pending.first().cloned()
             {
                 self.open(&id);
@@ -463,12 +535,25 @@ impl State {
                         .copied()
                     {
                         let advance = match &self.dialog {
-                            Some(Dialog::Form(v)) => self.records.iter().find(|r| r.id == v.id).is_some_and(|r| {
-                                r.status == Status::Pending && !v.sending && self.pending.contains(&v.id)
-                                    && r.form.questions.get(v.page).is_some_and(|q| {
-                                        q.kind == Kind::Single && matches!(focus, Focus::Option(i) if i < q.options.len())
-                                    })
-                            }),
+                            Some(Dialog::Form(v)) => self
+                                .records
+                                .iter()
+                                .find(|r| r.id == v.id)
+                                .is_some_and(|r| {
+                                    r.status == Status::Pending
+                                        && !v.sending
+                                        && self.pending.contains(&v.id)
+                                        && r.form
+                                            .questions
+                                            .get(v.page)
+                                            .is_some_and(|q| {
+                                                q.kind == Kind::Single
+                                                    && matches!(focus,
+                                            Focus::Option(i) if i < q
+                                            .options
+                                            .len())
+                                            })
+                                }),
                             _ => false,
                         };
                         if let Some(Dialog::Form(v)) = &mut self.dialog {
@@ -513,7 +598,10 @@ impl State {
             return Action::None;
         }
         if matches!(event, Event::Paste(_))
-            || matches!(event, Event::Key(key) if key.kind != KeyEventKind::Release)
+            || matches!(
+                event,
+                Event::Key(key) if key.kind != KeyEventKind::Release
+            )
         {
             self.pointer.keyboard();
         }
@@ -523,7 +611,9 @@ impl State {
             _ => None,
         };
         if key.is_some_and(|k| {
-            k.code == KeyCode::Char('c') && k.modifiers.contains(KeyModifiers::CONTROL)
+            k.code == KeyCode::Char('c')
+                && k.modifiers
+                    .contains(KeyModifiers::CONTROL)
         }) {
             return Action::CancelTask;
         }
@@ -560,7 +650,11 @@ impl State {
             return Action::None;
         };
         let controls = self.controls(v);
-        let record = self.records.iter().find(|r| r.id == v.id).unwrap();
+        let record = self
+            .records
+            .iter()
+            .find(|r| r.id == v.id)
+            .unwrap();
         let count = record.form.questions.len();
         let readonly = record.status != Status::Pending;
         let single = record
@@ -568,17 +662,22 @@ impl State {
             .questions
             .get(v.page)
             .is_some_and(|q| q.kind == Kind::Single);
-        let custom_option = record.form.questions.get(v.page).is_some_and(|q| {
-            q.kind != Kind::Text && q.allow_custom && v.focus == Focus::Option(q.options.len())
-        });
+        let custom_option = record
+            .form
+            .questions
+            .get(v.page)
+            .is_some_and(|q| {
+                q.kind != Kind::Text && q.allow_custom && v.focus == Focus::Option(q.options.len())
+            });
         let Some(Dialog::Form(v)) = &mut self.dialog else {
             return Action::None;
         };
         v.follow_focus = true;
         if let Some(k) = key {
             if matches!(k.code, KeyCode::Tab | KeyCode::BackTab) {
-                let backward =
-                    k.code == KeyCode::BackTab || k.modifiers.contains(KeyModifiers::SHIFT);
+                let backward = k.code == KeyCode::BackTab
+                    || k.modifiers
+                        .contains(KeyModifiers::SHIFT);
                 let page = (v.page + if backward { count } else { 1 }) % (count + 1);
                 return self.activate(Focus::Tab(page));
             }
@@ -610,7 +709,10 @@ impl State {
                     }
                     if single || custom_option {
                         self.activate(Focus::Option(i));
-                        if matches!(&self.dialog, Some(Dialog::Form(v)) if v.focus == Focus::Text) {
+                        if matches!(
+                            &self.dialog,
+                            Some(Dialog::Form(v)) if v.focus == Focus::Text
+                        ) {
                             return Action::None;
                         }
                     }
@@ -630,7 +732,10 @@ impl State {
                         return self.activate(f);
                     }
                     KeyCode::Up | KeyCode::Down => {
-                        let i = controls.iter().position(|f| f == &v.focus).unwrap_or(0);
+                        let i = controls
+                            .iter()
+                            .position(|f| f == &v.focus)
+                            .unwrap_or(0);
                         v.focus = controls[if k.code == KeyCode::Up {
                             i.saturating_sub(1)
                         } else {
@@ -642,7 +747,11 @@ impl State {
                 return Action::None;
             }
         }
-        let record = self.records.iter().find(|r| r.id == v.id).unwrap();
+        let record = self
+            .records
+            .iter()
+            .find(|r| r.id == v.id)
+            .unwrap();
         if record.status == Status::Pending
             && self.pending.contains(&v.id)
             && !v.sending
@@ -655,7 +764,10 @@ impl State {
                 && ((k.code == KeyCode::Up && editor.cursor == 0)
                     || (k.code == KeyCode::Down && editor.cursor == editor.text.len()))
             {
-                let i = controls.iter().position(|f| f == &v.focus).unwrap_or(0);
+                let i = controls
+                    .iter()
+                    .position(|f| f == &v.focus)
+                    .unwrap_or(0);
                 v.focus = controls[if k.code == KeyCode::Up {
                     i.saturating_sub(1)
                 } else {
@@ -663,7 +775,7 @@ impl State {
                 }];
                 return Action::None;
             }
-            let limit = 16384;
+            let limit = 16_384;
             let previous = editor.clone();
             editor.edit(event, self.editor_area.width.max(1) as usize);
             if editor.text.len() > limit {

@@ -19,7 +19,10 @@ impl Local {
     }
 
     pub async fn snapshot_with_refresh(&self, force: bool) -> Result<Configuration> {
-        Ok(self.snapshot_with_report(force).await?.0)
+        Ok(self
+            .snapshot_with_report(force)
+            .await?
+            .0)
     }
 
     pub async fn snapshot_with_report(&self, force: bool) -> Result<(Configuration, Vec<String>)> {
@@ -44,15 +47,23 @@ impl Local {
             let mut snapshot = provider.spec.clone();
             snapshot.set_models(&provider.models);
             for model in &provider.models {
-                if let Some(settings) = snapshot.model_overrides.get_mut(&model.id) {
+                if let Some(settings) = snapshot
+                    .model_overrides
+                    .get_mut(&model.id)
+                {
                     let requested = provider
                         .spec
                         .model_overrides
                         .get(&model.id)
                         .and_then(|m| m.max_output_tokens)
                         .unwrap_or(parsed.max_output_tokens);
-                    settings.max_output_tokens =
-                        Some(requested.min(model.max_output_tokens.unwrap_or(u32::MAX)));
+                    settings.max_output_tokens = Some(
+                        requested.min(
+                            model
+                                .max_output_tokens
+                                .unwrap_or(u32::MAX),
+                        ),
+                    );
                 }
             }
             snapshot.auto_refresh_models = false;

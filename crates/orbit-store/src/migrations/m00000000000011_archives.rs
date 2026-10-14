@@ -6,6 +6,7 @@ impl MigrationName for Migration {
         "00000000000011_archives"
     }
 }
+
 #[async_trait::async_trait]
 impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
@@ -13,8 +14,16 @@ impl MigrationTrait for Migration {
             .create_table(
                 Table::create()
                     .table(Alias::new("context_archives"))
-                    .col(ColumnDef::new(Alias::new("id")).integer().primary_key())
-                    .col(ColumnDef::new(Alias::new("session_id")).text().not_null())
+                    .col(
+                        ColumnDef::new(Alias::new("id"))
+                            .integer()
+                            .primary_key(),
+                    )
+                    .col(
+                        ColumnDef::new(Alias::new("session_id"))
+                            .text()
+                            .not_null(),
+                    )
                     .col(
                         ColumnDef::new(Alias::new("created_at"))
                             .integer()
@@ -49,8 +58,16 @@ impl MigrationTrait for Migration {
                             .integer()
                             .not_null(),
                     )
-                    .col(ColumnDef::new(Alias::new("ordinal")).integer().not_null())
-                    .col(ColumnDef::new(Alias::new("payload")).text().not_null())
+                    .col(
+                        ColumnDef::new(Alias::new("ordinal"))
+                            .integer()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(Alias::new("payload"))
+                            .text()
+                            .not_null(),
+                    )
                     .primary_key(
                         Index::create()
                             .col(Alias::new("archive_id"))
@@ -70,6 +87,7 @@ impl MigrationTrait for Migration {
             .await?;
         Ok(())
     }
+
     async fn down(&self, _: &SchemaManager) -> Result<(), DbErr> {
         super::forward_only()
     }

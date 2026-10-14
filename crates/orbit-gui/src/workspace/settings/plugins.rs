@@ -31,6 +31,7 @@ enum CatalogRow {
     Heading(String, usize),
     Cards(Vec<(usize, usize)>, usize),
 }
+
 impl Plugins {
     pub(super) fn has_pending_work(&self) -> bool {
         self.busy
@@ -46,7 +47,8 @@ impl Plugins {
         let query = cx.new(|cx| InputState::new(window, cx).placeholder("搜索插件"));
         let subscription = cx.subscribe(&query, |view, _, event, cx| {
             if matches!(event, InputEvent::Change) {
-                view.scroll.set_offset(point(Pixels::ZERO, Pixels::ZERO));
+                view.scroll
+                    .set_offset(point(Pixels::ZERO, Pixels::ZERO));
                 cx.notify();
             }
         });
@@ -71,6 +73,7 @@ impl Plugins {
             _query: subscription,
         }
     }
+
     fn request(
         &mut self,
         action: protocol::Action,
@@ -118,7 +121,10 @@ impl Plugins {
         self.busy = true;
         self.error = None;
         self.task = cx.spawn(async move |owner, cx| {
-            let result = receiver.await.map_err(|e| e.to_string()).and_then(|r| r);
+            let result = receiver
+                .await
+                .map_err(|e| e.to_string())
+                .and_then(|r| r);
             let _ = owner.update(cx, |view, cx| {
                 view.busy = false;
                 match result {
@@ -141,11 +147,16 @@ impl Plugins {
         });
         cx.notify();
     }
+
     fn sources(&mut self, adding: bool, window: &mut Window, cx: &mut Context<Self>) {
         self.error = None;
         let owner = cx.entity();
         let sources = cx.new(|cx| Sources::new(owner, adding, window, cx));
-        let focus = sources.read(cx).source.read(cx).focus_handle(cx);
+        let focus = sources
+            .read(cx)
+            .source
+            .read(cx)
+            .focus_handle(cx);
         let first = std::cell::Cell::new(true);
         crate::dialog::open(window, cx, move |dialog, window, cx| {
             if first.replace(false) && adding {
@@ -171,6 +182,7 @@ impl Plugins {
         });
         cx.notify();
     }
+
     fn details(
         &self,
         market_ix: usize,
@@ -192,17 +204,24 @@ impl Plugins {
             .find(|p| p.source == market.source && p.name == plugin.name)
             .cloned();
         crate::dialog::open(window, cx, move |dialog, _, cx| {
-            let mut body = v_flex().gap_3().child(description.clone()).child(
-                div()
-                    .text_sm()
-                    .text_color(cx.theme().muted_foreground)
-                    .child(format!("来源：{source}")),
-            );
+            let mut body = v_flex()
+                .gap_3()
+                .child(description.clone())
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(format!("来源：{source}")),
+                );
             if let Some(inspection) = &inspection {
                 match &inspection.package {
                     Ok(package) => {
                         if let Some(version) = &package.version {
-                            body = body.child(div().text_sm().child(format!("版本：{version}")));
+                            body = body.child(
+                                div()
+                                    .text_sm()
+                                    .child(format!("版本：{version}")),
+                            );
                         }
                         for (label, values) in [
                             ("技能", &package.skills),
@@ -218,10 +237,18 @@ impl Plugins {
                             }
                         }
                         if package.declares_hooks {
-                            body = body.child(div().text_sm().child("包含生命周期钩子"));
+                            body = body.child(
+                                div()
+                                    .text_sm()
+                                    .child("包含生命周期钩子"),
+                            );
                         }
                         if package.declares_mcp {
-                            body = body.child(div().text_sm().child("包含 MCP 工具配置"));
+                            body = body.child(
+                                div()
+                                    .text_sm()
+                                    .child("包含 MCP 工具配置"),
+                            );
                         }
                     }
                     Err(error) => {
@@ -237,6 +264,7 @@ impl Plugins {
             dialog.title(title.clone()).child(body)
         });
     }
+
     fn card(&self, market_ix: usize, plugin_ix: usize, cx: &mut Context<Self>) -> AnyElement {
         let Some(catalog) = &self.catalog else {
             return div().into_any_element();
@@ -257,7 +285,10 @@ impl Plugins {
             project_id: catalog.project_id.clone(),
             marketplace_source: market.source.clone(),
             plugin_name: plugin.name.clone(),
-            package_source: plugin.source.clone().unwrap_or_default(),
+            package_source: plugin
+                .source
+                .clone()
+                .unwrap_or_default(),
             version: package.and_then(|p| p.version.clone()),
             marketplace_revision: market.revision.clone(),
             enabled_at: 0,
@@ -286,7 +317,12 @@ impl Plugins {
                     .flex_1()
                     .min_w_0()
                     .gap_1()
-                    .child(div().font_semibold().truncate().child(name.clone()))
+                    .child(
+                        div()
+                            .font_semibold()
+                            .truncate()
+                            .child(name.clone()),
+                    )
                     .child(
                         div()
                             .text_sm()
@@ -341,6 +377,7 @@ impl Plugins {
             )
             .into_any_element()
     }
+
     fn row(&self, row: &CatalogRow, cx: &mut Context<Self>) -> AnyElement {
         match row {
             CatalogRow::Heading(name, count) => h_flex()
@@ -351,7 +388,11 @@ impl Plugins {
                 .gap_2()
                 .border_b_1()
                 .border_color(cx.theme().border)
-                .child(div().font_semibold().child(name.clone()))
+                .child(
+                    div()
+                        .font_semibold()
+                        .child(name.clone()),
+                )
                 .child(
                     div()
                         .text_sm()
@@ -374,6 +415,7 @@ impl Plugins {
         }
     }
 }
+
 fn package_summary(package: &protocol::PluginPackage) -> String {
     let mut fields = Vec::new();
     if !package.skills.is_empty() {
@@ -392,11 +434,15 @@ fn package_summary(package: &protocol::PluginPackage) -> String {
         fields.push("钩子".into());
     }
     if fields.is_empty() {
-        package.version.clone().unwrap_or_else(|| "插件包".into())
+        package
+            .version
+            .clone()
+            .unwrap_or_else(|| "插件包".into())
     } else {
         fields.join(" · ")
     }
 }
+
 impl Plugins {
     fn page(&self, width: Pixels, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let mut content = super::content_column()
@@ -413,7 +459,12 @@ impl Plugins {
                             .flex_1()
                             .min_w_0()
                             .gap_2()
-                            .child(div().text_xl().font_semibold().child("插件市场"))
+                            .child(
+                                div()
+                                    .text_xl()
+                                    .font_semibold()
+                                    .child("插件市场"),
+                            )
                             .child(
                                 div()
                                     .text_sm()
@@ -472,16 +523,24 @@ impl Plugins {
             )
             .when(self.busy, |v| {
                 v.child(
-                    h_flex().gap_2().child(Spinner::new().small()).child(
-                        div()
-                            .text_sm()
-                            .text_color(cx.theme().muted_foreground)
-                            .child("正在更新插件…"),
-                    ),
+                    h_flex()
+                        .gap_2()
+                        .child(Spinner::new().small())
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(cx.theme().muted_foreground)
+                                .child("正在更新插件…"),
+                        ),
                 )
             })
             .when_some(self.error.clone(), |v, error| {
-                v.child(div().text_sm().text_color(cx.theme().danger).child(error))
+                v.child(
+                    div()
+                        .text_sm()
+                        .text_color(cx.theme().danger)
+                        .child(error),
+                )
             });
         let Some(catalog) = &self.catalog else {
             // Container-query roots are painted at the viewport origin; an
@@ -489,77 +548,84 @@ impl Plugins {
             return v_flex()
                 .size_full()
                 .child(
-                    content.child(div().py_8().text_color(cx.theme().muted_foreground).child(
-                        if self.busy {
-                            "正在加载插件…"
-                        } else {
-                            "尚未加载插件。连接工作区后重试。"
-                        },
-                    )),
+                    content.child(
+                        div()
+                            .py_8()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(if self.busy {
+                                "正在加载插件…"
+                            } else {
+                                "尚未加载插件。连接工作区后重试。"
+                            }),
+                    ),
                 )
                 .into_any_element();
         };
         if !catalog.enabled.is_empty() {
-            content =
-                content.child(
-                    v_flex()
-                        .gap_3()
-                        .child(
-                            h_flex().gap_2().child(
-                                Button::new("toggle-enabled-plugins")
-                                    .ghost()
-                                    .small()
-                                    .icon(if self.enabled_expanded {
-                                        IconName::ChevronDown
-                                    } else {
-                                        IconName::ChevronRight
-                                    })
-                                    .label(format!("当前项目已启用 · {}", catalog.enabled.len()))
-                                    .on_click(cx.listener(|view, _, _, cx| {
-                                        view.enabled_expanded = !view.enabled_expanded;
-                                        cx.notify();
-                                    })),
-                            ),
+            content = content.child(
+                v_flex()
+                    .gap_3()
+                    .child(
+                        h_flex().gap_2().child(
+                            Button::new("toggle-enabled-plugins")
+                                .ghost()
+                                .small()
+                                .icon(if self.enabled_expanded {
+                                    IconName::ChevronDown
+                                } else {
+                                    IconName::ChevronRight
+                                })
+                                .label(format!("当前项目已启用 · {}", catalog.enabled.len()))
+                                .on_click(cx.listener(|view, _, _, cx| {
+                                    view.enabled_expanded = !view.enabled_expanded;
+                                    cx.notify();
+                                })),
+                        ),
+                    )
+                    .when(self.enabled_expanded, |view| {
+                        view.child(
+                            div()
+                                .id("enabled-plugins")
+                                .max_h(rems(6.))
+                                .overflow_y_scroll()
+                                .track_scroll(&self.enabled_scroll)
+                                .vertical_scrollbar(&self.enabled_scroll)
+                                .child(h_flex().flex_wrap().gap_2().children(
+                                    catalog.enabled.iter().map(|plugin| {
+                                        let name = plugin.plugin_name.clone();
+                                        let source = plugin.marketplace_source.clone();
+                                        Button::new(SharedString::from(format!(
+                                            "enabled:{source}:{name}"
+                                        )))
+                                        .outline()
+                                        .small()
+                                        .icon(IconName::X)
+                                        .label(name.clone())
+                                        .accessibility_label(format!("停用插件 {name}"))
+                                        .tooltip(format!("{source} · 点击停用 {name}"))
+                                        .disabled(self.busy)
+                                        .on_click(cx.listener(move |v, _, _, cx| {
+                                            v.request(
+                                                protocol::Action::Disable {
+                                                    marketplace_source: source.clone(),
+                                                    plugin_name: name.clone(),
+                                                },
+                                                None,
+                                                cx,
+                                            )
+                                        }))
+                                    }),
+                                )),
                         )
-                        .when(self.enabled_expanded, |view| {
-                            view.child(
-                                div()
-                                    .id("enabled-plugins")
-                                    .max_h(rems(6.))
-                                    .overflow_y_scroll()
-                                    .track_scroll(&self.enabled_scroll)
-                                    .vertical_scrollbar(&self.enabled_scroll)
-                                    .child(h_flex().flex_wrap().gap_2().children(
-                                        catalog.enabled.iter().map(|plugin| {
-                                            let name = plugin.plugin_name.clone();
-                                            let source = plugin.marketplace_source.clone();
-                                            Button::new(SharedString::from(format!(
-                                                "enabled:{source}:{name}"
-                                            )))
-                                            .outline()
-                                            .small()
-                                            .icon(IconName::X)
-                                            .label(name.clone())
-                                            .accessibility_label(format!("停用插件 {name}"))
-                                            .tooltip(format!("{source} · 点击停用 {name}"))
-                                            .disabled(self.busy)
-                                            .on_click(cx.listener(move |v, _, _, cx| {
-                                                v.request(
-                                                    protocol::Action::Disable {
-                                                        marketplace_source: source.clone(),
-                                                        plugin_name: name.clone(),
-                                                    },
-                                                    None,
-                                                    cx,
-                                                )
-                                            }))
-                                        }),
-                                    )),
-                            )
-                        }),
-                );
+                    }),
+            );
         }
-        let query = self.query.read(cx).value().trim().to_lowercase();
+        let query = self
+            .query
+            .read(cx)
+            .value()
+            .trim()
+            .to_lowercase();
         let columns = if width / window.rem_size() >= 40. {
             2
         } else {
@@ -682,6 +748,7 @@ struct Sources {
     _owner: Subscription,
     _source: Subscription,
 }
+
 impl Sources {
     fn new(
         owner: Entity<Plugins>,
@@ -708,8 +775,14 @@ impl Sources {
             _source: subscription,
         }
     }
+
     fn add(&mut self, cx: &mut Context<Self>) {
-        let source = self.source.read(cx).value().trim().to_string();
+        let source = self
+            .source
+            .read(cx)
+            .value()
+            .trim()
+            .to_string();
         if source.is_empty() || self.added {
             return;
         }
@@ -718,6 +791,7 @@ impl Sources {
             v.request(protocol::Action::Add { source }, Some(completion), cx)
         });
     }
+
     fn choose_directory(&mut self, cx: &mut Context<Self>) {
         let prompt = cx.prompt_for_paths(PathPromptOptions {
             files: false,
@@ -739,6 +813,7 @@ impl Sources {
         });
     }
 }
+
 impl Render for Sources {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let Some(owner) = self.owner.upgrade() else {
@@ -752,18 +827,28 @@ impl Render for Sources {
             .as_ref()
             .map(|c| c.marketplaces.clone())
             .unwrap_or_default();
-        let mut body = v_flex().gap_4().when_some(error, |v, e| {
-            v.child(div().text_sm().text_color(cx.theme().danger).child(e))
-        });
+        let mut body = v_flex()
+            .gap_4()
+            .when_some(error, |v, e| {
+                v.child(
+                    div()
+                        .text_sm()
+                        .text_color(cx.theme().danger)
+                        .child(e),
+                )
+            });
         if self.adding {
             body = body
                 .when(self.added, |view| {
                     view.child(
-                        h_flex().gap_2().child(Icon::new(IconName::Check)).child(
-                            div()
-                                .text_sm()
-                                .child("插件市场已添加，可关闭窗口浏览插件。"),
-                        ),
+                        h_flex()
+                            .gap_2()
+                            .child(Icon::new(IconName::Check))
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .child("插件市场已添加，可关闭窗口浏览插件。"),
+                            ),
                     )
                 })
                 .child(
@@ -807,7 +892,12 @@ impl Render for Sources {
                                 })
                                 .disabled(
                                     busy || self.added
-                                        || self.source.read(cx).value().trim().is_empty(),
+                                        || self
+                                            .source
+                                            .read(cx)
+                                            .value()
+                                            .trim()
+                                            .is_empty(),
                                 )
                                 .on_click(cx.listener(|v, _, _, cx| v.add(cx))),
                         ),
@@ -875,19 +965,17 @@ impl Render for Sources {
                                     .tooltip("刷新市场")
                                     .accessibility_label("刷新市场")
                                     .disabled(busy)
-                                    .on_click(
-                                        move |_, _, cx| {
-                                            let _ = owner.update(cx, |v, cx| {
-                                                v.request(
-                                                    protocol::Action::Refresh {
-                                                        source: refresh.clone(),
-                                                    },
-                                                    None,
-                                                    cx,
-                                                )
-                                            });
-                                        },
-                                    ),
+                                    .on_click(move |_, _, cx| {
+                                        let _ = owner.update(cx, |v, cx| {
+                                            v.request(
+                                                protocol::Action::Refresh {
+                                                    source: refresh.clone(),
+                                                },
+                                                None,
+                                                cx,
+                                            )
+                                        });
+                                    }),
                                 )
                                 .child(
                                     Button::new(SharedString::from(format!(
@@ -897,19 +985,17 @@ impl Render for Sources {
                                     .small()
                                     .label("移除")
                                     .disabled(busy)
-                                    .on_click(
-                                        move |_, _, cx| {
-                                            let _ = owner2.update(cx, |v, cx| {
-                                                v.request(
-                                                    protocol::Action::Remove {
-                                                        source: remove.clone(),
-                                                    },
-                                                    None,
-                                                    cx,
-                                                )
-                                            });
-                                        },
-                                    ),
+                                    .on_click(move |_, _, cx| {
+                                        let _ = owner2.update(cx, |v, cx| {
+                                            v.request(
+                                                protocol::Action::Remove {
+                                                    source: remove.clone(),
+                                                },
+                                                None,
+                                                cx,
+                                            )
+                                        });
+                                    }),
                                 )
                         })),
                 )

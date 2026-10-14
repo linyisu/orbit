@@ -30,7 +30,11 @@ async fn user_save_preserves_raw_markdown_crlf_and_file_permissions() {
         .unwrap();
     assert_eq!(fs::read_to_string(&path).unwrap(), after);
     assert_eq!(
-        fs::metadata(path).unwrap().permissions().mode() & 0o777,
+        fs::metadata(path)
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
         0o640
     );
     assert_eq!(output.changes[0].before.as_deref(), Some(before));
@@ -82,19 +86,23 @@ async fn user_save_refuses_stale_missing_binary_and_oversized_files() {
         tool.save_user_edit(
             "note".into(),
             "external change".into(),
-            "x".repeat(1024 * 1024 + 1),
+            "x".repeat(1_024 * 1_024 + 1),
             CancellationToken::new()
         )
         .await
         .is_err()
     );
-    assert!(fs::read_dir(root.path()).unwrap().all(|entry| {
-        !entry
+    assert!(
+        fs::read_dir(root.path())
             .unwrap()
-            .file_name()
-            .to_string_lossy()
-            .starts_with(".orbit-write-")
-    }));
+            .all(|entry| {
+                !entry
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".orbit-write-")
+            })
+    );
 }
 
 #[tokio::test]

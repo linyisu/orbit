@@ -6,6 +6,7 @@ impl MigrationName for Migration {
         "00000000000024_subagent_parent"
     }
 }
+
 #[async_trait::async_trait]
 impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
@@ -19,10 +20,20 @@ impl MigrationTrait for Migration {
                             .primary_key(),
                     )
                     .col(ColumnDef::new(Alias::new("parent_session_id")).text())
-                    .col(ColumnDef::new(Alias::new("role")).text().not_null().check(
-                        Expr::col(Alias::new("role")).is_in(["explore", "review", "develop"]),
-                    ))
-                    .col(ColumnDef::new(Alias::new("task")).text().not_null())
+                    .col(
+                        ColumnDef::new(Alias::new("role"))
+                            .text()
+                            .not_null()
+                            .check(
+                                Expr::col(Alias::new("role"))
+                                    .is_in(["explore", "review", "develop"]),
+                            ),
+                    )
+                    .col(
+                        ColumnDef::new(Alias::new("task"))
+                            .text()
+                            .not_null(),
+                    )
                     .foreign_key(
                         ForeignKey::create()
                             .from(Alias::new("agent_sessions_v24"), Alias::new("session_id"))
@@ -49,7 +60,11 @@ impl MigrationTrait for Migration {
         )
         .await?;
         manager
-            .drop_table(Table::drop().table(Alias::new("agent_sessions")).to_owned())
+            .drop_table(
+                Table::drop()
+                    .table(Alias::new("agent_sessions"))
+                    .to_owned(),
+            )
             .await?;
         manager
             .rename_table(
@@ -72,6 +87,7 @@ impl MigrationTrait for Migration {
             .await?;
         Ok(())
     }
+
     async fn down(&self, _: &SchemaManager) -> Result<(), DbErr> {
         super::forward_only()
     }

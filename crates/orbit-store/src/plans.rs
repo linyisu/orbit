@@ -20,6 +20,7 @@ impl Store {
         })
         .await
     }
+
     pub async fn save_planning(
         &self,
         session: &str,

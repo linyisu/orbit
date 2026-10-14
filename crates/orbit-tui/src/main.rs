@@ -1,3 +1,5 @@
+//! Terminal executable startup, argument parsing and workspace connection selection.
+
 use anyhow::Result;
 use clap::{Args, Parser};
 use orbit_tui as tui;
@@ -62,7 +64,9 @@ async fn run_tui(
         return Ok(());
     }
     let mut options = orbit_client::ConnectionOptions::local(
-        std::env::current_dir()?.to_string_lossy().into_owned(),
+        std::env::current_dir()?
+            .to_string_lossy()
+            .into_owned(),
     );
     options.allow_mcp_start = args.allow_mcp_start;
     let mut connection =

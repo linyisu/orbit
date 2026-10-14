@@ -25,7 +25,7 @@ async fn capture(
     let retaining = retained.is_some();
     let mut tail = VecDeque::with_capacity(MAX_OUTPUT);
     let mut total = 0u64;
-    let mut buffer = [0; 4096];
+    let mut buffer = [0; 4_096];
 
     let deadline = async {
         finished.cancelled().await;
@@ -37,14 +37,20 @@ async fn capture(
     loop {
         let count = tokio::select! {
             count = pipe.read(&mut buffer) => count?,
-            _ = &mut deadline => { interrupted = true; 0 },
+            _ = &mut deadline => {
+                interrupted = true;
+                0
+            }
         };
 
         if count == 0 {
             let mut bytes: Vec<u8> = tail.into();
 
             if total > MAX_OUTPUT as u64 {
-                let partial = bytes.iter().take_while(|b| **b & 0xc0 == 0x80).count();
+                let partial = bytes
+                    .iter()
+                    .take_while(|b| **b & 0xc0 == 0x80)
+                    .count();
                 bytes.drain(..partial);
             }
 
@@ -62,7 +68,9 @@ async fn capture(
                 retained_truncated: retaining
                     && (interrupted
                         || retained_error.is_some()
-                        || retained.as_ref().is_some_and(|file| file.written() < total)),
+                        || retained
+                            .as_ref()
+                            .is_some_and(|file| file.written() < total)),
             });
         }
 
@@ -104,12 +112,18 @@ pub(crate) async fn run_child_process(
 
     let finished = CancellationToken::new();
     let stdout = capture(
-        child.stdout.take().expect("piped stdout"),
+        child
+            .stdout
+            .take()
+            .expect("piped stdout"),
         stdout_log,
         finished.clone(),
     );
     let stderr = capture(
-        child.stderr.take().expect("piped stderr"),
+        child
+            .stderr
+            .take()
+            .expect("piped stderr"),
         stderr_log,
         finished.clone(),
     );
@@ -123,19 +137,23 @@ pub(crate) async fn run_child_process(
             _ = token.cancelled() => {
                 cancelled = true;
                 if let Some(id) = process_group {
-                    unsafe { libc::kill(-(id as i32), libc::SIGKILL); }
+                    unsafe {
+                        libc::kill(-(id as i32), libc::SIGKILL);
+                    }
                 }
                 child.start_kill()?;
                 child.wait().await
-            },
+            }
             _ = tokio::time::sleep(timeout) => {
                 timed_out = true;
                 if let Some(id) = process_group {
-                    unsafe { libc::kill(-(id as i32), libc::SIGKILL); }
+                    unsafe {
+                        libc::kill(-(id as i32), libc::SIGKILL);
+                    }
                 }
                 child.start_kill()?;
                 child.wait().await
-            },
+            }
         }?;
 
         if let Some(id) = process_group {
@@ -169,7 +187,10 @@ pub(crate) async fn run_child_process(
 
     Ok(CommandResult {
         exit_code: status.code(),
-        elapsed_ms: started.elapsed().as_millis().min(u64::MAX as u128) as u64,
+        elapsed_ms: started
+            .elapsed()
+            .as_millis()
+            .min(u64::MAX as u128) as u64,
         stdout,
         stderr,
         timed_out,
@@ -217,7 +238,9 @@ mod tests {
     #[tokio::test]
     async fn capture_retains_a_paginated_log_with_a_hard_limit() {
         let directory = tempfile::tempdir().unwrap();
-        let log = OutputLog::create(directory.path()).await.unwrap();
+        let log = OutputLog::create(directory.path())
+            .await
+            .unwrap();
         let id = log.id().to_owned();
         let (_, stdout, _) = log.split();
         let result = capture(
@@ -231,7 +254,12 @@ mod tests {
         assert!(!result.retained_truncated);
         assert_eq!(result.total, 13);
         assert_eq!(
-            std::fs::read_to_string(directory.path().join(format!("{id}.stdout"))).unwrap(),
+            std::fs::read_to_string(
+                directory
+                    .path()
+                    .join(format!("{id}.stdout"))
+            )
+            .unwrap(),
             "first\nsecond\n"
         );
     }
@@ -245,7 +273,10 @@ mod drain_tests {
     #[tokio::test]
     async fn completed_process_does_not_wait_for_a_detached_pipe_owner() {
         let (mut writer, reader) = tokio::io::duplex(64);
-        writer.write_all(b"last output").await.unwrap();
+        writer
+            .write_all(b"last output")
+            .await
+            .unwrap();
         let finished = CancellationToken::new();
         finished.cancel();
         let captured =

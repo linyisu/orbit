@@ -83,7 +83,8 @@ impl WebClient {
                 || url.fragment().is_some()
             {
                 return Err(invalid(
-                    "web.allowed_origins entries must be HTTP(S) origins without credentials, paths, queries or fragments",
+                    "web.allowed_origins entries must be HTTP(S) origins without credentials, \
+                        paths, queries or fragments",
                 ));
             }
             self.allowed_origins

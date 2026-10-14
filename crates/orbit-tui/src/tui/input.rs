@@ -67,8 +67,12 @@ impl InputState {
         if key.kind == KeyEventKind::Release {
             return false;
         }
-        let control = key.modifiers.contains(KeyModifiers::CONTROL);
-        let selecting = key.modifiers.contains(KeyModifiers::SHIFT);
+        let control = key
+            .modifiers
+            .contains(KeyModifiers::CONTROL);
+        let selecting = key
+            .modifiers
+            .contains(KeyModifiers::SHIFT);
         let motion = match (control, key.code) {
             (true, KeyCode::Left) => Some(Motion::WordLeft),
             (true, KeyCode::Right) => Some(Motion::WordRight),
@@ -104,7 +108,11 @@ impl InputState {
                     self.insert("\n")
                 }
 
-                (false, KeyCode::Char(c)) if !key.modifiers.contains(KeyModifiers::ALT) => {
+                (false, KeyCode::Char(c))
+                    if !key
+                        .modifiers
+                        .contains(KeyModifiers::ALT) =>
+                {
                     self.insert(&c.to_string())
                 }
                 _ => return false,
@@ -117,7 +125,11 @@ impl InputState {
     pub fn insert(&mut self, text: &str) {
         let text = Self::normalize(text);
         if !text.is_empty() {
-            self.replace(self.selection().unwrap_or(self.cursor..self.cursor), &text);
+            self.replace(
+                self.selection()
+                    .unwrap_or(self.cursor..self.cursor),
+                &text,
+            );
         }
     }
 
@@ -170,7 +182,8 @@ impl InputState {
     }
 
     pub fn selected_text(&self) -> Option<&str> {
-        self.selection().map(|range| &self.text[range])
+        self.selection()
+            .map(|range| &self.text[range])
     }
 
     pub fn clear_selection(&mut self) {
@@ -191,7 +204,10 @@ impl InputState {
 
     pub(super) fn navigate(&mut self, motion: Motion, width: usize, selecting: bool) {
         let selection = self.selection();
-        let anchor = selecting.then(|| self.selection_anchor.unwrap_or(self.cursor));
+        let anchor = selecting.then(|| {
+            self.selection_anchor
+                .unwrap_or(self.cursor)
+        });
         self.selection_anchor = None;
         if !selecting && let Some(range) = selection {
             match motion {
@@ -395,7 +411,10 @@ impl InputState {
 
     fn vertical(&mut self, down: bool, width: usize, history: bool) {
         let (lines, positions) = self.layout(width);
-        let &(_, column, row) = positions.iter().find(|p| p.0 == self.cursor).unwrap();
+        let &(_, column, row) = positions
+            .iter()
+            .find(|p| p.0 == self.cursor)
+            .unwrap();
         let target = if down {
             row.checked_add(1)
         } else {
@@ -425,7 +444,11 @@ impl InputState {
         let (lines, positions) = self.layout(width);
         let row = row.min(lines.len() - 1);
         if column >= lines[row].width() {
-            let start = positions.iter().find(|p| p.2 == row).unwrap().0;
+            let start = positions
+                .iter()
+                .find(|p| p.2 == row)
+                .unwrap()
+                .0;
             return start + lines[row].len();
         }
 
@@ -442,7 +465,8 @@ impl InputState {
     }
 
     pub fn extend_selection(&mut self, index: usize) {
-        self.selection_anchor.get_or_insert(self.cursor);
+        self.selection_anchor
+            .get_or_insert(self.cursor);
         self.cursor = self.boundary_after(index);
         self.preferred_column = None;
     }
@@ -459,7 +483,9 @@ impl InputState {
                 if !range.contains(&index) {
                     return None;
                 }
-                let width = self.text[index..pair[1].0].width().max(1);
+                let width = self.text[index..pair[1].0]
+                    .width()
+                    .max(1);
                 Some((row, column..column + width))
             })
             .collect()
@@ -467,7 +493,10 @@ impl InputState {
 
     pub fn visual_lines(&self, width: usize) -> (Vec<String>, InputPosition) {
         let (lines, positions) = self.layout(width);
-        let &(_, column, row) = positions.iter().find(|p| p.0 == self.cursor).unwrap();
+        let &(_, column, row) = positions
+            .iter()
+            .find(|p| p.0 == self.cursor)
+            .unwrap();
         (lines, InputPosition { column, row })
     }
 
@@ -492,7 +521,10 @@ impl InputState {
                 lines.push(String::new());
                 column = 0;
             } else {
-                lines.last_mut().unwrap().push_str(grapheme);
+                lines
+                    .last_mut()
+                    .unwrap()
+                    .push_str(grapheme);
                 column += size;
             }
         }
@@ -584,7 +616,9 @@ mod tests {
     #[test]
     fn history_restores_the_draft_cursor_and_detaches_on_any_edit() {
         let mut input = InputState::default();
-        input.history.push("Orbit history".into());
+        input
+            .history
+            .push("Orbit history".into());
         input.set("Orbit draft".into());
         input.set_cursor(5);
         input.history_up();
@@ -702,13 +736,15 @@ mod tests {
 
         input.navigate(Motion::Up, 4, false);
 
-        assert_eq!(input.cursor, 0); // ties choose the preceding boundary
+        // ties choose the preceding boundary
+        assert_eq!(input.cursor, 0);
 
         input.navigate(Motion::Down, 4, false);
 
         assert_eq!(input.visual_lines(4).1, InputPosition { column: 1, row: 1 });
 
-        input.move_right(); // reset the preferred column after horizontal movement
+        // reset the preferred column after horizontal movement
+        input.move_right();
         input.navigate(Motion::Up, 4, false);
 
         assert_eq!(input.visual_lines(4).1, InputPosition { column: 2, row: 0 });

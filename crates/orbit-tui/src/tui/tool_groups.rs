@@ -31,7 +31,11 @@ fn candidate(item: &TranscriptItem) -> Option<(&ToolRow, Value)> {
 fn target(row: &ToolRow) -> Option<Value> {
     let args: Value = serde_json::from_str(&row.arguments).ok()?;
     args.as_object()?;
-    let path = || args["path"].as_str().filter(|path| !path.is_empty());
+    let path = || {
+        args["path"]
+            .as_str()
+            .filter(|path| !path.is_empty())
+    };
     let ids = |key: &str| {
         let mut ids = args[key]
             .as_array()?
@@ -53,12 +57,16 @@ fn target(row: &ToolRow) -> Option<Value> {
         "list_files" => json!([
             args["path"].as_str().unwrap_or("."),
             args["depth"].as_u64().unwrap_or(1),
-            args["include_hidden"].as_bool().unwrap_or(false)
+            args["include_hidden"]
+                .as_bool()
+                .unwrap_or(false)
         ]),
 
         "project_overview" | "code_symbols" => json!([
             args["path"].as_str().unwrap_or("."),
-            args["query"].as_str().unwrap_or_default()
+            args["query"]
+                .as_str()
+                .unwrap_or_default()
         ]),
 
         "search_text" => json!([
@@ -66,14 +74,19 @@ fn target(row: &ToolRow) -> Option<Value> {
             args["query"].as_str()?,
             args["glob"],
             args["regex"].as_bool().unwrap_or(false),
-            args["case_sensitive"].as_bool().unwrap_or(false),
-            args["include_hidden"].as_bool().unwrap_or(false)
+            args["case_sensitive"]
+                .as_bool()
+                .unwrap_or(false),
+            args["include_hidden"]
+                .as_bool()
+                .unwrap_or(false)
         ]),
 
         "web_search" => {
             args["query"].as_str()?;
             let mut key = args;
-            key.as_object_mut()?.remove("max_results");
+            key.as_object_mut()?
+                .remove("max_results");
             key
         }
 
@@ -89,7 +102,9 @@ fn target(row: &ToolRow) -> Option<Value> {
         }
         "read_command_output" => json!([
             args["output_id"].as_str()?,
-            args["stream"].as_str().unwrap_or("stdout")
+            args["stream"]
+                .as_str()
+                .unwrap_or("stdout")
         ]),
 
         "get_command_status" | "wait_commands" | "cancel_commands" => {
@@ -98,15 +113,25 @@ fn target(row: &ToolRow) -> Option<Value> {
         "run_command" => json!([
             args["command"].as_str()?,
             args["cwd"].as_str().unwrap_or("."),
-            args["workspace_access"].as_str().unwrap_or("read"),
-            args["network"].as_str().unwrap_or("deny"),
-            args["background"].as_bool().unwrap_or(false)
+            args["workspace_access"]
+                .as_str()
+                .unwrap_or("read"),
+            args["network"]
+                .as_str()
+                .unwrap_or("deny"),
+            args["background"]
+                .as_bool()
+                .unwrap_or(false)
         ]),
 
         "git_inspect" => json!([
-            args["view"].as_str().unwrap_or("status"),
+            args["view"]
+                .as_str()
+                .unwrap_or("status"),
             args["path"],
-            args["staged"].as_bool().unwrap_or(false)
+            args["staged"]
+                .as_bool()
+                .unwrap_or(false)
         ]),
 
         "git_push" => json!([
@@ -159,9 +184,12 @@ pub(super) fn header(items: &[TranscriptItem], width: u16, framed: bool) -> Link
     };
     let running = items
         .iter()
-        .filter(
-            |item| matches!(item,TranscriptItem::Tool(row) if row.status == ToolStatus::Running),
-        )
+        .filter(|item| {
+            matches!(
+                item,
+                TranscriptItem::Tool(row) if row.status == ToolStatus::Running
+            )
+        })
         .count();
     let content_width = if framed {
         width.saturating_sub(4)
@@ -191,8 +219,14 @@ pub(super) fn header(items: &[TranscriptItem], width: u16, framed: bool) -> Link
         format!(" · {} 次调用", items.len()),
         Style::default().fg(THEME.tool_summary),
     ));
-    let available = usize::from(content_width)
-        .saturating_sub(spans.iter().chain(&suffix).map(Span::width).sum::<usize>() + 3);
+    let available = usize::from(content_width).saturating_sub(
+        spans
+            .iter()
+            .chain(&suffix)
+            .map(Span::width)
+            .sum::<usize>()
+            + 3,
+    );
     let target = super::tool_display::group_target_summary(first, available);
     if !target.is_empty() && available > 0 {
         let tail = matches!(

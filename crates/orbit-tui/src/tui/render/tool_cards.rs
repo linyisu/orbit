@@ -28,13 +28,23 @@ pub(in crate::tui) fn read_file_summary(arguments: &str, output: &str) -> String
     let start = out
         .as_ref()
         .and_then(|v| v["start_line"].as_u64())
-        .or_else(|| args.as_ref().and_then(|v| v["start_line"].as_u64()));
+        .or_else(|| {
+            args.as_ref()
+                .and_then(|v| v["start_line"].as_u64())
+        });
     let end = out
         .as_ref()
         .and_then(|v| v["end_line"].as_u64())
         .or_else(|| {
-            let max = args.as_ref().and_then(|v| v["max_lines"].as_u64())?;
-            Some(start.unwrap_or(1).saturating_add(max).saturating_sub(1))
+            let max = args
+                .as_ref()
+                .and_then(|v| v["max_lines"].as_u64())?;
+            Some(
+                start
+                    .unwrap_or(1)
+                    .saturating_add(max)
+                    .saturating_sub(1),
+            )
         });
 
     match (start, end) {
@@ -66,7 +76,10 @@ fn tool_details(row: &ToolRow, expanded: bool, width: u16) -> Vec<LinkedLine> {
     ]));
 
     if let Some(output) = tool_display::linked_lines(row, expanded, width) {
-        let mut lines: Vec<_> = lines.into_iter().map(LinkedLine::plain).collect();
+        let mut lines: Vec<_> = lines
+            .into_iter()
+            .map(LinkedLine::plain)
+            .collect();
         lines.extend(output);
         lines.push(LinkedLine::plain(Line::from("")));
         return lines;
@@ -85,8 +98,12 @@ fn tool_details(row: &ToolRow, expanded: bool, width: u16) -> Vec<LinkedLine> {
                     .map(|error| format!("\n验证：{error}"))
                     .unwrap_or_default();
 
-                let stdout = value["stdout"].as_str().unwrap_or_default();
-                let stderr = value["stderr"].as_str().unwrap_or_default();
+                let stdout = value["stdout"]
+                    .as_str()
+                    .unwrap_or_default();
+                let stderr = value["stderr"]
+                    .as_str()
+                    .unwrap_or_default();
 
                 if is_running {
                     Some(format!("运行中…\n{stdout}{stderr}{verification_detail}"))
@@ -128,7 +145,9 @@ fn tool_details(row: &ToolRow, expanded: bool, width: u16) -> Vec<LinkedLine> {
                     }
 
                     if text.is_empty()
-                        && let Some(code) = value["exit_code"].as_i64().filter(|c| *c != 0)
+                        && let Some(code) = value["exit_code"]
+                            .as_i64()
+                            .filter(|c| *c != 0)
                     {
                         text = format!("(exit {code})");
                     }
@@ -145,7 +164,9 @@ fn tool_details(row: &ToolRow, expanded: bool, width: u16) -> Vec<LinkedLine> {
                     }
                 ))
             } else {
-                value["content"].as_str().map(str::to_owned)
+                value["content"]
+                    .as_str()
+                    .map(str::to_owned)
             }
         })
         .unwrap_or_else(|| row.output.clone());
@@ -167,7 +188,10 @@ fn tool_details(row: &ToolRow, expanded: bool, width: u16) -> Vec<LinkedLine> {
     lines.push(tool_display::toggle_line(true, width));
 
     lines.push(Line::from(""));
-    lines.into_iter().map(LinkedLine::plain).collect()
+    lines
+        .into_iter()
+        .map(LinkedLine::plain)
+        .collect()
 }
 
 pub(in crate::tui) fn tool_card(row: &ToolRow, expanded: bool, width: u16) -> Vec<Line<'static>> {
@@ -215,7 +239,11 @@ pub(in crate::tui) fn tool_card_layout(row: &ToolRow, expanded: bool, width: u16
     let mut lines = vec![tool_border_line(width, ('╭', '╮'))];
     let title = tool_title_with_links(row, true, inner_width);
     let header = lines.len()..lines.len() + title.len();
-    lines.extend(title.into_iter().map(|line| tool_frame_line(line, width)));
+    lines.extend(
+        title
+            .into_iter()
+            .map(|line| tool_frame_line(line, width)),
+    );
     lines.push(tool_frame_line(LinkedLine::chrome(Line::default()), width));
     let start = lines.len();
     lines.extend(
@@ -278,7 +306,9 @@ fn tool_title_with_summary(
         })
         .unwrap_or("");
     let command = if !expanded
-        && let Some(command) = arguments.as_ref().and_then(|args| args["command"].as_str())
+        && let Some(command) = arguments
+            .as_ref()
+            .and_then(|args| args["command"].as_str())
     {
         tool_display::command_preview(
             command,
@@ -335,16 +365,23 @@ pub(in crate::tui) fn tool_body_with_links(row: &ToolRow, width: u16) -> Vec<Lin
     let toggle = tool_display::toggle_line(true, width);
     let collapse = tool_display::toggle_line(false, width);
     details.retain(|linked| linked.line != toggle && linked.line != collapse);
-    while details
-        .last()
-        .is_some_and(|linked| linked.line.to_string().trim().is_empty())
-    {
+    while details.last().is_some_and(|linked| {
+        linked
+            .line
+            .to_string()
+            .trim()
+            .is_empty()
+    }) {
         details.pop();
     }
 
     let mut lines = Vec::new();
     for mut linked in details {
-        if linked.line.to_string().starts_with("    ") {
+        if linked
+            .line
+            .to_string()
+            .starts_with("    ")
+        {
             let mut remaining = 4;
             for span in &mut linked.line.spans {
                 let count = span
@@ -373,7 +410,8 @@ pub(in crate::tui) fn tool_body_with_links(row: &ToolRow, width: u16) -> Vec<Lin
             }
         }
 
-        line.spans.retain(|span| !span.content.is_empty());
+        line.spans
+            .retain(|span| !span.content.is_empty());
         if markdown::expand_rule(line, width) {
             linked.decorations = std::iter::once(0..line.to_string().len()).collect();
             linked.chrome = true;
@@ -405,7 +443,13 @@ pub(in crate::tui) fn tool_frame_line(linked: LinkedLine, width: u16) -> LinkedL
         .spans
         .first()
         .and_then(|s| s.style.bg)
-        .filter(|bg| linked.line.spans.iter().all(|s| s.style.bg == Some(*bg)));
+        .filter(|bg| {
+            linked
+                .line
+                .spans
+                .iter()
+                .all(|s| s.style.bg == Some(*bg))
+        });
     let (leading, trailing) = if let Some(bg) = line_bg {
         (
             vec![
@@ -442,7 +486,13 @@ pub(in crate::tui) fn default_tool_summary(arguments: &str) -> String {
         .or_else(|| value["query"].as_str())
         .or_else(|| value["url"].as_str())
         .unwrap_or_default();
-    let mut summary = compact_preview(target.lines().next().unwrap_or_default(), 120);
+    let mut summary = compact_preview(
+        target
+            .lines()
+            .next()
+            .unwrap_or_default(),
+        120,
+    );
 
     if let Some(content) = value["content"].as_str() {
         summary.push_str(&format!(

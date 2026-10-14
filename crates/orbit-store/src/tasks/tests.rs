@@ -8,19 +8,36 @@ struct Board {
     first: SessionWriter,
     second: SessionWriter,
 }
+
 impl Board {
     async fn new() -> Self {
         let root = tempfile::tempdir().unwrap();
-        let store = Store::open(root.path().join("orbit.db")).await.unwrap();
+        let store = Store::open(root.path().join("orbit.db"))
+            .await
+            .unwrap();
         let first = store
-            .create(root.path().to_string_lossy().into_owned(), "mock".into())
+            .create(
+                root.path()
+                    .to_string_lossy()
+                    .into_owned(),
+                "mock".into(),
+            )
             .await
             .unwrap();
         let second = store
-            .create(root.path().to_string_lossy().into_owned(), "mock".into())
+            .create(
+                root.path()
+                    .to_string_lossy()
+                    .into_owned(),
+                "mock".into(),
+            )
             .await
             .unwrap();
-        let project = store.session(first.id()).await.unwrap().project_id;
+        let project = store
+            .session(first.id())
+            .await
+            .unwrap()
+            .project_id;
         Self {
             root,
             store,
@@ -29,6 +46,7 @@ impl Board {
             second,
         }
     }
+
     async fn task(&self, title: &str, depends_on: Vec<i64>) -> ProjectTask {
         self.store
             .create_task(
@@ -47,7 +65,9 @@ impl Board {
 #[tokio::test]
 async fn competing_connections_cannot_share_ownership_and_only_owner_or_user_can_release() {
     let board = Board::new().await;
-    let task = board.task("implement parser", vec![]).await;
+    let task = board
+        .task("implement parser", vec![])
+        .await;
     assert!(
         board
             .store
@@ -63,7 +83,9 @@ async fn competing_connections_cannot_share_ownership_and_only_owner_or_user_can
             .await
             .is_err()
     );
-    let other = Store::open(board.store.path()).await.unwrap();
+    let other = Store::open(board.store.path())
+        .await
+        .unwrap();
     let (first, second) = tokio::join!(
         board
             .store
@@ -127,7 +149,10 @@ async fn competing_connections_cannot_share_ownership_and_only_owner_or_user_can
     } else {
         &board.second
     };
-    owner.move_to(&directory, None).await.unwrap();
+    owner
+        .move_to(&directory, None)
+        .await
+        .unwrap();
     let released = board
         .store
         .tasks(&board.project, false)
@@ -143,8 +168,12 @@ async fn competing_connections_cannot_share_ownership_and_only_owner_or_user_can
 async fn dependency_changes_are_atomic_acyclic_project_scoped_and_gate_execution() {
     let board = Board::new().await;
     let first = board.task("implement", vec![]).await;
-    let second = board.task("verify", vec![first.id]).await;
-    let third = board.task("release", vec![second.id]).await;
+    let second = board
+        .task("verify", vec![first.id])
+        .await;
+    let third = board
+        .task("release", vec![second.id])
+        .await;
     assert_eq!(third.blocked_by, [second.id]);
     assert!(
         board
@@ -184,14 +213,26 @@ async fn dependency_changes_are_atomic_acyclic_project_scoped_and_gate_execution
             .await
             .is_err()
     );
-    let current = board.store.tasks(&board.project, false).await.unwrap();
+    let current = board
+        .store
+        .tasks(&board.project, false)
+        .await
+        .unwrap();
     assert_eq!(
-        current.iter().find(|t| t.id == first.id).unwrap().title,
+        current
+            .iter()
+            .find(|t| t.id == first.id)
+            .unwrap()
+            .title,
         "implement"
     );
     let foreign_dir = board.root.path().join("other");
     std::fs::create_dir(&foreign_dir).unwrap();
-    let foreign = board.store.resolve_project(&foreign_dir).await.unwrap();
+    let foreign = board
+        .store
+        .resolve_project(&foreign_dir)
+        .await
+        .unwrap();
     let external = board
         .store
         .create_task(&foreign.id, NewTask::new("external"))
@@ -260,9 +301,15 @@ async fn dependency_changes_are_atomic_acyclic_project_scoped_and_gate_execution
     let reopened = Store::open(board.root.path().join("orbit.db"))
         .await
         .unwrap();
-    let restored = reopened.tasks(&board.project, true).await.unwrap();
+    let restored = reopened
+        .tasks(&board.project, true)
+        .await
+        .unwrap();
     assert_eq!(
-        restored.iter().find(|t| t.id == second.id).unwrap(),
+        restored
+            .iter()
+            .find(|t| t.id == second.id)
+            .unwrap(),
         &claimed
     );
 }
@@ -290,7 +337,10 @@ async fn interrupted_child_finalization_requires_its_lease_and_matching_invocati
         .claim_task(&board.project, task.id, child.id())
         .await
         .unwrap();
-    child.begin("work".into(), "mock".into()).await.unwrap();
+    child
+        .begin("work".into(), "mock".into())
+        .await
+        .unwrap();
     let invocation = board
         .store
         .begin_agent_invocation(
@@ -300,11 +350,19 @@ async fn interrupted_child_finalization_requires_its_lease_and_matching_invocati
         )
         .await
         .unwrap();
-    assert!(board.store.acquire(child.id()).await.is_err());
+    assert!(
+        board
+            .store
+            .acquire(child.id())
+            .await
+            .is_err()
+    );
     let id = child.id().to_owned();
     drop(child);
     let writer = board.store.acquire(&id).await.unwrap();
-    let result = serde_json::json!({"status":"interrupted"});
+    let result = serde_json::json!({
+        "status": "interrupted"
+    });
     // A different child/parent must not finalize this receipt or free its tasks.
     assert!(
         board
@@ -320,7 +378,11 @@ async fn interrupted_child_finalization_requires_its_lease_and_matching_invocati
             .is_err()
     );
     assert_eq!(
-        board.store.tasks(&board.project, false).await.unwrap()[0]
+        board
+            .store
+            .tasks(&board.project, false)
+            .await
+            .unwrap()[0]
             .owner_session_id
             .as_deref(),
         Some(id.as_str())
@@ -349,7 +411,11 @@ async fn interrupted_child_finalization_requires_its_lease_and_matching_invocati
             .is_err()
     );
     assert_eq!(
-        board.store.tasks(&board.project, false).await.unwrap()[0]
+        board
+            .store
+            .tasks(&board.project, false)
+            .await
+            .unwrap()[0]
             .owner_session_id
             .as_deref(),
         Some(board.second.id())
@@ -374,9 +440,15 @@ async fn child_worktrees_share_the_board_and_terminal_receipts_release_unfinishe
         )
         .await
         .unwrap();
-    let directory = board.root.path().join("child-workspace");
+    let directory = board
+        .root
+        .path()
+        .join("child-workspace");
     std::fs::create_dir(&directory).unwrap();
-    let moved = child.move_to(&directory, None).await.unwrap();
+    let moved = child
+        .move_to(&directory, None)
+        .await
+        .unwrap();
     assert_eq!(moved.project_id, board.project);
     let task = board
         .store
@@ -388,7 +460,10 @@ async fn child_worktrees_share_the_board_and_terminal_receipts_release_unfinishe
         .claim_task(&board.project, task.id, child.id())
         .await
         .unwrap();
-    child.begin("work".into(), "mock".into()).await.unwrap();
+    child
+        .begin("work".into(), "mock".into())
+        .await
+        .unwrap();
     let invocation = board
         .store
         .begin_agent_invocation(
@@ -404,7 +479,9 @@ async fn child_worktrees_share_the_board_and_terminal_receipts_release_unfinishe
             None,
             parent.id().into(),
             invocation,
-            serde_json::json!({"status":"cancelled"}),
+            serde_json::json!({
+                "status": "cancelled"
+            }),
         )
         .await
         .unwrap();

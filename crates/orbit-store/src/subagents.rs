@@ -39,6 +39,7 @@ fn agent_query() -> Select<agent_sessions::Entity> {
     agent_sessions::Entity::find()
         .join(JoinType::InnerJoin, agent_sessions::Relation::Session.def())
 }
+
 fn agent_columns(query: Select<agent_sessions::Entity>) -> Select<agent_sessions::Entity> {
     query
         .select_only()
@@ -47,6 +48,7 @@ fn agent_columns(query: Select<agent_sessions::Entity>) -> Select<agent_sessions
         .column(sessions::Column::Model)
         .column(agent_sessions::Column::Task)
 }
+
 fn agent_model((id, role, model, task): (String, String, String, String)) -> SubagentSession {
     SubagentSession {
         id,
@@ -55,6 +57,7 @@ fn agent_model((id, role, model, task): (String, String, String, String)) -> Sub
         task,
     }
 }
+
 impl Store {
     pub async fn subagent_parent(&self, id: &str) -> Result<Option<String>> {
         let id = id.to_owned();
@@ -66,13 +69,18 @@ impl Store {
         })
         .await
     }
+
     pub async fn is_subagent(&self, id: &str) -> Result<bool> {
         let id = id.to_owned();
         self.read_access(move |conn| async move {
-            Ok(agent_sessions::Entity::find_by_id(id).count(&conn).await? > 0)
+            Ok(agent_sessions::Entity::find_by_id(id)
+                .count(&conn)
+                .await?
+                > 0)
         })
         .await
     }
+
     pub async fn create_subagent(
         &self,
         parent: &str,
@@ -123,6 +131,7 @@ impl Store {
             .await?;
         self.acquire(&id).await
     }
+
     pub async fn subagents(&self, parent: &str) -> Result<Vec<SubagentSession>> {
         let parent = parent.to_owned();
         self.read_access(move |conn| async move {
@@ -141,6 +150,7 @@ impl Store {
         })
         .await
     }
+
     pub async fn owned_subagent(&self, parent: &str, id: &str) -> Result<SubagentSession> {
         let parent = parent.to_owned();
         let id = id.to_owned();
@@ -157,6 +167,7 @@ impl Store {
         })
         .await
     }
+
     pub async fn begin_agent_invocation(
         &self,
         parent: &str,
@@ -195,6 +206,7 @@ impl Store {
         })
         .await
     }
+
     pub async fn pending_agent_results(&self, parent: &str) -> Result<Vec<AgentInvocation>> {
         let parent = parent.to_owned();
         self.read_access(move |conn| async move {
@@ -224,13 +236,17 @@ impl Store {
                         id: row.id,
                         agent: agent_model((row.session_id, row.role, row.model, row.task)),
                         call: serde_json::from_str(&row.call)?,
-                        result: row.result.map(|r| serde_json::from_str(&r)).transpose()?,
+                        result: row
+                            .result
+                            .map(|r| serde_json::from_str(&r))
+                            .transpose()?,
                     })
                 })
                 .collect()
         })
         .await
     }
+
     pub async fn queue_agent_message(
         &self,
         parent: &str,
@@ -242,12 +258,15 @@ impl Store {
             "message must contain 1..32768 bytes"
         );
         self.owned_subagent(parent, id).await?;
-        self.queue_session_input(id, content).await
+        self.queue_session_input(id, content)
+            .await
     }
+
     pub async fn queue_session_input(&self, id: &str, content: String) -> Result<i64> {
         self.queue_session_input_with_attachments(id, content, vec![])
             .await
     }
+
     pub async fn queue_session_input_with_attachments(
         &self,
         id: &str,
@@ -255,7 +274,8 @@ impl Store {
         attachments: Vec<orbit_model::types::Attachment>,
     ) -> Result<i64> {
         ensure!(
-            (!content.trim().is_empty() || !attachments.is_empty()) && content.len() <= 1024 * 1024,
+            (!content.trim().is_empty() || !attachments.is_empty())
+                && content.len() <= 1_024 * 1_024,
             "message must contain 1..1048576 bytes"
         );
         let id = id.to_owned();
@@ -282,6 +302,7 @@ impl Store {
         })
         .await
     }
+
     pub async fn pending_agent_messages(
         &self,
         id: &str,
@@ -367,7 +388,10 @@ mod tests {
         .last_insert_id() as i64;
         connection.close().await.unwrap();
         let store = Store::open(&path).await.unwrap();
-        let pending = store.pending_agent_messages(&child_id).await.unwrap();
+        let pending = store
+            .pending_agent_messages(&child_id)
+            .await
+            .unwrap();
         assert_eq!(pending[0].id, child_input);
         assert_eq!(pending[0].content, "pending child");
         let input = store
@@ -376,7 +400,11 @@ mod tests {
             .unwrap();
         assert!(input > child_input);
         assert_eq!(
-            store.pending_agent_messages(&parent_id).await.unwrap()[0].content,
+            store
+                .pending_agent_messages(&parent_id)
+                .await
+                .unwrap()[0]
+                .content,
             "steer root"
         );
         assert!(
@@ -391,7 +419,10 @@ mod tests {
                 .await
                 .is_err()
         );
-        store.delete_session(&parent_id).await.unwrap();
+        store
+            .delete_session(&parent_id)
+            .await
+            .unwrap();
         assert!(
             store
                 .pending_agent_messages(&parent_id)
@@ -404,7 +435,9 @@ mod tests {
     #[tokio::test]
     async fn children_are_scoped_hidden_and_deleted_with_closed_parent() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Store::open(dir.path().join("orbit.db")).await.unwrap();
+        let store = Store::open(dir.path().join("orbit.db"))
+            .await
+            .unwrap();
         let parent = store
             .create(dir.path().display().to_string(), "orbit-model".into())
             .await
@@ -425,8 +458,20 @@ mod tests {
         let child_id = child.id().to_owned();
         let parent_id = parent.id().to_owned();
         assert_eq!(store.list().await.unwrap().len(), 2);
-        assert_eq!(store.subagents(parent.id()).await.unwrap().len(), 1);
-        assert!(store.owned_subagent(other.id(), child.id()).await.is_err());
+        assert_eq!(
+            store
+                .subagents(parent.id())
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(
+            store
+                .owned_subagent(other.id(), child.id())
+                .await
+                .is_err()
+        );
         assert!(
             store
                 .queue_agent_message(other.id(), child.id(), "foreign".into())
@@ -445,10 +490,20 @@ mod tests {
                 .is_err()
         );
         drop(parent);
-        assert!(store.delete_session(&parent_id).await.is_err());
+        assert!(
+            store
+                .delete_session(&parent_id)
+                .await
+                .is_err()
+        );
         assert!(store.session(&parent_id).await.is_ok());
         drop(child);
-        assert!(store.delete_session(&parent_id).await.unwrap());
+        assert!(
+            store
+                .delete_session(&parent_id)
+                .await
+                .unwrap()
+        );
         assert!(store.session(&child_id).await.is_err());
         assert_eq!(store.list().await.unwrap().len(), 1);
     }
@@ -456,7 +511,9 @@ mod tests {
     #[tokio::test]
     async fn completion_and_messages_are_acknowledged_only_with_owned_checkpoints() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Store::open(dir.path().join("orbit.db")).await.unwrap();
+        let store = Store::open(dir.path().join("orbit.db"))
+            .await
+            .unwrap();
         let mut parent = store
             .create(dir.path().display().to_string(), "orbit-model".into())
             .await
@@ -482,7 +539,9 @@ mod tests {
         let call = ToolCall::function(
             "child",
             "spawn_agent",
-            serde_json::json!({"task":"inspect Orbit"}),
+            serde_json::json!({
+                "task": "inspect Orbit"
+            }),
         );
         let invocation = store
             .begin_agent_invocation(parent.id(), child.id(), call.clone())
@@ -532,7 +591,12 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
-        let result = serde_json::json!({"agent_id":child.id(),"invocation_id":invocation,"status":"completed","summary":"done"});
+        let result = serde_json::json!({
+            "agent_id": child.id(),
+            "invocation_id": invocation,
+            "status": "completed",
+            "summary": "done"
+        });
         child
             .finish_subagent(
                 "completed",
@@ -543,7 +607,10 @@ mod tests {
             )
             .await
             .unwrap();
-        let pending = store.pending_agent_results(parent.id()).await.unwrap();
+        let pending = store
+            .pending_agent_results(parent.id())
+            .await
+            .unwrap();
         assert_eq!(pending[0].result, Some(result.clone()));
         let finished = AgentEvent::ToolFinished {
             call,

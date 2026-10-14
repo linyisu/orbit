@@ -5,7 +5,9 @@ use std::collections::HashSet;
 
 async fn request(backend: &Backend, request: Request) -> Result<Response, String> {
     let (result, response) = tokio::sync::oneshot::channel();
-    backend.send(Command::Settings { request, result }).unwrap();
+    backend
+        .send(Command::Settings { request, result })
+        .unwrap();
     tokio::time::timeout(Duration::from_secs(5), response)
         .await
         .unwrap()
@@ -30,7 +32,13 @@ async fn history(backend: &Backend, session: &str, before: Option<i64>) -> Resul
 #[test]
 fn agent_input_history_pages_retry_without_changing_pending_answers_or_other_sessions() {
     let directory = tempfile::tempdir().unwrap();
-    std::fs::write(directory.path().join(".fixture-user-input-history"), "").unwrap();
+    std::fs::write(
+        directory
+            .path()
+            .join(".fixture-user-input-history"),
+        "",
+    )
+    .unwrap();
     std::fs::write(
         directory
             .path()
@@ -63,16 +71,25 @@ fn agent_input_history_pages_retry_without_changing_pending_answers_or_other_ses
             })
             .unwrap();
         let Event::Response(Response::Page(page)) = until(&mut events, |event| {
-            matches!(event,
-            Event::Response(Response::Page(page)) if page.user_inputs.first().is_some_and(|record|
-                record.status == Status::Pending && record.form.questions.len() == 2))
+            matches!(
+                event,
+                Event::Response(Response::Page(page))
+                    if page
+                        .user_inputs
+                        .first()
+                        .is_some_and(|record| {
+                            record.status == Status::Pending && record.form.questions.len() == 2
+                        })
+            )
         })
         .await
         else {
             unreachable!()
         };
         let pending = page.user_inputs[0].clone();
-        let first = history(&backend, "demo", None).await.unwrap();
+        let first = history(&backend, "demo", None)
+            .await
+            .unwrap();
         assert_eq!(first.before, None);
         assert_eq!(first.records.len(), 20);
         assert_eq!(first.records[0], pending);
@@ -83,11 +100,15 @@ fn agent_input_history_pages_retry_without_changing_pending_answers_or_other_ses
                 .unwrap_err()
                 .contains("请重试")
         );
-        let second = history(&backend, "demo", Some(cursor)).await.unwrap();
+        let second = history(&backend, "demo", Some(cursor))
+            .await
+            .unwrap();
         assert_eq!(second.before, Some(cursor));
         assert_eq!(second.records.len(), 20);
         assert!(second.next.unwrap() < cursor);
-        let last = history(&backend, "demo", second.next).await.unwrap();
+        let last = history(&backend, "demo", second.next)
+            .await
+            .unwrap();
         assert_eq!(last.records.len(), 6);
         assert!(last.next.is_none());
         let ids: HashSet<_> = first
@@ -99,7 +120,9 @@ fn agent_input_history_pages_retry_without_changing_pending_answers_or_other_ses
             .collect();
         assert_eq!(ids.len(), 46);
         assert_eq!(last.records.last().unwrap().id, "history-request-1");
-        let other = history(&backend, "navigation", None).await.unwrap();
+        let other = history(&backend, "navigation", None)
+            .await
+            .unwrap();
         assert!(other.records.is_empty() && other.next.is_none());
         let Response::Page(page) = request(
             &backend,
@@ -137,7 +160,9 @@ fn agent_input_history_pages_retry_without_changing_pending_answers_or_other_ses
         )
         .await
         .unwrap();
-        let refreshed = history(&backend, "demo", None).await.unwrap();
+        let refreshed = history(&backend, "demo", None)
+            .await
+            .unwrap();
         assert_eq!(refreshed.next, first.next);
         assert_eq!(refreshed.records[0].id, pending.id);
         assert_eq!(refreshed.records[0].status, Status::Answered);

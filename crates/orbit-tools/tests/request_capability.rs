@@ -21,7 +21,9 @@ async fn reserved_paths_never_prompt_and_nested_missing_paths_suggest_an_eligibl
                     "reserved",
                     "request_capability",
                     json!({
-                        "path": path, "access": "read", "reason": "test reserved paths"
+                        "path": path,
+                        "access": "read",
+                        "reason": "test reserved paths"
                     }),
                 ),
                 CancellationToken::new(),
@@ -41,9 +43,24 @@ async fn reserved_paths_never_prompt_and_nested_missing_paths_suggest_an_eligibl
         ));
     }
 
-    let error = tool.execute(ToolCall::function("missing", "request_capability", json!({
-        "path": outside.path().join("missing/nested/file.txt"), "access": "read_write", "reason": "test missing parents"
-    })), CancellationToken::new()).await.unwrap_err().to_string();
+    let error = tool
+        .execute(
+            ToolCall::function(
+                "missing",
+                "request_capability",
+                json!({
+                    "path": outside
+                        .path()
+                        .join("missing/nested/file.txt"),
+                    "access": "read_write",
+                    "reason": "test missing parents"
+                }),
+            ),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap_err()
+        .to_string();
     assert!(error.contains(&format!(
         "existing eligible parent '{}'",
         outside.path().display()
@@ -61,7 +78,9 @@ async fn request_capability_prompts_approval_and_enables_subsequent_reads() {
     let outside_temp = tempfile::tempdir().unwrap();
 
     let workspace = Workspace::new(ws_temp.path()).unwrap();
-    let outside_file = outside_temp.path().join("external_data.txt");
+    let outside_file = outside_temp
+        .path()
+        .join("external_data.txt");
     fs::write(&outside_file, "external secret contents\n").unwrap();
 
     let (sender, mut receiver) = approval::channel();
@@ -73,14 +92,20 @@ async fn request_capability_prompts_approval_and_enables_subsequent_reads() {
             ToolCall::function(
                 "call_1",
                 "read_file",
-                json!({ "path": outside_file.display().to_string() }),
+                json!({
+                    "path": outside_file.display().to_string()
+                }),
             ),
             CancellationToken::new(),
         )
         .await
         .unwrap_err();
 
-    assert!(initial_err.to_string().contains("permission denied"));
+    assert!(
+        initial_err
+            .to_string()
+            .contains("permission denied")
+    );
 
     let req_file = outside_file.display().to_string();
     let task = tokio::spawn(async move {
@@ -88,7 +113,11 @@ async fn request_capability_prompts_approval_and_enables_subsequent_reads() {
             ToolCall::function(
                 "call_2",
                 "request_capability",
-                json!({ "path": req_file, "access": "read", "reason": "Need to inspect external configuration data" }),
+                json!({
+                    "path": req_file,
+                    "access": "read",
+                    "reason": "Need to inspect external configuration data"
+                }),
             ),
             CancellationToken::new(),
         )
@@ -125,7 +154,9 @@ async fn request_capability_prompts_approval_and_enables_subsequent_reads() {
             ToolCall::function(
                 "call_3",
                 "read_file",
-                json!({ "path": outside_file.display().to_string() }),
+                json!({
+                    "path": outside_file.display().to_string()
+                }),
             ),
             CancellationToken::new(),
         )
@@ -143,7 +174,9 @@ async fn request_capability_handles_user_denial_and_cancellation() {
     let outside_temp = tempfile::tempdir().unwrap();
 
     let workspace = Workspace::new(ws_temp.path()).unwrap();
-    let outside_file = outside_temp.path().join("forbidden.txt");
+    let outside_file = outside_temp
+        .path()
+        .join("forbidden.txt");
     fs::write(&outside_file, "top secret\n").unwrap();
 
     let (sender, mut receiver) = approval::channel();
@@ -158,7 +191,11 @@ async fn request_capability_handles_user_denial_and_cancellation() {
                 ToolCall::function(
                     "call_deny",
                     "request_capability",
-                    json!({ "path": req_file, "access": "write", "reason": "Want to edit system files" }),
+                    json!({
+                        "path": req_file,
+                        "access": "write",
+                        "reason": "Want to edit system files"
+                    }),
                 ),
                 CancellationToken::new(),
             )
@@ -171,7 +208,10 @@ async fn request_capability_handles_user_denial_and_cancellation() {
 
     let err = task.await.unwrap().unwrap_err();
 
-    assert!(err.to_string().contains("permission denied"));
+    assert!(
+        err.to_string()
+            .contains("permission denied")
+    );
 
     let (sender2, _receiver2) = approval::channel();
     let tool2 = RequestCapability::new(workspace, sender2);
@@ -183,7 +223,11 @@ async fn request_capability_handles_user_denial_and_cancellation() {
             ToolCall::function(
                 "call_cancel",
                 "request_capability",
-                json!({ "path": outside_file.display().to_string(), "access": "read", "reason": "cancelled" }),
+                json!({
+                    "path": outside_file.display().to_string(),
+                    "access": "read",
+                    "reason": "cancelled"
+                }),
             ),
             token,
         )
@@ -208,21 +252,32 @@ async fn request_capability_validates_arguments() {
             ToolCall::function(
                 "bad_path",
                 "request_capability",
-                json!({ "path": "   ", "access": "read", "reason": "test" }),
+                json!({
+                    "path": "   ",
+                    "access": "read",
+                    "reason": "test"
+                }),
             ),
             CancellationToken::new(),
         )
         .await
         .unwrap_err();
 
-    assert!(err.to_string().contains("path must not be empty"));
+    assert!(
+        err.to_string()
+            .contains("path must not be empty")
+    );
 
     let err2 = tool
         .execute(
             ToolCall::function(
                 "bad_access",
                 "request_capability",
-                json!({ "path": "/tmp", "access": "execute", "reason": "test" }),
+                json!({
+                    "path": "/tmp",
+                    "access": "execute",
+                    "reason": "test"
+                }),
             ),
             CancellationToken::new(),
         )
@@ -239,14 +294,21 @@ async fn request_capability_validates_arguments() {
             ToolCall::function(
                 "bad_reason",
                 "request_capability",
-                json!({ "path": "/tmp", "access": "read", "reason": "  " }),
+                json!({
+                    "path": "/tmp",
+                    "access": "read",
+                    "reason": "  "
+                }),
             ),
             CancellationToken::new(),
         )
         .await
         .unwrap_err();
 
-    assert!(err3.to_string().contains("reason must not be empty"));
+    assert!(
+        err3.to_string()
+            .contains("reason must not be empty")
+    );
 }
 
 #[tokio::test]
@@ -267,7 +329,11 @@ async fn request_capability_supports_read_write_access() {
             ToolCall::function(
                 "call_rw",
                 "request_capability",
-                json!({ "path": req_file, "access": "read_write", "reason": "Modify external config" }),
+                json!({
+                    "path": req_file,
+                    "access": "read_write",
+                    "reason": "Modify external config"
+                }),
             ),
             CancellationToken::new(),
         )
@@ -313,11 +379,18 @@ async fn ordinary_system_file_requires_user_consent_and_grants_only_requested_ac
         let request = ToolCall::function(
             "system",
             "request_capability",
-            json!({"path": path, "access": "read", "reason": "Inspect OS version"}),
+            json!({
+                "path": path,
+                "access": "read",
+                "reason": "Inspect OS version"
+            }),
         );
         let task = tokio::spawn({
             let tool = tool.clone();
-            async move { tool.execute(request, CancellationToken::new()).await }
+            async move {
+                tool.execute(request, CancellationToken::new())
+                    .await
+            }
         });
         let approval = tokio::time::timeout(std::time::Duration::from_secs(2), receiver.recv())
             .await

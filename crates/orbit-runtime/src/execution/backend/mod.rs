@@ -1,6 +1,6 @@
 mod native;
 
-use std::pin::Pin;
+use std::{future::Future, pin::Pin};
 
 use tokio_util::sync::CancellationToken;
 
@@ -33,5 +33,5 @@ pub trait ExecutionBackend: Send + Sync {
         env: &'a ExecutionEnvironment,
         output_log: Option<OutputLog>,
         cancellation: CancellationToken,
-    ) -> Pin<Box<dyn std::future::Future<Output = Result<ExecutionResult, RuntimeError>> + Send + 'a>>;
+    ) -> Pin<Box<dyn Future<Output = Result<ExecutionResult, RuntimeError>> + Send + 'a>>;
 }

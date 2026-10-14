@@ -19,20 +19,29 @@ impl FileActivity {
         let Ok(value) = serde_json::from_str::<serde_json::Value>(output) else {
             return;
         };
-        let Some(path) = value.get("path").and_then(|v| v.as_str()) else {
+        let Some(path) = value
+            .get("path")
+            .and_then(|v| v.as_str())
+        else {
             return;
         };
 
         match call.function.name.as_str() {
             "read_file"
-                if value.get("content").is_some_and(|v| v.is_string())
-                    && value.get("total_lines").is_some_and(|v| v.is_u64()) =>
+                if value
+                    .get("content")
+                    .is_some_and(|v| v.is_string())
+                    && value
+                        .get("total_lines")
+                        .is_some_and(|v| v.is_u64()) =>
             {
                 self.read.insert(path.into());
             }
 
             "write_file" | "edit_file"
-                if value.get("written_bytes").is_some_and(|v| v.is_u64()) =>
+                if value
+                    .get("written_bytes")
+                    .is_some_and(|v| v.is_u64()) =>
             {
                 self.written.insert(path.into());
             }
@@ -42,8 +51,10 @@ impl FileActivity {
     }
 
     pub fn merge(&mut self, other: &Self) {
-        self.read.extend(other.read.iter().cloned());
-        self.written.extend(other.written.iter().cloned());
+        self.read
+            .extend(other.read.iter().cloned());
+        self.written
+            .extend(other.written.iter().cloned());
     }
 
     pub fn from_history(history: &[ChatMessage]) -> Self {
@@ -126,7 +137,13 @@ impl TaskSummary {
             .and_then(|v| v.strip_suffix("```"))
             .unwrap_or(text)
             .trim();
-        let summary: Self = serde_json::from_str(text).map_err(|_| AgentError::Compaction("summary must contain the required structured task fields; original context preserved".into()))?;
+        let summary: Self = serde_json::from_str(text).map_err(|_| {
+            AgentError::Compaction(
+                "summary must \
+            contain the required structured task fields; original context preserved"
+                    .into(),
+            )
+        })?;
 
         if summary.goal.trim().is_empty() {
             return Err(AgentError::Compaction(

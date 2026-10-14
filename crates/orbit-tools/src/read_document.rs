@@ -13,12 +13,12 @@ mod worker;
 
 pub use vision::render_worker;
 
-const MAX_FILE_BYTES: u64 = 256 * 1024 * 1024;
+const MAX_FILE_BYTES: u64 = 256 * 1_024 * 1_024;
 const DEFAULT_PAGE_CHARS: usize = 20_000;
 const MAX_PAGE_CHARS: usize = 60_000;
 const CHAR_INDEX_STRIDE: usize = 4_096;
 const MAX_CACHE_ENTRIES: usize = 4;
-const MAX_CACHE_BYTES: usize = 64 * 1024 * 1024;
+const MAX_CACHE_BYTES: usize = 64 * 1_024 * 1_024;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -60,7 +60,11 @@ fn page_range(start: Option<u32>, end: Option<u32>) -> Result<(u32, u32), String
     let start = start.unwrap_or(1);
     let end = end.unwrap_or_else(|| start.saturating_add(19));
     if start == 0 || end < start || end - start >= 100 {
-        return Err("PDF pages are 1-based; end_page must be >= start_page, with at most 100 pages per call".into());
+        return Err(
+            "PDF pages are 1-based; end_page must be >= start_page, with at most 100 pages \
+            per call"
+                .into(),
+        );
     }
     Ok((start, end))
 }
@@ -127,17 +131,70 @@ impl Tool for ReadDocument {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition::function(
             "read_document",
-            "Preferred tool for reading local PDFs and office documents: use this before shell commands, pdftotext, Python packages or tool discovery. Reads documents up to 256 MiB inside the workspace (or outside paths granted via request_capability). PDFs use 1-based start_page/end_page (default first 20 pages, at most 100 per call); extraction is restricted to that range. Supports PDF, Word, PowerPoint, Excel, OpenDocument, RTF, EPUB and CSV. Use read_file for source code and ordinary text. Mixed text/image PDFs return available text with physical page headings and per-page status in pdf.pages. Image-only, empty and undecodable portions are marked in place instead of failing the whole range. pdf.partial describes incomplete TEXT extraction. With a vision model, images=auto attaches up to four rendered physical pages containing images, undecodable text or no extracted text. Read those image attachments directly. Use images=always for diagrams/layout missed by text detection, or off for text only. pdf.vision lists attached pages, failures, and next_image_start_page: continue with image_start_page in the SAME page range until it is null. OCR is not performed; rendering alone does not mean the page has been understood. Do not treat missing text or an unreadable fragment as evidence that the original page lacks that information. Conversion is local and creates no project files. Continue with next_start_char and the SAME page range while truncated; then use next_start_page for the next PDF range. start_char/max_chars paginate the converted text within that range.",
+            "Preferred tool for reading local PDFs and office documents: use this before shell \
+                commands, pdftotext, Python packages or tool discovery. Reads documents up to 256 \
+                MiB inside the workspace (or outside paths granted via request_capability). PDFs \
+                use 1-based start_page/end_page (default first 20 pages, at most 100 per call); \
+                extraction is restricted to that range. Supports PDF, Word, PowerPoint, Excel, \
+                OpenDocument, RTF, EPUB and CSV. Use read_file for source code and ordinary text. \
+                Mixed text/image PDFs return available text with physical page headings and \
+                per-page status in pdf.pages. Image-only, empty and undecodable portions are \
+                marked in place instead of failing the whole range. pdf.partial describes \
+                incomplete TEXT extraction. With a vision model, images=auto attaches up to four \
+                rendered physical pages containing images, undecodable text or no extracted text. \
+                Read those image attachments directly. Use images=always for diagrams/layout \
+                missed by text detection, or off for text only. pdf.vision lists attached pages, \
+                failures, and next_image_start_page: continue with image_start_page in the SAME \
+                page range until it is null. OCR is not performed; rendering alone does not mean \
+                the page has been understood. Do not treat missing text or an unreadable fragment \
+                as evidence that the original page lacks that information. Conversion is local \
+                and creates no project files. Continue with next_start_char and the SAME page \
+                range while truncated; then use next_start_page for the next PDF range. \
+                start_char/max_chars paginate the converted text within that range.",
             json!({
                 "type": "object",
                 "properties": {
-                    "path": { "type": "string", "description": "Path relative to the workspace root, or an outside path granted via request_capability" },
-                    "start_page": { "type": "integer", "minimum": 1, "description": "PDF only: first physical page (1-based), default 1" },
-                    "end_page": { "type": "integer", "minimum": 1, "description": "PDF only: last physical page inclusive, default start_page + 19; at most 100 pages" },
-                    "images": { "type": "string", "enum": ["auto", "always", "off"], "default": "auto", "description": "PDF page images: auto for images or missing/undecodable text; always for every requested page (including vector diagrams); off for text only. Requires vision model." },
-                    "image_start_page": { "type": "integer", "minimum": 1, "description": "Resume page images using pdf.vision.next_image_start_page, keeping start_page/end_page unchanged; at most 4 images per call." },
-                    "start_char": { "type": "integer", "minimum": 0, "default": 0 },
-                    "max_chars": { "type": "integer", "minimum": 1, "maximum": MAX_PAGE_CHARS, "default": DEFAULT_PAGE_CHARS }
+                    "path": {
+                        "type": "string",
+                        "description": "Path relative to the workspace root, or an outside path \
+                            granted via request_capability"
+                    },
+                    "start_page": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "PDF only: first physical page (1-based), default 1"
+                    },
+                    "end_page": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "PDF only: last physical page inclusive, default start_page \
+                            + 19; at most 100 pages"
+                    },
+                    "images": {
+                        "type": "string",
+                        "enum": ["auto", "always", "off"],
+                        "default": "auto",
+                        "description": "PDF page images: auto for images or missing/undecodable \
+                            text; always for every requested page (including vector diagrams); \
+                            off for text only. Requires vision model."
+                    },
+                    "image_start_page": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "Resume page images using pdf.vision.next_image_start_page, \
+                            keeping start_page/end_page unchanged; at most 4 images per call."
+                    },
+                    "start_char": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "default": 0
+                    },
+                    "max_chars": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": MAX_PAGE_CHARS,
+                        "default": DEFAULT_PAGE_CHARS
+                    }
                 },
                 "required": ["path"],
                 "additionalProperties": false
@@ -216,8 +273,9 @@ impl Tool for ReadDocument {
                 _ = cancellation.cancelled() => return Err(ToolError::Cancelled),
                 guard = self.cache.lock() => guard,
             };
-            let (format, markdown) = if let Some(index) =
-                cache.iter().position(|(k, _, _)| k == &key)
+            let (format, markdown) = if let Some(index) = cache
+                .iter()
+                .position(|(k, _, _)| k == &key)
             {
                 let entry = cache.remove(index).unwrap();
                 let result = (entry.1.clone(), entry.2.clone());
@@ -231,7 +289,8 @@ impl Tool for ReadDocument {
                     && (arguments.start_page.is_some() || arguments.end_page.is_some())
                 {
                     return Err(invalid(
-                        "start_page/end_page are supported only for PDFs; use start_char/max_chars for other documents",
+                        "start_page/end_page are supported only for PDFs; use start_char/max_chars \
+                            for other documents",
                     ));
                 }
                 let document = if let Some(worker) = &self.worker {
@@ -250,12 +309,13 @@ impl Tool for ReadDocument {
                         convert(&bytes, format, arguments.start_page, arguments.end_page)
                             .map_err(failed)?
                     }
+
                     #[cfg(not(test))]
                     {
                         return Err(failed("document worker executable is unavailable"));
                     }
                 };
-                if document.text.len() > 64 * 1024 * 1024 {
+                if document.text.len() > 64 * 1_024 * 1_024 {
                     return Err(failed("converted document exceeds 64 MiB"));
                 }
                 let format = format!("{format:?}").to_ascii_lowercase();
@@ -311,13 +371,15 @@ fn read_source(
     cancellation: CancellationToken,
 ) -> Result<(Vec<u8>, String), ToolError> {
     use std::os::unix::fs::MetadataExt;
-    let mut file = workspace.authorize_read(Path::new(path)).map_err(failed)?;
+    let mut file = workspace
+        .authorize_read(Path::new(path))
+        .map_err(failed)?;
     let before = file.metadata().map_err(failed)?;
     if before.len() > MAX_FILE_BYTES {
         return Err(failed("document exceeds 256 MiB"));
     }
     let mut bytes = Vec::new();
-    let mut buffer = [0u8; 64 * 1024];
+    let mut buffer = [0u8; 64 * 1_024];
     loop {
         if cancellation.is_cancelled() {
             return Err(ToolError::Cancelled);
@@ -356,7 +418,10 @@ fn read_source(
         .and_then(|s| s.to_str())
         .unwrap_or("")
         .to_ascii_lowercase();
-    if !extension.bytes().all(|b| b.is_ascii_alphanumeric()) {
+    if !extension
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric())
+    {
         return Err(invalid("invalid document extension"));
     }
     Ok((bytes, extension))
@@ -369,8 +434,10 @@ async fn convert_worker(
     pages: (Option<u32>, Option<u32>),
     cancellation: CancellationToken,
 ) -> Result<Document, ToolError> {
-    let arguments =
-        [pages.0, pages.1].map(|page| page.map(|p| p.to_string()).unwrap_or_else(|| "-".into()));
+    let arguments = [pages.0, pages.1].map(|page| {
+        page.map(|p| p.to_string())
+            .unwrap_or_else(|| "-".into())
+    });
     let temporary_output = worker::run(
         worker,
         bytes,
@@ -380,8 +447,13 @@ async fn convert_worker(
         cancellation,
     )
     .await?;
-    let file = std::fs::File::open(temporary_output.path().join("result.json")).map_err(failed)?;
-    if file.metadata().map_err(failed)?.len() > 64 * 1024 * 1024 {
+    let file = std::fs::File::open(
+        temporary_output
+            .path()
+            .join("result.json"),
+    )
+    .map_err(failed)?;
+    if file.metadata().map_err(failed)?.len() > 64 * 1_024 * 1_024 {
         return Err(failed("document worker output exceeds 64 MiB"));
     }
     serde_json::from_reader(file).map_err(failed)
@@ -394,7 +466,11 @@ pub fn document_worker(
     start: Option<u32>,
     end: Option<u32>,
 ) -> Result<(), String> {
-    if std::fs::metadata(input).map_err(|e| e.to_string())?.len() > MAX_FILE_BYTES {
+    if std::fs::metadata(input)
+        .map_err(|e| e.to_string())?
+        .len()
+        > MAX_FILE_BYTES
+    {
         return Err("document exceeds 256 MiB".into());
     }
     let bytes = std::fs::read(input).map_err(|e| e.to_string())?;
@@ -402,7 +478,7 @@ pub fn document_worker(
         .or_else(|| anydoc::Format::from_path(input))
         .ok_or("unsupported document format")?;
     let document = convert(&bytes, format, start, end)?;
-    if document.text.len() > 64 * 1024 * 1024 {
+    if document.text.len() > 64 * 1_024 * 1_024 {
         return Err("converted document exceeds 64 MiB".into());
     }
     let output_file = std::fs::File::create(output).map_err(|e| e.to_string())?;
@@ -456,8 +532,13 @@ fn page(arguments: &Arguments, format: &str, markdown: &Converted) -> Result<Str
         "truncated": next < total_chars,
         "next_start_char": (next < total_chars).then_some(next),
         "pdf": markdown.pdf,
-        "next_start_page": markdown.pdf.as_ref().and_then(|pdf|
-            (next >= total_chars && pdf.end_page < pdf.total_pages).then_some(pdf.end_page + 1)),
+        "next_start_page": markdown
+            .pdf
+            .as_ref()
+            .and_then(
+                |pdf| (next >= total_chars && pdf.end_page < pdf.total_pages)
+                    .then_some(pdf.end_page + 1)
+            ),
         "source_kind": "local_document_markdown"
     })
     .to_string())
@@ -481,8 +562,10 @@ mod tests {
         let mut objects = vec![
             "<< /Type /Catalog /Pages 2 0 R >>".into(),
             "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>".into(),
-            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >> /Contents 6 0 R >>".into(),
-            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >> /Contents 7 0 R >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R \
+                >> >> /Contents 6 0 R >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R \
+                >> >> /Contents 7 0 R >>".into(),
             "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".into(),
             stream("First chapter: compiler structure and syntax analysis."),
             stream("Second chapter: language grammar and parsing techniques."),
@@ -498,10 +581,15 @@ mod tests {
                 drawing.len()
             );
             let mixed = format!(
-                "{drawing} BT /F1 12 Tf 50 700 Td (Second chapter: readable text beside an image.) Tj ET"
+                "{drawing} BT /F1 12 Tf 50 700 Td (Second chapter: readable text beside an image.) \
+                    Tj ET"
             );
             objects[6] = format!("<< /Length {} >>\nstream\n{mixed}\nendstream", mixed.len());
-            objects.push("<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Length 3 >>\nstream\nabc\nendstream".into());
+            objects.push(
+                "<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace \
+                /DeviceRGB /BitsPerComponent 8 /Length 3 >>\nstream\nabc\nendstream"
+                    .into(),
+            );
         }
         let mut bytes = b"%PDF-1.4\n".to_vec();
         let mut offsets = Vec::new();
@@ -544,8 +632,16 @@ mod tests {
         assert_eq!(metadata["has_encoding_issues"], false);
         let image_only =
             convert(&pdf_fixture(true), anydoc::Format::Pdf, Some(1), Some(1)).unwrap();
-        assert!(image_only.text.contains("No selectable text"));
-        assert!(!image_only.text.contains("Second chapter"));
+        assert!(
+            image_only
+                .text
+                .contains("No selectable text")
+        );
+        assert!(
+            !image_only
+                .text
+                .contains("Second chapter")
+        );
     }
 
     #[test]
@@ -590,16 +686,18 @@ mod tests {
         assert_eq!(page_range(None, None).unwrap(), (1, 20));
         let dir = tempdir().unwrap();
         let file = std::fs::File::create(dir.path().join("large.pdf")).unwrap();
-        file.set_len(33 * 1024 * 1024).unwrap();
+        file.set_len(33 * 1_024 * 1_024)
+            .unwrap();
         let workspace = Workspace::new(dir.path()).unwrap();
         assert_eq!(
             read_source(workspace.clone(), "large.pdf", CancellationToken::new())
                 .unwrap()
                 .0
                 .len(),
-            33 * 1024 * 1024
+            33 * 1_024 * 1_024
         );
-        file.set_len(MAX_FILE_BYTES + 1).unwrap();
+        file.set_len(MAX_FILE_BYTES + 1)
+            .unwrap();
         assert!(
             read_source(workspace, "large.pdf", CancellationToken::new())
                 .unwrap_err()
@@ -621,16 +719,33 @@ mod tests {
         let call = ToolCall::function(
             "doc-1",
             "read_document",
-            json!({ "path": "data.csv", "max_chars": 12 }),
+            json!({
+                "path": "data.csv",
+                "max_chars": 12
+            }),
         );
-        let first: serde_json::Value =
-            serde_json::from_str(&tool.execute(call, CancellationToken::new()).await.unwrap())
-                .unwrap();
+        let first: serde_json::Value = serde_json::from_str(
+            &tool
+                .execute(call, CancellationToken::new())
+                .await
+                .unwrap(),
+        )
+        .unwrap();
 
         assert_eq!(first["source_kind"], "local_document_markdown");
         assert_eq!(first["truncated"], true);
-        assert!(first["next_start_char"].as_u64().unwrap() > 0);
-        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
+        assert!(
+            first["next_start_char"]
+                .as_u64()
+                .unwrap()
+                > 0
+        );
+        assert_eq!(
+            std::fs::read_dir(directory.path())
+                .unwrap()
+                .count(),
+            1
+        );
     }
 
     #[test]
@@ -639,7 +754,7 @@ mod tests {
             text: "中a".repeat(10_000),
             pdf: None,
         });
-        for start in [0, 4095, 4096, 4097, 19990, 20000] {
+        for start in [0, 4_095, 4_096, 4_097, 19_990, 20_000] {
             let output: serde_json::Value = serde_json::from_str(
                 &page(
                     &Arguments {

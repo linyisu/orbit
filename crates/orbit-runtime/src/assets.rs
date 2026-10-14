@@ -10,7 +10,8 @@ use std::{
     sync::Arc,
 };
 
-pub const MAX_ASSET_DIRECTORY_BYTES: u64 = 512 * 1024 * 1024;
+/// Total persisted attachment byte budget for one database-owned asset directory.
+pub const MAX_ASSET_DIRECTORY_BYTES: u64 = 512 * 1_024 * 1_024;
 
 #[derive(Clone)]
 pub struct AssetDirectory {
@@ -33,12 +34,16 @@ impl AssetDirectory {
             root: database.with_extension("attachments"),
         }
     }
+
     pub fn path(&self) -> &Path {
         &self.root
     }
 
     pub fn lock(&self) -> Result<AssetDirectoryLock> {
-        match std::fs::DirBuilder::new().mode(0o700).create(&self.root) {
+        match std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&self.root)
+        {
             Ok(()) => (),
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => (),
             Err(error) => return Err(error.into()),
@@ -91,7 +96,11 @@ impl AssetDirectory {
             .read(&path, bytes.len())
             .is_ok_and(|existing| existing == bytes);
         if !valid {
-            let size: u64 = lock.files()?.into_iter().map(|(_, size)| size).sum();
+            let size: u64 = lock
+                .files()?
+                .into_iter()
+                .map(|(_, size)| size)
+                .sum();
             ensure!(
                 size.saturating_add(bytes.len() as u64) <= MAX_ASSET_DIRECTORY_BYTES,
                 "图片附件已达到 512 MiB 容量上限；请删除不需要的会话并清理附件后重试，已有会话图片不会被自动淘汰"
@@ -110,7 +119,9 @@ impl AssetDirectory {
     }
 
     pub fn read(&self, path: &Path, max_bytes: usize) -> Result<Vec<u8>> {
-        let name = self.file_name(path).context("not an image asset")?;
+        let name = self
+            .file_name(path)
+            .context("not an image asset")?;
         let metadata = self.root.symlink_metadata()?;
         ensure!(
             metadata.is_dir() && !metadata.file_type().is_symlink(),
@@ -123,7 +134,8 @@ impl AssetDirectory {
             "image exceeds byte limit"
         );
         let mut bytes = Vec::new();
-        file.take(max_bytes as u64 + 1).read_to_end(&mut bytes)?;
+        file.take(max_bytes as u64 + 1)
+            .read_to_end(&mut bytes)?;
         ensure!(bytes.len() <= max_bytes, "image exceeds byte limit");
         ensure!(
             hash(&bytes) == name.split_once('.').unwrap().0,
@@ -141,9 +153,9 @@ fn hash(bytes: &[u8]) -> String {
 }
 
 impl AssetDirectoryLock {
+    /// Imports hold this directory lock until rename. Therefore no pending file can belong to a
+    /// live writer while we hold it.
     pub fn prune_pending(&self) -> Result<()> {
-        // Imports hold this directory lock until rename. Therefore no pending
-        // file can belong to a live writer while we hold it.
         for entry in std::fs::read_dir(self.directory.path())? {
             let entry = entry?;
             if !entry
@@ -170,7 +182,11 @@ impl AssetDirectoryLock {
         let mut files = Vec::new();
         for entry in std::fs::read_dir(self.directory.path())? {
             let entry = entry?;
-            let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+            let Some(name) = entry
+                .file_name()
+                .to_str()
+                .map(str::to_owned)
+            else {
                 continue;
             };
             let metadata = entry.path().symlink_metadata()?;
@@ -212,11 +228,14 @@ impl AssetDirectoryLock {
 }
 
 pub fn is_asset_name(name: &str) -> bool {
-    name.split_once('.').is_some_and(|(hash, extension)| {
-        hash.len() == 64
-            && hash.bytes().all(|b| b.is_ascii_hexdigit())
-            && matches!(extension, "png" | "jpg" | "gif" | "webp")
-    })
+    name.split_once('.')
+        .is_some_and(|(hash, extension)| {
+            hash.len() == 64
+                && hash
+                    .bytes()
+                    .all(|b| b.is_ascii_hexdigit())
+                && matches!(extension, "png" | "jpg" | "gif" | "webp")
+        })
 }
 
 fn open_private(path: &Path, create: bool) -> Result<File> {
@@ -244,17 +263,27 @@ mod tests {
     fn quota_is_global_deduplication_is_free_and_collection_respects_open_leases() {
         let root = tempfile::tempdir().unwrap();
         let assets = AssetDirectory::for_database(&root.path().join("orbit.db"));
-        let (path, lease) = assets.import(b"picture", "png").unwrap();
-        let (same, duplicate) = assets.import(b"picture", "png").unwrap();
+        let (path, lease) = assets
+            .import(b"picture", "png")
+            .unwrap();
+        let (same, duplicate) = assets
+            .import(b"picture", "png")
+            .unwrap();
         assert_eq!(path, same);
         let lock = assets.lock().unwrap();
-        let name = path.file_name().unwrap().to_str().unwrap();
+        let name = path
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap();
         assert!(!lock.remove_if_unused(name).unwrap());
         drop(lease);
         assert!(!lock.remove_if_unused(name).unwrap());
         drop(duplicate);
         assert!(lock.remove_if_unused(name).unwrap());
-        let large = assets.path().join(format!("{}.png", "a".repeat(64)));
+        let large = assets
+            .path()
+            .join(format!("{}.png", "a".repeat(64)));
         File::create(&large)
             .unwrap()
             .set_len(MAX_ASSET_DIRECTORY_BYTES)
@@ -283,12 +312,16 @@ mod tests {
         std::fs::write(&outside, b"keep").unwrap();
         symlink(
             &outside,
-            assets.path().join(format!("{}.png", "b".repeat(64))),
+            assets
+                .path()
+                .join(format!("{}.png", "b".repeat(64))),
         )
         .unwrap();
         std::fs::hard_link(
             &outside,
-            assets.path().join(format!("{}.png", "c".repeat(64))),
+            assets
+                .path()
+                .join(format!("{}.png", "c".repeat(64))),
         )
         .unwrap();
         assert!(lock.files().unwrap().is_empty());

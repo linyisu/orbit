@@ -25,9 +25,19 @@ pub(super) async fn run(
     };
     let input = temporary()?;
     let temporary_output = temporary()?;
-    std::fs::write(input.path().join(format!("source.{extension}")), bytes).map_err(failed)?;
-    let source = input.path().join(format!("source.{extension}"));
-    let output = temporary_output.path().join("result.json");
+    std::fs::write(
+        input
+            .path()
+            .join(format!("source.{extension}")),
+        bytes,
+    )
+    .map_err(failed)?;
+    let source = input
+        .path()
+        .join(format!("source.{extension}"));
+    let output = temporary_output
+        .path()
+        .join("result.json");
     let mut argv = vec![
         worker
             .to_str()
@@ -46,8 +56,8 @@ pub(super) async fn run(
     let environment = ExecutionEnvironment::new(input.path(), input.path()).map_err(failed)?;
     let policy = ExecutionPolicy {
         resources: ResourceLimits {
-            max_memory_bytes: Some(1024 * 1024 * 1024),
-            max_file_size_bytes: Some(64 * 1024 * 1024),
+            max_memory_bytes: Some(1_024 * 1_024 * 1_024),
+            max_file_size_bytes: Some(64 * 1_024 * 1_024),
             max_open_files: Some(128),
         },
         ..Default::default()

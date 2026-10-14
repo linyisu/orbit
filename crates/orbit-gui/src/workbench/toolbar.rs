@@ -39,7 +39,10 @@ impl Workbench {
             .filter(|task| !task.closed)
             .map(|task| task.view.read(cx).key().to_owned())
             .collect();
-        if let Some(index) = keys.iter().position(|key| *key == self.active) {
+        if let Some(index) = keys
+            .iter()
+            .position(|key| *key == self.active)
+        {
             let next = if forward {
                 (index + 1) % keys.len()
             } else {
@@ -48,6 +51,7 @@ impl Workbench {
             self.activate(&keys[next], window, cx);
         }
     }
+
     pub(super) fn with_active(
         &mut self,
         window: &mut Window,
@@ -63,6 +67,7 @@ impl Workbench {
             view.update(cx, |view, cx| f(view, window, cx));
         }
     }
+
     pub(super) fn toolbar(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let tasks: Vec<_> = self
             .tasks
@@ -99,7 +104,12 @@ impl Workbench {
                         tab.prefix(Spinner::new().small())
                     })
                     .when(task.unread && !task.attention && !task.loading, |tab| {
-                        tab.prefix(div().size_1p5().rounded_full().bg(cx.theme().primary))
+                        tab.prefix(
+                            div()
+                                .size_1p5()
+                                .rounded_full()
+                                .bg(cx.theme().primary),
+                        )
                     })
                     .tooltip(move |window, cx| Tooltip::new(title.clone()).build(window, cx))
                     .suffix(
@@ -142,7 +152,8 @@ impl Workbench {
                         .accessibility_label("切换侧栏")
                         .tooltip(crate::keymap::tooltip("切换侧栏", "toggle_sidebar", cx))
                         .on_click(cx.listener(|view, _, _, cx| {
-                            view.sidebar.update(cx, |sidebar, cx| sidebar.toggle(cx))
+                            view.sidebar
+                                .update(cx, |sidebar, cx| sidebar.toggle(cx))
                         })),
                 )
                 .child(
@@ -167,8 +178,9 @@ impl Workbench {
                                     if tab.left() + offset.x < viewport.left() {
                                         offset.x = viewport.left() - tab.left();
                                     }
-                                    offset.x =
-                                        offset.x.clamp(-view.task_scroll.max_offset().x, px(0.));
+                                    offset.x = offset
+                                        .x
+                                        .clamp(-view.task_scroll.max_offset().x, px(0.));
                                     view.task_scroll.set_offset(offset);
                                 }
                                 if view.task_scroll.offset() != before {

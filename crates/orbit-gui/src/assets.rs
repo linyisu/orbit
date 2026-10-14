@@ -37,6 +37,7 @@ impl AssetSource for AppAssets {
         }
         gpui_kit::assets::Assets.load(path)
     }
+
     fn list(&self, path: &str) -> gpui_kit::Result<Vec<SharedString>> {
         let mut paths = gpui_kit::assets::Assets.list(path)?;
         paths.extend(CommandIcons.list(path)?);
@@ -54,7 +55,16 @@ mod tests {
     fn source_import_icon_is_available_in_the_application_bundle() {
         let path = gpui_kit::assets::IconName::Download.path();
         let bytes = AppAssets.load(&path).unwrap().unwrap();
-        assert!(std::str::from_utf8(&bytes).unwrap().contains("<svg"));
-        assert!(AppAssets.list("icons/").unwrap().contains(&path));
+        assert!(
+            std::str::from_utf8(&bytes)
+                .unwrap()
+                .contains("<svg")
+        );
+        assert!(
+            AppAssets
+                .list("icons/")
+                .unwrap()
+                .contains(&path)
+        );
     }
 }

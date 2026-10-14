@@ -56,8 +56,14 @@ impl Workspace {
                 .on_click(move |_, window, cx| {
                     let accepted = owner
                         .update(cx, |view, cx| {
-                            if !view.info.as_ref().is_some_and(|info| info.id == session)
-                                || !view.approvals.iter().any(|approval| approval.id == id)
+                            if !view
+                                .info
+                                .as_ref()
+                                .is_some_and(|info| info.id == session)
+                                || !view
+                                    .approvals
+                                    .iter()
+                                    .any(|approval| approval.id == id)
                             {
                                 view.report_error("审批已结束或会话已切换，请关闭后刷新。", cx);
                                 return false;
@@ -72,7 +78,8 @@ impl Workspace {
                                 cx,
                             );
                             if accepted {
-                                view.attention.dismiss(&attention::Decision::Approval(id));
+                                view.attention
+                                    .dismiss(&attention::Decision::Approval(id));
                             }
                             accepted
                         })
@@ -91,7 +98,13 @@ impl Workspace {
                 })
                 .title(title)
                 .child(content.clone())
-                .footer(h_flex().gap_2().flex_wrap().justify_end().children(buttons))
+                .footer(
+                    h_flex()
+                        .gap_2()
+                        .flex_wrap()
+                        .justify_end()
+                        .children(buttons),
+                )
         });
     }
 }
@@ -120,7 +133,10 @@ struct Arguments {
 
 fn short(value: &str, limit: usize) -> (String, bool) {
     let mut chars = value.chars();
-    let preview = chars.by_ref().take(limit).collect::<String>();
+    let preview = chars
+        .by_ref()
+        .take(limit)
+        .collect::<String>();
     if chars.next().is_some() {
         (format!("{preview}…（已截断）"), true)
     } else {
@@ -216,7 +232,12 @@ fn patch(before: &str, after: &str, new_file: bool, deleted: bool) -> String {
         .diff_lines(before, after);
     diff.unified_diff()
         // Keep all source context; Diff virtualizes it and offers fold controls.
-        .context_radius(before.lines().count().max(after.lines().count()))
+        .context_radius(
+            before
+                .lines()
+                .count()
+                .max(after.lines().count()),
+        )
         // The real target is displayed above the diff. Fixed internal paths
         // keep control characters in filenames out of the patch grammar.
         .header(
@@ -244,7 +265,10 @@ fn prepare(preview: ApprovalPreview) -> Prepared {
     match preview {
         ApprovalPreview::Write(write) => {
             let source = patch(
-                write.before.as_deref().unwrap_or_default(),
+                write
+                    .before
+                    .as_deref()
+                    .unwrap_or_default(),
                 &write.after,
                 write.before.is_none(),
                 false,
@@ -265,7 +289,10 @@ fn prepare(preview: ApprovalPreview) -> Prepared {
                         .unwrap_or_default()
                         .split_inclusive('\n')
                         .count(),
-                    write.after.split_inclusive('\n').count(),
+                    write
+                        .after
+                        .split_inclusive('\n')
+                        .count(),
                 ),
                 same_content: write.before.as_deref() == Some(write.after.as_str()),
                 before: write.before.unwrap_or_default(),
@@ -284,7 +311,13 @@ fn prepare(preview: ApprovalPreview) -> Prepared {
                             .collect()
                     })
                     .map_err(|error| error.to_string()),
-                lines: (delete.before.split_inclusive('\n').count(), 0),
+                lines: (
+                    delete
+                        .before
+                        .split_inclusive('\n')
+                        .count(),
+                    0,
+                ),
                 same_content: false,
                 before: delete.before,
                 after: String::new(),
@@ -350,7 +383,8 @@ impl ApprovalContent {
                         match files {
                             Ok(files) => {
                                 view.has_diff = !files.is_empty();
-                                view.diff.update(cx, |diff, cx| diff.set_files(files, cx));
+                                view.diff
+                                    .update(cx, |diff, cx| diff.set_files(files, cx));
                             }
                             Err(error) => {
                                 view.error =
@@ -512,7 +546,8 @@ impl ApprovalContent {
                                     } else {
                                         DiffMode::Unified
                                     };
-                                    view.diff.update(cx, |diff, cx| diff.set_mode(mode, cx));
+                                    view.diff
+                                        .update(cx, |diff, cx| diff.set_mode(mode, cx));
                                     cx.notify();
                                 })),
                         ),
@@ -753,7 +788,12 @@ impl Render for ApprovalContent {
             .overflow_y_scroll()
             .gap_3()
             .when_some(self.error.clone(), |body, error| {
-                body.child(div().text_sm().text_color(cx.theme().danger).child(error))
+                body.child(
+                    div()
+                        .text_sm()
+                        .text_color(cx.theme().danger)
+                        .child(error),
+                )
             })
             .child(body)
     }
@@ -790,16 +830,24 @@ mod tests {
 
     #[::core::prelude::v1::test]
     fn argument_summaries_keep_full_values_and_mark_shortened_data() {
-        let source =
-            serde_json::json!({ "message": "字".repeat(300), "options": { "active": true } })
-                .to_string();
+        let source = serde_json::json!({
+            "message": "字".repeat(300),
+            "options": {
+                "active": true
+            }
+        })
+        .to_string();
         let parsed = arguments(&source);
         assert_eq!(
             serde_json::from_str::<serde_json::Value>(&parsed.raw).unwrap(),
             serde_json::from_str::<serde_json::Value>(&source).unwrap()
         );
         assert!(parsed.note.is_some());
-        assert!(parsed.fields[0].value.ends_with("（已截断）"));
+        assert!(
+            parsed.fields[0]
+                .value
+                .ends_with("（已截断）")
+        );
         assert_eq!(short("🦀中文", 2), ("🦀中…（已截断）".into(), true));
         let invalid = arguments("not-json\nraw");
         assert_eq!(invalid.raw, "not-json\nraw");

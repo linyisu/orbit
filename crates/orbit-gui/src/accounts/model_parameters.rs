@@ -86,6 +86,7 @@ pub(super) struct ModelParameters {
     selected: usize,
     error: Option<String>,
 }
+
 impl ModelParameters {
     pub(super) fn new(
         profiles: Vec<ModelProfile>,
@@ -96,9 +97,15 @@ impl ModelParameters {
             .into_iter()
             .map(|profile| {
                 let values = [
-                    profile.context_tokens.map(|value| value.to_string()),
-                    profile.input_context_tokens.map(|value| value.to_string()),
-                    profile.max_output_tokens.map(|value| value.to_string()),
+                    profile
+                        .context_tokens
+                        .map(|value| value.to_string()),
+                    profile
+                        .input_context_tokens
+                        .map(|value| value.to_string()),
+                    profile
+                        .max_output_tokens
+                        .map(|value| value.to_string()),
                 ];
                 ModelFields {
                     profile,
@@ -118,6 +125,7 @@ impl ModelParameters {
             error: None,
         }
     }
+
     pub(super) fn values(&mut self, cx: &mut Context<Self>) -> Option<Vec<ModelProfile>> {
         let result: Result<Vec<_>> = self
             .models
@@ -143,14 +151,17 @@ impl ModelParameters {
             }
         }
     }
+
     pub(super) fn set_error(&mut self, error: &str, cx: &mut Context<Self>) {
         self.error = Some(error.into());
         cx.notify();
     }
+
     pub(super) fn focus(&self, window: &mut Window, cx: &mut Context<Self>) {
         self.models[self.selected].limits[0].update(cx, |input, cx| input.focus(window, cx));
     }
 }
+
 impl Render for ModelParameters {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let owner = cx.weak_entity();
@@ -230,7 +241,12 @@ impl Render for ModelParameters {
                 }),
             )
             .when_some(self.error.clone(), |view, error| {
-                view.child(div().text_sm().text_color(cx.theme().danger).child(error))
+                view.child(
+                    div()
+                        .text_sm()
+                        .text_color(cx.theme().danger)
+                        .child(error),
+                )
             })
     }
 }
@@ -249,13 +265,13 @@ mod tests {
             default: orbit_model::types::ReasoningEffort::High,
             extra: Default::default(),
         });
-        profile.context_tokens = Some(65536);
-        profile.input_context_tokens = Some(32768);
-        profile.max_output_tokens = Some(4096);
+        profile.context_tokens = Some(65_536);
+        profile.input_context_tokens = Some(32_768);
+        profile.max_output_tokens = Some(4_096);
         let updated = limits(&profile, ["131072", "", "8192"]).unwrap();
-        assert_eq!(updated.context_tokens, Some(131072));
+        assert_eq!(updated.context_tokens, Some(131_072));
         assert_eq!(updated.input_context_tokens, None);
-        assert_eq!(updated.max_output_tokens, Some(8192));
+        assert_eq!(updated.max_output_tokens, Some(8_192));
         assert_eq!(updated.supports_vision, Some(true));
         assert_eq!(
             serde_json::to_value(&updated.reasoning).unwrap(),
@@ -287,10 +303,10 @@ mod tests {
             assert!(limits(&profile, values).is_err(), "{values:?}");
         }
         let mut configured = profile.clone();
-        configured.max_output_tokens = Some(8192);
+        configured.max_output_tokens = Some(8_192);
         let profiles = profiles(" new, known ", &[configured]).unwrap();
         assert_eq!(profiles[0].id, "new");
-        assert_eq!(profiles[1].max_output_tokens, Some(8192));
+        assert_eq!(profiles[1].max_output_tokens, Some(8_192));
         assert!(super::profiles("known, known", &profiles).is_err());
         assert!(profile.max_output_tokens.is_none());
     }

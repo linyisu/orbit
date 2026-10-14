@@ -22,7 +22,9 @@ impl Tool for GatedCommand {
         ToolDefinition::function(
             "run_command",
             "Orbit test command",
-            json!({"type":"object"}),
+            json!({
+                "type": "object"
+            }),
         )
     }
 
@@ -32,16 +34,34 @@ impl Tool for GatedCommand {
                 .as_str()
                 .unwrap()
                 .to_owned();
-            let gate = self.gates.lock().unwrap().remove(&name).unwrap();
-            let job = self.jobs.start(call, name, None, cancellation, |token| async move {
-                tokio::select! {
-                    biased;
-                    _ = token.cancelled() => Err(orbit_agent::tool::ToolError::Cancelled),
-                    result = gate => Ok(ToolOutput::text(json!({"exit_code": 0, "stdout": result.unwrap()}).to_string())),
-                }
-            })?;
-            let mut output =
-                ToolOutput::text(json!({"job_id":job.job_id,"background":true}).to_string());
+            let gate = self
+                .gates
+                .lock()
+                .unwrap()
+                .remove(&name)
+                .unwrap();
+            let job = self
+                .jobs
+                .start(call, name, None, cancellation, |token| async move {
+                    tokio::select! {
+                        biased;
+                        _ = token.cancelled() => Err(orbit_agent::tool::ToolError::Cancelled),
+                        result = gate => Ok(ToolOutput::text(
+                            json!({
+                                "exit_code": 0,
+                                "stdout": result.unwrap()
+                            })
+                            .to_string(),
+                        )),
+                    }
+                })?;
+            let mut output = ToolOutput::text(
+                json!({
+                    "job_id": job.job_id,
+                    "background": true
+                })
+                .to_string(),
+            );
             output.background_job = Some(job.job_id);
             Ok(output)
         })
@@ -62,7 +82,10 @@ fn launch(id: &str, command: &str) -> ToolCall {
     ToolCall::function(
         id,
         "run_command",
-        json!({"command":command,"background":true}),
+        json!({
+            "command": command,
+            "background": true
+        }),
     )
 }
 
@@ -135,13 +158,45 @@ async fn idle_agent_waits_without_model_polling_and_receives_completion_once() {
         .unwrap();
 
     assert_eq!(model.requests().len(), 3);
-    let notifications = result.history.iter().filter(|message| matches!(message, ChatMessage::User {content, ..} if content.contains("background_command_completion"))).count();
+    let notifications = result
+        .history
+        .iter()
+        .filter(|message| {
+            matches!(message,
+        ChatMessage::User {
+        content,
+        ..
+    } if content
+        .contains("background_command_completion"))
+        })
+        .count();
     assert_eq!(notifications, 1);
-    assert_eq!(result.history.iter().filter(|message| matches!(message, ChatMessage::Tool {tool_call_id, ..} if tool_call_id == "build")).count(), 1);
-    assert!(model.requests()[2].messages.iter().any(|message| matches!(message, ChatMessage::User {content, ..} if content.contains("ORBIT BUILD PASSED"))));
+    assert_eq!(
+        result
+            .history
+            .iter()
+            .filter(|message| matches!(
+                message,
+                ChatMessage::Tool { tool_call_id, .. } if tool_call_id == "build"
+            ))
+            .count(),
+        1
+    );
+    assert!(
+        model.requests()[2]
+            .messages
+            .iter()
+            .any(|message| matches!(
+                message,
+                ChatMessage::User { content, .. } if content.contains("ORBIT BUILD PASSED")
+            ))
+    );
     let mut finished = 0;
     while let Some(event) = receiver.recv().await {
-        if matches!(event, AgentEvent::ToolFinished { call, .. } if call.id == "build") {
+        if matches!(
+            event,
+            AgentEvent::ToolFinished { call, .. } if call.id == "build"
+        ) {
             finished += 1;
         }
     }
@@ -156,7 +211,9 @@ async fn commands_overlap_other_work_and_wait_all_does_not_duplicate_results() {
     tools.register(ClosureTool::new(
         "check_docs",
         "Inspect Orbit docs",
-        json!({"type":"object"}),
+        json!({
+            "type": "object"
+        }),
         move |_, _| {
             let jobs = jobs.clone();
             async move {
@@ -177,7 +234,9 @@ async fn commands_overlap_other_work_and_wait_all_does_not_duplicate_results() {
     tools.register(ClosureTool::new(
         "wait_commands",
         "Wait for commands",
-        json!({"type":"object"}),
+        json!({
+            "type": "object"
+        }),
         move |_, token| {
             let jobs = jobs.clone();
             waiting_sender
@@ -242,8 +301,30 @@ async fn commands_overlap_other_work_and_wait_all_does_not_duplicate_results() {
         .unwrap();
 
     assert_eq!(model.requests().len(), 4);
-    assert!(!result.history.iter().any(|message| matches!(message, ChatMessage::User {content, ..} if content.contains("background_command_completion"))));
-    assert!(model.requests()[3].messages.iter().any(|message| matches!(message, ChatMessage::Tool {tool_call_id, content} if tool_call_id == "wait" && content.contains("ORBIT TEST PASSED") && content.contains("ORBIT BUILD PASSED"))));
+    assert!(
+        !result
+            .history
+            .iter()
+            .any(|message| matches!(
+                message,
+                ChatMessage::User { content, .. }
+                    if content.contains("background_command_completion")
+            ))
+    );
+    assert!(
+        model.requests()[3]
+            .messages
+            .iter()
+            .any(|message| matches!(
+                message,
+                ChatMessage::Tool {
+                    tool_call_id,
+                    content,
+                } if tool_call_id == "wait"
+                    && content.contains("ORBIT TEST PASSED")
+                    && content.contains("ORBIT BUILD PASSED")
+            ))
+    );
 }
 
 #[tokio::test]
@@ -272,7 +353,9 @@ async fn cancellation_while_idle_reaps_jobs_without_another_model_request() {
     });
 
     waiting(&mut receiver).await;
-    let id = jobs.snapshots(&[], false).unwrap()[0].job_id.clone();
+    let id = jobs.snapshots(&[], false).unwrap()[0]
+        .job_id
+        .clone();
     token.cancel();
     let result = tokio::time::timeout(Duration::from_secs(5), run)
         .await

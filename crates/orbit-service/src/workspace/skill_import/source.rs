@@ -105,7 +105,10 @@ pub(in crate::workspace) async fn acquire(
     if let Some(branch) = git.branch {
         command.args(["--branch", &branch]);
     }
-    command.arg("--").arg(&git.url).arg(&checkout);
+    command
+        .arg("--")
+        .arg(&git.url)
+        .arg(&checkout);
     let mut child = command
         .spawn()
         .context("无法启动 Git，请确认工作区服务器已安装 Git")?;
@@ -114,7 +117,7 @@ pub(in crate::workspace) async fn acquire(
         .stderr
         .take()
         .context("无法读取 Git 输出")?
-        .take(64 * 1024 + 1);
+        .take(64 * 1_024 + 1);
     let output = tokio::time::timeout(Duration::from_secs(60), async {
         let read = async {
             let mut errors = Vec::new();
@@ -152,7 +155,11 @@ pub(in crate::workspace) async fn acquire(
     ensure!(
         status.success(),
         "获取技能来源失败：{}",
-        errors.chars().take(1500).collect::<String>().trim()
+        errors
+            .chars()
+            .take(1_500)
+            .collect::<String>()
+            .trim()
     );
     let root = checkout.join(git.directory);
     reject_symlink_ancestors(&root)?;
@@ -208,7 +215,9 @@ fn parse(source: &str) -> Result<GitSource> {
     ensure!(
         matches!(parsed.scheme(), "https" | "ssh")
             && parsed.host_str().is_some()
-            && parsed.host_str().is_some_and(|host| !host.starts_with('-'))
+            && parsed
+                .host_str()
+                .is_some_and(|host| !host.starts_with('-'))
             && parsed.password().is_none()
             && !parsed.username().starts_with('-')
             && (parsed.scheme() == "ssh" || parsed.username().is_empty()),
@@ -260,8 +269,12 @@ fn decode(segment: &str) -> Result<String> {
     let mut bytes = segment.bytes();
     while let Some(byte) = bytes.next() {
         if byte == b'%' {
-            let high = bytes.next().and_then(|b| (b as char).to_digit(16));
-            let low = bytes.next().and_then(|b| (b as char).to_digit(16));
+            let high = bytes
+                .next()
+                .and_then(|b| (b as char).to_digit(16));
+            let low = bytes
+                .next()
+                .and_then(|b| (b as char).to_digit(16));
             match (high, low) {
                 (Some(high), Some(low)) => result.push((high * 16 + low) as u8),
                 _ => bail!("GitHub 地址包含无效编码"),

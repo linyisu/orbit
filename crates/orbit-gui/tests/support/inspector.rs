@@ -4,29 +4,54 @@ use std::{collections::VecDeque, path::Path};
 
 pub(super) fn seed(workspace: &str) -> (Vec<Value>, VecDeque<Value>, Value) {
     let mut history = vec![
-        json!({"Started":{"prompt":"检查工作面板的执行状态、计划、文件变更和协作任务。"}}),
-        json!({"Agent":{"TurnStarted":{"turn":8}}}),
-        json!({"Agent":{"Model":{"TextDelta":"已检查项目入口与模块依赖，正在验证工作面板的交互。\n\n右侧保留本轮执行证据：命令结果、文件变更和协作任务都可以直接打开。"}}}),
+        json!({
+            "Started": {
+                "prompt": "检查工作面板的执行状态、计划、文件变更和协作任务。"
+            }
+        }),
+        json!({
+            "Agent": {
+                "TurnStarted": {
+                    "turn": 8
+                }
+            }
+        }),
+        json!({
+            "Agent": {
+                "Model": {
+                    "TextDelta": "已检查项目入口与模块依赖，正在验证工作面板的交互。\n\n右侧保留本轮执行证据：命令结果、文件变更和协作任务都可以直接打开。"
+                }
+            }
+        }),
     ];
     for (id, name, arguments, content, changes) in [
         (
             "inspector-manifest",
             "read_file",
-            json!({"path":"Cargo.toml"}),
+            json!({
+                "path": "Cargo.toml"
+            }),
             "[workspace]\nmembers = [\"crates/orbit-gui\", \"crates/orbit-tui\"]\n".into(),
             json!([]),
         ),
         (
             "inspector-status",
             "run_command",
-            json!({"command":"git status --short --branch","cwd":workspace}),
+            json!({
+                "command": "git status --short --branch",
+                "cwd": workspace
+            }),
             command_result(0, 125, "## main\n M src/workspace/inspector.rs\n", ""),
             json!([]),
         ),
         (
             "inspector-search-failed",
             "run_command",
-            json!({"command":"rg -n --glob '*.rs' 'execution_state|inspector_width' src/workspace/inspector.rs src/workbench/storage.rs","cwd":workspace}),
+            json!({
+                "command": "rg -n --glob '*.rs' 'execution_state|inspector_width' \
+                    src/workspace/inspector.rs src/workbench/storage.rs",
+                "cwd": workspace
+            }),
             command_result(
                 2,
                 46,
@@ -38,40 +63,88 @@ pub(super) fn seed(workspace: &str) -> (Vec<Value>, VecDeque<Value>, Value) {
         (
             "inspector-layout",
             "write_file",
-            json!({"path":"src/workspace/inspector.rs"}),
+            json!({
+                "path": "src/workspace/inspector.rs"
+            }),
             "已更新执行记录布局。".into(),
-            json!([{"path":"src/workspace/inspector.rs","before":"// previous layout\n","after":"// compact inspector layout\n"}]),
+            json!([{
+                "path": "src/workspace/inspector.rs",
+                "before": "// previous layout\n",
+                "after": "// compact inspector layout\n"
+            }]),
         ),
         (
             "inspector-long-path",
             "write_file",
-            json!({"path":"crates/orbit-gui/src/workspace/components/execution/very_long_panel_name_for_truncation.rs"}),
+            json!({
+                "path": "crates/orbit-gui/src/workspace/components/execution/very_long_panel_name_f\
+                    or_truncation.rs"
+            }),
             "已统一窄面板的文本边界。".into(),
-            json!([{"path":"crates/orbit-gui/src/workspace/components/execution/very_long_panel_name_for_truncation.rs","before":null,"after":"// bounded content\n"}]),
+            json!([{
+                "path": "crates/orbit-gui/src/workspace/components/execution/very_long_panel_na\
+                        me_for_truncation.rs",
+                "before": null,
+                "after": "// bounded content\n"
+            }]),
         ),
         (
             "inspector-docs",
             "write_file",
-            json!({"path":"docs/界面设计/工作面板交互规范.md"}),
+            json!({
+                "path": "docs/界面设计/工作面板交互规范.md"
+            }),
             "已补充使用说明。".into(),
-            json!([{"path":"docs/界面设计/工作面板交互规范.md","before":null,"after":"# 工作面板\n"}]),
+            json!([{
+                "path": "docs/界面设计/工作面板交互规范.md",
+                "before": null,
+                "after": "# 工作面板\n"
+            }]),
         ),
     ] {
         let call = call(id, name, arguments);
-        history.push(json!({"Agent":{"ToolStarted":{"call":call}}}));
-        history.push(
-            json!({"Agent":{"ToolFinished":{"call":call,"content":content,"changes":changes}}}),
-        );
+        history.push(json!({
+            "Agent": {
+                "ToolStarted": {
+                    "call": call
+                }
+            }
+        }));
+        history.push(json!({
+            "Agent": {
+                "ToolFinished": {
+                    "call": call,
+                    "content": content,
+                    "changes": changes
+                }
+            }
+        }));
     }
     // Enough rows to exercise the local scrollbar at compact window heights.
     for index in 1..=8 {
         let call = call(
             &format!("inspector-source-{index}"),
             "read_file",
-            json!({"path":format!("src/workspace/module_{index}.rs")}),
+            json!({
+                "path": format!("src/workspace/module_{index}.rs")
+            }),
         );
-        history.push(json!({"Agent":{"ToolStarted":{"call":call}}}));
-        history.push(json!({"Agent":{"ToolFinished":{"call":call,"content":"模块状态、布局边界和键盘入口已检查。","changes":[]}}}));
+        history.push(json!({
+            "Agent": {
+                "ToolStarted": {
+                    "call": call
+                }
+            }
+        }));
+        history.push(json!({
+            "Agent": {
+                "ToolFinished": {
+                    "call": call,
+                    "content": "模块状态、布局边界和键盘入口已检查。",
+                    "changes": []
+                }
+            }
+        }));
     }
     for (id, role, status, task) in [
         ("child", "explore", "completed", "梳理工作面板的数据来源"),
@@ -91,39 +164,97 @@ pub(super) fn seed(workspace: &str) -> (Vec<Value>, VecDeque<Value>, Value) {
         let call = call(
             &format!("inspector-spawn-{id}"),
             "spawn_agent",
-            json!({"role":role,"task":task}),
+            json!({
+                "role": role,
+                "task": task
+            }),
         );
-        let content = json!({"agent_id":id,"role":role,"status":status}).to_string();
-        history.push(json!({"Agent":{"ToolStarted":{"call":call}}}));
+        let content = json!({
+            "agent_id": id,
+            "role": role,
+            "status": status
+        })
+        .to_string();
+        history.push(json!({
+            "Agent": {
+                "ToolStarted": {
+                    "call": call
+                }
+            }
+        }));
         if status == "running" {
-            history.push(
-                json!({"Agent":{"ToolBackgrounded":{"call":call,"job_id":id,"content":content}}}),
-            );
+            history.push(json!({
+                "Agent": {
+                    "ToolBackgrounded": {
+                        "call": call,
+                        "job_id": id,
+                        "content": content
+                    }
+                }
+            }));
         } else {
-            history.push(
-                json!({"Agent":{"ToolFinished":{"call":call,"content":content,"changes":[]}}}),
-            );
+            history.push(json!({
+                "Agent": {
+                    "ToolFinished": {
+                        "call": call,
+                        "content": content,
+                        "changes": []
+                    }
+                }
+            }));
         }
     }
     let call = call(
         "inspector-check",
         "run_command",
-        json!({"command":"cargo test -p orbit-gui --features test-support --locked","cwd":workspace,"timeout_seconds":120,"background":false}),
+        json!({
+            "command": "cargo test -p orbit-gui --features test-support --locked",
+            "cwd": workspace,
+            "timeout_seconds": 120,
+            "background": false
+        }),
     );
-    history.push(json!({"Agent":{"ToolStarted":{"call":call}}}));
+    history.push(json!({
+        "Agent": {
+            "ToolStarted": {
+                "call": call
+            }
+        }
+    }));
     let pending = [
-        json!({"Agent":{"ToolFinished":{"call":call,"content":command_result(0, 4280, "test result: ok. 24 passed; 0 failed\n", ""),"changes":[]}}}),
+        json!({
+            "Agent": {
+                "ToolFinished": {
+                    "call": call,
+                    "content": command_result(0,
+                        4_280,
+                        "test result: ok. 24 passed; 0 failed\n",
+                        ""),
+                    "changes": []
+                }
+            }
+        }),
         json!({"Agent":{"Model":{"TextDelta":"\n\n验证完成。执行记录中保留了一次失败的搜索及后续修正；最终检查已通过。"}}}),
         json!({"Finished":{"status":"completed"}}),
     ]
     .into();
-    let planning = json!({"generation":1,"mode":"build","plan":{
-        "id":"inspector-plan","workspace":workspace,"revision":2,
-        "title":"完善工作面板的执行证据与交互",
-        "markdown":"## 工作面板\n\n1. 统一工具状态和命令摘要。\n2. 保留计划、文件变更和协作任务的直接入口。\n3. 验证窄窗口、大字体、滚动和键盘操作。",
-        "steps":["统一工具状态和命令摘要","保留计划、文件变更和协作任务的直接入口","验证窄窗口、大字体、滚动和键盘操作"],
-        "status":"approved"
-    }});
+    let planning = json!({
+        "generation": 1,
+        "mode": "build",
+        "plan": {
+            "id": "inspector-plan",
+            "workspace": workspace,
+            "revision": 2,
+            "title": "完善工作面板的执行证据与交互",
+            "markdown": "## 工作面板\n\n1. 统一工具状态和命令摘要。\n2. 保留计划、文件变更和协作任务的直接入口。\n3. 验证窄窗口、大字体、滚动和键盘操作。",
+            "steps": [
+                "统一工具状态和命令摘要",
+                "保留计划、文件变更和协作任务的直接入口",
+                "验证窄窗口、大字体、滚动和键盘操作"
+            ],
+            "status": "approved"
+        }
+    });
     (history, pending, planning)
 }
 
@@ -135,13 +266,30 @@ pub(super) fn held(workspace: &str, event: &Value) -> bool {
 }
 
 fn call(id: &str, name: &str, arguments: Value) -> Value {
-    json!({"id":id,"function":{"name":name,"arguments":arguments.to_string()}})
+    json!({
+        "id": id,
+        "function": {
+            "name": name,
+            "arguments": arguments.to_string()
+        }
+    })
 }
 
 fn command_result(code: i32, elapsed_ms: u64, stdout: &str, stderr: &str) -> String {
     json!({
-        "exit_code":code,"elapsed":{"secs":elapsed_ms / 1000,"nanos":(elapsed_ms % 1000) * 1_000_000},
-        "stdout":stdout,"stderr":stderr,"stdout_total_bytes":stdout.len(),"stderr_total_bytes":stderr.len(),
-        "timed_out":false,"cancelled":false,"output_truncated":false,"retained_output_truncated":false
-    }).to_string()
+        "exit_code": code,
+        "elapsed": {
+            "secs": elapsed_ms / 1_000,
+            "nanos": (elapsed_ms % 1_000) * 1_000_000
+        },
+        "stdout": stdout,
+        "stderr": stderr,
+        "stdout_total_bytes": stdout.len(),
+        "stderr_total_bytes": stderr.len(),
+        "timed_out": false,
+        "cancelled": false,
+        "output_truncated": false,
+        "retained_output_truncated": false
+    })
+    .to_string()
 }

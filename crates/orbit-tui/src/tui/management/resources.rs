@@ -210,8 +210,8 @@ impl State {
         self.start(Pending::Save, request)
     }
 
+    /// Keep the editor until a successful save; hiding never loses its draft.
     fn back(&mut self) -> Action {
-        // Keep the editor until a successful save; hiding never loses its draft.
         Action::Close
     }
 
@@ -248,9 +248,13 @@ impl State {
                 }
             }
             Hit::Back => {
-                if self.editor.as_ref().is_some_and(|editor| {
-                    editor.readonly || editor.original.as_ref() == Some(&editor.body.raw())
-                }) {
+                if self
+                    .editor
+                    .as_ref()
+                    .is_some_and(|editor| {
+                        editor.readonly || editor.original.as_ref() == Some(&editor.body.raw())
+                    })
+                {
                     self.editor = None;
                     self.invalidate_geometry();
                     Action::None
@@ -288,7 +292,11 @@ impl Panel for State {
                 return Action::None;
             }
             if let Some(editor) = &mut self.editor {
-                if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('s') {
+                if key
+                    .modifiers
+                    .contains(KeyModifiers::CONTROL)
+                    && key.code == KeyCode::Char('s')
+                {
                     return self.save();
                 }
                 if key.code == KeyCode::Tab || key.code == KeyCode::BackTab {
@@ -303,12 +311,14 @@ impl Panel for State {
                         KeyCode::Up => editor.offset = editor.offset.saturating_sub(1),
                         KeyCode::Down => editor.offset = editor.offset.saturating_add(1),
                         KeyCode::PageUp => {
-                            editor.offset =
-                                editor.offset.saturating_sub(self.body_area.height as usize)
+                            editor.offset = editor
+                                .offset
+                                .saturating_sub(self.body_area.height as usize)
                         }
                         KeyCode::PageDown => {
-                            editor.offset =
-                                editor.offset.saturating_add(self.body_area.height as usize)
+                            editor.offset = editor
+                                .offset
+                                .saturating_add(self.body_area.height as usize)
                         }
                         KeyCode::Char('l') => return self.load(),
                         KeyCode::Backspace => return self.activate(Hit::Back),
@@ -437,7 +447,9 @@ impl Panel for State {
                     self.editor = None;
                     self.message = Some("技能已保存到项目。".into());
                 }
-                self.selected = self.selected.min(self.visible().len().saturating_sub(1));
+                self.selected = self
+                    .selected
+                    .min(self.visible().len().saturating_sub(1));
             }
             (
                 Some(Pending::Read),
@@ -535,13 +547,15 @@ impl Panel for State {
             ]
         };
         toolbar(frame, row(area, 1), &buttons, &mut self.hits);
-        let status = self.error.as_deref().or(self.message.as_deref()).unwrap_or(
-            if self.pending.is_some() {
+        let status = self
+            .error
+            .as_deref()
+            .or(self.message.as_deref())
+            .unwrap_or(if self.pending.is_some() {
                 "正在请求工作区…"
             } else {
                 ""
-            },
-        );
+            });
         frame.render_widget(
             Paragraph::new(safe_output(status)).style(Style::default().fg(
                 if self.error.is_some() {
@@ -606,7 +620,8 @@ impl Panel for State {
                 !editor.readonly && editor.focus == 1 && self.pending.is_none(),
                 std::mem::take(&mut editor.follow),
             );
-            self.hits.push((self.body_area, Hit::Body));
+            self.hits
+                .push((self.body_area, Hit::Body));
         } else {
             field(
                 frame,
@@ -615,7 +630,8 @@ impl Panel for State {
                 self.searching && self.pending.is_none(),
                 "搜索名称、说明或来源…",
             );
-            self.hits.push((row(content, 0), Hit::Search));
+            self.hits
+                .push((row(content, 0), Hit::Search));
             self.body_area = Rect::new(
                 content.x,
                 content.y + 2,
@@ -624,12 +640,19 @@ impl Panel for State {
             );
             let visible = self.visible();
             let height = (self.body_area.height as usize / 2).max(1);
-            self.selected = self.selected.min(visible.len().saturating_sub(1));
+            self.selected = self
+                .selected
+                .min(visible.len().saturating_sub(1));
             self.offset = self
                 .offset
                 .min(self.selected)
                 .max(self.selected.saturating_sub(height - 1));
-            for (position, index) in visible.iter().enumerate().skip(self.offset).take(height) {
+            for (position, index) in visible
+                .iter()
+                .enumerate()
+                .skip(self.offset)
+                .take(height)
+            {
                 let skill = &self.skills[*index];
                 let y = ((position - self.offset) * 2) as u16;
                 let text = format!(
@@ -660,7 +683,8 @@ impl Panel for State {
                         row(rect, 1),
                     );
                 }
-                self.hits.push((rect, Hit::Row(position)));
+                self.hits
+                    .push((rect, Hit::Row(position)));
             }
             if visible.is_empty() {
                 frame.render_widget(
@@ -754,11 +778,17 @@ pub(super) fn editor_area(
     }
     let (lines, caret) = input.visual_lines(area.width.max(1) as usize);
     if focused && follow {
-        *offset = (*offset)
-            .min(caret.row)
-            .max(caret.row.saturating_sub(area.height as usize - 1));
+        *offset = (*offset).min(caret.row).max(
+            caret
+                .row
+                .saturating_sub(area.height as usize - 1),
+        );
     }
-    *offset = (*offset).min(lines.len().saturating_sub(area.height as usize));
+    *offset = (*offset).min(
+        lines
+            .len()
+            .saturating_sub(area.height as usize),
+    );
     let selected = input.selection_cells(area.width.max(1) as usize);
     for (index, line) in lines
         .iter()
@@ -772,7 +802,10 @@ pub(super) fn editor_area(
             rect,
         );
         if focused {
-            for (_, range) in selected.iter().filter(|(row, _)| *row == index) {
+            for (_, range) in selected
+                .iter()
+                .filter(|(row, _)| *row == index)
+            {
                 for x in range.clone() {
                     if x < area.width as usize {
                         let cell = &mut frame.buffer_mut()[(area.x + x as u16, rect.y)];
@@ -818,7 +851,15 @@ mod tests {
         assert_eq!(original.as_deref(), Some("  original\n\n"));
         assert_eq!(content, "  changed\nsecond  \n");
         state.error("acknowledgement lost".into());
-        assert_eq!(state.editor.as_ref().unwrap().body.raw(), content);
+        assert_eq!(
+            state
+                .editor
+                .as_ref()
+                .unwrap()
+                .body
+                .raw(),
+            content
+        );
         assert!(matches!(
             state.handle(&Event::Key(crossterm::event::KeyEvent::new(
                 KeyCode::Esc,
@@ -826,7 +867,15 @@ mod tests {
             ))),
             Action::Close
         ));
-        assert_eq!(state.editor.as_ref().unwrap().body.raw(), content);
+        assert_eq!(
+            state
+                .editor
+                .as_ref()
+                .unwrap()
+                .body
+                .raw(),
+            content
+        );
     }
 
     #[test]
@@ -839,11 +888,23 @@ mod tests {
             editable: false,
         }));
         state.handle(&Event::Paste("change".into()));
-        assert_eq!(state.editor.as_ref().unwrap().body.raw(), "body");
-        assert!(matches!(state.save(), Action::None));
-        assert!(
-            matches!(state.load(), Action::Request(Request::SessionAction { session, action: SessionAction::LoadSkill { name } }) if session == "session" && name == "imported")
+        assert_eq!(
+            state
+                .editor
+                .as_ref()
+                .unwrap()
+                .body
+                .raw(),
+            "body"
         );
+        assert!(matches!(state.save(), Action::None));
+        assert!(matches!(
+            state.load(),
+            Action::Request(Request::SessionAction {
+                session,
+                action: SessionAction::LoadSkill { name },
+            }) if session == "session" && name == "imported"
+        ));
     }
 
     #[test]
@@ -858,7 +919,13 @@ mod tests {
         }));
         let editor = state.editor.as_ref().unwrap();
         assert_eq!(editor.body.raw(), raw);
-        assert!(!editor.body.input.text.contains(['\r', '\t']));
+        assert!(
+            !editor
+                .body
+                .input
+                .text
+                .contains(['\r', '\t'])
+        );
         assert!(matches!(
             state.load(),
             Action::Request(Request::SessionAction { .. })
@@ -901,7 +968,12 @@ mod tests {
     fn failed_create_keeps_full_draft_and_does_not_enable_loading_unsaved_content() {
         let mut state = state();
         state.create();
-        state.editor.as_mut().unwrap().name.set("new-skill".into());
+        state
+            .editor
+            .as_mut()
+            .unwrap()
+            .name
+            .set("new-skill".into());
         assert!(matches!(state.save(), Action::Request(_)));
         state.receive(Response::Error("duplicate skill".into()));
         assert_eq!(state.editor.as_ref().unwrap().name.text, "new-skill");
@@ -941,10 +1013,15 @@ mod tests {
         let mut state = state();
         state.create();
         state.editor.as_mut().unwrap().focus = 1;
-        let text: String = (0..60).map(|line| format!("line {line}\n")).collect();
+        let text: String = (0..60)
+            .map(|line| format!("line {line}\n"))
+            .collect();
         let editor = state.editor.as_mut().unwrap();
         editor.body = Source::new(&text);
-        editor.body.input.set_cursor(editor.body.input.text.len());
+        editor
+            .body
+            .input
+            .set_cursor(editor.body.input.text.len());
         let mut terminal = Terminal::new(TestBackend::new(100, 28)).unwrap();
         terminal
             .draw(|frame| state.draw(frame, frame.area()))

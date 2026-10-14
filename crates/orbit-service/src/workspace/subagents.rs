@@ -20,7 +20,10 @@ pub(super) async fn execute(
     action: Action,
 ) -> Result<Snapshot> {
     ensure!(
-        !setup.resources.policy.disabled(Capability::Subagents),
+        !setup
+            .resources
+            .policy
+            .disabled(Capability::Subagents),
         "子 Agent 功能已禁用"
     );
     let parent = setup.session.id();
@@ -31,7 +34,11 @@ pub(super) async fn execute(
             let children = store.subagents(parent).await?;
             let total = children.len();
             let mut agents = Vec::new();
-            for child in children.into_iter().skip(offset).take(PAGE_SIZE) {
+            for child in children
+                .into_iter()
+                .skip(offset)
+                .take(PAGE_SIZE)
+            {
                 let revision = store
                     .session_revision(&child.id)
                     .await?
@@ -57,14 +64,19 @@ pub(super) async fn execute(
             })
         }
         Action::Send { id, message } => {
-            store.owned_subagent(parent, &id).await?;
+            store
+                .owned_subagent(parent, &id)
+                .await?;
             let message = message.trim().to_owned();
             ensure!(
                 !message.is_empty() && message.len() <= MAX_MESSAGE_BYTES,
                 "消息需要 1–32768 字节"
             );
             ensure!(
-                setup.resources.tools.contains("send_agent_message"),
+                setup
+                    .resources
+                    .tools
+                    .contains("send_agent_message"),
                 "当前会话不能向子 Agent 发送消息"
             );
             let output = setup
@@ -74,7 +86,10 @@ pub(super) async fn execute(
                     ToolCall::function(
                         orbit_protocol::request_id(),
                         "send_agent_message",
-                        serde_json::json!({"agent_id":id,"message":message}),
+                        serde_json::json!({
+                            "agent_id": id,
+                            "message": message
+                        }),
                     ),
                     CancellationToken::new(),
                 )
@@ -98,7 +113,9 @@ pub(super) async fn execute(
             })
         }
         Action::Cancel { id, run } => {
-            store.owned_subagent(parent, &id).await?;
+            store
+                .owned_subagent(parent, &id)
+                .await?;
             let revision = store
                 .session_revision(&id)
                 .await?
@@ -112,7 +129,10 @@ pub(super) async fn execute(
                 "子 Agent 当前任务已结束，请刷新列表"
             );
             ensure!(
-                setup.resources.tools.contains("cancel_agents"),
+                setup
+                    .resources
+                    .tools
+                    .contains("cancel_agents"),
                 "当前会话不能停止子 Agent"
             );
             setup
@@ -122,7 +142,10 @@ pub(super) async fn execute(
                     ToolCall::function(
                         orbit_protocol::request_id(),
                         "cancel_agents",
-                        serde_json::json!({"agent_ids":[id],"expected_run_id":run}),
+                        serde_json::json!({
+                            "agent_ids": [id],
+                            "expected_run_id": run
+                        }),
                     ),
                     CancellationToken::new(),
                 )

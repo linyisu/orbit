@@ -5,14 +5,19 @@ fn main() -> Result<(), String> {
         return orbit_tools::read_document::render_worker(
             std::path::Path::new(&args[1]),
             std::path::Path::new(&args[2]),
-            args[3].to_str().ok_or("invalid render pages")?,
+            args[3]
+                .to_str()
+                .ok_or("invalid render pages")?,
         );
     }
     if (args.len() != 3 && args.len() != 5) || args[0] != "--internal-document-worker" {
         return Err("document worker requires input and output paths".into());
     }
     let page = |index: usize| -> Result<Option<u32>, String> {
-        match args.get(index).and_then(|value| value.to_str()) {
+        match args
+            .get(index)
+            .and_then(|value| value.to_str())
+        {
             None | Some("-") => Ok(None),
             Some(value) => value
                 .parse()

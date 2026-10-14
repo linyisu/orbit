@@ -27,7 +27,9 @@ pub(super) struct State {
 
 pub(super) fn is_open(dialog: &Option<InfoDialog>) -> bool {
     matches!(
-        dialog.as_ref().and_then(|dialog| dialog.source.as_ref()),
+        dialog
+            .as_ref()
+            .and_then(|dialog| dialog.source.as_ref()),
         Some(ReportSource::Usage)
     )
 }
@@ -54,6 +56,7 @@ impl State {
                 .refreshed
                 .is_some_and(|time| time.elapsed() < CACHE_AGE)
     }
+
     pub fn receive(&mut self, mut snapshot: Snapshot) {
         if snapshot.account.error.is_some()
             && let Some(old) = &self.snapshot
@@ -72,6 +75,7 @@ impl State {
         self.error = None;
         self.display_second = now();
     }
+
     pub fn tick(&mut self, dialog_open: bool) -> bool {
         let second = now();
         // The dialog shows seconds since the fetch; the footer only shows
@@ -85,6 +89,7 @@ impl State {
         self.display_second = second;
         changed
     }
+
     pub fn update_dialog(&self, dialog: &mut InfoDialog) {
         let status = if self.loading { " · 刷新中" } else { "" };
         let mut account_page = Text::default();
@@ -105,7 +110,8 @@ impl State {
                     .unwrap_or_else(|| "未提供".into())
             };
             session_page = format!(
-                "当前主会话 · {}\n\n运行次数      {}\n模型请求      {}\n输入 Token    {}\n输出 Token    {}\n缓存读取      {}\n缓存写入      {}\n\n用量记录覆盖 {} / {} 次运行\n仅汇总服务器已返回的字段；缺失字段不视为零。\n子代理及旁支问答不计入本页。",
+                "当前主会话 · {}\n\n运行次数      {}\n模型请求      {}\n输入 Token    {}\n输出 Token    {}\n缓存读取      \
+                    {}\n缓存写入      {}\n\n用量记录覆盖 {} / {} 次运行\n仅汇总服务器已返回的字段；缺失字段不视为零。\n子代理及旁支问答不计入本页。",
                 snapshot.model,
                 session.runs,
                 session.requests,
@@ -161,12 +167,16 @@ impl State {
         }
         dialog.pages(pages);
     }
+
     pub fn indicator(&self, max_width: usize) -> Line<'static> {
         let fallback = || Line::from(Span::styled("用量", super::components::accent()));
         let Some(snapshot) = &self.snapshot else {
             return fallback();
         };
-        let limits: Vec<_> = snapshot.summary_limits().take(2).collect();
+        let limits: Vec<_> = snapshot
+            .summary_limits()
+            .take(2)
+            .collect();
         if limits.is_empty() {
             return fallback();
         }
@@ -177,7 +187,8 @@ impl State {
                 if index > 0 {
                     line.spans.push(Span::raw("  "));
                 }
-                line.spans.extend(footer_limit(limit, width, time).spans);
+                line.spans
+                    .extend(footer_limit(limit, width, time).spans);
             }
             if snapshot.account.error.is_some() || self.error.is_some() {
                 line.spans
@@ -197,16 +208,21 @@ fn footer_limit(limit: &Limit, width: usize, time: u64) -> Line<'static> {
         super::components::accent(),
     )]);
     if let Some(fraction) = limit.remaining_fraction {
-        line.spans.extend(quota_bar(fraction, width).spans);
+        line.spans
+            .extend(quota_bar(fraction, width).spans);
     } else {
-        line.spans.push(Span::raw(super::render::safe_output(
-            format!(
-                "{} {}",
-                limit.remaining.as_deref().unwrap_or("—"),
-                limit.unit.as_deref().unwrap_or(""),
-            )
-            .trim(),
-        )));
+        line.spans
+            .push(Span::raw(super::render::safe_output(
+                format!(
+                    "{} {}",
+                    limit
+                        .remaining
+                        .as_deref()
+                        .unwrap_or("—"),
+                    limit.unit.as_deref().unwrap_or(""),
+                )
+                .trim(),
+            )));
     }
     if let Some(reset) = limit
         .resets_at
@@ -223,7 +239,9 @@ fn footer_limit(limit: &Limit, width: usize, time: u64) -> Line<'static> {
 }
 
 fn compact_reset(reset: &str) -> String {
-    reset.replace("小时", "时").replace("分钟", "分")
+    reset
+        .replace("小时", "时")
+        .replace("分钟", "分")
 }
 
 fn quota_label(label: &str) -> String {
@@ -236,7 +254,10 @@ fn quota_label(label: &str) -> String {
         .filter(|part| compact_label(part) == "额度")
         .map(|part| {
             let part = part.trim();
-            let part = if part.to_ascii_lowercase().ends_with(" models") {
+            let part = if part
+                .to_ascii_lowercase()
+                .ends_with(" models")
+            {
                 &part[..part.len() - " models".len()]
             } else {
                 part
@@ -375,19 +396,24 @@ fn account_content(account: &Account, scope: Scope) -> Text<'static> {
         ]);
         let unit = limit.unit.as_deref().unwrap_or("");
         if let Some(fraction) = limit.remaining_fraction {
-            row.spans.extend(quota_bar(fraction, BAR_WIDTH).spans);
+            row.spans
+                .extend(quota_bar(fraction, BAR_WIDTH).spans);
         }
         if let Some(value) = &limit.remaining {
-            row.spans.push(Span::raw(format!("  剩余 {value} {unit}")));
+            row.spans
+                .push(Span::raw(format!("  剩余 {value} {unit}")));
         }
         if let Some(value) = &limit.used {
-            row.spans.push(Span::raw(format!("  已用 {value} {unit}")));
+            row.spans
+                .push(Span::raw(format!("  已用 {value} {unit}")));
         }
         if let Some(value) = &limit.total {
-            row.spans.push(Span::raw(format!("  总量 {value} {unit}")));
+            row.spans
+                .push(Span::raw(format!("  总量 {value} {unit}")));
         }
         if limit.remaining_fraction.is_none() && limit.remaining.is_none() && limit.used.is_none() {
-            row.spans.push(Span::raw("服务器未提供剩余额度"));
+            row.spans
+                .push(Span::raw("服务器未提供剩余额度"));
         }
         if let Some(reset) = limit
             .resets_at
@@ -410,13 +436,14 @@ fn now() -> u64 {
         .unwrap_or_default()
         .as_secs()
 }
+
 fn reset_countdown(reset: &str, current: u64) -> Option<String> {
     let time = reset
         .parse::<u64>()
         .ok()
         .map(|time| {
             if time > 1_000_000_000_000 {
-                time / 1000
+                time / 1_000
             } else {
                 time
             }
@@ -432,17 +459,17 @@ fn reset_countdown(reset: &str, current: u64) -> Option<String> {
     let seconds = time.saturating_sub(current);
     if seconds == 0 {
         Some("等待刷新".into())
-    } else if seconds >= 86400 {
+    } else if seconds >= 86_400 {
         Some(format!(
             "{}天{}小时后重置",
-            seconds / 86400,
-            seconds % 86400 / 3600
+            seconds / 86_400,
+            seconds % 86_400 / 3_600
         ))
-    } else if seconds >= 3600 {
+    } else if seconds >= 3_600 {
         Some(format!(
             "{}小时{}分钟后重置",
-            seconds / 3600,
-            seconds % 3600 / 60
+            seconds / 3_600,
+            seconds % 3_600 / 60
         ))
     } else if seconds >= 60 {
         Some(format!("{}分钟后重置", seconds / 60))
@@ -482,8 +509,15 @@ mod tests {
                 assert_eq!(bar.width(), width);
                 let text = bar.to_string();
                 let value = format!("{:.0}%", fraction * 100.0);
-                let start = text.chars().position(|ch| ch.is_ascii_digit()).unwrap();
-                let end = text.chars().position(|ch| ch == '%').unwrap() + 1;
+                let start = text
+                    .chars()
+                    .position(|ch| ch.is_ascii_digit())
+                    .unwrap();
+                let end = text
+                    .chars()
+                    .position(|ch| ch == '%')
+                    .unwrap()
+                    + 1;
                 assert_eq!(
                     text.chars()
                         .skip(start)
@@ -517,7 +551,9 @@ mod tests {
             Some(super::super::theme::THEME.danger)
         );
         assert_eq!(
-            quota_bar(0.2, BAR_WIDTH).spans[0].style.fg,
+            quota_bar(0.2, BAR_WIDTH).spans[0]
+                .style
+                .fg,
             Some(super::super::theme::THEME.md_mark)
         );
         assert_eq!(
@@ -534,7 +570,10 @@ mod tests {
             full.spans
                 .iter()
                 .chain(&empty.spans)
-                .all(|span| span.style.bg.is_none_or(|color| color == Color::Reset))
+                .all(|span| span
+                    .style
+                    .bg
+                    .is_none_or(|color| color == Color::Reset))
         );
         let mut state = State::default();
         state.receive(Snapshot {
@@ -575,7 +614,11 @@ mod tests {
         state.update_dialog(&mut dialog);
         assert!(!dialog.content.contains("Gemini Pro"));
         assert!(dialog.content.contains("Gemini 周"));
-        assert!(!dialog.content.contains("Limit Remaining"));
+        assert!(
+            !dialog
+                .content
+                .contains("Limit Remaining")
+        );
         assert!(!dialog.content.contains("未知"));
         let content = dialog.content.clone();
         state.begin_refresh();
@@ -587,8 +630,15 @@ mod tests {
                 .to_string()
                 .contains("Gemini Pro")
         );
-        let mut account = state.snapshot.as_ref().unwrap().account.clone();
-        account.limits.retain(|limit| limit.scope == Scope::Account);
+        let mut account = state
+            .snapshot
+            .as_ref()
+            .unwrap()
+            .account
+            .clone();
+        account
+            .limits
+            .retain(|limit| limit.scope == Scope::Account);
         for window in ["weekly", "5h"] {
             account.limits.push(Limit {
                 label: format!("Claude and GPT models · {window}"),
@@ -617,11 +667,12 @@ mod tests {
             .retain(|limit| limit.scope == Scope::Model);
         assert_eq!(state.indicator(80).to_string(), "用量");
     }
+
     #[test]
     fn quota_countdown_accepts_server_timestamps_and_never_guesses_missing_times() {
         let current = 1_700_000_000;
-        let reset = current + 2 * 86400 + 3 * 3600;
-        for timestamp in [reset.to_string(), (reset * 1000).to_string()] {
+        let reset = current + 2 * 86_400 + 3 * 3_600;
+        for timestamp in [reset.to_string(), (reset * 1_000).to_string()] {
             assert_eq!(
                 reset_countdown(&timestamp, current).as_deref(),
                 Some("2天3小时后重置")
@@ -629,7 +680,7 @@ mod tests {
         }
         for timestamp in ["1970-01-01T05:30:00+02:00", "1970-01-01T03:30:00Z"] {
             assert_eq!(
-                reset_countdown(timestamp, 3600).as_deref(),
+                reset_countdown(timestamp, 3_600).as_deref(),
                 Some("2小时30分钟后重置")
             );
         }
@@ -644,7 +695,7 @@ mod tests {
             resets_at: Some("12600".into()),
             ..Default::default()
         };
-        let indicator = footer_limit(&limit, 12, 3600).to_string();
+        let indicator = footer_limit(&limit, 12, 3_600).to_string();
         assert!(indicator.starts_with("5h "));
         assert!(indicator.contains("96%"));
         assert!(indicator.ends_with(" (2时30分)"));

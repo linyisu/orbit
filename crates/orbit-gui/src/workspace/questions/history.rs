@@ -40,7 +40,11 @@ impl Workspace {
         {
             let panel = panel.clone();
             present(panel.clone(), window, cx);
-            panel.read(cx).list.focus_handle(cx).focus(window, cx);
+            panel
+                .read(cx)
+                .list
+                .focus_handle(cx)
+                .focus(window, cx);
             return;
         }
         let owner = cx.weak_entity();
@@ -99,17 +103,22 @@ impl QuestionHistory {
     }
 
     fn current_scope(&self, cx: &App) -> bool {
-        self.owner.upgrade().is_some_and(|owner| {
-            let workspace = owner.read(cx);
-            workspace.connected
-                && workspace
-                    .question_history
-                    .as_ref()
-                    .is_some_and(|panel| panel.entity_id() == self.id)
-                && workspace.info.as_ref().is_some_and(|info| {
-                    self.belongs_to(&info.id, &info.workspace, &workspace.options)
-                })
-        })
+        self.owner
+            .upgrade()
+            .is_some_and(|owner| {
+                let workspace = owner.read(cx);
+                workspace.connected
+                    && workspace
+                        .question_history
+                        .as_ref()
+                        .is_some_and(|panel| panel.entity_id() == self.id)
+                    && workspace
+                        .info
+                        .as_ref()
+                        .is_some_and(|info| {
+                            self.belongs_to(&info.id, &info.workspace, &workspace.options)
+                        })
+            })
     }
 
     fn load(&mut self, cx: &mut Context<Self>) {
@@ -132,9 +141,14 @@ impl QuestionHistory {
         let sent = self
             .owner
             .update(cx, |workspace, _| {
-                workspace.backend.as_ref().is_some_and(|backend| {
-                    backend.send(Command::Settings { request, result }).is_ok()
-                })
+                workspace
+                    .backend
+                    .as_ref()
+                    .is_some_and(|backend| {
+                        backend
+                            .send(Command::Settings { request, result })
+                            .is_ok()
+                    })
             })
             .unwrap_or(false);
         if !sent {
@@ -179,10 +193,11 @@ impl QuestionHistory {
                     }
                 });
             } else {
-                self.details.push(cx.new(|cx| HistoryDetail {
-                    record: record.clone(),
-                    text: cx.new(|cx| TextViewState::markdown(&record_text(record), cx)),
-                }));
+                self.details
+                    .push(cx.new(|cx| HistoryDetail {
+                        record: record.clone(),
+                        text: cx.new(|cx| TextViewState::markdown(&record_text(record), cx)),
+                    }));
             }
         }
         let selected = self
@@ -308,16 +323,24 @@ impl Render for QuestionHistory {
                     .border_color(cx.theme().border)
                     .pt_3()
                     .when_some(self.state.error.clone(), |view, error| {
-                        view.child(div().text_sm().text_color(cx.theme().danger).child(error))
+                        view.child(
+                            div()
+                                .text_sm()
+                                .text_color(cx.theme().danger)
+                                .child(error),
+                        )
                     })
                     .when(loading, |view| {
-                        view.child(h_flex().gap_2().child(Spinner::new().small()).child(
-                            if self.state.loaded {
-                                "正在加载更早记录…"
-                            } else {
-                                "正在加载问答历史…"
-                            },
-                        ))
+                        view.child(
+                            h_flex()
+                                .gap_2()
+                                .child(Spinner::new().small())
+                                .child(if self.state.loaded {
+                                    "正在加载更早记录…"
+                                } else {
+                                    "正在加载问答历史…"
+                                }),
+                        )
                     })
                     .when(!complete, |view| {
                         view.child(
@@ -385,7 +408,12 @@ impl ListDelegate for HistoryList {
                         .min_w_0()
                         .w_full()
                         .gap_1()
-                        .child(div().text_sm().text_ellipsis().child(item.title.clone()))
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_ellipsis()
+                                .child(item.title.clone()),
+                        )
                         .child(
                             div()
                                 .text_xs()

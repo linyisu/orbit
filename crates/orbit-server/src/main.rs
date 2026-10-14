@@ -1,3 +1,5 @@
+//! Headless workspace service entry point for native and remote transports.
+
 use std::path::PathBuf;
 
 use anyhow::Result;

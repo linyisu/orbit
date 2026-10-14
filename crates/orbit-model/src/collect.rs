@@ -18,15 +18,17 @@ pub(crate) async fn completion(
             StreamEvent::TextDelta(delta) => text.push_str(&delta),
             StreamEvent::ReasoningDelta(_) => {}
             StreamEvent::ToolCallDelta(delta) => {
-                let call = calls.entry(delta.index).or_insert_with(|| ToolCall {
-                    metadata: None,
-                    id: String::new(),
-                    kind: "function".into(),
-                    function: FunctionCall {
-                        name: String::new(),
-                        arguments: String::new(),
-                    },
-                });
+                let call = calls
+                    .entry(delta.index)
+                    .or_insert_with(|| ToolCall {
+                        metadata: None,
+                        id: String::new(),
+                        kind: "function".into(),
+                        function: FunctionCall {
+                            name: String::new(),
+                            arguments: String::new(),
+                        },
+                    });
                 if let Some(id) = delta.id {
                     call.id = id;
                 }
@@ -36,7 +38,9 @@ pub(crate) async fn completion(
                 if let Some(metadata) = delta.metadata {
                     call.metadata = Some(metadata);
                 }
-                call.function.arguments.push_str(&delta.arguments);
+                call.function
+                    .arguments
+                    .push_str(&delta.arguments);
             }
 
             StreamEvent::Completed {

@@ -12,6 +12,7 @@ fn choice_mark(kind: Kind, chosen: bool) -> &'static str {
         " "
     }
 }
+
 fn status(status: Status) -> &'static str {
     match status {
         Status::Pending => "待回答",
@@ -26,8 +27,9 @@ struct Row {
     line: Line<'static>,
     focus: Option<Focus>,
 }
+
+/// Sanitize model-controlled text before terminal rendering.
 fn push(rows: &mut Vec<Row>, text: String, style: Style, focus: Option<Focus>, width: u16) {
-    // Sanitize model-controlled text before terminal rendering.
     for text in text.split('\n') {
         let line = Line::styled(crate::tui::render::safe_output(text), style);
         for line in crate::tui::transcript::wrap_line(&line, width.max(1)).0 {
@@ -67,6 +69,7 @@ impl State {
             self.badge,
         );
     }
+
     pub fn draw(&mut self, frame: &mut Frame<'_>) -> Option<Position> {
         self.hits.clear();
         self.editor_area = Rect::default();
@@ -92,7 +95,11 @@ impl State {
             );
             let height = inner.height.saturating_sub(5) as usize;
             *cursor = (*cursor).min(self.records.len().saturating_sub(1));
-            *offset = (*offset).min(self.records.len().saturating_sub(height));
+            *offset = (*offset).min(
+                self.records
+                    .len()
+                    .saturating_sub(height),
+            );
             if *cursor >= *offset + height {
                 *offset = cursor.saturating_sub(height - 1);
             }
@@ -117,7 +124,8 @@ impl State {
                     Paragraph::new(label).style(if i == *cursor { selected() } else { normal() }),
                     rect,
                 );
-                self.hits.push((rect, Focus::History(i)));
+                self.hits
+                    .push((rect, Focus::History(i)));
             }
             if self.records.is_empty() {
                 frame.render_widget(
@@ -140,7 +148,10 @@ impl State {
             return None;
         };
         let highlight = self.pointer.highlight(Some(v.focus));
-        let r = self.records.iter().find(|r| r.id == v.id)?;
+        let r = self
+            .records
+            .iter()
+            .find(|r| r.id == v.id)?;
         let editable = r.status == Status::Pending && self.pending.contains(&v.id);
         let count = r.form.questions.len();
         let page = v.page.min(count);
@@ -345,7 +356,13 @@ impl State {
                 }
             }
         } else {
-            for (i, (q, d)) in r.form.questions.iter().zip(&self.drafts[&r.id]).enumerate() {
+            for (i, (q, d)) in r
+                .form
+                .questions
+                .iter()
+                .zip(&self.drafts[&r.id])
+                .enumerate()
+            {
                 push(
                     &mut rows,
                     q.prompt.clone(),
@@ -395,11 +412,14 @@ impl State {
         }
         let body = Rect::new(inner.x, inner.y + 3, inner.width, inner.height - 8);
         let height = body.height as usize;
-        v.offset = v.offset.min(rows.len().saturating_sub(height) as u16);
+        v.offset = v
+            .offset
+            .min(rows.len().saturating_sub(height) as u16);
         if v.follow_focus {
-            let row = caret
-                .map(|(_, row)| row)
-                .or_else(|| rows.iter().position(|r| r.focus == Some(v.focus)));
+            let row = caret.map(|(_, row)| row).or_else(|| {
+                rows.iter()
+                    .position(|r| r.focus == Some(v.focus))
+            });
             if let Some(row) = row {
                 if v.focus == Focus::Option(0) && row < height {
                     v.offset = 0;
@@ -411,7 +431,12 @@ impl State {
             }
             v.follow_focus = false;
         }
-        for (i, row) in rows.iter().skip(v.offset as usize).take(height).enumerate() {
+        for (i, row) in rows
+            .iter()
+            .skip(v.offset as usize)
+            .take(height)
+            .enumerate()
+        {
             let rect = Rect::new(body.x, body.y + i as u16, body.width, 1);
             frame.render_widget(Paragraph::new(row.line.clone()).style(row.line.style), rect);
             let absolute = i + v.offset as usize;

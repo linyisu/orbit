@@ -31,6 +31,7 @@ pub struct Question {
     #[serde(default = "yes")]
     pub required: bool,
 }
+
 fn yes() -> bool {
     true
 }
@@ -93,7 +94,7 @@ impl Form {
                 || q.title.trim().is_empty()
                 || q.title.chars().count() > 30
                 || q.prompt.trim().is_empty()
-                || q.prompt.len() > 4096
+                || q.prompt.len() > 4_096
             {
                 return Err("题目需要唯一 ID、简短标题和完整问题".into());
             }
@@ -109,7 +110,7 @@ impl Form {
                     || !options.insert(&o.id)
                     || o.label.trim().is_empty()
                     || o.label.len() > 256
-                    || o.description.len() > 1024
+                    || o.description.len() > 1_024
                 {
                     return Err("选项需要唯一 ID 和有效名称".into());
                 }
@@ -129,7 +130,7 @@ impl Form {
                 .iter()
                 .find(|q| q.id == a.question_id)
                 .ok_or("答案包含未知题目")?;
-            if !ids.insert(&a.question_id) || a.text.len() > 16384 || a.note.len() > 8192 {
+            if !ids.insert(&a.question_id) || a.text.len() > 16_384 || a.note.len() > 8_192 {
                 return Err("答案重复或文字过长".into());
             }
             let selected: HashSet<_> = a.selected.iter().collect();
@@ -186,6 +187,7 @@ mod tests {
             }],
         }
     }
+
     #[test]
     fn user_input_validates_selection_custom_text_and_optional_answers() {
         for kind in [Kind::Single, Kind::Multiple, Kind::Text] {
@@ -196,20 +198,39 @@ mod tests {
             selected: vec!["a".into()],
             ..Default::default()
         };
-        form(Kind::Single).validate_answers(&[a.clone()]).unwrap();
+        form(Kind::Single)
+            .validate_answers(&[a.clone()])
+            .unwrap();
         a.text = "其他目的地".into();
-        assert!(form(Kind::Single).validate_answers(&[a.clone()]).is_err());
-        form(Kind::Multiple).validate_answers(&[a.clone()]).unwrap();
-        assert!(form(Kind::Text).validate_answers(&[a.clone()]).is_err());
+        assert!(
+            form(Kind::Single)
+                .validate_answers(&[a.clone()])
+                .is_err()
+        );
+        form(Kind::Multiple)
+            .validate_answers(&[a.clone()])
+            .unwrap();
+        assert!(
+            form(Kind::Text)
+                .validate_answers(&[a.clone()])
+                .is_err()
+        );
         a.selected.clear();
-        form(Kind::Text).validate_answers(&[a.clone()]).unwrap();
+        form(Kind::Text)
+            .validate_answers(&[a.clone()])
+            .unwrap();
         a.text.clear();
         a.note = "备注不等于答案".into();
-        assert!(form(Kind::Text).validate_answers(&[a.clone()]).is_err());
+        assert!(
+            form(Kind::Text)
+                .validate_answers(&[a.clone()])
+                .is_err()
+        );
         let mut f = form(Kind::Text);
         f.questions[0].required = false;
         f.validate_answers(&[a]).unwrap();
     }
+
     #[test]
     fn user_input_rejects_unknown_ids_duplicates_and_invalid_schema() {
         let f = form(Kind::Multiple);
@@ -224,7 +245,9 @@ mod tests {
             );
         }
         let mut invalid = f.clone();
-        invalid.questions.push(invalid.questions[0].clone());
+        invalid
+            .questions
+            .push(invalid.questions[0].clone());
         assert!(invalid.validate().is_err());
         invalid = f;
         invalid.questions[0].options[1].id = "a".into();

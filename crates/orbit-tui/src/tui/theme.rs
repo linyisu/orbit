@@ -196,7 +196,9 @@ pub const THEME: Theme = Theme::dark();
 
 /// Use one subdued background while retaining token colors and readable contrast.
 pub(super) fn selection_style(style: Style) -> Style {
-    let (source_foreground, source_background) = if style.add_modifier.contains(Modifier::REVERSED)
+    let (source_foreground, source_background) = if style
+        .add_modifier
+        .contains(Modifier::REVERSED)
     {
         (style.bg, style.fg)
     } else {
@@ -361,10 +363,12 @@ fn contrast(foreground: (u8, u8, u8), background: (u8, u8, u8)) -> f64 {
 
 /// Stable language hues with a bounded brightness, including unknown languages.
 pub(super) fn code_label_color(key: &str) -> Color {
-    let hash = key.bytes().fold(0xcbf29ce484222325_u64, |hash, byte| {
-        (hash ^ u64::from(byte)).wrapping_mul(0x100000001b3)
-    });
-    let hue = ((hash ^ (hash >> 32)) % 1536) as u16;
+    let hash = key
+        .bytes()
+        .fold(0xcbf29ce484222325_u64, |hash, byte| {
+            (hash ^ u64::from(byte)).wrapping_mul(0x100000001b3)
+        });
+    let hue = ((hash ^ (hash >> 32)) % 1_536) as u16;
     let low = 146 + ((hash >> 40) % 16) as u8;
     let high = 208 + ((hash >> 48) % 16) as u8;
     let offset = ((hue % 256) * u16::from(high - low) / 255) as u8;
@@ -445,12 +449,22 @@ pub(super) fn syntax_modifiers(scopes: &[Scope]) -> Modifier {
             ("markup.strikethrough", Modifier::CROSSED_OUT),
             ("markup.highlight", Modifier::UNDERLINED),
         ]
-        .map(|(scope, modifier)| (scope.parse().expect("valid syntax effect scope"), modifier))
+        .map(|(scope, modifier)| {
+            (
+                scope
+                    .parse()
+                    .expect("valid syntax effect scope"),
+                modifier,
+            )
+        })
     });
     RULES
         .iter()
         .fold(Modifier::empty(), |effects, (scope, modifier)| {
-            if scopes.iter().any(|token| scope.is_prefix_of(*token)) {
+            if scopes
+                .iter()
+                .any(|token| scope.is_prefix_of(*token))
+            {
                 effects | *modifier
             } else {
                 effects
@@ -529,7 +543,9 @@ pub(super) static CODE_THEME: LazyLock<syntect::highlighting::Theme> = LazyLock:
         ]
         .into_iter()
         .map(|(scope, foreground)| ThemeItem {
-            scope: scope.parse().expect("valid built-in syntax scope"),
+            scope: scope
+                .parse()
+                .expect("valid built-in syntax scope"),
             style: StyleModifier {
                 foreground: Some(foreground),
                 ..Default::default()
@@ -592,8 +608,16 @@ mod tests {
         let foreground = color_rgb(selected.fg.unwrap()).unwrap();
         assert!(foreground.2 > foreground.1 && foreground.1 > foreground.0);
         assert!(contrast(foreground, color_rgb(THEME.selection).unwrap()) >= 4.5);
-        assert!(selected.add_modifier.contains(modifiers));
-        assert!(!selected.add_modifier.contains(Modifier::DIM));
+        assert!(
+            selected
+                .add_modifier
+                .contains(modifiers)
+        );
+        assert!(
+            !selected
+                .add_modifier
+                .contains(Modifier::DIM)
+        );
 
         for language in ["python", "rust", "orbit-script"] {
             let badge = code_label_color(language);
@@ -611,7 +635,11 @@ mod tests {
             assert_eq!(red.cmp(&green), selected_red.cmp(&selected_green));
             assert_eq!(red.cmp(&blue), selected_red.cmp(&selected_blue));
             assert_eq!(green.cmp(&blue), selected_green.cmp(&selected_blue));
-            assert!(selected.add_modifier.contains(Modifier::BOLD));
+            assert!(
+                selected
+                    .add_modifier
+                    .contains(Modifier::BOLD)
+            );
         }
     }
 
@@ -642,7 +670,11 @@ mod tests {
             let selected = selection_style(source);
             assert_eq!(selected.fg, Some(foreground));
             assert_eq!(selected.bg, Some(THEME.selection));
-            assert!(!selected.add_modifier.contains(Modifier::REVERSED));
+            assert!(
+                !selected
+                    .add_modifier
+                    .contains(Modifier::REVERSED)
+            );
         }
 
         let source = Color::Rgb(16, 16, 16);
@@ -666,7 +698,11 @@ mod tests {
                 Color::Rgb(24, 24, 24),
                 Color::Rgb(240, 240, 240),
             ] {
-                let selected = selection_style(Style::default().fg(color).bg(background));
+                let selected = selection_style(
+                    Style::default()
+                        .fg(color)
+                        .bg(background),
+                );
                 let foreground = color_rgb(selected.fg.unwrap()).unwrap();
                 let background = color_rgb(selected.bg.unwrap()).unwrap();
                 assert!(

@@ -88,7 +88,10 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(
-            snapshot.credentials.keys().collect::<Vec<_>>(),
+            snapshot
+                .credentials
+                .keys()
+                .collect::<Vec<_>>(),
             vec!["used"]
         );
         assert!(!format!("{snapshot:?}").contains("secret"));
@@ -106,7 +109,9 @@ mod tests {
             instruction_dir: None,
             editor_command: "vi".into(),
         };
-        let installed = Installed::install(snapshot, &options).await.unwrap();
+        let installed = Installed::install(snapshot, &options)
+            .await
+            .unwrap();
         assert!(!options.config.exists());
         assert!(!options.auth_directory.exists());
         let parsed = crate::config::FileConfig::load(
@@ -139,9 +144,18 @@ mod tests {
                 & 0o777,
             0o600
         );
-        let root = installed.options.config.parent().unwrap().to_owned();
+        let root = installed
+            .options
+            .config
+            .parent()
+            .unwrap()
+            .to_owned();
         assert_eq!(
-            std::fs::metadata(&root).unwrap().permissions().mode() & 0o777,
+            std::fs::metadata(&root)
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
             0o700
         );
         drop(installed);

@@ -17,7 +17,10 @@ impl Frames {
         let target = self
             .last_draw
             .map_or(now, |last| now.max(last + MIN_FRAME_INTERVAL));
-        self.pending = Some(self.pending.map_or(target, |previous| previous.min(target)));
+        self.pending = Some(
+            self.pending
+                .map_or(target, |previous| previous.min(target)),
+        );
     }
 
     pub fn pending(&self) -> bool {
@@ -26,7 +29,7 @@ impl Frames {
 
     pub fn deadline(&self) -> Instant {
         self.pending
-            .unwrap_or_else(|| Instant::now() + Duration::from_secs(86400))
+            .unwrap_or_else(|| Instant::now() + Duration::from_secs(86_400))
     }
 
     pub fn drawn(&mut self, now: Instant) {
@@ -49,7 +52,7 @@ mod tests {
 
         frames.drawn(now);
 
-        for micros in 1..1000 {
+        for micros in 1..1_000 {
             frames.request(now + Duration::from_micros(micros));
         }
 

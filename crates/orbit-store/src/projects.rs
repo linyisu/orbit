@@ -29,6 +29,7 @@ async fn affected_sessions<C: ConnectionTrait>(
         .all(conn)
         .await?)
 }
+
 async fn record_path<C: ConnectionTrait>(conn: &C, id: &str, path: &str) -> Result<()> {
     project_paths::Entity::insert(project_paths::ActiveModel {
         project_id: Set(id.to_owned()),
@@ -47,6 +48,7 @@ async fn record_path<C: ConnectionTrait>(conn: &C, id: &str, path: &str) -> Resu
     .await?;
     Ok(())
 }
+
 async fn update_directory<C: ConnectionTrait>(
     conn: &C,
     id: &str,
@@ -64,6 +66,7 @@ async fn update_directory<C: ConnectionTrait>(
         .await?;
     record_path(conn, id, path).await
 }
+
 fn can_complete_identity(row: &projects::Model, directory: &Directory) -> bool {
     directory.strong
         && !row.strong
@@ -123,7 +126,10 @@ async fn find_project(
                     || (same_path.contains(&row.id)
                         && same_directory_identity(
                             &identity,
-                            directory.identity.as_deref().unwrap_or_default(),
+                            directory
+                                .identity
+                                .as_deref()
+                                .unwrap_or_default(),
                         )))
             {
                 let count = sessions::Entity::find()
@@ -139,11 +145,15 @@ async fn find_project(
             .then_with(|| b.2.cmp(&a.2))
             .then_with(|| a.0.cmp(&b.0))
     });
-    Ok(matches.into_iter().next().map(|(id, _, _)| id).or_else(|| {
-        known
-            .filter(|row| row.legacy || row.identity == directory.identity)
-            .map(|row| row.id)
-    }))
+    Ok(matches
+        .into_iter()
+        .next()
+        .map(|(id, _, _)| id)
+        .or_else(|| {
+            known
+                .filter(|row| row.legacy || row.identity == directory.identity)
+                .map(|row| row.id)
+        }))
 }
 
 impl Store {
@@ -169,10 +179,12 @@ impl Store {
         let directory = Directory::read(path.as_ref())?;
         self.read_access(move |conn| async move {
             let tx = conn.begin().await?;
-            Ok(find_project(&tx, &directory).await?.map(|id| Project {
-                id,
-                path: Some(directory.path),
-            }))
+            Ok(find_project(&tx, &directory)
+                .await?
+                .map(|id| Project {
+                    id,
+                    path: Some(directory.path),
+                }))
         })
         .await
     }
@@ -228,7 +240,9 @@ impl Store {
     pub async fn link_project(&self, id: &str, path: impl AsRef<Path>) -> Result<Project> {
         let directory = Directory::read(path.as_ref())?;
         let id = id.to_owned();
-        let lock_dir = self.path().with_extension("session-locks");
+        let lock_dir = self
+            .path()
+            .with_extension("session-locks");
 
         for _ in 0..3 {
             let scan_id = id.clone();
@@ -250,7 +264,10 @@ impl Store {
 
                 for session in session_ids {
                     ensure!(
-                        session.len() == 32 && session.bytes().all(|byte| byte.is_ascii_hexdigit()),
+                        session.len() == 32
+                            && session
+                                .bytes()
+                                .all(|byte| byte.is_ascii_hexdigit()),
                         "invalid stored session ID"
                     );
 
@@ -277,12 +294,23 @@ impl Store {
                         return Ok(None);
                     }
 
-                    let old = projects::Entity::find_by_id(&link_id).one(&tx).await?.context("project not found")?.path;
+                    let old = projects::Entity::find_by_id(&link_id)
+                        .one(&tx)
+                        .await?
+                        .context("project not found")?
+                        .path;
 
-                    if let Some(old) = old.as_deref().filter(|old| *old != link_path) {
+                    if let Some(old) = old
+                        .as_deref()
+                        .filter(|old| *old != link_path)
+                    {
                         ensure!(
-                            matches!(std::fs::metadata(old), Err(error) if error.kind() == std::io::ErrorKind::NotFound),
-                            "old project directory still exists or cannot be checked; refusing to merge a copy"
+                            matches!(
+                                std::fs::metadata(old),
+                                Err(error) if error.kind() == std::io::ErrorKind::NotFound
+                            ),
+                            "old project directory still exists or cannot be checked; refusing to \
+                                merge a copy"
                         );
                     }
 
@@ -291,19 +319,31 @@ impl Store {
                         .join(JoinType::InnerJoin, sessions::Relation::Project.def())
                         .filter(projects::Column::Path.eq(&link_path))
                         .filter(projects::Column::Id.ne(&link_id))
-                        .count(&tx).await?;
-                    ensure!(others == 0, "this directory already has another project's conversations; refusing to merge histories");
+                        .count(&tx)
+                        .await?;
+                    ensure!(
+                        others == 0,
+                        "this directory already has another project's \
+                        conversations; refusing to merge histories"
+                    );
                     projects::Entity::update_many()
                         .col_expr(projects::Column::Path, Expr::value(Option::<String>::None))
-                        .col_expr(projects::Column::Identity, Expr::value(Option::<String>::None))
+                        .col_expr(
+                            projects::Column::Identity,
+                            Expr::value(Option::<String>::None),
+                        )
                         .col_expr(projects::Column::Strong, Expr::value(false))
                         .filter(projects::Column::Path.eq(&link_path))
                         .filter(projects::Column::Id.ne(&link_id))
-                        .exec(&tx).await?;
+                        .exec(&tx)
+                        .await?;
                     update_directory(&tx, &link_id, &link_path, identity, strong).await?;
                     tx.commit().await?;
 
-                    Ok(Some(Project { id: link_id, path: Some(link_path) }))
+                    Ok(Some(Project {
+                        id: link_id,
+                        path: Some(link_path),
+                    }))
                 })
                 .await?;
 
@@ -374,7 +414,10 @@ mod tests {
         let store = Store::open(temporary.path().join("orbit.db"))
             .await
             .unwrap();
-        let original = store.resolve_project(temporary.path()).await.unwrap();
+        let original = store
+            .resolve_project(temporary.path())
+            .await
+            .unwrap();
         drop(
             store
                 .create(temporary.path().display().to_string(), "model".into())
@@ -418,11 +461,18 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(
-            store.resolve_project(temporary.path()).await.unwrap().id,
+            store
+                .resolve_project(temporary.path())
+                .await
+                .unwrap()
+                .id,
             original.id
         );
         assert_eq!(store.projects().await.unwrap().len(), 2);
-        let related = store.equivalent_project_ids(&original.id).await.unwrap();
+        let related = store
+            .equivalent_project_ids(&original.id)
+            .await
+            .unwrap();
         assert!(related.contains(&"weak".to_owned()));
     }
 
@@ -433,7 +483,10 @@ mod tests {
             let store = Store::open(temporary.path().join("orbit.db"))
                 .await
                 .unwrap();
-            let original = store.resolve_project(temporary.path()).await.unwrap();
+            let original = store
+                .resolve_project(temporary.path())
+                .await
+                .unwrap();
             let mut writer = store
                 .create(temporary.path().display().to_string(), "model".into())
                 .await
@@ -442,7 +495,10 @@ mod tests {
                 .begin("saved conversation".into(), "model".into())
                 .await
                 .unwrap();
-            writer.finish("failed", Vec::new(), None).await.unwrap();
+            writer
+                .finish("failed", Vec::new(), None)
+                .await
+                .unwrap();
             drop(writer);
             let id = original.id.clone();
             store
@@ -453,7 +509,10 @@ mod tests {
                         .unwrap()
                         .identity
                         .unwrap();
-                    let mut fields: Vec<_> = identity.split(':').map(str::to_owned).collect();
+                    let mut fields: Vec<_> = identity
+                        .split(':')
+                        .map(str::to_owned)
+                        .collect();
                     if !same_inode {
                         fields[2] = "0".into();
                     }
@@ -470,9 +529,19 @@ mod tests {
                 })
                 .await
                 .unwrap();
-            let resolved = store.resolve_project(temporary.path()).await.unwrap();
+            let resolved = store
+                .resolve_project(temporary.path())
+                .await
+                .unwrap();
             assert_eq!(resolved.id == original.id, same_inode);
-            assert_eq!(store.list_resumable().await.unwrap().len(), 1);
+            assert_eq!(
+                store
+                    .list_resumable()
+                    .await
+                    .unwrap()
+                    .len(),
+                1
+            );
         }
     }
 
@@ -484,7 +553,10 @@ mod tests {
         let store = Store::open(temporary.path().join("orbit.db"))
             .await
             .unwrap();
-        let original = store.resolve_project(&workspace).await.unwrap();
+        let original = store
+            .resolve_project(&workspace)
+            .await
+            .unwrap();
 
         for _ in 0..2 {
             drop(
@@ -546,12 +618,19 @@ mod tests {
             .await
             .unwrap();
 
-        let related = store.equivalent_project_ids("duplicate").await.unwrap();
+        let related = store
+            .equivalent_project_ids("duplicate")
+            .await
+            .unwrap();
 
         assert!(related.contains(&original.id));
         assert!(related.contains(&"duplicate".to_owned()));
         assert_eq!(
-            store.resolve_project(&workspace).await.unwrap().id,
+            store
+                .resolve_project(&workspace)
+                .await
+                .unwrap()
+                .id,
             original.id
         );
         assert_eq!(store.list().await.unwrap().len(), 3);

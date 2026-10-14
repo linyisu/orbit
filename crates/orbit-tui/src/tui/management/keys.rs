@@ -46,6 +46,7 @@ impl State {
             buttons: Vec::new(),
         }
     }
+
     fn commands(&self) -> Vec<Command> {
         let query = self.query.text.to_lowercase();
         keymap::COMMANDS
@@ -53,20 +54,28 @@ impl State {
             .copied()
             .filter(|command| {
                 query.is_empty()
-                    || command.label().to_lowercase().contains(&query)
+                    || command
+                        .label()
+                        .to_lowercase()
+                        .contains(&query)
                     || command.id().contains(&query)
             })
             .collect()
     }
+
     fn selected(&self) -> Option<Command> {
-        self.commands().get(self.selected).copied()
+        self.commands()
+            .get(self.selected)
+            .copied()
     }
+
     fn result(&mut self, result: Result<(), String>) {
         self.message = Some(match result {
             Ok(()) => "快捷键已保存，立即生效".into(),
             Err(error) => error,
         });
     }
+
     fn activate(&mut self, action: char) -> Action {
         match action {
             'c' => return Action::Close,
@@ -98,7 +107,10 @@ impl State {
             'a' => self.reset_confirmation = true,
             'f' => {
                 let warning = {
-                    let mut keymap = self.keymap.lock().unwrap_or_else(|e| e.into_inner());
+                    let mut keymap = self
+                        .keymap
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner());
                     keymap.reload();
                     keymap.warning().map(str::to_owned)
                 };
@@ -166,10 +178,18 @@ impl Panel for State {
             if key.code == KeyCode::F(5) {
                 return self.activate('f');
             }
-            if key.code == KeyCode::Char('r') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            if key.code == KeyCode::Char('r')
+                && key
+                    .modifiers
+                    .contains(KeyModifiers::CONTROL)
+            {
                 return self.activate('a');
             }
-            if key.code == KeyCode::Char('e') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            if key.code == KeyCode::Char('e')
+                && key
+                    .modifiers
+                    .contains(KeyModifiers::CONTROL)
+            {
                 return self.activate('y');
             }
             if matches!(key.code, KeyCode::Tab | KeyCode::BackTab) {
@@ -202,7 +222,9 @@ impl Panel for State {
                             .min(self.commands().len().saturating_sub(1))
                     }
                     KeyCode::PageUp => {
-                        self.selected = self.selected.saturating_sub(self.body.height as usize)
+                        self.selected = self
+                            .selected
+                            .saturating_sub(self.body.height as usize)
                     }
                     KeyCode::PageDown => {
                         self.selected = self
@@ -227,16 +249,20 @@ impl Panel for State {
             let point = (mouse.column, mouse.row).into();
             match mouse.kind {
                 MouseEventKind::Down(MouseButton::Left) => {
-                    if let Some((_, action)) =
-                        self.buttons.iter().find(|(area, _)| area.contains(point))
+                    if let Some((_, action)) = self
+                        .buttons
+                        .iter()
+                        .find(|(area, _)| area.contains(point))
                     {
                         return self.activate(*action);
                     }
                     if self.search_area.contains(point) {
                         self.search = true;
                     }
-                    if let Some((_, index)) =
-                        self.rows.iter().find(|(area, _)| area.contains(point))
+                    if let Some((_, index)) = self
+                        .rows
+                        .iter()
+                        .find(|(area, _)| area.contains(point))
                     {
                         self.selected = *index;
                         self.search = false;
@@ -257,18 +283,22 @@ impl Panel for State {
         }
         Action::None
     }
+
     fn receive(&mut self, _: Response) -> Action {
         Action::None
     }
+
     fn error(&mut self, error: String) {
         self.message = Some(error);
     }
+
     fn invalidate_geometry(&mut self) {
         self.body = Rect::default();
         self.search_area = Rect::default();
         self.rows.clear();
         self.buttons.clear();
     }
+
     fn draw(&mut self, frame: &mut Frame<'_>, area: Rect) {
         self.invalidate_geometry();
         if area.is_empty() {
@@ -317,10 +347,13 @@ impl Panel for State {
             area.x,
             area.y + 3,
             area.width,
-            area.height.saturating_sub(3 + footer_height),
+            area.height
+                .saturating_sub(3 + footer_height),
         );
         let commands = self.commands();
-        self.selected = self.selected.min(commands.len().saturating_sub(1));
+        self.selected = self
+            .selected
+            .min(commands.len().saturating_sub(1));
         if self.selected < self.offset {
             self.offset = self.selected;
         }
@@ -330,13 +363,18 @@ impl Panel for State {
                 .saturating_sub(self.body.height.saturating_sub(1) as usize);
         }
         let (bindings, warning) = {
-            let keymap = self.keymap.lock().unwrap_or_else(|e| e.into_inner());
+            let keymap = self
+                .keymap
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             (
                 commands
                     .iter()
                     .map(|command| {
                         (
-                            keymap.binding(*command).unwrap_or_else(|| "未绑定".into()),
+                            keymap
+                                .binding(*command)
+                                .unwrap_or_else(|| "未绑定".into()),
                             keymap.overridden(*command),
                         )
                     })
@@ -383,7 +421,14 @@ impl Panel for State {
         } else if self.reset_confirmation {
             "将全部应用快捷键恢复默认？Y 恢复 · N / Esc 取消".into()
         } else {
-            self.message.clone().or(warning).unwrap_or_else(|| "↑↓ 选择 · Enter 修改 · Delete 禁用 · R 恢复单项 · Ctrl+R 恢复全部 · Ctrl+E 复制配置".into())
+            self.message
+                .clone()
+                .or(warning)
+                .unwrap_or_else(|| {
+                    "↑↓ 选择 · Enter 修改 · Delete 禁用 · R \
+                恢复单项 · Ctrl+R 恢复全部 · Ctrl+E 复制配置"
+                        .into()
+                })
         };
         frame.render_widget(
             Paragraph::new(safe_output(&status)).style(components::accent()),
@@ -432,6 +477,7 @@ mod tests {
     fn key(code: KeyCode, modifiers: KeyModifiers) -> Event {
         Event::Key(KeyEvent::new(code, modifiers))
     }
+
     #[test]
     fn capture_errors_keep_editing_and_a_valid_key_is_persisted_immediately() {
         let directory = tempfile::tempdir().unwrap();
@@ -453,8 +499,14 @@ mod tests {
                 .resolve(&KeyEvent::new(KeyCode::F(6), KeyModifiers::NONE)),
             Some(Command::NewTab)
         );
-        assert!(directory.path().join("tui-keymap.json").exists());
+        assert!(
+            directory
+                .path()
+                .join("tui-keymap.json")
+                .exists()
+        );
     }
+
     #[test]
     fn search_reset_confirmation_and_narrow_render_keep_binding_state() {
         let directory = tempfile::tempdir().unwrap();
@@ -468,14 +520,20 @@ mod tests {
         state.handle(&key(KeyCode::Enter, KeyModifiers::NONE));
         state.handle(&key(KeyCode::Delete, KeyModifiers::NONE));
         assert_eq!(
-            shared.lock().unwrap().binding(Command::HistoryPrevious),
+            shared
+                .lock()
+                .unwrap()
+                .binding(Command::HistoryPrevious),
             None
         );
         state.handle(&key(KeyCode::Char('r'), KeyModifiers::CONTROL));
         assert!(state.reset_confirmation);
         state.handle(&key(KeyCode::Char('n'), KeyModifiers::NONE));
         assert_eq!(
-            shared.lock().unwrap().binding(Command::HistoryPrevious),
+            shared
+                .lock()
+                .unwrap()
+                .binding(Command::HistoryPrevious),
             None
         );
         for (width, height) in [(100, 30), (28, 9), (1, 1)] {
@@ -485,7 +543,10 @@ mod tests {
                 .unwrap();
         }
         assert_eq!(
-            shared.lock().unwrap().binding(Command::HistoryPrevious),
+            shared
+                .lock()
+                .unwrap()
+                .binding(Command::HistoryPrevious),
             None
         );
     }

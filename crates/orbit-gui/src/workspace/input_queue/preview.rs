@@ -1,13 +1,13 @@
 //! Queue messages live beside the composer, without a second navigation surface.
 use super::*;
 
+/// Read failures alone must not invent an empty queue UI. Keep actual local drafts visible even
+/// when the server can no longer confirm their entry.
 pub(super) fn preview(
     queue: &mut InputQueue,
     window: &mut Window,
     cx: &mut Context<InputQueue>,
 ) -> AnyElement {
-    // Read failures alone must not invent an empty queue UI. Keep actual local
-    // drafts visible even when the server can no longer confirm their entry.
     let visible = queue
         .rows
         .iter()
@@ -30,7 +30,10 @@ pub(super) fn preview(
         .min_w_0()
         .gap_1()
         .pb_2();
-    for row in visible.iter().take(if queue.expanded { 0 } else { 3 }) {
+    for row in visible
+        .iter()
+        .take(if queue.expanded { 0 } else { 3 })
+    {
         let id = row.entry.id;
         let dirty = row.draft.read(cx).value().as_ref() != row.entry.content;
         let snippet = row
@@ -43,7 +46,10 @@ pub(super) fn preview(
         let title = if snippet.trim().is_empty() && !row.entry.images.is_empty() {
             format!("{} 张图片", row.entry.images.len())
         } else {
-            snippet.split_whitespace().collect::<Vec<_>>().join(" ")
+            snippet
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
         };
         view = view.child(
             h_flex()
@@ -56,13 +62,19 @@ pub(super) fn preview(
                 .bg(cx.theme().muted)
                 .rounded_lg()
                 .child(Icon::new(IconName::List).small())
-                .children(row.entry.images.iter().take(3).map(|image| {
-                    img(PathBuf::from(&image.path))
-                        .w(rems(2.))
-                        .h(rems(2.))
-                        .object_fit(ObjectFit::Contain)
-                        .rounded_sm()
-                }))
+                .children(
+                    row.entry
+                        .images
+                        .iter()
+                        .take(3)
+                        .map(|image| {
+                            img(PathBuf::from(&image.path))
+                                .w(rems(2.))
+                                .h(rems(2.))
+                                .object_fit(ObjectFit::Contain)
+                                .rounded_sm()
+                        }),
+                )
                 .child(
                     div()
                         .flex_1()
@@ -200,7 +212,12 @@ pub(super) fn preview(
         view = view
             .child(queue.editor(window, cx))
             .when_some(error, |view, error| {
-                view.child(div().text_xs().text_color(cx.theme().danger).child(error))
+                view.child(
+                    div()
+                        .text_xs()
+                        .text_color(cx.theme().danger)
+                        .child(error),
+                )
             });
     }
     view.into_any_element()

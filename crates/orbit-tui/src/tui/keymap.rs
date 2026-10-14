@@ -17,12 +17,17 @@ pub(super) fn shared(config: &Path) -> Shared {
     type Registry = Mutex<BTreeMap<PathBuf, std::sync::Weak<Mutex<State>>>>;
     static REGISTRY: std::sync::OnceLock<Registry> = std::sync::OnceLock::new();
     let registry = REGISTRY.get_or_init(Default::default);
-    let mut registry = registry.lock().unwrap_or_else(|error| error.into_inner());
+    let mut registry = registry
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let path = config
         .parent()
         .unwrap_or_else(|| Path::new("."))
         .join("tui-keymap.json");
-    if let Some(state) = registry.get(&path).and_then(std::sync::Weak::upgrade) {
+    if let Some(state) = registry
+        .get(&path)
+        .and_then(std::sync::Weak::upgrade)
+    {
         return state;
     }
     let state = Arc::new(Mutex::new(State::load(config)));
@@ -79,6 +84,7 @@ impl Command {
             Self::HistoryNext => "input_history_next",
         }
     }
+
     pub(super) fn label(self) -> &'static str {
         match self {
             Self::NewTab => "新建会话标签",
@@ -95,6 +101,7 @@ impl Command {
             Self::HistoryNext => "下一条输入历史",
         }
     }
+
     pub(super) fn default(self) -> Option<&'static str> {
         match self {
             Self::Help => Some("?"),
@@ -147,6 +154,7 @@ impl Chord {
         };
         Ok(Self { code, modifiers })
     }
+
     fn parse(value: &str) -> Result<Self, String> {
         if value == "?" {
             return Ok(Self {
@@ -193,22 +201,35 @@ impl Chord {
                     .filter(|number| (1..=24).contains(number))
                     .ok_or("功能键须为 F1–F24")?,
             ),
-            _ if key.chars().count() == 1 => {
-                KeyCode::Char(key.chars().next().unwrap().to_ascii_lowercase())
-            }
+            _ if key.chars().count() == 1 => KeyCode::Char(
+                key.chars()
+                    .next()
+                    .unwrap()
+                    .to_ascii_lowercase(),
+            ),
             _ => return Err("无法识别快捷键；例如 Ctrl+N、Alt+P 或 F6".into()),
         };
         Self::event(&KeyEvent::new(code, modifiers))
     }
+
     fn label(&self) -> String {
         let mut parts = Vec::new();
-        if self.modifiers.contains(KeyModifiers::CONTROL) {
+        if self
+            .modifiers
+            .contains(KeyModifiers::CONTROL)
+        {
             parts.push("Ctrl".to_owned());
         }
-        if self.modifiers.contains(KeyModifiers::ALT) {
+        if self
+            .modifiers
+            .contains(KeyModifiers::ALT)
+        {
             parts.push("Alt".to_owned());
         }
-        if self.modifiers.contains(KeyModifiers::SHIFT) {
+        if self
+            .modifiers
+            .contains(KeyModifiers::SHIFT)
+        {
             parts.push("Shift".to_owned());
         }
         parts.push(match self.code {
@@ -230,9 +251,14 @@ impl Chord {
         });
         parts.join("+")
     }
+
     fn validate(&self, command: Command) -> Result<(), String> {
-        let control = self.modifiers.contains(KeyModifiers::CONTROL);
-        let alt = self.modifiers.contains(KeyModifiers::ALT);
+        let control = self
+            .modifiers
+            .contains(KeyModifiers::CONTROL);
+        let alt = self
+            .modifiers
+            .contains(KeyModifiers::ALT);
         if self.code == KeyCode::Char('?') && self.modifiers.is_empty() && command == Command::Help
         {
             return Ok(());
@@ -244,7 +270,7 @@ impl Chord {
             && matches!(
                 self.code,
                 KeyCode::Char(
-                    'a' | 'c' | 'd' | 'e' | 'h' | 'i' | 'j' | 'k' | 'l' | 'm' | 'o' | 'u' | 'v'
+                    'a' | 'c' | 'd' | 'e' | 'h' | 'i' | 'j' | 'k' | 'l' | 'm' | 'o' | 'u' | 'v',
                 ) | KeyCode::Left
                     | KeyCode::Right
                     | KeyCode::Home
@@ -266,6 +292,7 @@ struct Document {
     #[serde(default)]
     bindings: BTreeMap<String, Option<String>>,
 }
+
 fn version() -> u8 {
     1
 }
@@ -293,6 +320,7 @@ impl State {
         state.reload();
         state
     }
+
     pub(super) fn reload(&mut self) {
         match read(&self.path) {
             Ok(bytes) => {
@@ -332,12 +360,15 @@ impl State {
             Err(error) => self.warning = Some(error),
         }
     }
+
     pub(super) fn warning(&self) -> Option<&str> {
         self.warning.as_deref()
     }
+
     pub(super) fn path(&self) -> &Path {
         &self.path
     }
+
     pub(super) fn export(&self) -> String {
         serde_json::to_string_pretty(&Document {
             version: 1,
@@ -345,46 +376,59 @@ impl State {
         })
         .unwrap_or_default()
     }
+
     pub(super) fn binding(&self, command: Command) -> Option<String> {
         effective(&self.overrides, command).map(str::to_owned)
     }
+
     pub(super) fn overridden(&self, command: Command) -> bool {
-        self.overrides.contains_key(command.id())
+        self.overrides
+            .contains_key(command.id())
     }
+
     pub(super) fn resolve(&self, event: &KeyEvent) -> Option<Command> {
         if event.kind == KeyEventKind::Release {
             return None;
         }
         let chord = Chord::event(event).ok()?;
-        COMMANDS.iter().copied().find(|command| {
-            (event.kind != KeyEventKind::Repeat
-                || matches!(command, Command::HistoryPrevious | Command::HistoryNext))
-                && effective(&self.overrides, *command)
-                    .and_then(|value| Chord::parse(value).ok())
-                    .is_some_and(|binding| binding == chord)
-        })
+        COMMANDS
+            .iter()
+            .copied()
+            .find(|command| {
+                (event.kind != KeyEventKind::Repeat
+                    || matches!(command, Command::HistoryPrevious | Command::HistoryNext))
+                    && effective(&self.overrides, *command)
+                        .and_then(|value| Chord::parse(value).ok())
+                        .is_some_and(|binding| binding == chord)
+            })
     }
+
     pub(super) fn capture(&mut self, command: Command, event: &KeyEvent) -> Result<(), String> {
         let chord = Chord::event(event)?;
         chord.validate(command)?;
         self.set(command, Some(chord.label()))
     }
+
     pub(super) fn remove(&mut self, command: Command) -> Result<(), String> {
         self.set(command, None)
     }
+
     fn set(&mut self, command: Command, chord: Option<String>) -> Result<(), String> {
         let mut next = self.overrides.clone();
         next.insert(command.id().into(), chord);
         self.save(next)
     }
+
     pub(super) fn restore(&mut self, command: Command) -> Result<(), String> {
         let mut next = self.overrides.clone();
         next.remove(command.id());
         self.save(next)
     }
+
     pub(super) fn reset(&mut self) -> Result<(), String> {
         self.save(BTreeMap::new())
     }
+
     fn save(&mut self, next: BTreeMap<String, Option<String>>) -> Result<(), String> {
         if self.warning.is_some() {
             return Err(
@@ -397,7 +441,10 @@ impl State {
             bindings: next.clone(),
         })
         .map_err(|error| error.to_string())?;
-        let parent = self.path.parent().unwrap_or_else(|| Path::new("."));
+        let parent = self
+            .path
+            .parent()
+            .unwrap_or_else(|| Path::new("."));
         fs::create_dir_all(parent).map_err(|error| format!("无法创建快捷键目录：{error}"))?;
         let lock_path = self.path.with_extension("json.lock");
         let lock = fs::OpenOptions::new()
@@ -434,9 +481,13 @@ fn effective(overrides: &BTreeMap<String, Option<String>>, command: Command) -> 
         .get(command.id())
         .map_or_else(|| command.default(), |value| value.as_deref())
 }
+
 fn validate(overrides: &BTreeMap<String, Option<String>>) -> Result<(), String> {
     for id in overrides.keys() {
-        if !COMMANDS.iter().any(|command| command.id() == id) {
+        if !COMMANDS
+            .iter()
+            .any(|command| command.id() == id)
+        {
             return Err(format!("未知命令：{id}"));
         }
     }
@@ -445,7 +496,10 @@ fn validate(overrides: &BTreeMap<String, Option<String>>) -> Result<(), String> 
         if let Some(binding) = effective(overrides, *command) {
             let chord = Chord::parse(binding)?;
             chord.validate(*command)?;
-            if let Some((other, _)) = chords.iter().find(|(_, other)| *other == chord) {
+            if let Some((other, _)) = chords
+                .iter()
+                .find(|(_, other)| *other == chord)
+            {
                 return Err(format!(
                     "{} 与 {} 的快捷键冲突",
                     command.label(),
@@ -457,6 +511,7 @@ fn validate(overrides: &BTreeMap<String, Option<String>>) -> Result<(), String> 
     }
     Ok(())
 }
+
 fn read(path: &Path) -> Result<Option<Vec<u8>>, String> {
     match fs::symlink_metadata(path) {
         Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
@@ -468,9 +523,12 @@ fn read(path: &Path) -> Result<Option<Vec<u8>>, String> {
     }
     let mut bytes = Vec::new();
     fs::File::open(path)
-        .and_then(|file| file.take(64 * 1024 + 1).read_to_end(&mut bytes))
+        .and_then(|file| {
+            file.take(64 * 1_024 + 1)
+                .read_to_end(&mut bytes)
+        })
         .map_err(|error| format!("无法读取快捷键文件：{error}"))?;
-    if bytes.len() > 64 * 1024 {
+    if bytes.len() > 64 * 1_024 {
         return Err("快捷键文件超过 64 KiB；原文件已保留".into());
     }
     Ok(Some(bytes))
@@ -479,6 +537,7 @@ struct Lock {
     path: PathBuf,
     _file: fs::File,
 }
+
 impl Drop for Lock {
     fn drop(&mut self) {
         let _ = fs::remove_file(&self.path);
@@ -491,6 +550,7 @@ mod tests {
     fn event(code: KeyCode, modifiers: KeyModifiers) -> KeyEvent {
         KeyEvent::new(code, modifiers)
     }
+
     #[test]
     fn live_tabs_sharing_a_client_keymap_observe_changes_without_reconnect() {
         let directory = tempfile::tempdir().unwrap();
@@ -540,6 +600,7 @@ mod tests {
             None
         );
     }
+
     #[test]
     fn editing_keys_ctrl_c_and_ambiguous_sequences_are_reserved() {
         for binding in [
@@ -566,6 +627,7 @@ mod tests {
             );
         }
     }
+
     #[test]
     fn rebinding_conflicts_persistence_disable_and_restore_are_consistent() {
         let dir = tempfile::tempdir().unwrap();
@@ -590,18 +652,28 @@ mod tests {
                 .is_err()
         );
         let mut loaded = State::load(&config);
-        assert_eq!(loaded.binding(Command::NewTab).as_deref(), Some("Ctrl+N"));
-        loaded.remove(Command::HistoryPrevious).unwrap();
+        assert_eq!(
+            loaded
+                .binding(Command::NewTab)
+                .as_deref(),
+            Some("Ctrl+N")
+        );
+        loaded
+            .remove(Command::HistoryPrevious)
+            .unwrap();
         assert_eq!(
             loaded.resolve(&event(KeyCode::Up, KeyModifiers::CONTROL)),
             None
         );
-        loaded.restore(Command::HistoryPrevious).unwrap();
+        loaded
+            .restore(Command::HistoryPrevious)
+            .unwrap();
         assert_eq!(
             loaded.resolve(&event(KeyCode::Up, KeyModifiers::CONTROL)),
             Some(Command::HistoryPrevious)
         );
     }
+
     #[test]
     fn invalid_and_concurrently_modified_files_are_never_overwritten() {
         let dir = tempfile::tempdir().unwrap();
@@ -631,6 +703,7 @@ mod tests {
             Some(Command::Review)
         );
     }
+
     #[test]
     fn uppercase_capture_has_one_canonical_representation_and_releases_do_not_dispatch() {
         let chord = Chord::event(&event(KeyCode::Char('N'), KeyModifiers::CONTROL)).unwrap();

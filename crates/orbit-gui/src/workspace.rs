@@ -351,11 +351,14 @@ impl Workspace {
             file_drafts: Vec::new(),
             review: None,
         };
-        view.input.update(cx, |input, cx| input.focus(window, cx));
+        view.input
+            .update(cx, |input, cx| input.focus(window, cx));
         view.connect(window, cx);
         view.timer = cx.spawn(async move |weak, cx| {
             loop {
-                cx.background_executor().timer(Duration::from_secs(1)).await;
+                cx.background_executor()
+                    .timer(Duration::from_secs(1))
+                    .await;
                 if weak
                     .update_in(cx, |view, window, cx| {
                         if view.connected
@@ -493,7 +496,8 @@ impl Workspace {
             Event::Subagent { agent, page, reset } => {
                 if reset {
                     let (conversation, image_subscription) = Self::new_conversation(cx);
-                    self._subscriptions.push(image_subscription);
+                    self._subscriptions
+                        .push(image_subscription);
                     self.subagent = Some((agent.clone(), conversation.clone()));
                     let owner = cx.weak_entity();
                     let title = format!("子 Agent · {agent}");
@@ -506,7 +510,11 @@ impl Workspace {
                             sheet
                                 .title(title.clone())
                                 .size(width)
-                                .child(div().h_full().child(conversation.clone()))
+                                .child(
+                                    div()
+                                        .h_full()
+                                        .child(conversation.clone()),
+                                )
                                 .on_close(move |_, _, cx| {
                                     let _ = owner.update(cx, |view, cx| {
                                         view.subagent = None;
@@ -531,7 +539,11 @@ impl Workspace {
                 path,
                 result,
             } => {
-                if self.info.as_ref().is_some_and(|info| info.id == session) {
+                if self
+                    .info
+                    .as_ref()
+                    .is_some_and(|info| info.id == session)
+                {
                     self.conversation
                         .update(cx, |view, cx| view.image(&path, result, cx));
                 }
@@ -551,14 +563,17 @@ impl Workspace {
             Event::Usage { session, result } => {
                 if self.info.as_ref().is_some_and(|info| {
                     info.id == session
-                        && result.as_ref().map_or(true, |snapshot| {
-                            snapshot.model.rsplit("::").next() == info.model.rsplit("::").next()
-                        })
+                        && result
+                            .as_ref()
+                            .map_or(true, |snapshot| {
+                                snapshot.model.rsplit("::").next() == info.model.rsplit("::").next()
+                            })
                 }) {
-                    self.usage.update(cx, |usage, cx| match result {
-                        Ok(snapshot) => usage.set(snapshot, cx),
-                        Err(error) => usage.error(error, cx),
-                    });
+                    self.usage
+                        .update(cx, |usage, cx| match result {
+                            Ok(snapshot) => usage.set(snapshot, cx),
+                            Err(error) => usage.error(error, cx),
+                        });
                 }
             }
             Event::Disconnected(error) => {
@@ -584,15 +599,19 @@ impl Workspace {
                 }
                 self.connected = false;
                 self.opening = false;
-                self.retry = self.pending.take().or(self.retry.take());
-                if let Some(delay) = self
-                    .info
-                    .as_ref()
-                    .and_then(|_| self.recovery.disconnected(Instant::now()))
-                {
+                self.retry = self
+                    .pending
+                    .take()
+                    .or(self.retry.take());
+                if let Some(delay) = self.info.as_ref().and_then(|_| {
+                    self.recovery
+                        .disconnected(Instant::now())
+                }) {
                     self.error = Some(error.into());
                     self.reconnect = cx.spawn(async move |owner, cx| {
-                        cx.background_executor().timer(delay).await;
+                        cx.background_executor()
+                            .timer(delay)
+                            .await;
                         let _ = owner
                             .update_in(cx, |view, window, cx| view.start_connection(window, cx));
                     });
@@ -633,7 +652,8 @@ impl Workspace {
                         self.input
                             .update(cx, |input, cx| input.set_value("", window, cx));
                     }
-                    self.paths.retain(|path| !pending.paths.contains(path));
+                    self.paths
+                        .retain(|path| !pending.paths.contains(path));
                     self.busy = true;
                     self.refresh_input_queue(true, cx);
                 }
@@ -668,9 +688,12 @@ impl Workspace {
                 || self.question_history.is_some()
                 || self.child_agents.is_some()
                 || self.input_queue.is_some())
-            && self.info.as_ref().is_some_and(|previous| {
-                previous.workspace != info.workspace || previous.id != info.id
-            })
+            && self
+                .info
+                .as_ref()
+                .is_some_and(|previous| {
+                    previous.workspace != info.workspace || previous.id != info.id
+                })
         {
             window.close_sheet(cx);
         }
@@ -787,7 +810,8 @@ impl Workspace {
                 self.usage = cx.new(crate::usage::Usage::new);
                 let (conversation, image_subscription) = Self::new_conversation(cx);
                 self.conversation = conversation;
-                self._subscriptions.push(image_subscription);
+                self._subscriptions
+                    .push(image_subscription);
                 self.execution = Default::default();
                 self.refresh_usage(cx);
                 self.command(Command::Request(Request::AllSessions), cx);
@@ -847,7 +871,12 @@ impl Workspace {
                                 attachments, ..
                             } => attachments
                                 .iter()
-                                .map(|image| image.path().to_string_lossy().into_owned())
+                                .map(|image| {
+                                    image
+                                        .path()
+                                        .to_string_lossy()
+                                        .into_owned()
+                                })
                                 .collect(),
                             _ => vec![],
                         },
@@ -865,9 +894,12 @@ impl Workspace {
                         }
                     }
                     if let Update::Profile(info) = update {
-                        let changed = self.info.as_ref().is_none_or(|current| {
-                            current.model != info.model || current.workspace != info.workspace
-                        });
+                        let changed = self
+                            .info
+                            .as_ref()
+                            .is_none_or(|current| {
+                                current.model != info.model || current.workspace != info.workspace
+                            });
                         self.profile(*info, window, cx);
                         if changed {
                             self.usage = cx.new(crate::usage::Usage::new);
@@ -881,9 +913,11 @@ impl Workspace {
                     }
                 }
                 if restoring && !self.opening {
-                    self.history.seed(self.conversation.read(cx).prompts());
+                    self.history
+                        .seed(self.conversation.read(cx).prompts());
                 }
-                self.execution.apply_progress(&page.tool_progress);
+                self.execution
+                    .apply_progress(&page.tool_progress);
                 if self.input_queue.is_none() {
                     self.ensure_input_queue(window, cx);
                 }
@@ -896,7 +930,9 @@ impl Workspace {
                     self.command(Command::Request(Request::AllSessions), cx);
                 }
             }
-            Response::Usage(snapshot) => self.usage.update(cx, |usage, cx| usage.set(snapshot, cx)),
+            Response::Usage(snapshot) => self
+                .usage
+                .update(cx, |usage, cx| usage.set(snapshot, cx)),
             Response::Report(report) => self.show_report(report.title, report.text, window, cx),
             Response::File(_) => self.report_error("文件响应缺少路径，请从文件页重新打开。", cx),
             Response::Questions(questions) => self.show_questions(questions, window, cx),
@@ -904,7 +940,8 @@ impl Workspace {
             Response::UserInputs(_) => self.open_question_history(window, cx),
             Response::Subagent(page) => {
                 let (conversation, image_subscription) = Self::new_conversation(cx);
-                self._subscriptions.push(image_subscription);
+                self._subscriptions
+                    .push(image_subscription);
                 conversation.update(cx, |view, cx| {
                     for update in page.updates {
                         view.apply(update, cx);
@@ -916,7 +953,11 @@ impl Workspace {
                     sheet
                         .title("子 Agent")
                         .size(width)
-                        .child(div().h_full().child(conversation.clone()))
+                        .child(
+                            div()
+                                .h_full()
+                                .child(conversation.clone()),
+                        )
                 });
             }
             Response::Error(error) => {
@@ -1025,7 +1066,10 @@ impl Workspace {
             multiple: true,
             prompt: Some("添加图片".into()),
         });
-        let session = self.info.as_ref().map(|info| info.id.clone());
+        let session = self
+            .info
+            .as_ref()
+            .map(|info| info.id.clone());
         self.picker = cx.spawn(async move |weak, cx| {
             let result = prompt.await;
             let _ = weak.update(cx, |view, cx| {
@@ -1037,8 +1081,10 @@ impl Workspace {
                 match result {
                     Ok(Ok(Some(paths))) => {
                         for path in paths {
-                            let supported =
-                                path.extension().and_then(|v| v.to_str()).is_some_and(|v| {
+                            let supported = path
+                                .extension()
+                                .and_then(|v| v.to_str())
+                                .is_some_and(|v| {
                                     matches!(
                                         v.to_ascii_lowercase().as_str(),
                                         "png" | "jpg" | "jpeg" | "webp" | "gif"
@@ -1094,7 +1140,10 @@ impl Workspace {
             }
             return handled;
         }
-        let session = self.info.as_ref().map(|info| info.id.clone());
+        let session = self
+            .info
+            .as_ref()
+            .map(|info| info.id.clone());
         self.picker_pending = true;
         cx.notify();
         let job =
@@ -1123,9 +1172,13 @@ impl Workspace {
                 }
                 match result {
                     Ok(Ok(files)) => {
-                        view.paths
-                            .extend(files.iter().map(|file| file.path().to_path_buf()));
-                        view.clipboard_files.extend(files.into_iter().map(Arc::new));
+                        view.paths.extend(
+                            files
+                                .iter()
+                                .map(|file| file.path().to_path_buf()),
+                        );
+                        view.clipboard_files
+                            .extend(files.into_iter().map(Arc::new));
                     }
                     Ok(Err(error)) => view.report_error(format!("粘贴图片失败：{error}"), cx),
                     Err(error) => view.report_error(format!("粘贴图片失败：{error}"), cx),
@@ -1158,17 +1211,18 @@ impl Workspace {
         let weak = cx.weak_entity();
         crate::dialog::open(window, cx, move |dialog, _, _| {
             let weak = weak.clone();
-            dialog.title("用量").child(usage.clone()).footer(
-                h_flex()
-                    .justify_end()
-                    .child(
+            dialog
+                .title("用量")
+                .child(usage.clone())
+                .footer(
+                    h_flex().justify_end().child(
                         Button::new("refresh-usage")
                             .label("刷新")
                             .on_click(move |_, _, cx| {
                                 let _ = weak.update(cx, |view, cx| view.refresh_usage(cx));
                             }),
                     ),
-            )
+                )
         });
     }
 }
@@ -1189,6 +1243,7 @@ impl PendingSend {
         self.session == session && self.text.as_ref() == text && self.paths == paths
     }
 }
+
 #[cfg(test)]
 mod tests {
     use super::{PendingSend, draft_ready};
@@ -1203,6 +1258,7 @@ mod tests {
         assert!(draft_ready("a text supplement", &[], true));
         assert!(!draft_ready("  ", &[], true));
     }
+
     #[test]
     fn ambiguous_send_reuses_receipt_only_for_the_same_session_and_payload() {
         let pending = PendingSend {

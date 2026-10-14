@@ -56,7 +56,12 @@ fn model() -> MockModel {
 async fn running_edit_remove_use_real_inbox_and_canonical_consumption_under_sending_policy() {
     let root = tempfile::tempdir().unwrap();
     let mut setup = setup(root.path()).await;
-    let workspace = setup.session.snapshot.session.workspace.clone();
+    let workspace = setup
+        .session
+        .snapshot
+        .session
+        .workspace
+        .clone();
     setup.resources.policy = orbit_protocol::SessionPolicy {
         read_only: true,
         disabled: vec![
@@ -149,7 +154,10 @@ async fn running_edit_remove_use_real_inbox_and_canonical_consumption_under_send
         .await
         .is_err()
     );
-    let journal = setup.session.execution_journal().unwrap();
+    let journal = setup
+        .session
+        .execution_journal()
+        .unwrap();
     let model = model();
     let result = Agent::new(model.clone(), ToolRegistry::new(), AgentConfig::default())
         .with_inbox(inbox)
@@ -185,8 +193,14 @@ async fn running_edit_remove_use_real_inbox_and_canonical_consumption_under_send
         .canonical_messages(setup.session.id(), None, 100)
         .await
         .unwrap();
-    assert!(canonical.iter().any(|record| matches!(&record.message, ChatMessage::User { content, .. } if content == "edited\ncontext")));
-    assert!(!canonical.iter().any(|record| matches!(&record.message, ChatMessage::User { content, .. } if content == "first" || content == "original")));
+    assert!(canonical.iter().any(|record| matches!(
+        &record.message,
+        ChatMessage::User { content, .. } if content == "edited\ncontext"
+    )));
+    assert!(!canonical.iter().any(|record| matches!(
+        &record.message,
+        ChatMessage::User { content, .. } if content == "first" || content == "original"
+    )));
     setup
         .session
         .finish("completed", Some(result.history))
@@ -199,16 +213,20 @@ struct GatedJournal {
     claimed: tokio::sync::Notify,
     release: tokio::sync::Semaphore,
 }
+
 impl ExecutionJournal for GatedJournal {
     fn record(&self, event: AgentEvent) {
         self.inner.record(event);
     }
+
     fn record_message(&self, message: ChatMessage) {
         self.inner.record_message(message);
     }
+
     fn flush(&self) -> CheckpointFuture<'_> {
         self.inner.flush()
     }
+
     fn save<'a>(
         &'a self,
         checkpoint: ExecutionCheckpoint,
@@ -217,7 +235,11 @@ impl ExecutionJournal for GatedJournal {
         Box::pin(async move {
             if matches!(event, Some(AgentEvent::InputReceived { .. })) {
                 self.claimed.notify_one();
-                self.release.acquire().await.unwrap().forget();
+                self.release
+                    .acquire()
+                    .await
+                    .unwrap()
+                    .forget();
             }
             self.inner.save(checkpoint, event).await
         })
@@ -228,7 +250,12 @@ impl ExecutionJournal for GatedJournal {
 async fn drained_but_not_checkpointed_is_claimed_and_cannot_be_rewritten_in_database() {
     let root = tempfile::tempdir().unwrap();
     let mut setup = setup(root.path()).await;
-    let workspace = setup.session.snapshot.session.workspace.clone();
+    let workspace = setup
+        .session
+        .snapshot
+        .session
+        .workspace
+        .clone();
     setup
         .session
         .begin("initial".into(), "test::test".into())
@@ -251,7 +278,10 @@ async fn drained_but_not_checkpointed_is_claimed_and_cannot_be_rewritten_in_data
         .await
         .unwrap();
     let journal = Arc::new(GatedJournal {
-        inner: setup.session.execution_journal().unwrap(),
+        inner: setup
+            .session
+            .execution_journal()
+            .unwrap(),
         claimed: tokio::sync::Notify::new(),
         release: tokio::sync::Semaphore::new(0),
     });
@@ -336,7 +366,12 @@ async fn drained_but_not_checkpointed_is_claimed_and_cannot_be_rewritten_in_data
 async fn foreign_live_writer_blocks_idle_mutation_and_external_workspace_change_is_checked() {
     let root = tempfile::tempdir().unwrap();
     let mut setup = setup(root.path()).await;
-    let workspace = setup.session.snapshot.session.workspace.clone();
+    let workspace = setup
+        .session
+        .snapshot
+        .session
+        .workspace
+        .clone();
     let session = setup.session.id().to_owned();
     let store = setup.session.store.clone();
     let id = store
@@ -371,13 +406,24 @@ async fn foreign_live_writer_blocks_idle_mutation_and_external_workspace_change_
         .is_err()
     );
     assert_eq!(
-        store.input_queue(&session).await.unwrap().messages[0].content,
+        store
+            .input_queue(&session)
+            .await
+            .unwrap()
+            .messages[0]
+            .content,
         "pending"
     );
-    foreign.finish("cancelled", vec![], None).await.unwrap();
+    foreign
+        .finish("cancelled", vec![], None)
+        .await
+        .unwrap();
     let moved = root.path().join("moved");
     std::fs::create_dir(&moved).unwrap();
-    foreign.move_to(&moved, None).await.unwrap();
+    foreign
+        .move_to(&moved, None)
+        .await
+        .unwrap();
     drop(foreign);
     assert!(
         execute(
@@ -395,7 +441,12 @@ async fn foreign_live_writer_blocks_idle_mutation_and_external_workspace_change_
         .is_err()
     );
     assert_eq!(
-        store.input_queue(&session).await.unwrap().messages[0].content,
+        store
+            .input_queue(&session)
+            .await
+            .unwrap()
+            .messages[0]
+            .content,
         "pending"
     );
 }
@@ -404,7 +455,12 @@ async fn foreign_live_writer_blocks_idle_mutation_and_external_workspace_change_
 async fn idle_inputs_keep_ids_and_order_and_pagination_accounts_for_json_escaping() {
     let root = tempfile::tempdir().unwrap();
     let mut setup = setup(root.path()).await;
-    let workspace = setup.session.snapshot.session.workspace.clone();
+    let workspace = setup
+        .session
+        .snapshot
+        .session
+        .workspace
+        .clone();
     let content = "\0".repeat(800_000);
     let mut ids = Vec::new();
     for _ in 0..8 {
@@ -473,7 +529,10 @@ async fn idle_inputs_keep_ids_and_order_and_pagination_accounts_for_json_escapin
         .unwrap()
         .messages;
     assert_eq!(
-        pending.iter().map(|message| message.id).collect::<Vec<_>>(),
+        pending
+            .iter()
+            .map(|message| message.id)
+            .collect::<Vec<_>>(),
         ids.iter()
             .copied()
             .filter(|id| *id != ids[1])

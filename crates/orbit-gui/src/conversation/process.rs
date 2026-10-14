@@ -48,17 +48,79 @@ mod tests {
     }
 
     fn commentary_and_tools() -> Vec<Value> {
-        let call = json!({"id":"read","function":{"name":"read_file","arguments":"{}"}});
+        let call = json!({
+            "id": "read",
+            "function": {
+                "name": "read_file",
+                "arguments": "{}"
+            }
+        });
         vec![
-            json!({"Started":{"prompt":"检查项目"}}),
-            json!({"Agent":{"ToolStarted":{"call":call}}}),
-            json!({"Agent":{"ToolFinished":{"call":call,"content":"文件内容","changes":[]}}}),
-            json!({"Agent":{"Model":{"TextDelta":"先检查实现，再验证影响。"}}}),
-            json!({"Agent":{"Model":{"ReasoningDelta":"补充思考"}}}),
-            json!({"Agent":{"Model":{"TextDelta":"  \n"}}}),
-            json!({"Agent":{"ToolStarted":{"call":call}}}),
-            json!({"Agent":{"ToolFinished":{"call":call,"content":"检查结果","changes":[]}}}),
-            json!({"Agent":{"Model":{"TextDelta":"检查完成。"}}}),
+            json!({
+                "Started": {
+                    "prompt": "检查项目"
+                }
+            }),
+            json!({
+                "Agent": {
+                    "ToolStarted": {
+                        "call": call
+                    }
+                }
+            }),
+            json!({
+                "Agent": {
+                    "ToolFinished": {
+                        "call": call,
+                        "content": "文件内容",
+                        "changes": []
+                    }
+                }
+            }),
+            json!({
+                "Agent": {
+                    "Model": {
+                        "TextDelta": "先检查实现，再验证影响。"
+                    }
+                }
+            }),
+            json!({
+                "Agent": {
+                    "Model": {
+                        "ReasoningDelta": "补充思考"
+                    }
+                }
+            }),
+            json!({
+                "Agent": {
+                    "Model": {
+                        "TextDelta": "  \n"
+                    }
+                }
+            }),
+            json!({
+                "Agent": {
+                    "ToolStarted": {
+                        "call": call
+                    }
+                }
+            }),
+            json!({
+                "Agent": {
+                    "ToolFinished": {
+                        "call": call,
+                        "content": "检查结果",
+                        "changes": []
+                    }
+                }
+            }),
+            json!({
+                "Agent": {
+                    "Model": {
+                        "TextDelta": "检查完成。"
+                    }
+                }
+            }),
         ]
     }
 
@@ -73,7 +135,11 @@ mod tests {
         apply(
             &mut transcript,
             &mut disclosure,
-            json!({"Finished":{"status":"completed"}}),
+            json!({
+                "Finished": {
+                    "status": "completed"
+                }
+            }),
         );
         assert!(!disclosure.expanded());
         // Opening a completed record must survive subsequent view syncs.
@@ -93,7 +159,11 @@ mod tests {
             }
             for event in commentary_and_tools()
                 .into_iter()
-                .chain([json!({"Finished":{"status":"completed"}})])
+                .chain([json!({
+                    "Finished": {
+                        "status": "completed"
+                    }
+                })])
             {
                 apply(&mut transcript, &mut disclosure, event);
                 assert_eq!(disclosure.expanded(), expanded);
@@ -108,7 +178,11 @@ mod tests {
             let mut disclosure = ProcessDisclosure::default();
             for event in commentary_and_tools()
                 .into_iter()
-                .chain([json!({"Finished":{"status":status}})])
+                .chain([json!({
+                    "Finished": {
+                        "status": status
+                    }
+                })])
             {
                 apply(&mut transcript, &mut disclosure, event);
             }
@@ -121,9 +195,23 @@ mod tests {
         let mut transcript = Transcript::default();
         let mut disclosure = ProcessDisclosure::default();
         for event in [
-            json!({"Started":{"prompt":"检查项目"}}),
-            json!({"Agent":{"Model":{"ReasoningDelta":"分析结果"}}}),
-            json!({"Finished":{"status":"completed"}}),
+            json!({
+                "Started": {
+                    "prompt": "检查项目"
+                }
+            }),
+            json!({
+                "Agent": {
+                    "Model": {
+                        "ReasoningDelta": "分析结果"
+                    }
+                }
+            }),
+            json!({
+                "Finished": {
+                    "status": "completed"
+                }
+            }),
         ] {
             apply(&mut transcript, &mut disclosure, event);
         }

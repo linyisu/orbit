@@ -21,8 +21,18 @@ pub(super) fn describe(setup: &PreparedWorkspace) -> SessionInfo {
         auto_compact: budget.auto_compact,
         skills: budget.skills.completions(),
         id: setup.session.id().into(),
-        title: setup.session.snapshot.session.title.clone(),
-        workspace: setup.session.snapshot.session.workspace.clone(),
+        title: setup
+            .session
+            .snapshot
+            .session
+            .title
+            .clone(),
+        workspace: setup
+            .session
+            .snapshot
+            .session
+            .workspace
+            .clone(),
         model: resources.model_name.clone(),
         model_catalog: budget
             .model_options
@@ -90,7 +100,9 @@ pub(super) fn apply(
     );
     let selected = candidates[0];
     ensure!(
-        effort.is_none_or(|effort| selected.reasoning_efforts.contains(&effort)),
+        effort.is_none_or(|effort| selected
+            .reasoning_efforts
+            .contains(&effort)),
         "reasoning effort is not supported by this model"
     );
     let mut config = selected.config.clone();
@@ -119,7 +131,11 @@ pub(super) async fn select(
         .session
         .set_model_profile(
             setup.resources.model_name.clone(),
-            setup.resources.model.config().reasoning_effort,
+            setup
+                .resources
+                .model
+                .config()
+                .reasoning_effort,
         )
         .await
 }

@@ -80,7 +80,10 @@ impl TranscriptDialog {
     }
 
     pub fn tick(&mut self) -> bool {
-        let direction = self.ui.selection.auto_scroll(Instant::now());
+        let direction = self
+            .ui
+            .selection
+            .auto_scroll(Instant::now());
         if direction < 0 {
             self.ui.scroll_up(2);
         } else if direction > 0 {
@@ -120,14 +123,20 @@ impl TranscriptDialog {
         );
         let close_width = (icons::CLOSE_THICK.width() + 2).min(usize::from(header.width)) as u16;
         self.close_area = Rect::new(
-            header.right().saturating_sub(close_width),
+            header
+                .right()
+                .saturating_sub(close_width),
             header.y,
             close_width,
             1.min(header.height),
         );
         let title = fit_label(
             title,
-            usize::from(header.width.saturating_sub(close_width + 1)),
+            usize::from(
+                header
+                    .width
+                    .saturating_sub(close_width + 1),
+            ),
             false,
         );
 
@@ -139,7 +148,9 @@ impl TranscriptDialog {
                     .add_modifier(Modifier::BOLD),
             )),
             Rect {
-                width: header.width.saturating_sub(close_width + 1),
+                width: header
+                    .width
+                    .saturating_sub(close_width + 1),
                 height: 1.min(header.height),
                 ..header
             },
@@ -148,7 +159,8 @@ impl TranscriptDialog {
             Paragraph::new(icons::CLOSE_THICK)
                 .alignment(Alignment::Center)
                 .style(super::theme::control_style(
-                    self.close_hover.map(|since| since.elapsed()),
+                    self.close_hover
+                        .map(|since| since.elapsed()),
                 )),
             self.close_area,
         );
@@ -171,7 +183,10 @@ impl TranscriptDialog {
         self.ui.ime_cursor = None;
         self.ui.input_area = Rect::default();
         self.ui.input_width = usize::from(header.width.saturating_sub(2));
-        let (lines, cursor) = self.ui.input.visual_lines(self.ui.input_width);
+        let (lines, cursor) = self
+            .ui
+            .input
+            .visual_lines(self.ui.input_width);
         let composer_height = if self.input_enabled && inner.height >= 7 {
             (lines.len().clamp(1, 4) as u16 + 2).min(inner.height.saturating_sub(4))
         } else {
@@ -179,9 +194,14 @@ impl TranscriptDialog {
         };
         let body = Rect::new(
             header.x,
-            header.bottom().saturating_add(1).min(inner.bottom()),
+            header
+                .bottom()
+                .saturating_add(1)
+                .min(inner.bottom()),
             header.width,
-            inner.height.saturating_sub(3 + composer_height),
+            inner
+                .height
+                .saturating_sub(3 + composer_height),
         );
 
         if let Some(error) = error {
@@ -279,7 +299,9 @@ impl TranscriptDialog {
             if let Event::Key(key) = event
                 && key.kind != KeyEventKind::Release
                 && key.code == KeyCode::Char('c')
-                && key.modifiers.contains(KeyModifiers::CONTROL)
+                && key
+                    .modifiers
+                    .contains(KeyModifiers::CONTROL)
                 && let Some(text) = self.ui.input.selected_text()
             {
                 super::selection::copy_text(text)?;
@@ -320,7 +342,11 @@ impl TranscriptDialog {
                     );
                 }
 
-                if key.code == KeyCode::Char('v') && key.modifiers.contains(KeyModifiers::CONTROL) {
+                if key.code == KeyCode::Char('v')
+                    && key
+                        .modifiers
+                        .contains(KeyModifiers::CONTROL)
+                {
                     match arboard::Clipboard::new().and_then(|mut clipboard| clipboard.get_text()) {
                         Ok(text) => {
                             self.ui.input.insert(&text);
@@ -343,7 +369,12 @@ impl TranscriptDialog {
                     })
             );
 
-            if (self.input_focus || text_input) && self.ui.input.edit(event, self.ui.input_width) {
+            if (self.input_focus || text_input)
+                && self
+                    .ui
+                    .input
+                    .edit(event, self.ui.input_width)
+            {
                 self.input_focus = true;
                 self.ui.selection.clear();
                 self.input_message = None;
@@ -355,7 +386,9 @@ impl TranscriptDialog {
             && key.kind != KeyEventKind::Release
             && ((key.code == KeyCode::Esc || (!self.input_enabled && key.code == KeyCode::Enter))
                 || (key.code == KeyCode::Char('c')
-                    && key.modifiers.contains(KeyModifiers::CONTROL)
+                    && key
+                        .modifiers
+                        .contains(KeyModifiers::CONTROL)
                     && !self.ui.selection.active()))
         {
             return Ok(Action::Close);
@@ -369,15 +402,22 @@ impl TranscriptDialog {
                 }
                 self.close_pressed = self.close_area.contains(point);
                 if self.close_pressed {
-                    self.close_hover.get_or_insert_with(Instant::now);
+                    self.close_hover
+                        .get_or_insert_with(Instant::now);
                     return Ok(Action::Redraw);
                 }
 
-                if mouse.modifiers.contains(KeyModifiers::CONTROL) {
+                if mouse
+                    .modifiers
+                    .contains(KeyModifiers::CONTROL)
+                {
                     if super::jump_footnote_at(&mut self.ui, (mouse.column, mouse.row)) {
                         return Ok(Action::Redraw);
                     }
-                    let offset = self.ui.max_scroll.saturating_sub(self.ui.scroll);
+                    let offset = self
+                        .ui
+                        .max_scroll
+                        .saturating_sub(self.ui.scroll);
                     if let Some(url) = self.ui.transcript_layout.link_at(
                         self.ui.selection.viewport,
                         offset,
@@ -439,7 +479,11 @@ impl TranscriptDialog {
 
         let page = usize::from(self.ui.selection.viewport.height).max(1);
         match event {
-            Event::Mouse(mouse) if self.area.contains((mouse.column, mouse.row).into()) => {
+            Event::Mouse(mouse)
+                if self
+                    .area
+                    .contains((mouse.column, mouse.row).into()) =>
+            {
                 match mouse.kind {
                     MouseEventKind::ScrollUp => self.ui.scroll_up(super::wheel::LINES),
                     MouseEventKind::ScrollDown => self.ui.scroll_down(super::wheel::LINES),
@@ -502,7 +546,10 @@ mod tests {
             super::super::app::ToolRow {
                 id: "output".into(),
                 name: "run_command".into(),
-                arguments: serde_json::json!({"command": "example"}).to_string(),
+                arguments: serde_json::json!({
+                    "command": "example"
+                })
+                .to_string(),
                 status: super::super::app::ToolStatus::Finished,
                 output: (0..30)
                     .map(|i| format!("https://orbit.example/{i:02}\n"))
@@ -515,7 +562,10 @@ mod tests {
         let point = (area.y..area.bottom())
             .find_map(|y| {
                 (area.x..area.right()).find_map(|x| {
-                    (view.ui.transcript_layout.link_at(area, 0, (x, y))
+                    (view
+                        .ui
+                        .transcript_layout
+                        .link_at(area, 0, (x, y))
                         == Some("https://orbit.example/00"))
                     .then_some((x, y))
                 })
@@ -533,7 +583,9 @@ mod tests {
             super::super::wheel::TOOL_LINES
         );
         assert_eq!(
-            view.ui.transcript_layout.link_at(area, 0, point),
+            view.ui
+                .transcript_layout
+                .link_at(area, 0, point),
             Some(expected.as_str())
         );
     }
@@ -639,9 +691,10 @@ mod tests {
         let enter = Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         assert!(matches!(view.handle(&enter).unwrap(), Action::Redraw));
         view.block_submission(false);
-        assert!(
-            matches!(view.handle(&enter).unwrap(), Action::Submit(text) if text == "Orbit 中文🦀\n后续问题")
-        );
+        assert!(matches!(
+            view.handle(&enter).unwrap(),
+            Action::Submit(text) if text == "Orbit 中文🦀\n后续问题"
+        ));
         view.submit_error("Orbit 请求未发送");
         assert_eq!(view.ui.input.text, "Orbit 中文🦀\n后续问题");
         view.submitted();

@@ -27,9 +27,13 @@ fn draw(state: &mut UiState, terminal: &mut Terminal<TestBackend>) {
 
 fn setup() -> (UiState, Terminal<TestBackend>) {
     let mut state = UiState::new("footer-model");
-    state.transcript.push(TranscriptItem::Assistant(
-        (0..40).map(|i| format!("line{i:02}\n")).collect(),
-    ));
+    state
+        .transcript
+        .push(TranscriptItem::Assistant(
+            (0..40)
+                .map(|i| format!("line{i:02}\n"))
+                .collect(),
+        ));
     state.input.set("你好 draft".into());
     state.follow_bottom = false;
     let mut terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
@@ -124,7 +128,9 @@ fn copying_html_keeps_unsupported_tags_and_omits_supported_tags_and_thinking_rai
 
 #[test]
 fn copying_html_blocks_omits_generated_spacing_and_rails_and_keeps_literal_glyphs() {
-    let source = "<details open><summary>摘要</summary>\n<blockquote>引用 │原文</blockquote>\n<div style='border-left:4px solid #3498db; padding:12px;'>提示</div>\n</details>\n<p style='text-align:center;'>结束</p>";
+    let source = "<details open><summary>摘要</summary>\n<blockquote>引用 │原文</blockquote>\n<div \
+        style='border-left:4px solid #3498db; padding:12px;'>提示</div>\n</details>\n<p \
+        style='text-align:center;'>结束</p>";
     let selection = select_transcript(&[TranscriptItem::Assistant(source.into())], 80, &[]);
     let copied = selection.text();
     assert!(copied.contains("摘要"));
@@ -175,16 +181,23 @@ fn copying_message_and_tool_frames_keeps_literal_borders_and_body_blank_lines() 
     assert_eq!(user.text().trim_end_matches('\n'), source);
 
     let tool = select_transcript(
-            &[TranscriptItem::Tool(ToolRow {
-                id: "read".into(),
-                name: "read_file".into(),
-                arguments: json!({"path": "example.txt"}).to_string(),
-                status: ToolStatus::Finished,
-                output: json!({"path": "example.txt", "content": "1:     first │─╭╮\n2: \n3:     second 你好\n"}).to_string(),
-            })],
-            60,
-            &[0],
-        );
+        &[TranscriptItem::Tool(ToolRow {
+            id: "read".into(),
+            name: "read_file".into(),
+            arguments: json!({
+                "path": "example.txt"
+            })
+            .to_string(),
+            status: ToolStatus::Finished,
+            output: json!({
+                "path": "example.txt",
+                "content": "1:     first │─╭╮\n2: \n3:     second 你好\n"
+            })
+            .to_string(),
+        })],
+        60,
+        &[0],
+    );
     let copied = tool.text();
     assert!(copied.starts_with("read_file example.txt"), "{copied:?}");
     assert!(copied.contains(source), "{copied:?}");
@@ -206,7 +219,9 @@ fn copying_tables_omits_grid_rows_and_keeps_columns_separate() {
             .text()
             .trim_end_matches('\n')
             .lines()
-            .map(|line| line.split_whitespace().collect::<Vec<_>>())
+            .map(|line| line
+                .split_whitespace()
+                .collect::<Vec<_>>())
             .collect::<Vec<_>>(),
         [vec!["名称", "值"], vec!["Orbit", "你好"]]
     );
@@ -217,8 +232,12 @@ fn selected_markdown_and_code_keep_colors_and_wide_glyphs_through_redraws() {
     use ratatui::style::{Color, Modifier};
 
     let mut state = UiState::new("orbit-model");
-    state.transcript.push(TranscriptItem::Assistant(
-            "Orbit **加粗** _斜体_ [文档](https://orbit.example/docs) 👩‍💻\n\n```python\n# Orbit\nprint('Orbit')\n```".into(),
+    state
+        .transcript
+        .push(TranscriptItem::Assistant(
+            "Orbit **加粗** _斜体_ [文档](https://orbit.example/docs) 👩‍💻\n\n```python\n# \
+                Orbit\nprint('Orbit')\n```"
+                .into(),
         ));
     state.follow_bottom = false;
     let mut terminal = Terminal::new(TestBackend::new(70, 24)).unwrap();
@@ -311,7 +330,8 @@ fn selection_leaves_frames_table_grid_and_padding_unchanged() {
     use super::super::theme::THEME;
     use serde_json::json;
 
-    let source = "| 项 | 值 |\n|---|---|\n| Orbit | **重点** 与 `code` |\n\n```rust\nlet rail = \"│─\";\n```";
+    let source = "| 项 | 值 |\n|---|---|\n| Orbit | **重点** 与 `code` |\n\n```rust\nlet rail = \
+        \"│─\";\n```";
     for width in [28, 72, 100] {
         let mut state = UiState::new("orbit-model");
         state
@@ -320,14 +340,31 @@ fn selection_leaves_frames_table_grid_and_padding_unchanged() {
         state
             .transcript
             .push(TranscriptItem::Assistant(format!("{source}\n\n---\n")));
-        state.transcript.push(TranscriptItem::Tool(ToolRow {
-                id: "orbit-read".into(), name: "read_file".into(),
-                arguments: json!({"path": "ORBIT.md"}).to_string(), status: ToolStatus::Finished,
-                output: json!({"path":"ORBIT.md", "content":source.lines().enumerate().map(|(index, line)| format!("{}: {line}\n", index + 1)).collect::<String>()}).to_string(),
+        state
+            .transcript
+            .push(TranscriptItem::Tool(ToolRow {
+                id: "orbit-read".into(),
+                name: "read_file".into(),
+                arguments: json!({
+                    "path": "ORBIT.md"
+                })
+                .to_string(),
+                status: ToolStatus::Finished,
+                output: json!({
+                    "path": "ORBIT.md",
+                    "content": source
+                        .lines()
+                        .enumerate()
+                        .map(|(index, line)| format!("{}: {line}\n", index + 1))
+                        .collect::<String>()
+                })
+                .to_string(),
             }));
         let mut thinking = ThinkingRow::from("```rust\nlet rail = \"│─\";\n```".to_owned());
         thinking.finished = true;
-        state.transcript.push(TranscriptItem::Thinking(thinking));
+        state
+            .transcript
+            .push(TranscriptItem::Thinking(thinking));
         state.expanded.extend([2, 3]);
         state.follow_bottom = false;
         let mut terminal = Terminal::new(TestBackend::new(width, 70)).unwrap();
@@ -419,7 +456,12 @@ fn selection_leaves_frames_table_grid_and_padding_unchanged() {
                     .all(|(i, text)| before[(x + i as u16, y)].symbol() == *text)
                     && let Some(border) =
                         (x + 5..area.right()).find(|&column| before[(column, y)].symbol() == "│")
-                    && (x + 5..border).all(|column| before[(column, y)].symbol().trim().is_empty())
+                    && (x + 5..border).all(|column| {
+                        before[(column, y)]
+                            .symbol()
+                            .trim()
+                            .is_empty()
+                    })
                 {
                     for column in x + 5..border {
                         assert_eq!(after[(column, y)], before[(column, y)]);
@@ -435,7 +477,10 @@ fn selection_leaves_frames_table_grid_and_padding_unchanged() {
             }
 
             let tail = area.right() - 1;
-            if before[(tail, y)].symbol().trim().is_empty()
+            if before[(tail, y)]
+                .symbol()
+                .trim()
+                .is_empty()
                 && before[(tail - 1, y)].symbol().width() <= 1
             {
                 assert_eq!(after[(tail, y)], before[(tail, y)]);
@@ -476,11 +521,19 @@ fn press_does_not_select_until_pointer_moves() {
 
     assert_eq!(terminal.backend().buffer(), &before);
     assert!(state.selection.text().is_empty());
-    assert_eq!(state.selection.auto_scroll(Instant::now()), 0);
+    assert_eq!(
+        state
+            .selection
+            .auto_scroll(Instant::now()),
+        0
+    );
 
     let release = mouse(MouseEventKind::Up(MouseButton::Left), point.0, point.1);
     assert_eq!(state.selection.click(&release), Some(point));
-    state.selection.handle(&release).unwrap();
+    state
+        .selection
+        .handle(&release)
+        .unwrap();
     assert!(!state.selection.active());
 
     state
@@ -508,7 +561,12 @@ fn press_does_not_select_until_pointer_moves() {
         crate::tui::theme::THEME.selection
     );
     assert!(!state.selection.text().is_empty());
-    assert!(state.selection.click(&release).is_none());
+    assert!(
+        state
+            .selection
+            .click(&release)
+            .is_none()
+    );
 }
 
 #[test]
@@ -520,7 +578,10 @@ fn dismissing_a_selection_keeps_blocks_open_and_the_next_content_click_folds_the
         let tool = ToolRow {
             id: "orbit-tool".into(),
             name: "run_command".into(),
-            arguments: serde_json::json!({ "command": "orbit --version" }).to_string(),
+            arguments: serde_json::json!({
+                "command": "orbit --version"
+            })
+            .to_string(),
             status: ToolStatus::Finished,
             output: "Orbit output\nsecond line".into(),
         };
@@ -528,15 +589,21 @@ fn dismissing_a_selection_keeps_blocks_open_and_the_next_content_click_folds_the
         if kind == "thinking" {
             let mut thinking = ThinkingRow::from(tool.output);
             thinking.finished = true;
-            state.transcript.push(TranscriptItem::Thinking(thinking));
+            state
+                .transcript
+                .push(TranscriptItem::Thinking(thinking));
         } else {
-            state.transcript.push(TranscriptItem::Tool(tool.clone()));
+            state
+                .transcript
+                .push(TranscriptItem::Tool(tool.clone()));
             if kind == "group" {
-                state.transcript.push(TranscriptItem::Tool(ToolRow {
-                    id: "orbit-other".into(),
-                    output: "Orbit other output".into(),
-                    ..tool
-                }));
+                state
+                    .transcript
+                    .push(TranscriptItem::Tool(ToolRow {
+                        id: "orbit-other".into(),
+                        output: "Orbit other output".into(),
+                        ..tool
+                    }));
                 state.expanded_tool_groups.insert(0);
             }
         }
@@ -573,8 +640,16 @@ fn dismissing_a_selection_keeps_blocks_open_and_the_next_content_click_folds_the
             ))
             .unwrap();
         let release = mouse(MouseEventKind::Up(MouseButton::Left), point.0 + 8, point.1);
-        assert!(state.selection.click(&release).is_none());
-        state.selection.handle(&release).unwrap();
+        assert!(
+            state
+                .selection
+                .click(&release)
+                .is_none()
+        );
+        state
+            .selection
+            .handle(&release)
+            .unwrap();
         draw(&mut state, &mut terminal);
         assert!(!state.selection.text().is_empty());
 
@@ -590,7 +665,10 @@ fn dismissing_a_selection_keeps_blocks_open_and_the_next_content_click_folds_the
         if let Some(point) = state.selection.click(&release) {
             super::super::toggle_transcript_at(&mut state, point);
         }
-        state.selection.handle(&release).unwrap();
+        state
+            .selection
+            .handle(&release)
+            .unwrap();
         draw(&mut state, &mut terminal);
         assert!(
             state.expanded.contains(&0),
@@ -645,8 +723,16 @@ fn replacing_a_selection_by_drag_and_clicking_the_input_remain_immediate() {
         ))
         .unwrap();
     let release = mouse(MouseEventKind::Up(MouseButton::Left), point.0, point.1);
-    assert!(state.selection.click(&release).is_none());
-    state.selection.handle(&release).unwrap();
+    assert!(
+        state
+            .selection
+            .click(&release)
+            .is_none()
+    );
+    state
+        .selection
+        .handle(&release)
+        .unwrap();
     assert!(!state.selection.active());
 
     let release = mouse(MouseEventKind::Up(MouseButton::Left), area.x + 2, area.y);
@@ -754,7 +840,12 @@ fn boundary_timer_repeats_without_motion_and_stops_on_release() {
         draw(&mut state, &mut terminal);
     }
 
-    assert!(state.selection.text().contains("line06"));
+    assert!(
+        state
+            .selection
+            .text()
+            .contains("line06")
+    );
 
     state
         .selection
@@ -775,7 +866,12 @@ fn boundary_timer_repeats_without_motion_and_stops_on_release() {
         .handle(&mouse(MouseEventKind::Up(MouseButton::Left), area.x, 0))
         .unwrap();
 
-    assert_eq!(state.selection.auto_scroll(now + Duration::from_secs(1)), 0);
+    assert_eq!(
+        state
+            .selection
+            .auto_scroll(now + Duration::from_secs(1)),
+        0
+    );
 }
 
 #[test]

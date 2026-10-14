@@ -13,9 +13,9 @@ pub(super) struct Watch {
 }
 
 impl Watch {
+    /// A restored transcript is a new observer, even for the same session. Always send its first
+    /// snapshot rather than reusing a transport cache.
     pub(super) fn set(&mut self, scope: Option<(String, String)>) {
-        // A restored transcript is a new observer, even for the same session.
-        // Always send its first snapshot rather than reusing a transport cache.
         self.scope = scope;
         self.due = None;
         self.last = None;
@@ -30,7 +30,11 @@ impl Watch {
         let Some((session, workspace)) = &self.scope else {
             return Ok(());
         };
-        if session != current || self.due.is_some_and(|due| Instant::now() < due) {
+        if session != current
+            || self
+                .due
+                .is_some_and(|due| Instant::now() < due)
+        {
             return Ok(());
         }
         self.due = Some(Instant::now() + Duration::from_secs(2));

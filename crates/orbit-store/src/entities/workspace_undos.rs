@@ -13,6 +13,7 @@ pub struct Model {
     pub path: String,
     pub undone_at: i64,
 }
+
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
 pub enum Relation {
     #[sea_orm(
@@ -28,6 +29,7 @@ pub enum Relation {
     )]
     Session,
 }
+
 impl ActiveModelBehavior for ActiveModel {}
 
 impl Related<super::runs::Entity> for Entity {
@@ -35,6 +37,7 @@ impl Related<super::runs::Entity> for Entity {
         Relation::Run.def()
     }
 }
+
 impl Related<super::sessions::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::Session.def()

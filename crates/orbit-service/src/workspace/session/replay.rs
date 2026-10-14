@@ -13,8 +13,8 @@ use anyhow::{Context, Result, ensure};
 use orbit_protocol::PAGE_BYTES;
 use orbit_protocol::PAGE_EVENTS;
 
-pub(super) const MAX_CACHED_BYTES: usize = 8 * 1024 * 1024;
-pub(super) const MAX_CACHED_EVENTS: usize = 2048;
+pub(super) const MAX_CACHED_BYTES: usize = 8 * 1_024 * 1_024;
+pub(super) const MAX_CACHED_EVENTS: usize = 2_048;
 
 #[derive(Default)]
 pub(super) struct Log {
@@ -32,9 +32,9 @@ struct Spool {
 }
 
 impl Spool {
+    /// tempfile honors the platform temporary directory and unlinks on creation where supported. No
+    /// draft or per-session artifact directory.
     fn new() -> Result<Self> {
-        // tempfile honors the platform temporary directory and unlinks on
-        // creation where supported. No draft or per-session artifact directory.
         Ok(Self {
             data: tempfile::tempfile()?,
             index: tempfile::tempfile()?,
@@ -44,22 +44,28 @@ impl Spool {
 
     fn append(&mut self, ordinal: usize, update: &Update) -> Result<()> {
         let bytes = serde_json::to_vec(update)?;
-        self.data.seek(SeekFrom::Start(self.end))?;
+        self.data
+            .seek(SeekFrom::Start(self.end))?;
         self.data.write_all(&bytes)?;
-        self.index.seek(SeekFrom::Start(ordinal as u64 * 16))?;
-        self.index.write_all(&self.end.to_le_bytes())?;
-        self.index.write_all(&(bytes.len() as u64).to_le_bytes())?;
+        self.index
+            .seek(SeekFrom::Start(ordinal as u64 * 16))?;
+        self.index
+            .write_all(&self.end.to_le_bytes())?;
+        self.index
+            .write_all(&(bytes.len() as u64).to_le_bytes())?;
         self.end += bytes.len() as u64;
         Ok(())
     }
 
     fn read(&mut self, ordinal: usize) -> Result<(Update, usize)> {
-        self.index.seek(SeekFrom::Start(ordinal as u64 * 16))?;
+        self.index
+            .seek(SeekFrom::Start(ordinal as u64 * 16))?;
         let mut entry = [0; 16];
         self.index.read_exact(&mut entry)?;
         let offset = u64::from_le_bytes(entry[..8].try_into()?);
         let length = u64::from_le_bytes(entry[8..].try_into()?) as usize;
-        self.data.seek(SeekFrom::Start(offset))?;
+        self.data
+            .seek(SeekFrom::Start(offset))?;
         let mut bytes = vec![0; length];
         self.data.read_exact(&mut bytes)?;
         Ok((serde_json::from_slice(&bytes)?, length))
@@ -127,7 +133,11 @@ impl Log {
                 orbit_agent::events::AgentEvent::Model(
                     orbit_model::types::StreamEvent::TextDelta(text)
                     | orbit_model::types::StreamEvent::ReasoningDelta(text),
-                ) => Some(serde_json::to_vec(text)?.len().saturating_sub(2)),
+                ) => Some(
+                    serde_json::to_vec(text)?
+                        .len()
+                        .saturating_sub(2),
+                ),
                 _ => None,
             };
             if orbit_agent::events::coalesce(previous, next) {
@@ -151,7 +161,10 @@ impl Log {
             if self.disk.is_none() {
                 self.disk = Some(Arc::new(Mutex::new(Spool::new()?)));
             }
-            let (update, _) = self.cache.front().context("empty delivery cache")?;
+            let (update, _) = self
+                .cache
+                .front()
+                .context("empty delivery cache")?;
             self.disk
                 .as_ref()
                 .unwrap()
@@ -173,7 +186,9 @@ impl Log {
         if let Some(error) = &self.fault {
             anyhow::bail!("{error}");
         }
-        let disk_end = self.base.min(after.saturating_add(PAGE_EVENTS));
+        let disk_end = self
+            .base
+            .min(after.saturating_add(PAGE_EVENTS));
         let range = after..disk_end.max(after);
         let remaining = PAGE_EVENTS - range.len();
         let cached = self
@@ -241,7 +256,11 @@ mod tests {
         let mut actual = Vec::new();
         let mut cursor = 0;
         while cursor < log.len() {
-            let page = log.reader(cursor).unwrap().read(PAGE_BYTES / 2).unwrap();
+            let page = log
+                .reader(cursor)
+                .unwrap()
+                .read(PAGE_BYTES / 2)
+                .unwrap();
             assert!(!page.is_empty());
             cursor += page.len();
             actual.extend(

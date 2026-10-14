@@ -39,14 +39,34 @@ impl Tool for EditFile {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition::function(
             "edit_file",
-            "Make a localized change to an existing UTF-8 file while preserving all other content. Prefer this to write_file or shell scripts for small replacements, insertions and deletions. Read the relevant region first; old_text must match exactly once, including whitespace and line endings. Include surrounding context when needed; replace_all=true explicitly replaces all occurrences. Use empty new_text to delete, or retain an anchor in new_text to insert beside it. A mismatch returns bounded candidate locations/current text and a fingerprint: re-read and correct old_text instead of rewriting the whole file. No regex or fuzzy edits. Workspace paths and granted outside paths are supported under the same approval, protected-path and conflict checks as write_file. Old and new files are each limited to 1 MiB. Never retry a denied edit without a new user request.",
+            "Make a localized change to an existing UTF-8 file while preserving all other content. \
+                Prefer this to write_file or shell scripts for small replacements, insertions and \
+                deletions. Read the relevant region first; old_text must match exactly once, \
+                including whitespace and line endings. Include surrounding context when needed; \
+                replace_all=true explicitly replaces all occurrences. Use empty new_text to \
+                delete, or retain an anchor in new_text to insert beside it. A mismatch returns \
+                bounded candidate locations/current text and a fingerprint: re-read and correct \
+                old_text instead of rewriting the whole file. No regex or fuzzy edits. Workspace \
+                paths and granted outside paths are supported under the same approval, \
+                protected-path and conflict checks as write_file. Old and new files are each \
+                limited to 1 MiB. Never retry a denied edit without a new user request.",
             json!({
                 "type": "object",
                 "properties": {
-                    "path": { "type": "string" },
-                    "old_text": { "type": "string", "minLength": 1 },
-                    "new_text": { "type": "string" },
-                    "replace_all": { "type": "boolean", "default": false }
+                    "path": {
+                        "type": "string"
+                    },
+                    "old_text": {
+                        "type": "string",
+                        "minLength": 1
+                    },
+                    "new_text": {
+                        "type": "string"
+                    },
+                    "replace_all": {
+                        "type": "boolean",
+                        "default": false
+                    }
                 },
                 "required": ["path", "old_text", "new_text"],
                 "additionalProperties": false
@@ -65,12 +85,18 @@ impl Tool for EditFile {
 
             if args.path.trim().is_empty()
                 || args.old_text.is_empty()
-                || args.old_text.len() > 1024 * 1024
-                || args.new_text.len() > 1024 * 1024
+                || args.old_text.len() > 1_024 * 1_024
+                || args.new_text.len() > 1_024 * 1_024
                 || args.old_text.contains('\0')
                 || args.new_text.contains('\0')
             {
-                return Err(ToolError::InvalidArguments { tool: "edit_file".into(), message: "path and old_text must be nonempty; old_text and new_text must be text without NUL, at most 1 MiB each".into() });
+                return Err(ToolError::InvalidArguments {
+                    tool: "edit_file".into(),
+                    message: "path and old_text \
+                    must be nonempty; old_text and new_text must be text without NUL, at most 1 \
+                    MiB each"
+                        .into(),
+                });
             }
 
             self.writer
@@ -101,7 +127,7 @@ impl Tool for EditFile {
                             .len()
                             .checked_mul(count)
                             .and_then(|n| new_len.checked_add(n))
-                            .is_none_or(|n| n > 1024 * 1024)
+                            .is_none_or(|n| n > 1_024 * 1_024)
                         {
                             return Err(ToolError::ExecutionFailed(
                                 "edited file would exceed 1 MiB".into(),

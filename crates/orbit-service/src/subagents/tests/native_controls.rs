@@ -6,7 +6,10 @@ async fn stale_native_run_guard_never_cancels_a_later_follow_up() {
     let model = GatedModel::new();
     let (service, _parent) = fixture(directory.path(), model.clone(), Default::default()).await;
     let first = spawn(&service, "native-first-run", CancellationToken::new()).await;
-    let id = first["agent_id"].as_str().unwrap().to_owned();
+    let id = first["agent_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     let first_run = first["run_id"].as_i64().unwrap();
     model.received(1).await;
     model.gate.add_permits(1);
@@ -15,7 +18,10 @@ async fn stale_native_run_guard_never_cancels_a_later_follow_up() {
         .wait(&[], true, CancellationToken::new())
         .await
         .unwrap();
-    let args = json!({"agent_id":id,"message":"继续核对当前任务"});
+    let args = json!({
+        "agent_id": id,
+        "message": "继续核对当前任务"
+    });
     let follow_up: Value = serde_json::from_str(
         &service
             .clone()
@@ -33,7 +39,12 @@ async fn stale_native_run_guard_never_cancels_a_later_follow_up() {
     model.received(2).await;
     let current_run = follow_up["run_id"].as_i64().unwrap();
     assert_ne!(first_run, current_run);
-    let cancel = |run| json!({"agent_ids":[id],"expected_run_id":run});
+    let cancel = |run| {
+        json!({
+            "agent_ids": [id],
+            "expected_run_id": run
+        })
+    };
     let error = service
         .clone()
         .execute(
@@ -65,9 +76,16 @@ async fn stale_native_run_guard_never_cancels_a_later_follow_up() {
             .status,
         "running"
     );
-    let job = follow_up["job_id"].as_str().unwrap().to_owned();
+    let job = follow_up["job_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     assert_eq!(
-        service.jobs.snapshots(&[job], false).unwrap()[0].status,
+        service
+            .jobs
+            .snapshots(&[job], false)
+            .unwrap()[0]
+            .status,
         JobStatus::Running
     );
     service
@@ -111,9 +129,18 @@ async fn run_guard_requires_one_owned_child_and_never_means_cancel_all() {
     let other_id = second["agent_id"].as_str().unwrap();
     let run = first["run_id"].as_i64().unwrap();
     for args in [
-        json!({"agent_ids":[],"expected_run_id":run}),
-        json!({"agent_ids":[id,other_id],"expected_run_id":run}),
-        json!({"agent_ids":[id],"expected_run_id":0}),
+        json!({
+            "agent_ids": [],
+            "expected_run_id": run
+        }),
+        json!({
+            "agent_ids": [id, other_id],
+            "expected_run_id": run
+        }),
+        json!({
+            "agent_ids": [id],
+            "expected_run_id": 0
+        }),
     ] {
         assert!(
             service
@@ -150,7 +177,9 @@ async fn run_guard_requires_one_owned_child_and_never_means_cancel_all() {
     );
     // Existing model-tool requests without a guard retain their original
     // selected cancellation semantics, including sibling isolation.
-    let args = json!({"agent_ids":[id]});
+    let args = json!({
+        "agent_ids": [id]
+    });
     service
         .clone()
         .execute(
@@ -161,9 +190,16 @@ async fn run_guard_requires_one_owned_child_and_never_means_cancel_all() {
         )
         .await
         .unwrap();
-    let second_job = second["job_id"].as_str().unwrap().to_owned();
+    let second_job = second["job_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     assert_eq!(
-        service.jobs.snapshots(&[second_job], false).unwrap()[0].status,
+        service
+            .jobs
+            .snapshots(&[second_job], false)
+            .unwrap()[0]
+            .status,
         JobStatus::Running
     );
     service.jobs.cancel(&[]).unwrap();

@@ -18,7 +18,8 @@ fn canonical_url(value: &str) -> Option<String> {
 
     url.set_query(None);
     if !query.is_empty() {
-        url.query_pairs_mut().extend_pairs(query);
+        url.query_pairs_mut()
+            .extend_pairs(query);
     }
     Some(url.into())
 }

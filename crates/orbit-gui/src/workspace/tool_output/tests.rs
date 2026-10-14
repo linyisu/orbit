@@ -20,13 +20,24 @@ fn tool(name: &str, arguments: serde_json::Value, output: Option<serde_json::Val
 fn command_streams_use_actual_result_and_preserve_literal_markdown_and_unicode() {
     let tool = tool(
         "run_command",
-        serde_json::json!({"command":"example"}),
+        serde_json::json!({
+            "command": "example"
+        }),
         Some(serde_json::json!({
-            "exit_code":3,"elapsed":{"secs":0,"nanos":9000000},
-            "stdout":"# literal\n````\n甲乙\r\n","stderr":"actual error\n",
-            "timed_out":false,"cancelled":false,"output_truncated":true,
-            "stdout_total_bytes":40000,"stderr_total_bytes":13,
-            "retained_output_truncated":true,"retained_output_error":"disk unavailable"
+            "exit_code": 3,
+            "elapsed": {
+                "secs": 0,
+                "nanos": 9_000_000
+            },
+            "stdout": "# literal\n````\n甲乙\r\n",
+            "stderr": "actual error\n",
+            "timed_out": false,
+            "cancelled": false,
+            "output_truncated": true,
+            "stdout_total_bytes": 40_000,
+            "stderr_total_bytes": 13,
+            "retained_output_truncated": true,
+            "retained_output_error": "disk unavailable"
         })),
     );
     assert_eq!(content(&tool, Stream::Stdout), "# literal\n````\n甲乙\r\n");
@@ -43,7 +54,10 @@ fn command_view_preserves_the_complete_multiline_request() {
     let command = "python3 - <<'PY'\nprint('甲乙 `code`')\nPY\n";
     let tool = tool(
         "run_command",
-        serde_json::json!({"command":command,"cwd":"/project/with spaces"}),
+        serde_json::json!({
+            "command": command,
+            "cwd": "/project/with spaces"
+        }),
         None,
     );
     assert_eq!(content(&tool, Stream::Command), command);
@@ -54,10 +68,17 @@ fn command_view_preserves_the_complete_multiline_request() {
 fn received_output_page_is_a_snapshot_and_more_pages_does_not_mean_retention_loss() {
     let tool = tool(
         "read_command_output",
-        serde_json::json!({"output_id":"cmd-1"}),
+        serde_json::json!({
+            "output_id": "cmd-1"
+        }),
         Some(serde_json::json!({
-            "output_id":"cmd-1","stream":"stderr","offset":12,"next_offset":18,
-            "total_retained_bytes":90,"truncated":true,"content":"甲乙"
+            "output_id": "cmd-1",
+            "stream": "stderr",
+            "offset": 12,
+            "next_offset": 18,
+            "total_retained_bytes": 90,
+            "truncated": true,
+            "content": "甲乙"
         })),
     );
     assert_eq!(content(&tool, Stream::Result), "甲乙");
@@ -70,9 +91,16 @@ fn received_output_page_is_a_snapshot_and_more_pages_does_not_mean_retention_los
 fn background_receipts_never_become_realtime_even_if_they_contain_preview_like_fields() {
     let mut tool = tool(
         "run_command",
-        serde_json::json!({"command":"background","background":true}),
+        serde_json::json!({
+            "command": "background",
+            "background": true
+        }),
         Some(serde_json::json!({
-            "job_id":"job-1","output_id":"cmd-1","background":true,"running":true,"status":"running"
+            "job_id": "job-1",
+            "output_id": "cmd-1",
+            "background": true,
+            "running": true,
+            "status": "running"
         })),
     );
     tool.status = ToolStatus::Background;
@@ -87,7 +115,13 @@ fn background_receipts_never_become_realtime_even_if_they_contain_preview_like_f
 
 #[test]
 fn malformed_or_legacy_outputs_remain_inspectable_without_markdown_wrapping() {
-    let mut tool = tool("read_file", serde_json::json!({"path":"source.rs"}), None);
+    let mut tool = tool(
+        "read_file",
+        serde_json::json!({
+            "path": "source.rs"
+        }),
+        None,
+    );
     tool.output = Some("# not a heading\n````text\nraw\n````".into());
     assert_eq!(
         content(&tool, Stream::Result),

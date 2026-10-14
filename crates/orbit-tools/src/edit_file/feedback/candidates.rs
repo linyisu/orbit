@@ -2,13 +2,15 @@
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, HashMap};
 
-use super::MAX_EXCERPT;
+use super::MAX_EXCERPT_CHARS;
 
 const MAX_WINDOWS: usize = 64;
-const COMPARISON_BYTES: usize = 4 * 1024 * 1024;
+const COMPARISON_BYTES: usize = 4 * 1_024 * 1_024;
 
 fn key(line: &str) -> String {
-    line.chars().filter(|c| !c.is_whitespace()).collect()
+    line.chars()
+        .filter(|c| !c.is_whitespace())
+        .collect()
 }
 
 fn near_line(left: &str, right: &str) -> bool {
@@ -41,7 +43,10 @@ pub(super) fn find(before: &str, old: &str) -> (Vec<Value>, bool) {
     let mut locations = HashMap::<&str, Vec<usize>>::new();
     for (index, text) in current.iter().enumerate() {
         if !text.is_empty() {
-            locations.entry(text).or_default().push(index);
+            locations
+                .entry(text)
+                .or_default()
+                .push(index);
         }
     }
     let meaningful: Vec<_> = expected
@@ -94,7 +99,10 @@ pub(super) fn find(before: &str, old: &str) -> (Vec<Value>, bool) {
     let mut candidates = Vec::new();
     for (start, _) in windows.into_iter().take(MAX_WINDOWS) {
         let mut matched = 0;
-        for (a, b) in current[start..start + pattern.len()].iter().zip(&expected) {
+        for (a, b) in current[start..start + pattern.len()]
+            .iter()
+            .zip(&expected)
+        {
             let cost = (a.len() + b.len()).max(1);
             if cost > budget {
                 return (candidates, true);
@@ -121,7 +129,7 @@ pub(super) fn find(before: &str, old: &str) -> (Vec<Value>, bool) {
         let excerpt: String = window
             .iter()
             .flat_map(|s| s.chars())
-            .take(MAX_EXCERPT)
+            .take(MAX_EXCERPT_CHARS)
             .collect();
         let difference = window
             .iter()
@@ -138,16 +146,30 @@ pub(super) fn find(before: &str, old: &str) -> (Vec<Value>, bool) {
                     .take_while(|(a, b)| a == b)
                     .count()
                     + 1;
-                Some(json!({"line":start+offset+1, "column":column,
-                    "current_line":actual.chars().take(200).collect::<String>(),
-                    "expected_line":b.chars().take(200).collect::<String>(),
-                    "line_text_truncated":actual.chars().count()>200 || b.chars().count()>200,
+                Some(json!({
+                    "line": start + offset + 1,
+                    "column": column,
+                    "current_line": actual
+                        .chars()
+                        .take(200)
+                        .collect::<String>(),
+                    "expected_line": b.chars().take(200).collect::<String>(),
+                    "line_text_truncated": actual.chars().count() > 200 || b.chars().count() > 200,
                 }))
             });
-        candidates.push(json!({"line":start+1,"end_line":start+pattern.len(),
-            "basis":"nearby lines found by bounded anchors; verify current text, whitespace and line endings",
-            "current_text":excerpt, "text_truncated":window.iter().map(|s|s.chars().count()).sum::<usize>()>MAX_EXCERPT,
-            "first_difference":difference,
+        candidates.push(json!({
+            "line": start+1,
+            "end_line": start+pattern.len(),
+            "basis": "nearby lines found by bounded anchors; verify current text, whitespace and \
+                line endings",
+            "current_text": excerpt,
+            "text_truncated": window
+                .iter()
+                .map(|s|s
+                .chars()
+                .count())
+                .sum::<usize>()>MAX_EXCERPT_CHARS,
+            "first_difference": difference,
         }));
     }
     (candidates, exhausted)

@@ -19,6 +19,7 @@ struct Entry {
     record: Record,
     reply: oneshot::Sender<Record>,
 }
+
 #[derive(Clone)]
 pub struct Questions(Arc<Inner>);
 struct Inner {
@@ -30,7 +31,9 @@ struct Inner {
 
 impl Questions {
     pub async fn new(store: Store, session: String) -> Result<Self> {
-        store.interrupt_user_inputs(&session).await?;
+        store
+            .interrupt_user_inputs(&session)
+            .await?;
         Ok(Self(Arc::new(Inner {
             store,
             session,
@@ -38,21 +41,30 @@ impl Questions {
             pending: Mutex::new(BTreeMap::new()),
         })))
     }
+
     pub fn enable(&self) {
-        self.0.enabled.store(true, Ordering::Release);
+        self.0
+            .enabled
+            .store(true, Ordering::Release);
     }
+
     pub fn register(&self, tools: &mut ToolRegistry, source: Option<String>) {
         tools.register(AskUser {
             questions: self.clone(),
             source,
         });
     }
+
     pub async fn pending(&self) -> Vec<Record> {
         let pending = self.0.pending.lock().await;
         let mut entries: Vec<_> = pending.values().collect();
         entries.sort_by_key(|e| e.queued);
-        entries.into_iter().map(|e| e.record.clone()).collect()
+        entries
+            .into_iter()
+            .map(|e| e.record.clone())
+            .collect()
     }
+
     pub async fn answer(&self, id: &str, answers: Option<Vec<Answer>>) -> Result<()> {
         let mut pending = self.0.pending.lock().await;
         let status = if answers.is_some() {
@@ -62,7 +74,11 @@ impl Questions {
         };
         let answers = answers.unwrap_or_default();
         let Some(entry) = pending.get(id) else {
-            let existing = self.0.store.user_input(&self.0.session, id).await?;
+            let existing = self
+                .0
+                .store
+                .user_input(&self.0.session, id)
+                .await?;
             ensure!(
                 existing.is_some_and(|r| r.status == status && r.answers == answers),
                 "该问答已结束或已在其他终端回答，请查看最新结果"
@@ -88,6 +104,7 @@ impl Questions {
         let _ = entry.reply.send(record);
         Ok(())
     }
+
     async fn ask(
         &self,
         call_id: String,
@@ -99,7 +116,8 @@ impl Questions {
             self.0.enabled.load(Ordering::Acquire),
             "当前客户端不支持交互问答，请通过对话向用户提问"
         );
-        form.validate().map_err(anyhow::Error::msg)?;
+        form.validate()
+            .map_err(anyhow::Error::msg)?;
         let record = Record {
             id: orbit_protocol::request_id(),
             call_id,
@@ -137,11 +155,18 @@ impl Questions {
                 if let Some(entry) = pending.get(&record.id) {
                     let mut cancelled = entry.record.clone();
                     cancelled.status = Status::Cancelled;
-                    self.0.store.save_user_input(&self.0.session,&cancelled).await?;
+                    self.0
+                        .store
+                        .save_user_input(&self.0.session, &cancelled)
+                        .await?;
                     pending.remove(&record.id);
                     Ok(cancelled)
                 } else {
-                    self.0.store.user_input(&self.0.session,&record.id).await?.ok_or_else(||anyhow::anyhow!("问答记录丢失"))
+                    self.0
+                        .store
+                        .user_input(&self.0.session, &record.id)
+                        .await?
+                        .ok_or_else(|| anyhow::anyhow!("问答记录丢失"))
                 }
             }
         }
@@ -152,6 +177,7 @@ struct PendingGuard {
     questions: Questions,
     id: String,
 }
+
 impl Drop for PendingGuard {
     fn drop(&mut self) {
         let questions = self.questions.clone();
@@ -177,6 +203,7 @@ struct AskUser {
     questions: Questions,
     source: Option<String>,
 }
+
 impl Tool for AskUser {
     fn capabilities(&self) -> orbit_agent::tool::ToolCapabilities {
         orbit_agent::tool::ToolCapabilities::INTERACTION
@@ -185,18 +212,72 @@ impl Tool for AskUser {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition::function(
             "ask_user",
-            "Ask the user a group of related clarification questions. Prefer 1–4 questions. Supports single choice, multiple choice and free text. The UI supplies a custom-answer option; do not add an Other option yourself. No answer is preselected. Waits for explicit submission or cancellation, including in auto/YOLO mode. Use only when missing user information materially affects the task. This tool does not grant execution permissions.",
+            "Ask the user a group of related clarification questions. Prefer 1–4 questions. \
+                Supports single choice, multiple choice and free text. The UI supplies a \
+                custom-answer option; do not add an Other option yourself. No answer is \
+                preselected. Waits for explicit submission or cancellation, including in \
+                auto/YOLO mode. Use only when missing user information materially affects the \
+                task. This tool does not grant execution permissions.",
             serde_json::json!({
-                "type":"object","required":["questions"],"properties":{"questions":{"type":"array","minItems":1,"maxItems":8,"items":{
-                    "type":"object","required":["id","title","prompt","kind"],"properties":{
-                        "id":{"type":"string"},"title":{"type":"string","description":"Short question tab title"},"prompt":{"type":"string"},
-                        "kind":{"type":"string","enum":["single","multiple","text"]},"required":{"type":"boolean","default":true},"allow_custom":{"type":"boolean","default":true},
-                        "options":{"type":"array","items":{"type":"object","required":["id","label"],"properties":{"id":{"type":"string"},"label":{"type":"string"},"description":{"type":"string"}}}}
+                "type": "object",
+                "required": ["questions"],
+                "properties": {
+                    "questions": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": 8,
+                        "items": {
+                            "type": "object",
+                            "required": ["id", "title", "prompt", "kind"],
+                            "properties": {
+                                "id": {
+                                    "type": "string"
+                                },
+                                "title": {
+                                    "type": "string",
+                                    "description": "Short question tab title"
+                                },
+                                "prompt": {
+                                    "type": "string"
+                                },
+                                "kind": {
+                                    "type": "string",
+                                    "enum": ["single", "multiple", "text"]
+                                },
+                                "required": {
+                                    "type": "boolean",
+                                    "default": true
+                                },
+                                "allow_custom": {
+                                    "type": "boolean",
+                                    "default": true
+                                },
+                                "options": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "object",
+                                        "required": ["id", "label"],
+                                        "properties": {
+                                            "id": {
+                                                "type": "string"
+                                            },
+                                            "label": {
+                                                "type": "string"
+                                            },
+                                            "description": {
+                                                "type": "string"
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
-                }}}
+                }
             }),
         )
     }
+
     fn execute<'a>(&'a self, call: ToolCall, cancellation: CancellationToken) -> ToolFuture<'a> {
         Box::pin(async move {
             let form: Form = serde_json::from_value(call.arguments_json().map_err(|e| {
@@ -239,21 +320,27 @@ mod tests {
             }],
         }
     }
+
     async fn fixture() -> (
         tempfile::TempDir,
         Questions,
         orbit_store::store::SessionWriter,
     ) {
         let dir = tempfile::tempdir().unwrap();
-        let store = Store::open(dir.path().join("test.sqlite")).await.unwrap();
+        let store = Store::open(dir.path().join("test.sqlite"))
+            .await
+            .unwrap();
         let writer = store
             .create(dir.path().display().to_string(), "test".into())
             .await
             .unwrap();
-        let questions = Questions::new(store, writer.id().into()).await.unwrap();
+        let questions = Questions::new(store, writer.id().into())
+            .await
+            .unwrap();
         questions.enable();
         (dir, questions, writer)
     }
+
     async fn wait(questions: &Questions) -> Record {
         tokio::time::timeout(std::time::Duration::from_secs(2), async {
             loop {
@@ -266,6 +353,7 @@ mod tests {
         .await
         .unwrap()
     }
+
     #[tokio::test]
     async fn user_input_two_clients_submit_once_and_results_survive_reopen() {
         let (_dir, q, writer) = fixture().await;
@@ -290,8 +378,14 @@ mod tests {
         b.unwrap();
         assert!(q.pending().await.is_empty());
         assert_eq!(task.await.unwrap().answers, answer);
-        assert!(q.answer(&pending.id, None).await.is_err());
-        let store = Store::open(q.0.store.path()).await.unwrap();
+        assert!(
+            q.answer(&pending.id, None)
+                .await
+                .is_err()
+        );
+        let store = Store::open(q.0.store.path())
+            .await
+            .unwrap();
         assert_eq!(
             store
                 .user_input_history(writer.id(), None)
@@ -302,6 +396,7 @@ mod tests {
             Status::Answered
         );
     }
+
     #[tokio::test]
     async fn user_input_validation_preserves_pending_and_cancellation_is_recorded() {
         let (_dir, q, _writer) = fixture().await;
@@ -316,7 +411,11 @@ mod tests {
         });
         let r = wait(&q).await;
         assert_eq!(r.source.as_deref(), Some("child"));
-        assert!(q.answer(&r.id, Some(vec![])).await.is_err());
+        assert!(
+            q.answer(&r.id, Some(vec![]))
+                .await
+                .is_err()
+        );
         assert_eq!(q.pending().await.len(), 1);
         token.cancel();
         assert_eq!(task.await.unwrap().status, Status::Cancelled);
@@ -331,6 +430,7 @@ mod tests {
             Status::Cancelled
         );
     }
+
     #[tokio::test]
     async fn user_input_headless_rejects_and_restart_marks_interrupted() {
         let (_dir, q, _writer) = fixture().await;
@@ -368,6 +468,7 @@ mod tests {
             Status::Interrupted
         );
     }
+
     #[tokio::test]
     async fn user_input_history_pages_and_session_boundaries() {
         let (_dir, q, _writer) = fixture().await;
@@ -400,7 +501,13 @@ mod tests {
                 .unwrap();
         assert_eq!(second.records.len(), 3);
         assert!(second.next.is_none());
-        assert!(q.0.store.user_input("other", "0").await.unwrap().is_none());
+        assert!(
+            q.0.store
+                .user_input("other", "0")
+                .await
+                .unwrap()
+                .is_none()
+        );
     }
 }
 
@@ -410,7 +517,9 @@ mod lifecycle_tests {
     #[tokio::test]
     async fn user_input_aborted_tool_releases_request() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Store::open(dir.path().join("db")).await.unwrap();
+        let store = Store::open(dir.path().join("db"))
+            .await
+            .unwrap();
         let writer = store
             .create(dir.path().display().to_string(), "test".into())
             .await
@@ -419,7 +528,15 @@ mod lifecycle_tests {
             .await
             .unwrap();
         q.enable();
-        let form=serde_json::from_value(serde_json::json!({"questions":[{"id":"q","title":"要求","prompt":"需要什么？","kind":"text"}]})).unwrap();
+        let form = serde_json::from_value(serde_json::json!({
+            "questions": [{
+                "id": "q",
+                "title": "要求",
+                "prompt": "需要什么？",
+                "kind": "text"
+            }]
+        }))
+        .unwrap();
         let caller = q.clone();
         let task = tokio::spawn(async move {
             caller

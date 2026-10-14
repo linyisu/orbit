@@ -14,7 +14,10 @@ pub(super) struct Entry {
 
 pub(super) fn merge(entries: &mut Vec<Entry>, profiles: Vec<ModelProfile>) {
     for profile in profiles {
-        if !entries.iter().any(|entry| entry.profile.id == profile.id) {
+        if !entries
+            .iter()
+            .any(|entry| entry.profile.id == profile.id)
+        {
             entries.push(Entry {
                 profile: ModelProfile::new(profile.id),
                 enabled: false,
@@ -69,7 +72,10 @@ pub(super) async fn discover(
         )
         .await?
     };
-    Ok(ids.iter().map(|id| model::blank(id)).collect())
+    Ok(ids
+        .iter()
+        .map(|id| model::blank(id))
+        .collect())
 }
 
 #[cfg(test)]
@@ -79,7 +85,7 @@ mod tests {
     #[test]
     fn rediscovery_keeps_selection_and_model_settings() {
         let mut profile = model::blank("a");
-        profile.max_output_tokens = Some(4096);
+        profile.max_output_tokens = Some(4_096);
         profile.supports_vision = Some(true);
         let mut entries = vec![Entry {
             profile,
@@ -93,9 +99,14 @@ mod tests {
 
         assert_eq!(entries.len(), 2);
         assert!(entries[0].enabled);
-        assert_eq!(entries[0].profile.max_output_tokens, Some(4096));
+        assert_eq!(entries[0].profile.max_output_tokens, Some(4_096));
         assert_eq!(entries[0].profile.supports_vision, Some(true));
         assert!(!entries[1].enabled);
-        assert!(entries[1].profile.context_tokens.is_none());
+        assert!(
+            entries[1]
+                .profile
+                .context_tokens
+                .is_none()
+        );
     }
 }

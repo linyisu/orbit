@@ -1,6 +1,6 @@
 use image::{DynamicImage, RgbaImage};
 
-pub(super) const PAN_RANGE: i16 = 1000;
+pub(super) const PAN_RANGE: i16 = 1_000;
 pub(super) const PAN_STEP: i16 = PAN_RANGE / 10;
 const FIT_ZOOM: u16 = 100;
 pub(super) const MIN_ZOOM: u16 = 25;
@@ -78,8 +78,14 @@ impl View {
             scale,
             x: position(self.pan.0, overflow.0),
             y: position(self.pan.1, overflow.1),
-            width: (width * scale).ceil().max(1.0).min(max_w as f32) as u32,
-            height: (height * scale).ceil().max(1.0).min(max_h as f32) as u32,
+            width: (width * scale)
+                .ceil()
+                .max(1.0)
+                .min(max_w as f32) as u32,
+            height: (height * scale)
+                .ceil()
+                .max(1.0)
+                .min(max_h as f32) as u32,
             overflow,
             quality: self.quality,
         }
@@ -114,8 +120,14 @@ impl Geometry {
         (
             x,
             y,
-            right.min(width).saturating_sub(x).max(1),
-            bottom.min(height).saturating_sub(y).max(1),
+            right
+                .min(width)
+                .saturating_sub(x)
+                .max(1),
+            bottom
+                .min(height)
+                .saturating_sub(y)
+                .max(1),
         )
     }
 
@@ -131,12 +143,20 @@ impl Geometry {
             .collect();
         let mut output = RgbaImage::new(self.width, self.height);
         let stride = source.width() as usize * 4;
-        for (index, row) in output.chunks_exact_mut(self.width as usize * 4).enumerate() {
+        for (index, row) in output
+            .chunks_exact_mut(self.width as usize * 4)
+            .enumerate()
+        {
             let source_y = (y
                 + (((index as f32 + 0.5) * height as f32 / self.height as f32) as u32)
                     .min(height - 1)) as usize;
             let source_row = &source.as_raw()[source_y * stride..(source_y + 1) * stride];
-            for (pixel, x) in row.as_chunks_mut::<4>().0.iter_mut().zip(&columns) {
+            for (pixel, x) in row
+                .as_chunks_mut::<4>()
+                .0
+                .iter_mut()
+                .zip(&columns)
+            {
                 pixel.copy_from_slice(&source_row[*x..*x + 4]);
             }
         }

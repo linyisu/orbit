@@ -7,13 +7,16 @@ pub(crate) struct Projects {
     pinned: BTreeSet<String>,
     order: Vec<String>,
 }
+
 impl Projects {
     pub(in crate::preferences) fn is_empty(&self) -> bool {
         self.pinned.is_empty() && self.order.is_empty()
     }
+
     pub(crate) fn is_pinned(&self, path: &str) -> bool {
         self.pinned.contains(path)
     }
+
     pub(crate) fn position(&self, path: &str) -> usize {
         self.order
             .iter()
@@ -21,6 +24,7 @@ impl Projects {
             .unwrap_or(usize::MAX)
     }
 }
+
 impl Organization {
     pub(in crate::preferences) fn projects(&self, options: &Options) -> Projects {
         self.hosts
@@ -29,6 +33,7 @@ impl Organization {
             .map(|host| host.projects.clone())
             .unwrap_or_default()
     }
+
     fn project_host(&mut self, options: &Options) -> &mut Host {
         let ix = self
             .hosts
@@ -44,6 +49,7 @@ impl Organization {
             });
         &mut self.hosts[ix]
     }
+
     pub(in crate::preferences) fn set_project_pin(
         &mut self,
         options: &Options,
@@ -65,6 +71,7 @@ impl Organization {
         self.hosts
             .retain(|host| !host.sessions.is_empty() || !host.projects.is_empty());
     }
+
     pub(in crate::preferences) fn reorder_project(
         &mut self,
         options: &Options,
@@ -86,7 +93,9 @@ impl Organization {
         let host = self.project_host(options);
         // A drop into the other section adopts that section's pin state.
         if host.projects.is_pinned(target) {
-            host.projects.pinned.insert(source.to_owned());
+            host.projects
+                .pinned
+                .insert(source.to_owned());
         } else {
             host.projects.pinned.remove(source);
         }
@@ -104,6 +113,7 @@ impl Organization {
         host.projects.order = order;
         Ok(())
     }
+
     pub(in crate::preferences) fn migrate_project_pins(
         &mut self,
         options: &Options,
@@ -122,7 +132,9 @@ impl Organization {
                 && placement.is_pinned()
             {
                 placement.pinned = false;
-                host.projects.pinned.insert(path.clone());
+                host.projects
+                    .pinned
+                    .insert(path.clone());
                 changed = true;
             }
         }
@@ -147,10 +159,20 @@ mod tests {
         let catalog = [("a".into(), "/alpha".into()), ("b".into(), "/alpha".into())];
         assert!(organization.migrate_project_pins(&options, &catalog));
         assert!(!organization.migrate_project_pins(&options, &catalog));
-        assert!(organization.projects(&options).is_pinned("/alpha"));
-        assert!(!organization.placement(&options, "a").is_pinned());
+        assert!(
+            organization
+                .projects(&options)
+                .is_pinned("/alpha")
+        );
+        assert!(
+            !organization
+                .placement(&options, "a")
+                .is_pinned()
+        );
         assert_eq!(
-            organization.placement(&options, "a").category(),
+            organization
+                .placement(&options, "a")
+                .category(),
             Some("学习")
         );
         let paths = ["/alpha", "/beta", "/gamma"].map(str::to_owned);
@@ -163,7 +185,11 @@ mod tests {
         assert_eq!(projects.order, ["/alpha", "/gamma", "/beta"]);
         assert!(projects.is_pinned("/alpha"));
         restored.set_project_pin(&options, "/alpha", false);
-        assert!(!restored.projects(&options).is_pinned("/alpha"));
+        assert!(
+            !restored
+                .projects(&options)
+                .is_pinned("/alpha")
+        );
         restored.forget(&options, "a");
         assert_eq!(restored.projects(&options).order, projects.order);
         assert!(
@@ -172,6 +198,7 @@ mod tests {
                 .is_err()
         );
     }
+
     #[test]
     fn project_paths_are_isolated_by_target_host_and_cross_section_drops_are_explicit() {
         let local = Options::parse_from(["orbit-gui"]);
@@ -179,16 +206,28 @@ mod tests {
         ssh.ssh = Some("dev".into());
         let mut organization = Organization::default();
         organization.set_project_pin(&ssh, "/same", true);
-        assert!(!organization.projects(&local).is_pinned("/same"));
+        assert!(
+            !organization
+                .projects(&local)
+                .is_pinned("/same")
+        );
         let paths = ["/same", "/other"].map(str::to_owned);
         organization
             .reorder_project(&ssh, "/other", "/same", &paths)
             .unwrap();
-        assert!(organization.projects(&ssh).is_pinned("/other"));
+        assert!(
+            organization
+                .projects(&ssh)
+                .is_pinned("/other")
+        );
         organization.set_project_pin(&ssh, "/same", false);
         organization
             .reorder_project(&ssh, "/other", "/same", &paths)
             .unwrap();
-        assert!(!organization.projects(&ssh).is_pinned("/other"));
+        assert!(
+            !organization
+                .projects(&ssh)
+                .is_pinned("/other")
+        );
     }
 }

@@ -79,9 +79,12 @@ impl Panel {
         let config: FileConfig = toml::from_str(&draft.source)?;
         let mut panel = Self {
             saved_auth: draft.account()
-                || draft.provider.as_ref().is_some_and(|provider| {
-                    provider.credential.is_some() || !provider.api_key.is_empty()
-                }),
+                || draft
+                    .provider
+                    .as_ref()
+                    .is_some_and(|provider| {
+                        provider.credential.is_some() || !provider.api_key.is_empty()
+                    }),
             service,
             query: Field::text("筛选模型", "", "搜索模型"),
             models: Vec::new(),
@@ -227,15 +230,23 @@ impl Panel {
             }
             .into(),
         );
-        let current = self.models[i].reasoning[8].value().to_owned();
+        let current = self.models[i].reasoning[8]
+            .value()
+            .to_owned();
         if !(1..=7).any(|j| {
             self.models[i].reasoning[j].label == current
                 && self.models[i].reasoning[j].value() == "启用"
         }) {
             let value = first
-                .map(|j| self.models[i].reasoning[j].label.clone())
+                .map(|j| {
+                    self.models[i].reasoning[j]
+                        .label
+                        .clone()
+                })
                 .unwrap_or_default();
-            self.models[i].reasoning[8].input.set(value);
+            self.models[i].reasoning[8]
+                .input
+                .set(value);
         }
     }
 
@@ -398,7 +409,11 @@ impl Panel {
 
     fn apply_models(&self, draft: &mut ConnectionDraft) -> Result<()> {
         let mut profiles = Vec::new();
-        for entry in self.models.iter().filter(|model| model.entry.enabled) {
+        for entry in self
+            .models
+            .iter()
+            .filter(|model| model.entry.enabled)
+        {
             let mut profile = model::read(
                 &entry.fields,
                 &entry.entry.profile,
@@ -412,7 +427,9 @@ impl Panel {
                 draft.format,
             )?;
             ensure!(
-                !profiles.iter().any(|p: &ModelProfile| p.id == profile.id),
+                !profiles
+                    .iter()
+                    .any(|p: &ModelProfile| p.id == profile.id),
                 "模型 ID 重复：{}",
                 profile.id
             );
@@ -469,7 +486,11 @@ pub(super) async fn run(
                 panel.pointer = None;
                 match key.code {
                     KeyCode::Esc => return Ok(None),
-                    KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    KeyCode::Char('c')
+                        if key
+                            .modifiers
+                            .contains(KeyModifiers::CONTROL) =>
+                    {
                         return Ok(None);
                     }
                     KeyCode::Tab | KeyCode::BackTab | KeyCode::Up | KeyCode::Down => {

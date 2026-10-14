@@ -10,6 +10,7 @@ pub struct Model {
     pub strong: bool,
     pub legacy: bool,
 }
+
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
 pub enum Relation {}
 impl ActiveModelBehavior for ActiveModel {}

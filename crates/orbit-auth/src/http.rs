@@ -9,8 +9,10 @@ use crate::{
     credential::{Credential, Secret, now},
 };
 
+/// Upper bound for one authentication HTTP request.
 pub(crate) const AUTH_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
-pub(crate) const MAX_TOKEN_RESPONSE_BYTES: usize = 64 * 1024;
+/// Response-body byte ceiling, enforced while streaming token responses.
+pub(crate) const MAX_TOKEN_RESPONSE_BYTES: usize = 64 * 1_024;
 
 pub(crate) fn client() -> Result<Client> {
     Client::builder()
@@ -25,7 +27,11 @@ pub(crate) async fn json_response(mut response: Response) -> Result<Value> {
     let status = response.status();
     let mut bytes = Vec::new();
 
-    while let Some(chunk) = response.chunk().await.map_err(|_| AuthError::Transport)? {
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|_| AuthError::Transport)?
+    {
         if bytes.len().saturating_add(chunk.len()) > MAX_TOKEN_RESPONSE_BYTES {
             return Err(AuthError::InvalidToken);
         }
@@ -75,7 +81,11 @@ pub(crate) struct Tokens {
 impl Tokens {
     pub fn apply(self, credential: &mut Credential) -> Result<()> {
         if self.access_token.0.is_empty()
-            || self.access_token.0.chars().any(char::is_control)
+            || self
+                .access_token
+                .0
+                .chars()
+                .any(char::is_control)
             || self.expires_in == 0
         {
             return Err(AuthError::InvalidToken);
@@ -116,7 +126,9 @@ mod tests {
             while !bytes.ends_with(b"\r\n\r\n") {
                 bytes.push(socket.read_u8().await.unwrap());
             }
-            let headers = String::from_utf8(bytes).unwrap().to_ascii_lowercase();
+            let headers = String::from_utf8(bytes)
+                .unwrap()
+                .to_ascii_lowercase();
             let length: usize = headers
                 .lines()
                 .find_map(|line| line.strip_prefix("content-length: "))
@@ -124,13 +136,19 @@ mod tests {
                 .parse()
                 .unwrap();
             let mut body = vec![0; length];
-            socket.read_exact(&mut body).await.unwrap();
+            socket
+                .read_exact(&mut body)
+                .await
+                .unwrap();
             let error = r#"{"error":"invalid_grant","error_description":"private-token"}"#;
             let response = format!(
                 "HTTP/1.1 400 Bad Request\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{error}",
                 error.len()
             );
-            socket.write_all(response.as_bytes()).await.unwrap();
+            socket
+                .write_all(response.as_bytes())
+                .await
+                .unwrap();
             (headers, body)
         };
 

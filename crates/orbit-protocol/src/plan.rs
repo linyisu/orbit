@@ -8,6 +8,7 @@ pub enum WorkMode {
     #[default]
     Build,
 }
+
 impl WorkMode {
     pub fn label(self) -> &'static str {
         match self {
@@ -16,6 +17,7 @@ impl WorkMode {
         }
     }
 }
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Status {
@@ -23,6 +25,7 @@ pub enum Status {
     Review,
     Approved,
 }
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Plan {
     pub id: String,
@@ -39,12 +42,14 @@ pub struct Plan {
     #[serde(default)]
     pub feedback: String,
 }
+
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct State {
     pub generation: u64,
     pub mode: WorkMode,
     pub plan: Option<Plan>,
 }
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum Action {

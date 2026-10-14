@@ -5,12 +5,18 @@ use crate::web_fetch::dom::attribute;
 use html2text::Handle;
 
 fn whitespace(value: &str) -> String {
-    value.split_whitespace().collect::<Vec<_>>().join(" ")
+    value
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 pub(super) fn query_echo(query: &str, url: &Url, body: &str) -> Result<(), Failure> {
     let expected = whitespace(query);
-    for (_, actual) in url.query_pairs().filter(|(key, _)| key == "q") {
+    for (_, actual) in url
+        .query_pairs()
+        .filter(|(key, _)| key == "q")
+    {
         if whitespace(&actual) != expected {
             return Err(failed("search redirect changed the query").into());
         }
@@ -25,7 +31,10 @@ pub(super) fn query_echo(query: &str, url: &Url, body: &str) -> Result<(), Failu
         {
             return attribute(node, "value");
         }
-        node.children.borrow().iter().find_map(input)
+        node.children
+            .borrow()
+            .iter()
+            .find_map(input)
     }
     if input(&dom.document).is_some_and(|actual| whitespace(&actual) != expected) {
         return Err(failed("search page displays a different query").into());
@@ -77,7 +86,9 @@ fn simple_site(words: &[String]) -> Option<Url> {
     {
         return None;
     }
-    let mut sites = words.iter().filter_map(|word| word.strip_prefix("site:"));
+    let mut sites = words
+        .iter()
+        .filter_map(|word| word.strip_prefix("site:"));
     let site = sites.next()?;
     if sites.next().is_some() || site.is_empty() {
         return None;
@@ -103,7 +114,11 @@ fn within_site(value: &str, site: &Url) -> bool {
     let expected = expected.trim_end_matches('.');
     let path = site.path().trim_end_matches('/');
     (host == expected || host.ends_with(&format!(".{expected}")))
-        && (path.is_empty() || url.path() == path || url.path().starts_with(&format!("{path}/")))
+        && (path.is_empty()
+            || url.path() == path
+            || url
+                .path()
+                .starts_with(&format!("{path}/")))
 }
 
 fn normalized(value: &str) -> String {
@@ -156,7 +171,12 @@ pub(super) fn results(
         .collect();
     let terms: Vec<_> = words
         .iter()
-        .filter(|word| word.len() >= 3 && word.bytes().all(|b| b.is_ascii_alphanumeric()))
+        .filter(|word| {
+            word.len() >= 3
+                && word
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric())
+        })
         .map(|word| word.to_ascii_lowercase())
         .filter(|word| {
             !matches!(
@@ -192,7 +212,10 @@ pub(super) fn results(
         } else {
             "No quoted phrase"
         };
-        warnings.push(format!("{missing} appears in result titles, snippets or URLs. Relevance is unconfirmed; inspect pages or refine the query before using these results as evidence."));
+        warnings.push(format!(
+            "{missing} appears in result titles, snippets or URLs. Relevance is \
+            unconfirmed; inspect pages or refine the query before using these results as evidence."
+        ));
     }
     Ok((warnings, unconfirmed))
 }
@@ -207,6 +230,7 @@ mod tests {
             snippet: String::new(),
         }
     }
+
     #[test]
     fn query_identity_survives_encoding_but_rewritten_responses_are_rejected() {
         let mut url = Url::parse("https://search.example/query").unwrap();
@@ -230,6 +254,7 @@ mod tests {
             .is_err()
         );
     }
+
     #[test]
     fn site_scope_rejects_unrelated_hosts_and_path_prefix_collisions() {
         let mut results = vec![
@@ -257,6 +282,7 @@ mod tests {
         assert!(!unconfirmed);
         assert!(super::results("site:github.com guide", &mut results).is_err());
     }
+
     #[test]
     fn alternatives_and_excluded_operators_do_not_become_mandatory_site_filters() {
         for query in [
@@ -266,10 +292,15 @@ mod tests {
             "\"site:github.com\" OR rust",
         ] {
             let mut results = vec![result("Rust", "https://gitlab.com/rust")];
-            assert!(!super::results(query, &mut results).unwrap().1);
+            assert!(
+                !super::results(query, &mut results)
+                    .unwrap()
+                    .1
+            );
             assert_eq!(results.len(), 1);
         }
     }
+
     #[test]
     fn generic_turing_results_are_suspect_but_hidden_page_terms_are_not_required() {
         let query = "\"Turing Complete\" \"RV32I\" custom instructions architecture .txt or github";
@@ -277,12 +308,20 @@ mod tests {
             result("Alan Turing", "https://example.org/turing"),
             result("Turing AI", "https://turing.ai/"),
         ];
-        assert!(super::results(query, &mut results).unwrap().1);
+        assert!(
+            super::results(query, &mut results)
+                .unwrap()
+                .1
+        );
         results.push(result(
             "RV32I single cycle processor",
             "https://github.com/example/rv32i",
         ));
-        assert!(!super::results(query, &mut results).unwrap().1);
+        assert!(
+            !super::results(query, &mut results)
+                .unwrap()
+                .1
+        );
         assert!(
             !super::results("\"Turing Complete\" OR processor", &mut results)
                 .unwrap()

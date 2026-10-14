@@ -146,12 +146,12 @@ fn unknown_and_unsupported_labels_keep_plain_text() {
             let block = CodeBlock::from_code("module top; // 中文\r\n", language);
             let styles = highlight(&block, &theme);
             // A recognized explicit plain-text grammar may supply one foreground.
-            assert!(
-                styles
-                    .iter()
-                    .all(|(_, style)| style.color
-                        == styles.first().and_then(|(_, style)| style.color))
-            );
+            assert!(styles.iter().all(|(_, style)| {
+                style.color
+                    == styles
+                        .first()
+                        .and_then(|(_, style)| style.color)
+            }));
             if language != Some("text") {
                 assert!(styles.is_empty());
             }
@@ -179,7 +179,11 @@ fn changing_theme_recolors_existing_code_and_incomplete_stream_is_safe() {
                 &CodeBlock::from_code(prefix.to_owned(), Some("verilog")),
                 &theme,
             );
-            assert!(styles.iter().all(|(range, _)| range.end <= prefix.len()));
+            assert!(
+                styles
+                    .iter()
+                    .all(|(range, _)| range.end <= prefix.len())
+            );
         }
     }
 }
@@ -204,8 +208,15 @@ fn shipped_code_colors_remain_legible_on_code_surfaces() {
             .sum::<f64>()
     };
     for theme in themes["themes"].as_array().unwrap() {
-        let background = luminance(theme["colors"]["muted.background"].as_str().unwrap());
-        for (role, style) in theme["highlight"]["syntax"].as_object().unwrap() {
+        let background = luminance(
+            theme["colors"]["muted.background"]
+                .as_str()
+                .unwrap(),
+        );
+        for (role, style) in theme["highlight"]["syntax"]
+            .as_object()
+            .unwrap()
+        {
             let foreground = luminance(style["color"].as_str().unwrap());
             let contrast =
                 (foreground.max(background) + 0.05) / (foreground.min(background) + 0.05);

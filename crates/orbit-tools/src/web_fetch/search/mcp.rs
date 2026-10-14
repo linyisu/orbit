@@ -10,16 +10,29 @@ fn payload(args: &SearchArguments, provider: SearchProvider) -> Value {
     let (name, arguments) = match provider {
         SearchProvider::Parallel => (
             "web_search",
-            json!({"objective": args.query, "search_queries": [&args.query]}),
+            json!({
+                "objective": args.query,
+                "search_queries": [&args.query]
+            }),
         ),
         SearchProvider::Exa => (
             "web_search_exa",
-            json!({"query": args.query, "numResults": args.max_results}),
+            json!({
+                "query": args.query,
+                "numResults": args.max_results
+            }),
         ),
         SearchProvider::Duckduckgo => unreachable!("HTML provider is dispatched separately"),
     };
-    json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
-        "params": {"name": name, "arguments": arguments}})
+    json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {
+            "name": name,
+            "arguments": arguments
+        }
+    })
 }
 
 pub(super) async fn request(
@@ -71,9 +84,13 @@ pub(super) async fn request(
     let (checks, unconfirmed) = validation::results(&args.query, &mut results)?;
     warnings.extend(checks);
     let unsupported: Vec<_> = [
-        args.language.as_ref().map(|_| "language"),
+        args.language
+            .as_ref()
+            .map(|_| "language"),
         args.region.as_ref().map(|_| "region"),
-        args.freshness.as_ref().map(|_| "freshness"),
+        args.freshness
+            .as_ref()
+            .map(|_| "freshness"),
     ]
     .into_iter()
     .flatten()
@@ -154,7 +171,9 @@ fn tool_result(envelope: Value) -> Result<Value, Failure> {
     }
     if let Some(error) = envelope.get("error") {
         return Err(tool_failure(
-            error["message"].as_str().unwrap_or("MCP request failed"),
+            error["message"]
+                .as_str()
+                .unwrap_or("MCP request failed"),
             error["code"] == 429,
         ));
     }
@@ -167,7 +186,9 @@ fn tool_result(envelope: Value) -> Result<Value, Failure> {
         return Err(tool_failure("MCP free-tier rate limit reached", true));
     }
     if result["isError"] == true {
-        let message = text_blocks(result).next().unwrap_or("MCP tool failed");
+        let message = text_blocks(result)
+            .next()
+            .unwrap_or("MCP tool failed");
         return Err(tool_failure(message, false));
     }
     Ok(result.clone())
@@ -244,7 +265,9 @@ fn structured_results(value: &Value) -> (Vec<SearchResult>, Vec<String>) {
         .flatten()
         .take(50)
         .filter_map(|item| {
-            let url = checked_url(item["url"].as_str()?).ok()?.to_string();
+            let url = checked_url(item["url"].as_str()?)
+                .ok()?
+                .to_string();
             let excerpts = item["excerpts"]
                 .as_array()
                 .or_else(|| item["highlights"].as_array());
@@ -265,7 +288,7 @@ fn structured_results(value: &Value) -> (Vec<SearchResult>, Vec<String>) {
             Some(SearchResult {
                 title: compact(item["title"].as_str().unwrap_or(&url), 512),
                 url,
-                snippet: compact(&snippet, 2000),
+                snippet: compact(&snippet, 2_000),
             })
         })
         .collect();
@@ -274,7 +297,11 @@ fn structured_results(value: &Value) -> (Vec<SearchResult>, Vec<String>) {
         .into_iter()
         .flatten()
         .take(10)
-        .filter_map(|warning| warning.as_str().or_else(|| warning["message"].as_str()))
+        .filter_map(|warning| {
+            warning
+                .as_str()
+                .or_else(|| warning["message"].as_str())
+        })
         .map(|warning| compact(warning, 500))
         .collect();
     (results, warnings)
@@ -298,7 +325,7 @@ fn exa_results(text: &str) -> Vec<SearchResult> {
                     512,
                 ),
                 url: url.into(),
-                snippet: compact(snippet, 2000),
+                snippet: compact(snippet, 2_000),
             });
         }
     };

@@ -18,6 +18,7 @@ pub(super) enum Section {
     Changes,
     Agents,
 }
+
 impl Section {
     const ALL: [Self; 4] = [Self::Execution, Self::Plan, Self::Changes, Self::Agents];
     fn label(self) -> &'static str {
@@ -37,6 +38,7 @@ pub(super) enum Filter {
     Active,
     Failed,
 }
+
 impl Filter {
     fn accepts(self, status: ToolStatus) -> bool {
         match self {
@@ -52,6 +54,7 @@ pub(super) struct State {
     selected: Option<u64>,
     pub(super) focus: FocusHandle,
 }
+
 impl State {
     pub(super) fn new(cx: &mut App) -> Self {
         Self {
@@ -60,6 +63,7 @@ impl State {
             focus: cx.focus_handle(),
         }
     }
+
     pub(super) fn reset(&mut self) {
         self.filter = Filter::All;
         self.selected = None;
@@ -79,9 +83,13 @@ pub(super) fn bind_keys(cx: &mut App) {
 
 impl Workspace {
     pub(super) fn inspector_view(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let section = self.inspector.unwrap_or(Section::Execution);
+        let section = self
+            .inspector
+            .unwrap_or(Section::Execution);
         let content = match section {
-            Section::Execution => self.execution_view(cx).into_any_element(),
+            Section::Execution => self
+                .execution_view(cx)
+                .into_any_element(),
             Section::Plan => self.plan_view(cx).into_any_element(),
             Section::Changes => self.changes_view(cx).into_any_element(),
             Section::Agents => self.agents_view(cx).into_any_element(),
@@ -133,7 +141,10 @@ impl Workspace {
                             .small()
                             .w_full()
                             .selected_index(
-                                Section::ALL.iter().position(|s| *s == section).unwrap_or(0),
+                                Section::ALL
+                                    .iter()
+                                    .position(|s| *s == section)
+                                    .unwrap_or(0),
                             )
                             .children(
                                 Section::ALL
@@ -145,7 +156,13 @@ impl Workspace {
                             })),
                     ),
             )
-            .child(div().flex_1().min_h_0().min_w_0().child(content))
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .min_w_0()
+                    .child(content),
+            )
     }
 
     fn visible_tools(&self) -> Vec<usize> {
@@ -179,14 +196,19 @@ impl Workspace {
         self.inspector_state.selected = Some(self.execution.tools()[visible[next]].generation);
         self.execution_scroll
             .scroll_to_item(next, ScrollStrategy::Center);
-        self.inspector_state.focus.focus(window, cx);
+        self.inspector_state
+            .focus
+            .focus(window, cx);
         cx.notify();
     }
 
     fn open_selected_tool(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let selected = self.visible_tools().into_iter().find(|ix| {
-            Some(self.execution.tools()[*ix].generation) == self.inspector_state.selected
-        });
+        let selected = self
+            .visible_tools()
+            .into_iter()
+            .find(|ix| {
+                Some(self.execution.tools()[*ix].generation) == self.inspector_state.selected
+            });
         if let Some(ix) = selected {
             self.open_tool_output(self.execution.tools()[ix].id.clone(), window, cx);
         }
@@ -218,72 +240,85 @@ impl Workspace {
             .min_h_0()
             .min_w_0()
             .child(
-                v_flex().px_3().py_3().gap_1().flex_shrink_0().child(
-                    h_flex()
-                        .gap_2()
-                        .child(if self.busy && self.connected {
-                            Spinner::new()
-                                .small()
-                                .color(cx.theme().primary)
-                                .into_any_element()
-                        } else {
-                            Icon::new(if self.execution.phase() == Phase::Complete {
-                                IconName::Check
-                            } else if !self.connected
-                                || self.error.is_some()
-                                || self.execution.phase() == Phase::Failed
-                            {
-                                IconName::CircleAlert
+                v_flex()
+                    .px_3()
+                    .py_3()
+                    .gap_1()
+                    .flex_shrink_0()
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .child(if self.busy && self.connected {
+                                Spinner::new()
+                                    .small()
+                                    .color(cx.theme().primary)
+                                    .into_any_element()
                             } else {
-                                IconName::SquareTerminal
+                                Icon::new(if self.execution.phase() == Phase::Complete {
+                                    IconName::Check
+                                } else if !self.connected
+                                    || self.error.is_some()
+                                    || self.execution.phase() == Phase::Failed
+                                {
+                                    IconName::CircleAlert
+                                } else {
+                                    IconName::SquareTerminal
+                                })
+                                .small()
+                                .text_color(phase_color)
+                                .into_any_element()
                             })
-                            .small()
-                            .text_color(phase_color)
-                            .into_any_element()
-                        })
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .text_sm()
-                                .font_weight(FontWeight::MEDIUM)
-                                .child(self.status()),
-                        )
-                        .when(self.execution.turns() > 0, |row| {
-                            row.child(
+                            .child(
                                 div()
-                                    .text_xs()
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child(format!("第 {} 轮", self.execution.turns())),
+                                    .flex_1()
+                                    .min_w_0()
+                                    .text_sm()
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .child(self.status()),
                             )
-                        }),
-                ),
+                            .when(self.execution.turns() > 0, |row| {
+                                row.child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child(format!("第 {} 轮", self.execution.turns())),
+                                )
+                            }),
+                    ),
             )
             .when(!tools.is_empty(), |view| {
                 view.child(
-                    h_flex().px_3().pb_2().gap_1().flex_shrink_0().children(
-                        [
-                            (Filter::All, "全部", tools.len()),
-                            (Filter::Active, "进行中", active),
-                            (Filter::Failed, "失败", failed),
-                        ]
-                        .into_iter()
-                        .map(|(filter, label, count)| {
-                            Button::new(("execution-filter", filter as usize))
-                                .ghost()
-                                .xsmall()
-                                .selected(self.inspector_state.filter == filter)
-                                .label(format!("{label} {count}"))
-                                .on_click(cx.listener(move |view, _, window, cx| {
-                                    view.inspector_state.filter = filter;
-                                    // A new filter starts at the top, without a hidden selection.
-                                    view.inspector_state.selected = None;
-                                    view.execution_scroll = UniformListScrollHandle::new();
-                                    view.inspector_state.focus.focus(window, cx);
-                                    cx.notify();
-                                }))
-                        }),
-                    ),
+                    h_flex()
+                        .px_3()
+                        .pb_2()
+                        .gap_1()
+                        .flex_shrink_0()
+                        .children(
+                            [
+                                (Filter::All, "全部", tools.len()),
+                                (Filter::Active, "进行中", active),
+                                (Filter::Failed, "失败", failed),
+                            ]
+                            .into_iter()
+                            .map(|(filter, label, count)| {
+                                Button::new(("execution-filter", filter as usize))
+                                    .ghost()
+                                    .xsmall()
+                                    .selected(self.inspector_state.filter == filter)
+                                    .label(format!("{label} {count}"))
+                                    .on_click(cx.listener(move |view, _, window, cx| {
+                                        view.inspector_state.filter = filter;
+                                        // A new filter starts at the top, without a hidden
+                                        // selection.
+                                        view.inspector_state.selected = None;
+                                        view.execution_scroll = UniformListScrollHandle::new();
+                                        view.inspector_state
+                                            .focus
+                                            .focus(window, cx);
+                                        cx.notify();
+                                    }))
+                            }),
+                        ),
                 )
             })
             .child(
@@ -446,7 +481,9 @@ impl Workspace {
                                         )
                                         .when_some(tool.elapsed_ms, |row, elapsed| {
                                             row.child(
-                                                div().flex_shrink_0().child(duration(elapsed)),
+                                                div()
+                                                    .flex_shrink_0()
+                                                    .child(duration(elapsed)),
                                             )
                                         }),
                                 ),
@@ -496,10 +533,13 @@ impl Workspace {
         else {
             return;
         };
-        let existing = self.tool_output.as_ref().filter(|panel| {
-            let panel = panel.read(cx);
-            panel.belongs_to(&self.options, &info.id, &info.workspace) && panel.matches(&tool)
-        });
+        let existing = self
+            .tool_output
+            .as_ref()
+            .filter(|panel| {
+                let panel = panel.read(cx);
+                panel.belongs_to(&self.options, &info.id, &info.workspace) && panel.matches(&tool)
+            });
         let panel = if let Some(panel) = existing {
             panel.update(cx, |panel, cx| panel.sync(&tool, false, window, cx));
             panel.clone()
@@ -611,28 +651,35 @@ impl Workspace {
                                             .child(format!("· {} 个步骤", plan.steps.len())),
                                     ),
                             )
-                            .child(v_flex().children(plan.steps.iter().enumerate().map(
-                                |(ix, step)| {
-                                    h_flex()
-                                        .items_start()
-                                        .gap_2()
-                                        .py_2()
-                                        .when(ix + 1 < plan.steps.len(), |row| {
-                                            row.border_b_1().border_color(cx.theme().border)
-                                        })
-                                        .child(
-                                            div()
-                                                .w_5()
-                                                .flex_shrink_0()
-                                                .text_sm()
-                                                .text_color(cx.theme().muted_foreground)
-                                                .child(format!("{:02}", ix + 1)),
-                                        )
-                                        .child(
-                                            div().flex_1().min_w_0().text_sm().child(step.clone()),
-                                        )
-                                },
-                            )))
+                            .child(
+                                v_flex().children(plan.steps.iter().enumerate().map(
+                                    |(ix, step)| {
+                                        h_flex()
+                                            .items_start()
+                                            .gap_2()
+                                            .py_2()
+                                            .when(ix + 1 < plan.steps.len(), |row| {
+                                                row.border_b_1()
+                                                    .border_color(cx.theme().border)
+                                            })
+                                            .child(
+                                                div()
+                                                    .w_5()
+                                                    .flex_shrink_0()
+                                                    .text_sm()
+                                                    .text_color(cx.theme().muted_foreground)
+                                                    .child(format!("{:02}", ix + 1)),
+                                            )
+                                            .child(
+                                                div()
+                                                    .flex_1()
+                                                    .min_w_0()
+                                                    .text_sm()
+                                                    .child(step.clone()),
+                                            )
+                                    },
+                                )),
+                            )
                             .into_any_element()
                     } else {
                         empty_state(
@@ -707,12 +754,16 @@ impl Workspace {
                     } else {
                         v_flex()
                             .px_2()
-                            .children(self.execution.files().iter().map(|path| {
-                                let path = path.clone();
-                                let edit_path = path.clone();
-                                let (name, parent) = path_labels(&path);
-                                let tooltip = preview_tooltip(&path, "点击查看文件差异");
-                                h_flex()
+                            .children(
+                                self.execution
+                                    .files()
+                                    .iter()
+                                    .map(|path| {
+                                        let path = path.clone();
+                                        let edit_path = path.clone();
+                                        let (name, parent) = path_labels(&path);
+                                        let tooltip = preview_tooltip(&path, "点击查看文件差异");
+                                        h_flex()
                                     .gap_1()
                                     .min_w_0()
                                     .child(
@@ -792,7 +843,8 @@ impl Workspace {
                                             }),
                                         ),
                                     )
-                            }))
+                                    }),
+                            )
                             .into_any_element()
                     }),
             )
@@ -844,22 +896,29 @@ impl Workspace {
                     } else {
                         v_flex()
                             .px_2()
-                            .children(self.execution.agents().iter().map(|agent| {
-                                let id = agent.id.clone();
-                                let recipient = id.clone();
-                                let title =
-                                    agent.task_summary().unwrap_or_else(|| agent.role.clone());
-                                let detail = format!("{} · {id}", agent.role);
-                                let tooltip =
-                                    preview_tooltip(agent.task().unwrap_or(&id), "点击查看子任务");
-                                let state = match agent.status.as_str() {
-                                    "运行中" => ToolStatus::Running,
-                                    "已完成" => ToolStatus::Complete,
-                                    "失败" => ToolStatus::Failed,
-                                    "已停止" => ToolStatus::Stopped,
-                                    _ => ToolStatus::Background,
-                                };
-                                h_flex()
+                            .children(
+                                self.execution
+                                    .agents()
+                                    .iter()
+                                    .map(|agent| {
+                                        let id = agent.id.clone();
+                                        let recipient = id.clone();
+                                        let title = agent
+                                            .task_summary()
+                                            .unwrap_or_else(|| agent.role.clone());
+                                        let detail = format!("{} · {id}", agent.role);
+                                        let tooltip = preview_tooltip(
+                                            agent.task().unwrap_or(&id),
+                                            "点击查看子任务",
+                                        );
+                                        let state = match agent.status.as_str() {
+                                            "运行中" => ToolStatus::Running,
+                                            "已完成" => ToolStatus::Complete,
+                                            "失败" => ToolStatus::Failed,
+                                            "已停止" => ToolStatus::Stopped,
+                                            _ => ToolStatus::Background,
+                                        };
+                                        h_flex()
                                     .gap_1()
                                     .min_w_0()
                                     .child(
@@ -990,7 +1049,8 @@ impl Workspace {
                                             }),
                                         ),
                                     )
-                            }))
+                                    }),
+                            )
                             .into_any_element()
                     }),
             )
@@ -1022,7 +1082,12 @@ fn section_summary(title: &'static str, detail: String, cx: &App) -> impl IntoEl
         .py_3()
         .gap_1()
         .flex_shrink_0()
-        .child(div().text_sm().font_weight(FontWeight::MEDIUM).child(title))
+        .child(
+            div()
+                .text_sm()
+                .font_weight(FontWeight::MEDIUM)
+                .child(title),
+        )
         .child(
             div()
                 .text_xs()
@@ -1046,7 +1111,12 @@ fn empty_state(
                 .small()
                 .text_color(cx.theme().muted_foreground),
         )
-        .child(div().text_sm().font_weight(FontWeight::MEDIUM).child(title))
+        .child(
+            div()
+                .text_sm()
+                .font_weight(FontWeight::MEDIUM)
+                .child(title),
+        )
         .child(
             div()
                 .text_sm()
@@ -1098,12 +1168,12 @@ fn status_icon(status: ToolStatus, cx: &App) -> AnyElement {
 }
 
 fn duration(ms: u64) -> String {
-    if ms < 1000 {
+    if ms < 1_000 {
         format!("{ms} ms")
-    } else if ms < 60000 {
+    } else if ms < 60_000 {
         format!("{:.1} s", ms as f64 / 1000.)
     } else {
-        format!("{}m {:02}s", ms / 60000, ms % 60000 / 1000)
+        format!("{}m {:02}s", ms / 60_000, ms % 60_000 / 1_000)
     }
 }
 
@@ -1125,10 +1195,14 @@ fn path_labels(path: &str) -> (String, String) {
 fn evidence_tooltip(text: String, window: &mut Window, cx: &mut App) -> AnyView {
     let width = (window.viewport_size().width * 0.25).min(window.rem_size() * 22.);
     Tooltip::element(move |_, _| {
-        v_flex().w(width).gap_1().children(
-            text.lines()
-                .map(|line| div().text_ellipsis().child(line.to_owned())),
-        )
+        v_flex()
+            .w(width)
+            .gap_1()
+            .children(text.lines().map(|line| {
+                div()
+                    .text_ellipsis()
+                    .child(line.to_owned())
+            }))
     })
     .build(window, cx)
 }
@@ -1138,7 +1212,11 @@ fn preview_tooltip(text: &str, action: &str) -> String {
         .lines()
         .filter(|line| !line.trim().is_empty())
         .take(3)
-        .map(|line| line.chars().take(120).collect::<String>())
+        .map(|line| {
+            line.chars()
+                .take(120)
+                .collect::<String>()
+        })
         .collect::<Vec<_>>()
         .join("\n");
     format!("{preview}\n{action}")
@@ -1182,6 +1260,7 @@ mod tests {
         assert_eq!(selection(8, Some(1), 1, true), Some(7));
         assert_eq!(selection(8, Some(7), -1, true), Some(0));
     }
+
     #[test]
     fn file_identity_and_tooltip_survive_long_unicode_and_remote_paths() {
         assert_eq!(

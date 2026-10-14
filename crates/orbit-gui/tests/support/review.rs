@@ -31,7 +31,8 @@ pub(super) fn execute(workspace: &str, request: &Value) -> Value {
             } => Ok(Snapshot::Diff {
                 path: path.clone(),
                 patch: format!(
-                    "--- a/{path}\n+++ b/{path}\n@@ -1 +1 @@\n-fn main() {{}}\n+fn main() {{ println!(\"Hello Orbit\"); }}\n"
+                    "--- a/{path}\n+++ b/{path}\n@@ -1 +1 @@\n-fn main() {{}}\n+fn main() {{ \
+                        println!(\"Hello Orbit\"); }}\n"
                 ),
                 note: "Orbit 写入检查点 · write_file · run 7".into(),
                 checkpoint: Some(Checkpoint {
@@ -63,25 +64,42 @@ pub(super) fn execute(workspace: &str, request: &Value) -> Value {
                     .into_iter()
                     .flatten()
                     .filter_map(|entry| {
-                        let xy = entry["xy"].as_str().unwrap_or("..").as_bytes();
+                        let xy = entry["xy"]
+                            .as_str()
+                            .unwrap_or("..")
+                            .as_bytes();
                         let include = match kind {
                             Kind::Untracked => entry["kind"] == "untracked",
-                            Kind::Staged => xy.first().is_some_and(|v| !matches!(v, b'.' | b' ')),
-                            Kind::Unstaged => xy.get(1).is_some_and(|v| !matches!(v, b'.' | b' ')),
+                            Kind::Staged => xy
+                                .first()
+                                .is_some_and(|v| !matches!(v, b'.' | b' ')),
+                            Kind::Unstaged => xy
+                                .get(1)
+                                .is_some_and(|v| !matches!(v, b'.' | b' ')),
                             _ => false,
                         };
                         include.then(|| Entry {
-                            path: entry["path"].as_str().unwrap_or_default().into(),
+                            path: entry["path"]
+                                .as_str()
+                                .unwrap_or_default()
+                                .into(),
                             kind,
-                            status: entry["xy"].as_str().unwrap_or("新增").into(),
+                            status: entry["xy"]
+                                .as_str()
+                                .unwrap_or("新增")
+                                .into(),
                             undone: false,
                         })
                     })
                     .collect();
                 Ok(Snapshot::List {
                     entries,
-                    next: listing["next_offset"].as_u64().map(|v| v as usize),
-                    branch: listing["branch"]["head"].as_str().map(str::to_owned),
+                    next: listing["next_offset"]
+                        .as_u64()
+                        .map(|v| v as usize),
+                    branch: listing["branch"]["head"]
+                        .as_str()
+                        .map(str::to_owned),
                 })
             }
             Action::Diff { kind, path } => {
@@ -94,7 +112,9 @@ pub(super) fn execute(workspace: &str, request: &Value) -> Value {
                 Ok(Snapshot::Diff {
                     patch: reviewed.patch,
                     path,
-                    note: reviewed.index_note.unwrap_or_else(|| "Git 文件差异".into()),
+                    note: reviewed
+                        .index_note
+                        .unwrap_or_else(|| "Git 文件差异".into()),
                     checkpoint: None,
                     index_receipt: reviewed.index_receipt,
                 })
@@ -119,7 +139,13 @@ pub(super) fn execute(workspace: &str, request: &Value) -> Value {
         }
     })();
     match result {
-        Ok(snapshot) => json!({"type":"review", "value":snapshot}),
-        Err(error) => json!({"type":"error", "value":format!("{error:#}")}),
+        Ok(snapshot) => json!({
+            "type": "review",
+            "value": snapshot
+        }),
+        Err(error) => json!({
+            "type": "error",
+            "value": format!("{error:#}")
+        }),
     }
 }

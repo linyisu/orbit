@@ -15,10 +15,10 @@ use tokio_util::sync::CancellationToken;
 
 use crate::limits::{MAX_DIRECTORY_ENTRIES, MAX_TEXT_OUTPUT_BYTES, OUTPUT_METADATA_RESERVE_BYTES};
 
-const MAX_FILE_BYTES: u64 = 2 * 1024 * 1024;
-const MAX_SCANNED_BYTES: u64 = 16 * 1024 * 1024;
-const MAX_LINE_BYTES: usize = 4 * 1024;
-const MAX_QUERY_BYTES: usize = 4096;
+const MAX_FILE_BYTES: u64 = 2 * 1_024 * 1_024;
+const MAX_SCANNED_BYTES: u64 = 16 * 1_024 * 1_024;
+const MAX_LINE_BYTES: usize = 4 * 1_024;
+const MAX_QUERY_BYTES: usize = 4_096;
 const DEFAULT_PAGE_MATCHES: usize = 100;
 const MAX_PAGE_MATCHES: usize = 500;
 const MAX_CONTEXT_LINES: usize = 10;
@@ -72,19 +72,28 @@ impl Tool for SearchText {
         ToolDefinition::function(
             "search_text",
             concat!(
-                "Search UTF-8 text files in the workspace (or outside paths granted via request_capability) without running a shell. ",
-                "IMPORTANT: regex defaults to false. With regex=false or omitted, the entire query is literal: ",
+                "Search UTF-8 text files in the workspace (or outside paths granted via \
+                    request_capability) without running a shell. ",
+                "IMPORTANT: regex defaults to false. With regex=false or omitted, the entire query \
+                    is literal: ",
                 "a|b searches for the actual text a|b, NOT either a or b. ",
                 "To search alternatives, send {\"query\":\"a|b\",\"regex\":true}; ",
                 "to find the literal pipe expression, send {\"query\":\"a|b\",\"regex\":false}. ",
-                "Set regex=true explicitly whenever using alternation, character classes, anchors or other regex syntax. ",
-                "Regex uses Rust regex syntax and matches one line at a time; lookaround and backreferences are unsupported. ",
+                "Set regex=true explicitly whenever using alternation, character classes, anchors \
+                    or other regex syntax. ",
+                "Regex uses Rust regex syntax and matches one line at a time; lookaround and \
+                    backreferences are unsupported. ",
                 "Both modes are case-insensitive unless case_sensitive=true. ",
-                "If a query returns no matches, check the returned regex mode and query before concluding the text is absent. ",
-                "Uses .gitignore and .ignore rules, never follows symlinks, and excludes protected metadata such as .git and .env. ",
-                "Optionally narrow with a workspace-relative path, outside granted path, or glob such as **/*.rs. ",
-                "Results have path, 1-based line/column, text and surrounding lines. Paginate matches with offset/next_offset. ",
-                "Large, binary and unreadable files are skipped; use read_file for full content after locating a match."
+                "If a query returns no matches, check the returned regex mode and query before \
+                    concluding the text is absent. ",
+                "Uses .gitignore and .ignore rules, never follows symlinks, and excludes protected \
+                    metadata such as .git and .env. ",
+                "Optionally narrow with a workspace-relative path, outside granted path, or glob \
+                    such as **/*.rs. ",
+                "Results have path, 1-based line/column, text and surrounding lines. Paginate \
+                    matches with offset/next_offset. ",
+                "Large, binary and unreadable files are skipped; use read_file for full content \
+                    after locating a match."
             ),
             json!({
                 "type": "object",
@@ -93,24 +102,54 @@ impl Tool for SearchText {
                         "type": "string",
                         "minLength": 1,
                         "maxLength": MAX_QUERY_BYTES,
-                        "description": "Search text. Literal unless regex=true: a|b means the literal pipe expression by default. For either term, use query=a|b AND regex=true. Do not add shell quotes or /regex/ delimiters."
+                        "description": "Search text. Literal unless regex=true: a|b means the \
+                            literal pipe expression by default. For either term, use query=a|b \
+                            AND regex=true. Do not add shell quotes or /regex/ delimiters."
                     },
                     "path": {
                         "type": "string",
                         "default": ".",
-                        "description": "Workspace-relative directory or file, or outside path granted via request_capability"
+                        "description": "Workspace-relative directory or file, or outside path \
+                            granted via request_capability"
                     },
                     "regex": {
                         "type": "boolean",
                         "default": false,
-                        "description": "false or omitted: exact literal substring matching, including | . * [ ] ^ $. true: interpret query as a Rust regular expression. REQUIRED for alternatives such as foo|bar; never inferred from query content."
+                        "description": "false or omitted: exact literal substring matching, \
+                            including | . * [ ] ^ $. true: interpret query as a Rust regular \
+                            expression. REQUIRED for alternatives such as foo|bar; never inferred \
+                            from query content."
                     },
-                    "case_sensitive": { "type": "boolean", "default": false },
-                    "glob": { "type": "string", "description": "Optional glob filter, for example **/*.rs" },
-                    "context_lines": { "type": "integer", "minimum": 0, "maximum": MAX_CONTEXT_LINES, "default": 0 },
-                    "offset": { "type": "integer", "minimum": 0, "maximum": MAX_DIRECTORY_ENTRIES, "default": 0 },
-                    "limit": { "type": "integer", "minimum": 1, "maximum": MAX_PAGE_MATCHES, "default": DEFAULT_PAGE_MATCHES },
-                    "include_hidden": { "type": "boolean", "default": false }
+                    "case_sensitive": {
+                        "type": "boolean",
+                        "default": false
+                    },
+                    "glob": {
+                        "type": "string",
+                        "description": "Optional glob filter, for example **/*.rs"
+                    },
+                    "context_lines": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": MAX_CONTEXT_LINES,
+                        "default": 0
+                    },
+                    "offset": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": MAX_DIRECTORY_ENTRIES,
+                        "default": 0
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": MAX_PAGE_MATCHES,
+                        "default": DEFAULT_PAGE_MATCHES
+                    },
+                    "include_hidden": {
+                        "type": "boolean",
+                        "default": false
+                    }
                 },
                 "required": ["query"],
                 "additionalProperties": false
@@ -161,7 +200,8 @@ fn validate(args: &Arguments) -> Result<(), ToolError> {
         || args.offset > MAX_DIRECTORY_ENTRIES
     {
         return Err(invalid(
-            "query must be 1–4096 bytes, path nonempty; limit 1–500, context_lines 0–10, offset 0–20000",
+            "query must be 1–4096 bytes, path nonempty; limit 1–500, context_lines 0–10, offset \
+                0–20000",
         ));
     }
 
@@ -199,17 +239,24 @@ fn search(
 
     if !is_external {
         walker.filter_entry(move |entry| {
-            let Ok(relative) = entry.path().strip_prefix(filter_workspace.root()) else {
+            let Ok(relative) = entry
+                .path()
+                .strip_prefix(filter_workspace.root())
+            else {
                 return false;
             };
 
-            let within_scope = filter_scope_clone.as_os_str().is_empty()
+            let within_scope = filter_scope_clone
+                .as_os_str()
+                .is_empty()
                 || relative.starts_with(&filter_scope_clone)
                 || filter_scope_clone.starts_with(relative);
 
             within_scope
                 && (relative.as_os_str().is_empty()
-                    || filter_workspace.checked_relative(relative).is_ok())
+                    || filter_workspace
+                        .checked_relative(relative)
+                        .is_ok())
         });
     }
 
@@ -236,7 +283,10 @@ fn search(
             }
         };
 
-        if !entry.file_type().is_some_and(|kind| kind.is_file()) {
+        if !entry
+            .file_type()
+            .is_some_and(|kind| kind.is_file())
+        {
             continue;
         }
         if visited >= MAX_DIRECTORY_ENTRIES {
@@ -251,7 +301,10 @@ fn search(
             let file = workspace.authorize_read(&path);
             (path, file)
         } else {
-            let relative = match entry.path().strip_prefix(workspace.root()) {
+            let relative = match entry
+                .path()
+                .strip_prefix(workspace.root())
+            {
                 Ok(path) if workspace.checked_relative(path).is_ok() => path.to_path_buf(),
                 _ => {
                     skipped_files += 1;
@@ -389,7 +442,9 @@ fn scope(workspace: &Workspace, path: &str) -> Result<SearchScope, ToolError> {
 
     match workspace.checked_relative(target_path) {
         Ok(relative) => {
-            if workspace.open_directory(&relative).is_err()
+            if workspace
+                .open_directory(&relative)
+                .is_err()
                 && workspace.open_read(&relative).is_err()
             {
                 return Err(invalid(
@@ -404,7 +459,9 @@ fn scope(workspace: &Workspace, path: &str) -> Result<SearchScope, ToolError> {
             Err(invalid(WorkspaceError::ProtectedPath.to_string()))
         }
         Err(_) => {
-            let canonical = target_path.canonicalize().map_err(failed)?;
+            let canonical = target_path
+                .canonicalize()
+                .map_err(failed)?;
 
             match workspace.authorize_directory(&canonical) {
                 Ok(_) => Ok(SearchScope::External(canonical)),
@@ -462,7 +519,12 @@ fn match_entry(
     let end = (line_index + args.context_lines + 1).min(lines.len());
     let surrounding = (start..end)
         .filter(|index| *index != line_index)
-        .map(|index| json!({ "line": index + 1, "text": bounded_line(lines[index]) }))
+        .map(|index| {
+            json!({
+                "line": index + 1,
+                "text": bounded_line(lines[index])
+            })
+        })
         .collect::<Vec<_>>();
 
     json!({

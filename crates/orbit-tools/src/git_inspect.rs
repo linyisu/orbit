@@ -19,10 +19,10 @@ use tokio_util::sync::CancellationToken;
 mod index;
 pub use index::{ReviewedFile, review_index_patch, update_review_index};
 
-const MAX_OUTPUT_BYTES: usize = 256 * 1024;
+const MAX_OUTPUT_BYTES: usize = 256 * 1_024;
 /// A SWE prediction must contain the complete patch. Refuse a larger patch
 /// instead of silently truncating it as the interactive inspection tool does.
-const MAX_PATCH_BYTES: usize = 4 * 1024 * 1024;
+const MAX_PATCH_BYTES: usize = 4 * 1_024 * 1_024;
 const MAX_ENTRIES: usize = 500;
 const MAX_OFFSET: usize = 20_000;
 const GIT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -125,11 +125,14 @@ pub fn review_patch(
             &cancellation,
             true,
         )?;
-        if !listing["entries"].as_array().is_some_and(|entries| {
-            entries
-                .iter()
-                .any(|entry| entry["path"] == path && entry["kind"] == "untracked")
-        }) {
+        if !listing["entries"]
+            .as_array()
+            .is_some_and(|entries| {
+                entries
+                    .iter()
+                    .any(|entry| entry["path"] == path && entry["kind"] == "untracked")
+            })
+        {
             return Err(invalid(
                 "the file is no longer untracked; refresh the review",
             ));
@@ -208,10 +211,14 @@ pub fn working_tree_patch(workspace: &Path) -> Result<String, ToolError> {
             true,
         )?;
 
-        if patch.len().saturating_add(addition.len()) > MAX_PATCH_BYTES {
+        if patch
+            .len()
+            .saturating_add(addition.len())
+            > MAX_PATCH_BYTES
+        {
             return Err(ToolError::ExecutionFailed(format!(
                 "Git patch exceeds the {} MiB export limit",
-                MAX_PATCH_BYTES / (1024 * 1024)
+                MAX_PATCH_BYTES / (1_024 * 1_024)
             )));
         }
 
@@ -237,17 +244,36 @@ impl Tool for GitInspect {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition::function(
             "git_inspect",
-            "Inspect the Git repository that exactly matches the workspace root, without running a shell or changing the working tree. view=status (default) returns branch, HEAD baseline and paginated changed paths. view=diff returns a bounded unified diff; set staged=true for index-to-HEAD, otherwise working-tree-to-index. view=history returns recent commits. Optional path is workspace-relative and is used only for status/diff. Git hooks, external diff drivers, text conversion, user/global Git configuration, and Git environment overrides are disabled. This tool is read-only; it never stages, commits, resets, fetches or writes Git locks.",
+            "Inspect the Git repository that exactly matches the workspace root, without running a \
+                shell or changing the working tree. view=status (default) returns branch, HEAD \
+                baseline and paginated changed paths. view=diff returns a bounded unified diff; \
+                set staged=true for index-to-HEAD, otherwise working-tree-to-index. view=history \
+                returns recent commits. Optional path is workspace-relative and is used only for \
+                status/diff. Git hooks, external diff drivers, text conversion, user/global Git \
+                configuration, and Git environment overrides are disabled. This tool is \
+                read-only; it never stages, commits, resets, fetches or writes Git locks.",
             json!({
                 "type": "object",
                 "properties": {
-                    "view": { "type": "string", "enum": ["status", "diff", "history"], "default": "status" },
-                    "path": { "type": "string", "description": "Optional workspace-relative path for status or diff" },
-                    "staged": { "type": "boolean", "default": false, "description": "For diff: inspect staged changes instead of unstaged changes" },
+                    "view": {
+                        "type": "string",
+                        "enum": ["status", "diff", "history"],
+                        "default": "status"
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": "Optional workspace-relative path for status or diff"
+                    },
+                    "staged": {
+                        "type": "boolean",
+                        "default": false,
+                        "description": "For diff: inspect staged changes instead of unstaged \
+                            changes"
+                    },
                     "offset": {
                         "type": "integer",
                         "minimum": 0,
-                        "maximum": 20000,
+                        "maximum": 20_000,
                         "default": 0,
                         "description": "Entry offset for status/history, line offset for diff"
                     },
@@ -337,7 +363,9 @@ fn repository_root(
 
     if root != workspace {
         return Err(ToolError::ExecutionFailed(
-            "Git repository root differs from the workspace root; start Orbit at the repository root to inspect Git safely".into(),
+            "Git repository root differs from the workspace root; start Orbit at the repository \
+                root to inspect Git safely"
+                .into(),
         ));
     }
 
@@ -371,7 +399,10 @@ fn status_inner(
         // A desktop list must not report a truncated prefix as the complete final page.
         git_export(
             root,
-            command.into_iter().map(str::to_owned).collect(),
+            command
+                .into_iter()
+                .map(str::to_owned)
+                .collect(),
             cancellation,
             false,
         )?
@@ -389,7 +420,9 @@ fn status_inner(
     let mut skipped = 0;
     let mut has_more = false;
     let path_filter = checked_path(workspace, args.path.as_deref())?;
-    let records = output.split(|byte| *byte == 0).collect::<Vec<_>>();
+    let records = output
+        .split(|byte| *byte == 0)
+        .collect::<Vec<_>>();
     let mut index = 0;
 
     while index < records.len() {
@@ -408,22 +441,27 @@ fn status_inner(
         index += consumed;
         let Some(entry) = entry else { continue };
         if review
-            && ["path", "original_path"].iter().any(|key| {
-                entry
-                    .get(key)
-                    .and_then(Value::as_str)
-                    .is_some_and(|path| checked_review_path(workspace, path).is_err())
-            })
+            && ["path", "original_path"]
+                .iter()
+                .any(|key| {
+                    entry
+                        .get(key)
+                        .and_then(Value::as_str)
+                        .is_some_and(|path| checked_review_path(workspace, path).is_err())
+                })
         {
             continue;
         }
-        if path_filter.as_ref().is_some_and(|filter| {
-            let path = entry
-                .get("path")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            !(path == filter || path.starts_with(&format!("{filter}/")))
-        }) {
+        if path_filter
+            .as_ref()
+            .is_some_and(|filter| {
+                let path = entry
+                    .get("path")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                !(path == filter || path.starts_with(&format!("{filter}/")))
+            })
+        {
             continue;
         }
 
@@ -481,14 +519,19 @@ fn diff(
         .lines()
         .map(str::to_owned)
         .collect::<Vec<_>>();
-    let end = args.offset.saturating_add(args.limit).min(lines.len());
+    let end = args
+        .offset
+        .saturating_add(args.limit)
+        .min(lines.len());
 
     Ok(json!({
         "repository_root": root,
         "staged": args.staged,
         "path": args.path,
         "offset": args.offset,
-        "lines": lines.get(args.offset..end).unwrap_or_default(),
+        "lines": lines
+            .get(args.offset..end)
+            .unwrap_or_default(),
         "next_offset": (end < lines.len()).then_some(end),
         "has_more": end < lines.len(),
         "total_lines": lines.len(),
@@ -515,7 +558,9 @@ fn history(
         ],
         cancellation,
     )?;
-    let mut fields = output.split(|byte| *byte == 0).collect::<Vec<_>>();
+    let mut fields = output
+        .split(|byte| *byte == 0)
+        .collect::<Vec<_>>();
     // Only consume terminated fields, never a partial record at the byte cap.
     fields.pop();
     let mut commits = Vec::new();
@@ -607,10 +652,22 @@ fn parse_status_entry(
     let record = text(record)?;
 
     if let Some(rest) = record.strip_prefix("? ") {
-        return Ok((Some(json!({ "kind": "untracked", "path": rest })), 0));
+        return Ok((
+            Some(json!({
+                "kind": "untracked",
+                "path": rest
+            })),
+            0,
+        ));
     }
     if let Some(rest) = record.strip_prefix("! ") {
-        return Ok((Some(json!({ "kind": "ignored", "path": rest })), 0));
+        return Ok((
+            Some(json!({
+                "kind": "ignored",
+                "path": rest
+            })),
+            0,
+        ));
     }
 
     let tag = record
@@ -642,7 +699,9 @@ fn parse_status_entry(
 
     let rest = fields.next().unwrap_or_default();
     let (score, path) = if tag == "2" {
-        let (score, path) = rest.split_once(' ').unwrap_or((rest, ""));
+        let (score, path) = rest
+            .split_once(' ')
+            .unwrap_or((rest, ""));
         (Some(score), path)
     } else {
         (None, rest)
@@ -653,7 +712,11 @@ fn parse_status_entry(
         "2" => "renamed_or_copied",
         _ => "unmerged",
     };
-    let mut entry = json!({ "kind": kind, "xy": xy, "path": path });
+    let mut entry = json!({
+        "kind": kind,
+        "xy": xy,
+        "path": path
+    });
 
     if tag == "2" {
         entry["score"] = json!(score);
@@ -671,7 +734,9 @@ fn git<const N: usize>(
 ) -> Result<Vec<u8>, ToolError> {
     git_owned(
         root,
-        args.into_iter().map(str::to_owned).collect(),
+        args.into_iter()
+            .map(str::to_owned)
+            .collect(),
         cancellation,
     )
 }
@@ -745,6 +810,9 @@ fn git_with_index(
 }
 
 #[allow(clippy::too_many_arguments)]
+/// --no-textconv does not disable clean/process filters. Enumerate configured driver names with a
+/// non-converting Git builtin, then override every driver through argv. This also covers attributes
+/// supplied by .git/info/attributes.
 fn git_with_objects(
     root: &Path,
     args: Vec<String>,
@@ -756,9 +824,6 @@ fn git_with_objects(
     objects: Option<&Path>,
     deadline: Instant,
 ) -> Result<Vec<u8>, ToolError> {
-    // --no-textconv does not disable clean/process filters. Enumerate configured
-    // driver names with a non-converting Git builtin, then override every driver
-    // through argv. This also covers attributes supplied by .git/info/attributes.
     let keys = run_git(
         root,
         vec![
@@ -773,19 +838,24 @@ fn git_with_objects(
         GitLimits {
             bytes: MAX_OUTPUT_BYTES,
             truncate: false,
-            allows_difference_status: true, // `git config` returns 1 when no key matches.
+            // `git config` returns 1 when no key matches.
+            allows_difference_status: true,
             deadline,
         },
     )?;
     let mut drivers = BTreeSet::new();
-    for key in keys.split(|byte| *byte == 0).filter(|key| !key.is_empty()) {
+    for key in keys
+        .split(|byte| *byte == 0)
+        .filter(|key| !key.is_empty())
+    {
         let key = text(key)?;
         if !key.starts_with("filter.") {
             // Older Git versions may not understand GIT_NO_LAZY_FETCH. Refuse
             // partial repositories before any object-reading builtin can
             // invoke a configured transport or upload-pack executable.
             return Err(failed(
-                "Partial/promisor repositories require external object fetching and cannot be inspected safely",
+                "Partial/promisor repositories require external object fetching and cannot be \
+                    inspected safely",
             ));
         }
         let (driver, _) = key
@@ -824,9 +894,9 @@ struct GitLimits {
 struct GitChild(Child);
 
 impl Drop for GitChild {
+    /// Each child has its own process group. Kill descendants that may still hold stdout open, then
+    /// reap the direct child on every exit path.
     fn drop(&mut self) {
-        // Each child has its own process group. Kill descendants that may still hold
-        // stdout open, then reap the direct child on every exit path.
         unsafe {
             libc::kill(-(self.0.id() as i32), libc::SIGKILL);
         }
@@ -877,7 +947,9 @@ fn run_git_index(
         .arg("diff.external=");
     for driver in drivers {
         for suffix in ["clean=", "smudge=", "process=", "required=false"] {
-            command.arg("-c").arg(format!("{driver}.{suffix}"));
+            command
+                .arg("-c")
+                .arg(format!("{driver}.{suffix}"));
         }
     }
     command
@@ -905,11 +977,15 @@ fn run_git_index(
         command.env("GIT_OBJECT_DIRECTORY", objects);
     }
     let mut child = GitChild(command.spawn().map_err(failed)?);
-    let mut stdout = child.0.stdout.take().expect("stdout is piped");
+    let mut stdout = child
+        .0
+        .stdout
+        .take()
+        .expect("stdout is piped");
     let flags = rustix::fs::fcntl_getfl(&stdout).map_err(failed)?;
     rustix::fs::fcntl_setfl(&stdout, flags | rustix::fs::OFlags::NONBLOCK).map_err(failed)?;
     let mut output = Vec::new();
-    let mut buffer = [0; 8192];
+    let mut buffer = [0; 8_192];
     let mut eof = false;
     loop {
         if cancellation.is_cancelled() {
@@ -922,7 +998,10 @@ fn run_git_index(
             match stdout.read(&mut buffer) {
                 Ok(0) => eof = true,
                 Ok(count) => {
-                    let remaining = limits.bytes.saturating_add(1).saturating_sub(output.len());
+                    let remaining = limits
+                        .bytes
+                        .saturating_add(1)
+                        .saturating_sub(output.len());
                     output.extend_from_slice(&buffer[..count.min(remaining)]);
                     if output.len() > limits.bytes {
                         if limits.truncate {
@@ -950,15 +1029,21 @@ fn run_git_index(
             return Ok(output);
         }
         std::thread::sleep(
-            GIT_POLL_INTERVAL.min(limits.deadline.saturating_duration_since(Instant::now())),
+            GIT_POLL_INTERVAL.min(
+                limits
+                    .deadline
+                    .saturating_duration_since(Instant::now()),
+            ),
         );
     }
 }
 
 fn text(bytes: &[u8]) -> Result<String, ToolError> {
-    std::str::from_utf8(bytes).map(str::to_owned).map_err(|_| {
-        ToolError::ExecutionFailed("Git returned a non-UTF-8 path or metadata field".into())
-    })
+    std::str::from_utf8(bytes)
+        .map(str::to_owned)
+        .map_err(|_| {
+            ToolError::ExecutionFailed("Git returned a non-UTF-8 path or metadata field".into())
+        })
 }
 
 #[cfg(test)]
@@ -983,15 +1068,16 @@ mod tests {
             &CancellationToken::new(),
             &BTreeSet::new(),
             GitLimits {
-                bytes: 1024,
+                bytes: 1_024,
                 truncate: false,
                 allows_difference_status: false,
                 deadline: started + Duration::from_millis(100),
             },
         );
-        assert!(
-            matches!(result, Err(ToolError::ExecutionFailed(error)) if error.contains("timed out"))
-        );
+        assert!(matches!(
+            result,
+            Err(ToolError::ExecutionFailed(error)) if error.contains("timed out")
+        ));
         assert!(started.elapsed() < Duration::from_secs(3));
     }
 
@@ -1011,7 +1097,7 @@ mod tests {
             &cancellation,
             &BTreeSet::new(),
             GitLimits {
-                bytes: 1024,
+                bytes: 1_024,
                 truncate: false,
                 allows_difference_status: false,
                 deadline: started + Duration::from_secs(3),
@@ -1042,9 +1128,10 @@ mod tests {
             if truncate {
                 assert_eq!(result.unwrap(), b"12345678");
             } else {
-                assert!(
-                    matches!(result, Err(ToolError::ExecutionFailed(error)) if error.contains("8 byte"))
-                );
+                assert!(matches!(
+                    result,
+                    Err(ToolError::ExecutionFailed(error)) if error.contains("8 byte")
+                ));
             }
             assert!(started.elapsed() < Duration::from_secs(2));
         }

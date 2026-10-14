@@ -17,7 +17,9 @@ pub(super) fn javascript_shell(text: &str) -> bool {
         .join(" ")
         .to_lowercase();
     text.chars().count() < SHELL_MAX_CHARS
-        && SHELL_MESSAGES.iter().any(|message| text.contains(message))
+        && SHELL_MESSAGES
+            .iter()
+            .any(|message| text.contains(message))
 }
 
 #[cfg(test)]

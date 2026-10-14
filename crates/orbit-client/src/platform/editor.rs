@@ -15,7 +15,9 @@ impl Editor {
 
     pub async fn edit(&self, draft: &str, directory: &Path) -> Result<String> {
         let words = shlex::split(&self.command).context("编辑器命令包含未闭合的引号")?;
-        let (program, arguments) = words.split_first().context("请配置 VISUAL 或 EDITOR")?;
+        let (program, arguments) = words
+            .split_first()
+            .context("请配置 VISUAL 或 EDITOR")?;
         let mut file = tempfile::Builder::new()
             .prefix("orbit-draft-")
             .suffix(".md")
@@ -64,7 +66,12 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(unchanged, "draft");
-        assert!(!directory.path().join("injected").exists());
+        assert!(
+            !directory
+                .path()
+                .join("injected")
+                .exists()
+        );
         assert!(
             Editor::new("/bin/false".into())
                 .edit("draft", directory.path())

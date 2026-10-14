@@ -19,7 +19,12 @@ fn main() {
         .get_mut("inline")
         .expect("Markdown inline context")
         .patterns
-        .splice(0..0, inline.contexts["inject"].patterns.clone());
+        .splice(
+            0..0,
+            inline.contexts["inject"]
+                .patterns
+                .clone(),
+        );
 
     // Keep compiled context indices intact: extend patterns without adding or
     // renaming contexts in the existing grammars, and append new grammars last.

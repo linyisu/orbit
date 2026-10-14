@@ -12,7 +12,12 @@ impl Tab {
         if key.kind == KeyEventKind::Release {
             return None;
         }
-        let command = self.keymap.as_ref()?.lock().ok()?.resolve(key);
+        let command = self
+            .keymap
+            .as_ref()?
+            .lock()
+            .ok()?
+            .resolve(key);
         if command == Some(Command::Help)
             && key.code == KeyCode::Char('?')
             && (!self.state.input.text.is_empty() || !self.state.attachments.is_empty())
@@ -76,9 +81,10 @@ impl Tab {
         };
         if command == "/keys" {
             let Some(keymap) = &self.keymap else {
-                self.state.report_local(TranscriptItem::CommandError(
-                    "此连接未提供本机快捷键配置路径。".into(),
-                ));
+                self.state
+                    .report_local(TranscriptItem::CommandError(
+                        "此连接未提供本机快捷键配置路径。".into(),
+                    ));
                 return true;
             };
             let state = management::local_keys(
@@ -95,9 +101,10 @@ impl Tab {
                 .as_ref()
                 .and_then(|connection| connection.local_configuration.as_ref())
             else {
-                self.state.report_local(TranscriptItem::CommandError(
-                    "此连接未提供本机配置路径；/mcp status 可查看服务器连接状态。".into(),
-                ));
+                self.state
+                    .report_local(TranscriptItem::CommandError(
+                        "此连接未提供本机配置路径；/mcp status 可查看服务器连接状态。".into(),
+                    ));
                 return true;
             };
             let state = management::local_settings(
@@ -212,11 +219,25 @@ mod tests {
     async fn late_response_settles_its_hidden_panel_without_replacing_active_editor() {
         let (mut tab, mut requests) = tab();
         assert!(tab.open_management("/queue"));
-        let queue = tab.state.management.active.as_ref().unwrap().id.clone();
+        let queue = tab
+            .state
+            .management
+            .active
+            .as_ref()
+            .unwrap()
+            .id
+            .clone();
         let call = requests.try_recv().unwrap();
         assert!(matches!(call.request, Request::InputQueue { .. }));
         assert!(tab.open_management("/file"));
-        let file = tab.state.management.active.as_ref().unwrap().id.clone();
+        let file = tab
+            .state
+            .management
+            .active
+            .as_ref()
+            .unwrap()
+            .id
+            .clone();
         call.reply
             .unwrap()
             .send(Ok(Response::InputQueue(Snapshot::List {
@@ -231,10 +252,32 @@ mod tests {
             })))
             .unwrap();
         assert!(tab.poll_submissions());
-        assert_eq!(tab.state.management.active.as_ref().unwrap().id, file);
+        assert_eq!(
+            tab.state
+                .management
+                .active
+                .as_ref()
+                .unwrap()
+                .id,
+            file
+        );
         assert!(tab.open_management("/queue"));
-        assert_eq!(tab.state.management.active.as_ref().unwrap().id, queue);
-        let panel = &mut tab.state.management.active.as_mut().unwrap().panel;
+        assert_eq!(
+            tab.state
+                .management
+                .active
+                .as_ref()
+                .unwrap()
+                .id,
+            queue
+        );
+        let panel = &mut tab
+            .state
+            .management
+            .active
+            .as_mut()
+            .unwrap()
+            .panel;
         panel.handle(&Event::Key(KeyEvent::new(
             KeyCode::Enter,
             KeyModifiers::NONE,
@@ -256,7 +299,14 @@ mod tests {
     async fn workspace_changes_block_hidden_panel_mutations_and_stale_receipts() {
         let (mut tab, mut requests) = tab();
         tab.open_management("/queue");
-        let id = tab.state.management.active.as_ref().unwrap().id.clone();
+        let id = tab
+            .state
+            .management
+            .active
+            .as_ref()
+            .unwrap()
+            .id
+            .clone();
         let call = requests.try_recv().unwrap();
         tab.state.workspace = "/other".into();
         tab.management_action(
@@ -275,9 +325,22 @@ mod tests {
             })))
             .unwrap();
         tab.poll_submissions();
-        assert_eq!(tab.state.management.active.as_ref().unwrap().id, id);
         assert_eq!(
-            tab.state.management.active.as_ref().unwrap().workspace,
+            tab.state
+                .management
+                .active
+                .as_ref()
+                .unwrap()
+                .id,
+            id
+        );
+        assert_eq!(
+            tab.state
+                .management
+                .active
+                .as_ref()
+                .unwrap()
+                .workspace,
             "/project"
         );
     }
@@ -287,7 +350,9 @@ mod tests {
         use crossterm::event::{MouseEvent, MouseEventKind};
         let (mut tab, mut requests) = tab();
         tab.busy = true;
-        tab.state.input.set("unsent draft".into());
+        tab.state
+            .input
+            .set("unsent draft".into());
         tab.state.scroll = 4;
         tab.submit("/queue".into()).unwrap();
         let call = requests.try_recv().unwrap();
@@ -347,7 +412,10 @@ mod tests {
             .unwrap();
         let (mut tab, mut requests) = tab();
         tab.keymap = Some(keymap);
-        tab.state.input.history.push("history".into());
+        tab.state
+            .input
+            .history
+            .push("history".into());
         tab.state.input.set("draft".into());
         tab.handle(Event::Key(KeyEvent::new(
             KeyCode::Up,
@@ -414,7 +482,11 @@ mod tests {
             .unwrap();
         tab.poll_submissions();
         assert_eq!(
-            tab.state.marketplace_dialog.as_ref().unwrap().identity(),
+            tab.state
+                .marketplace_dialog
+                .as_ref()
+                .unwrap()
+                .identity(),
             current_id
         );
     }
@@ -426,10 +498,11 @@ mod tests {
         let (ready, wait) = tokio::sync::oneshot::channel();
         let sent = Arc::new(AtomicBool::new(false));
         let observed = sent.clone();
-        tab.independent_requests.spawn(async move {
-            let _ = wait.await;
-            observed.store(true, Ordering::SeqCst);
-        });
+        tab.independent_requests
+            .spawn(async move {
+                let _ = wait.await;
+                observed.store(true, Ordering::SeqCst);
+            });
         tokio::task::yield_now().await;
         assert!(tab.send(Request::Cancel {
             session: "session".into(),
@@ -439,7 +512,11 @@ mod tests {
             Request::Cancel { .. }
         ));
         let _ = ready.send(());
-        let result = tab.independent_requests.join_next().await.unwrap();
+        let result = tab
+            .independent_requests
+            .join_next()
+            .await
+            .unwrap();
         assert!(result.unwrap_err().is_cancelled());
         assert!(!sent.load(Ordering::SeqCst));
     }
@@ -473,7 +550,14 @@ mod tests {
             )))
             .unwrap();
         tab.poll_submissions();
-        let id = tab.state.management.active.as_ref().unwrap().id.clone();
+        let id = tab
+            .state
+            .management
+            .active
+            .as_ref()
+            .unwrap()
+            .id
+            .clone();
         tab.management_action(
             &id,
             management::Action::Request(Request::Review {
@@ -503,7 +587,15 @@ mod tests {
         })
         .await
         .unwrap();
-        assert_eq!(tab.state.management.active.as_ref().unwrap().id, id);
+        assert_eq!(
+            tab.state
+                .management
+                .active
+                .as_ref()
+                .unwrap()
+                .id,
+            id
+        );
         assert!(!tab.offline);
     }
 
@@ -513,7 +605,14 @@ mod tests {
         let (mut tab, mut requests) = tab();
         tab.open_management("/queue");
         let _initial = requests.try_recv().unwrap();
-        let id = tab.state.management.active.as_ref().unwrap().id.clone();
+        let id = tab
+            .state
+            .management
+            .active
+            .as_ref()
+            .unwrap()
+            .id
+            .clone();
         tab.approval_id = Some(8);
         tab.state.approval = Some(orbit_tools::approval::ApprovalPreview::Capability(
             orbit_tools::approval::CapabilityPreview {
@@ -541,6 +640,14 @@ mod tests {
         ));
         tab.state.approval = None;
         overlay::sync(&mut tab.state);
-        assert_eq!(tab.state.management.active.as_ref().unwrap().id, id);
+        assert_eq!(
+            tab.state
+                .management
+                .active
+                .as_ref()
+                .unwrap()
+                .id,
+            id
+        );
     }
 }

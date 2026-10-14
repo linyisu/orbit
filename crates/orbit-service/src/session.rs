@@ -109,14 +109,19 @@ async fn apply_title(
     writer: &Option<SessionWriter>,
     snapshot: &mut Snapshot,
 ) -> Result<bool> {
-    if !task.as_ref().is_some_and(|task| task.is_finished()) {
+    if !task
+        .as_ref()
+        .is_some_and(|task| task.is_finished())
+    {
         return Ok(false);
     }
     let temporary;
     let writer = match writer {
         Some(writer) => writer,
         None => {
-            temporary = store.acquire(&snapshot.session.id).await?;
+            temporary = store
+                .acquire(&snapshot.session.id)
+                .await?;
             &temporary
         }
     };
@@ -207,12 +212,19 @@ impl SessionState {
         shared: bool,
     ) -> Result<Self> {
         let store = Store::open(path).await?;
-        let workspace = directory.canonicalize()?.to_string_lossy().into_owned();
+        let workspace = directory
+            .canonicalize()?
+            .to_string_lossy()
+            .into_owned();
         let persisted = resume.is_some();
         let (snapshot, writer, git_baseline) = if let Some(id) = resume {
-            let project = store.resolve_project(&workspace).await?;
+            let project = store
+                .resolve_project(&workspace)
+                .await?;
             let saved = store.session(&id).await?;
-            let equivalent = store.equivalent_project_ids(&project.id).await?;
+            let equivalent = store
+                .equivalent_project_ids(&project.id)
+                .await?;
             ensure!(
                 equivalent.contains(&saved.project_id),
                 "session belongs to workspace {}",
@@ -288,9 +300,17 @@ impl SessionState {
     ) -> Result<()> {
         ensure!(!self.active, "请先结束当前响应再移动会话");
         if !self.persisted {
-            let project = self.store.project_at(workspace.root()).await?;
-            self.snapshot.session.workspace = workspace.root().to_string_lossy().into_owned();
-            self.snapshot.session.project_id = project.map(|p| p.id).unwrap_or_default();
+            let project = self
+                .store
+                .project_at(workspace.root())
+                .await?;
+            self.snapshot.session.workspace = workspace
+                .root()
+                .to_string_lossy()
+                .into_owned();
+            self.snapshot.session.project_id = project
+                .map(|p| p.id)
+                .unwrap_or_default();
             self.audit_workspace = Some(workspace);
             self.audit_limits = limits;
             return Ok(());
@@ -323,7 +343,11 @@ impl SessionState {
         // Never label the current state of an old session as its starting state.
         if self.persisted
             && self.snapshot.runs.is_empty()
-            && self.store.workspace_baseline(self.id()).await?.is_none()
+            && self
+                .store
+                .workspace_baseline(self.id())
+                .await?
+                .is_none()
             && let Ok(baseline) = orbit_runtime::execution::fingerprint_configured(
                 workspace,
                 tokio_util::sync::CancellationToken::new(),
@@ -402,10 +426,17 @@ impl SessionState {
             return Ok(());
         }
         self.ensure_writer().await?;
-        let result = self.writer.as_ref().unwrap().append_context(message).await;
+        let result = self
+            .writer
+            .as_ref()
+            .unwrap()
+            .append_context(message)
+            .await;
         self.release_idle_writer();
         result?;
-        self.store.refresh_runtime(&mut self.snapshot).await?;
+        self.store
+            .refresh_runtime(&mut self.snapshot)
+            .await?;
         Ok(())
     }
 
@@ -416,7 +447,12 @@ impl SessionState {
             return Ok(());
         }
         self.ensure_writer().await?;
-        let result = self.writer.as_ref().unwrap().set_title(title.clone()).await;
+        let result = self
+            .writer
+            .as_ref()
+            .unwrap()
+            .set_title(title.clone())
+            .await;
         self.release_idle_writer();
         result?;
         self.title_task = None;
@@ -434,7 +470,8 @@ impl SessionState {
             && self.snapshot.runs.is_empty()
             && self.snapshot.session.title.is_empty()
             && self.title_task.is_none();
-        self.begin(prompt.clone(), model).await?;
+        self.begin(prompt.clone(), model)
+            .await?;
         if generate {
             self.title_task = Some(crate::session::title::TitleTask::start(client, &prompt));
         }
@@ -454,7 +491,11 @@ impl SessionState {
     pub async fn begin(&mut self, prompt: String, model: String) -> Result<()> {
         self.persist().await?;
         self.ensure_writer().await?;
-        let matches = match self.store.matches_snapshot(&self.snapshot).await {
+        let matches = match self
+            .store
+            .matches_snapshot(&self.snapshot)
+            .await
+        {
             Ok(latest) => latest,
             Err(error) => {
                 self.release_idle_writer();
@@ -463,16 +504,25 @@ impl SessionState {
         };
 
         if !matches
-            || self.audit_workspace.as_ref().is_some_and(|workspace| {
-                workspace.root() != Path::new(&self.snapshot.session.workspace)
-            })
+            || self
+                .audit_workspace
+                .as_ref()
+                .is_some_and(|workspace| {
+                    workspace.root() != Path::new(&self.snapshot.session.workspace)
+                })
         {
             self.release_idle_writer();
             return Err(SessionRefreshRequired.into());
         }
 
         let output_run = self.command_output.begin_run()?;
-        if let Err(error) = self.writer.as_mut().unwrap().begin(prompt, model).await {
+        if let Err(error) = self
+            .writer
+            .as_mut()
+            .unwrap()
+            .begin(prompt, model)
+            .await
+        {
             self.release_idle_writer();
             return Err(error);
         }
@@ -496,9 +546,9 @@ impl SessionState {
         Ok(journal)
     }
 
+    /// The executor has stopped. A later persistence error must not extend the lifetime of
+    /// temporary raw logs or expose them to a future task.
     pub async fn finish(&mut self, status: &str, history: Option<Vec<ChatMessage>>) -> Result<()> {
-        // The executor has stopped. A later persistence error must not extend
-        // the lifetime of temporary raw logs or expose them to a future task.
         self.output_run = None;
         if let Some(journal) = &self.journal {
             journal.flush().await?;
@@ -511,7 +561,9 @@ impl SessionState {
             .await?;
         self.active = false;
         self.journal = None;
-        self.store.refresh_runtime(&mut self.snapshot).await?;
+        self.store
+            .refresh_runtime(&mut self.snapshot)
+            .await?;
         self.release_idle_writer();
 
         Ok(())
@@ -533,7 +585,10 @@ impl SessionState {
         else {
             return Ok(Vec::new());
         };
-        let equivalent = self.store.equivalent_project_ids(&project.id).await?;
+        let equivalent = self
+            .store
+            .equivalent_project_ids(&project.id)
+            .await?;
 
         Ok(self
             .store
@@ -576,7 +631,9 @@ impl SessionState {
         id: String,
     ) -> Result<PreparedResume> {
         let saved = store.session(&id).await?;
-        let equivalent = store.equivalent_project_ids(&project).await?;
+        let equivalent = store
+            .equivalent_project_ids(&project)
+            .await?;
         ensure!(
             equivalent.contains(&saved.project_id),
             "该会话属于其他项目，请在对应目录恢复。"
@@ -647,7 +704,9 @@ impl SessionState {
         self.git_baseline =
             orbit_tools::git_inspect::capture_baseline(Path::new(&self.snapshot.session.workspace));
         if let Some(baseline) = &self.git_baseline {
-            self.store.save_git_baseline(self.id(), baseline).await?;
+            self.store
+                .save_git_baseline(self.id(), baseline)
+                .await?;
         }
         if let Some(workspace) = self.audit_workspace.clone() {
             self.initialize_audit(workspace, self.audit_limits.clone())
@@ -666,7 +725,9 @@ impl SessionState {
     }
 
     pub fn active_run_id(&self) -> Option<i64> {
-        self.writer.as_ref().and_then(SessionWriter::active_run_id)
+        self.writer
+            .as_ref()
+            .and_then(SessionWriter::active_run_id)
     }
 
     pub(crate) async fn edit_queued_input(
@@ -742,8 +803,14 @@ impl SessionState {
     }
 
     pub async fn prepare_new_in(&self, model: String, directory: &Path) -> Result<PreparedResume> {
-        let workspace = directory.canonicalize()?.to_string_lossy().into_owned();
-        let session = self.store.draft(workspace, model).await?;
+        let workspace = directory
+            .canonicalize()?
+            .to_string_lossy()
+            .into_owned();
+        let session = self
+            .store
+            .draft(workspace, model)
+            .await?;
         Ok(PreparedResume {
             store: self.store.clone(),
             title_task: None,

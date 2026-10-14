@@ -15,7 +15,11 @@ fn node_cli_uses_registry_stdio_arguments_without_running_source() {
     for entry in entries {
         assert!(entry.launch.args[0].ends_with("scripts/fixture.mjs"));
         assert_eq!(&entry.launch.args[1..], &["mcp"]);
-        assert!(entry.description.contains("server.json"));
+        assert!(
+            entry
+                .description
+                .contains("server.json")
+        );
     }
     fs::write(source.join("server.json"), r#"{"packages":[{"registryType":"npm","identifier":"fixture-tools","transport":{"type":"streamable-http"},"packageArguments":[{"type":"positional","value":"mcp"}]}]}"#).unwrap();
     assert!(
@@ -34,6 +38,7 @@ fn fixture() -> (tempfile::TempDir, PathBuf, PathBuf) {
     fs::create_dir(&source).unwrap();
     (root, workspace, source)
 }
+
 #[tokio::test]
 async fn discovers_manifest_and_python_without_executing_source() {
     let (root, workspace, source) = fixture();
@@ -72,6 +77,7 @@ async fn discovers_manifest_and_python_without_executing_source() {
     assert_eq!(python.install.len(), 2);
     assert!(!Path::new(&python.launch.command).exists());
 }
+
 #[tokio::test]
 async fn installation_requires_exact_token_session_workspace_and_entry() {
     for invalid in ["token", "session", "workspace", "entry"] {
@@ -110,11 +116,14 @@ async fn installation_requires_exact_token_session_workspace_and_entry() {
             &workspace
         };
         assert!(
-            scan.install(&token, &id, session, workspace).await.is_err(),
+            scan.install(&token, &id, session, workspace)
+                .await
+                .is_err(),
             "{invalid}"
         );
     }
 }
+
 #[tokio::test]
 async fn reviewed_node_build_is_installed_in_a_persistent_private_copy() {
     let (root, workspace, source) = fixture();
@@ -155,6 +164,7 @@ async fn reviewed_node_build_is_installed_in_a_persistent_private_copy() {
     assert_eq!(fs::read_to_string(built).unwrap(), "fixture");
     assert!(!source.join("dist").exists());
 }
+
 #[cfg(unix)]
 #[tokio::test]
 async fn source_symlinks_and_traversing_bin_paths_are_rejected() {

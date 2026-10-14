@@ -15,7 +15,7 @@ use std::collections::VecDeque;
 
 const VISIBLE_MESSAGES: usize = 3;
 const PREVIEW_LINES: usize = 3;
-const PREVIEW_CHARACTERS: usize = 4096;
+const PREVIEW_CHARACTERS: usize = 4_096;
 const RECENT_RECEIPTS: usize = 64;
 
 #[derive(Debug)]
@@ -38,7 +38,10 @@ impl State {
         // Delivery feedback only needs a bounded preview. The submission owns
         // the original message; do not retain another full draft here.
         let mut chars = text.chars();
-        let mut preview: String = chars.by_ref().take(PREVIEW_CHARACTERS).collect();
+        let mut preview: String = chars
+            .by_ref()
+            .take(PREVIEW_CHARACTERS)
+            .collect();
         if chars.next().is_some() {
             preview.push('…');
         }
@@ -53,17 +56,23 @@ impl State {
     pub fn queued(&mut self, ticket: u64, message_id: i64) {
         if self.received.contains(&message_id) {
             self.reject(ticket);
-        } else if let Some(message) = self.messages.iter_mut().find(|m| m.ticket == ticket) {
+        } else if let Some(message) = self
+            .messages
+            .iter_mut()
+            .find(|m| m.ticket == ticket)
+        {
             message.message_id = Some(message_id);
         }
     }
 
     pub fn reject(&mut self, ticket: u64) {
-        self.messages.retain(|m| m.ticket != ticket);
+        self.messages
+            .retain(|m| m.ticket != ticket);
     }
 
     pub fn received(&mut self, message_id: i64) {
-        self.messages.retain(|m| m.message_id != Some(message_id));
+        self.messages
+            .retain(|m| m.message_id != Some(message_id));
         self.received.push_back(message_id);
         if self.received.len() > RECENT_RECEIPTS {
             self.received.pop_front();
@@ -180,10 +189,18 @@ mod tests {
                     .collect()
             })
             .collect();
-        assert!(rows[0].replace(' ', "").contains("等待处理"));
+        assert!(
+            rows[0]
+                .replace(' ', "")
+                .contains("等待处理")
+        );
         assert!(!rows[0].contains("blink.cmp"));
         assert!(rows[1].contains("blink.cmp") && !rows[1].contains("\\n"));
-        assert!(rows[2].replace(' ', "").contains("中文问题"));
+        assert!(
+            rows[2]
+                .replace(' ', "")
+                .contains("中文问题")
+        );
         assert!(rows[3].contains("\\n is literal"));
         state.received(42);
         assert_eq!(state.height(50), 0);
@@ -193,11 +210,25 @@ mod tests {
     fn previews_wrap_unicode_and_keep_recent_messages_visible_in_small_allocations() {
         let mut state = State::default();
         state.sending("中文问题 ".repeat(PREVIEW_CHARACTERS));
-        assert!(state.messages[0].preview.chars().count() <= PREVIEW_CHARACTERS + 1);
+        assert!(
+            state.messages[0]
+                .preview
+                .chars()
+                .count()
+                <= PREVIEW_CHARACTERS + 1
+        );
         let rows = preview_lines(&state.messages[0].preview, 12, PREVIEW_LINES);
         assert!(rows.len() <= PREVIEW_LINES);
-        assert!(rows.iter().all(|row| row.to_string().width() <= 12));
-        assert!(rows.last().unwrap().to_string().ends_with('…'));
+        assert!(
+            rows.iter()
+                .all(|row| row.to_string().width() <= 12)
+        );
+        assert!(
+            rows.last()
+                .unwrap()
+                .to_string()
+                .ends_with('…')
+        );
         for name in ["older", "recent", "newest"] {
             state.sending(name.into());
         }

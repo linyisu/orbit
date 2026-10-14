@@ -8,6 +8,7 @@ pub struct McpDraft {
     source: String,
     servers: BTreeMap<String, McpServerConfig>,
 }
+
 impl McpDraft {
     pub fn load(path: &Path) -> Result<Self> {
         let source = super::read_config(path)?;
@@ -17,9 +18,11 @@ impl McpDraft {
             servers: config.mcp.servers,
         })
     }
+
     pub fn servers(&self) -> &BTreeMap<String, McpServerConfig> {
         &self.servers
     }
+
     pub fn save(&self, path: &Path, name: &str, server: Option<McpServerConfig>) -> Result<Self> {
         let mut servers = self.servers.clone();
         if let Some(server) = server {
@@ -35,7 +38,9 @@ impl McpDraft {
             super::read_config(path)? == self.source,
             "配置已变更，请刷新后重试"
         );
-        let mut document = self.source.parse::<toml_edit::DocumentMut>()?;
+        let mut document = self
+            .source
+            .parse::<toml_edit::DocumentMut>()?;
         if let Some(server) = servers.get(name) {
             if document.get("mcp").is_none() {
                 document["mcp"] = toml_edit::Item::Table(toml_edit::Table::new());
@@ -58,6 +63,7 @@ impl McpDraft {
         Ok(Self { source, servers })
     }
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -96,13 +102,19 @@ mod tests {
         std::fs::write(&path, "# keep me\n[providers]\n").unwrap();
         let draft = McpDraft::load(&path).unwrap();
         let server: McpServerConfig = toml::from_str("command='test'\nenabled=false").unwrap();
-        draft.save(&path, "demo", Some(server.clone())).unwrap();
+        draft
+            .save(&path, "demo", Some(server.clone()))
+            .unwrap();
         assert!(
             std::fs::read_to_string(&path)
                 .unwrap()
                 .contains("# keep me")
         );
-        assert!(draft.save(&path, "other", Some(server)).is_err());
+        assert!(
+            draft
+                .save(&path, "other", Some(server))
+                .is_err()
+        );
         let draft = McpDraft::load(&path).unwrap();
         assert_eq!(draft.servers().len(), 1);
         assert!(

@@ -11,27 +11,46 @@ async fn refresh(config: &mut FileConfig, force: bool) -> Vec<String> {
 async fn manual_update_is_reused_offline_when_automatic_refresh_is_disabled() {
     use crate::test_support::{TestConfig, TestProvider};
     let directory = tempfile::tempdir().unwrap();
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .unwrap();
     let endpoint = format!("http://{}/v1", listener.local_addr().unwrap());
     let server = tokio::spawn(serve_catalog(
         listener,
-        json!({"data": [{"id": "fresh-model", "context_tokens": 200000}]}),
+        json!({
+            "data": [{
+                "id": "fresh-model",
+                "context_tokens": 200_000
+            }]
+        }),
     ));
     let baseline = TestConfig::new()
         .auth(directory.path())
-        .provider(TestProvider::new("manual").endpoint(endpoint).automatic())
+        .provider(
+            TestProvider::new("manual")
+                .endpoint(endpoint)
+                .automatic(),
+        )
         .build()
         .unwrap();
     let mut manual = baseline.clone();
-    assert!(refresh(&mut manual, true).await.is_empty());
+    assert!(
+        refresh(&mut manual, true)
+            .await
+            .is_empty()
+    );
     server.await.unwrap();
     assert_eq!(manual.providers["manual"].models[0].id, "fresh-model");
     // A new reader must get the manual update without contacting the stopped server.
     let mut reloaded = baseline;
-    assert!(refresh(&mut reloaded, false).await.is_empty());
+    assert!(
+        refresh(&mut reloaded, false)
+            .await
+            .is_empty()
+    );
     assert_eq!(
         reloaded.providers["manual"].models[0].context_tokens,
-        Some(200000)
+        Some(200_000)
     );
 }
 
@@ -39,7 +58,9 @@ async fn manual_update_is_reused_offline_when_automatic_refresh_is_disabled() {
 async fn cached_open_reuses_stale_account_catalog_and_manual_refresh_replaces_it() {
     use crate::test_support::{TestConfig, TestProvider};
     let root = tempfile::tempdir().unwrap();
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .unwrap();
     let endpoint = format!("http://{}/v1", listener.local_addr().unwrap());
     let mut config = TestConfig::new()
         .auth(root.path())
@@ -53,10 +74,23 @@ async fn cached_open_reuses_stale_account_catalog_and_manual_refresh_replaces_it
         .unwrap();
     let first = tokio::spawn(serve_catalog(
         listener,
-        json!({"data": [{"id":"old"},{"id":"kept"}]}),
+        json!({
+            "data": [
+                {
+                    "id": "old"
+                },
+                {
+                    "id": "kept"
+                }
+            ]
+        }),
     ));
     // Discover only the account catalog so this fixture never accesses public metadata.
-    assert!(refresh(&mut config, true).await.is_empty());
+    assert!(
+        refresh(&mut config, true)
+            .await
+            .is_empty()
+    );
     first.await.unwrap();
     let cache = root
         .path()
@@ -97,8 +131,19 @@ async fn cached_open_reuses_stale_account_catalog_and_manual_refresh_replaces_it
     )
     .await
     .unwrap();
-    let second = tokio::spawn(serve_catalog(listener, json!({"data": [{"id":"kept"}]})));
-    assert!(refresh(&mut cached, true).await.is_empty());
+    let second = tokio::spawn(serve_catalog(
+        listener,
+        json!({
+            "data": [{
+                "id": "kept"
+            }]
+        }),
+    ));
+    assert!(
+        refresh(&mut cached, true)
+            .await
+            .is_empty()
+    );
     second.await.unwrap();
     assert_eq!(
         cached.providers["auto"]
@@ -116,7 +161,9 @@ fn provider(format: ApiFormat, managed: bool) -> ProviderConfig {
         .format(format)
         .endpoint("https://orbit.example/v1")
         .models([
-            TestModel::new("orbit-live").context(100000).vision(false),
+            TestModel::new("orbit-live")
+                .context(100_000)
+                .vision(false),
             TestModel::new("orbit-retired"),
         ]);
     let mut provider = if managed {
@@ -137,20 +184,43 @@ fn provider(format: ApiFormat, managed: bool) -> ProviderConfig {
 fn refresh_updates_remote_capabilities_but_preserves_explicit_fields_and_choices() {
     for managed in [false, true] {
         let mut provider = provider(ApiFormat::OpenaiResponses, managed);
-        for (effort, output) in [("high", 32000), ("low", 64000)] {
-            let (models, _) = normalize(ApiFormat::OpenaiResponses, &json!({"data": [
-                    {"id": "orbit-live", "context_tokens": 200000, "supports_vision": true,
-                     "max_output_tokens": output,
-                     "reasoning": {"adapter": "openai_responses", "efforts": [effort], "default": effort}},
-                    {"id": "orbit-new"}
-                ]})).unwrap();
+        for (effort, output) in [("high", 32_000), ("low", 64_000)] {
+            let (models, _) = normalize(
+                ApiFormat::OpenaiResponses,
+                &json!({
+                    "data": [
+                        {
+                            "id": "orbit-live",
+                            "context_tokens": 200_000,
+                            "supports_vision": true,
+                            "max_output_tokens": output,
+                            "reasoning": {
+                                "adapter": "openai_responses",
+                                "efforts": [effort],
+                                "default": effort
+                            }
+                        },
+                        {
+                            "id": "orbit-new"
+                        }
+                    ]
+                }),
+            )
+            .unwrap();
 
             merge_discovered_models(&mut provider, models);
             let live = &provider.models[0];
-            assert_eq!(live.context_tokens, Some(100000));
+            assert_eq!(live.context_tokens, Some(100_000));
             assert_eq!(live.supports_vision, Some(false));
             assert_eq!(live.max_output_tokens, Some(output));
-            assert_eq!(live.reasoning.as_ref().unwrap().default.as_str(), effort);
+            assert_eq!(
+                live.reasoning
+                    .as_ref()
+                    .unwrap()
+                    .default
+                    .as_str(),
+                effort
+            );
             assert_eq!(provider.models.len(), 2);
             assert_eq!(
                 provider.models[1].id,
@@ -176,15 +246,18 @@ models = "auto"
         Path::new("/tmp/orbit-fixture-auth"),
     )
     .unwrap();
-    let provider = config.providers.get_mut("orbit").unwrap();
+    let provider = config
+        .providers
+        .get_mut("orbit")
+        .unwrap();
     let id = provider.models[0].id.clone();
     let model = crate::test_support::TestModel::new(id)
-        .context(4000000)
+        .context(4_000_000)
         .vision(false)
         .build();
     merge_discovered_models(provider, vec![model]);
     assert_eq!(provider.models.len(), 1);
-    assert_eq!(provider.models[0].context_tokens, Some(4000000));
+    assert_eq!(provider.models[0].context_tokens, Some(4_000_000));
     assert_eq!(provider.models[0].supports_vision, Some(false));
 }
 
@@ -192,21 +265,53 @@ models = "auto"
 fn anthropic_discovery_uses_advertised_capacity_vision_and_adaptive_efforts() {
     let (models, _) = normalize(
         ApiFormat::AnthropicMessages,
-        &json!({"data": [{
-            "id": "orbit-adaptive", "max_input_tokens": 1000000, "max_tokens": 64000,
-            "capabilities": {
-                "image_input": {"supported": true},
-                "thinking": {"types": {"adaptive": {"supported": true}}},
-                "effort": {"supported": true, "low": {"supported": true},
-                    "medium": {"supported": false}, "high": {"supported": true},
-                    "max": {"supported": true}, "future": {"supported": true}}
-            }
-        }, {"id": "orbit-unknown"}]}),
+        &json!({
+            "data": [
+                {
+                    "id": "orbit-adaptive",
+                    "max_input_tokens": 1_000_000,
+                    "max_tokens": 64_000,
+                    "capabilities": {
+                        "image_input": {
+                            "supported": true
+                        },
+                        "thinking": {
+                            "types": {
+                                "adaptive": {
+                                    "supported": true
+                                }
+                            }
+                        },
+                        "effort": {
+                            "supported": true,
+                            "low": {
+                                "supported": true
+                            },
+                            "medium": {
+                                "supported": false
+                            },
+                            "high": {
+                                "supported": true
+                            },
+                            "max": {
+                                "supported": true
+                            },
+                            "future": {
+                                "supported": true
+                            }
+                        }
+                    }
+                },
+                {
+                    "id": "orbit-unknown"
+                }
+            ]
+        }),
     )
     .unwrap();
     let profile = &models[0];
-    assert_eq!(profile.input_context_tokens, Some(1000000));
-    assert_eq!(profile.max_output_tokens, Some(64000));
+    assert_eq!(profile.input_context_tokens, Some(1_000_000));
+    assert_eq!(profile.max_output_tokens, Some(64_000));
     assert_eq!(profile.supports_vision, Some(true));
     let reasoning = profile.reasoning.as_ref().unwrap();
     assert_eq!(reasoning.adapter, ReasoningAdapter::AnthropicMessages);
@@ -229,16 +334,31 @@ fn google_quota_models_do_not_retire_unlisted_or_exhausted_models() {
     provider.base_url = "https://cloudcode-pa.googleapis.com".into();
     let (models, _) = normalize(
         ApiFormat::GoogleCodeAssist,
-        &json!({"buckets": [
-            {"modelId": "orbit-live", "remainingFraction": 0},
-            {"modelId": "orbit-new", "remainingFraction": 1},
-            {"modelId": "orbit-new", "tokenType": "REQUESTS"}
-        ]}),
+        &json!({
+            "buckets": [
+                {
+                    "modelId": "orbit-live",
+                    "remainingFraction": 0
+                },
+                {
+                    "modelId": "orbit-new",
+                    "remainingFraction": 1
+                },
+                {
+                    "modelId": "orbit-new",
+                    "tokenType": "REQUESTS"
+                }
+            ]
+        }),
     )
     .unwrap();
 
     assert_eq!(models.len(), 2);
-    assert!(models.iter().all(|model| model.reasoning.is_none()));
+    assert!(
+        models
+            .iter()
+            .all(|model| model.reasoning.is_none())
+    );
     merge_discovered_models(&mut provider, models);
     assert_eq!(provider.models.len(), 3);
     assert_eq!(provider.models[0].id, "orbit-live");
@@ -266,7 +386,9 @@ async fn serve_catalog(listener: tokio::net::TcpListener, payload: Value) -> Str
         )
         .await
         .unwrap();
-    String::from_utf8(request).unwrap().to_ascii_lowercase()
+    String::from_utf8(request)
+        .unwrap()
+        .to_ascii_lowercase()
 }
 
 #[tokio::test]
@@ -307,7 +429,9 @@ async fn all_api_connections_refresh_with_scoped_caches_and_independent_failures
             false,
         ),
     ] {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .unwrap();
         let endpoint = format!("http://{}/orbit/v1", listener.local_addr().unwrap());
         let connection = TestProvider::new(name)
             .format(format)
@@ -336,9 +460,17 @@ async fn all_api_connections_refresh_with_scoped_caches_and_independent_failures
             key,
             tokio::spawn(serve_catalog(
                 listener,
-                json!({"data": [
-                    {"id": "orbit-live", "context_tokens": 200000}, {"id": "orbit-new"}
-                ]}),
+                json!({
+                    "data": [
+                        {
+                            "id": "orbit-live",
+                            "context_tokens": 200_000
+                        },
+                        {
+                            "id": "orbit-new"
+                        }
+                    ]
+                }),
             )),
         ));
     }
@@ -374,7 +506,7 @@ async fn all_api_connections_refresh_with_scoped_caches_and_independent_failures
 
         assert_eq!(
             config.providers[name].models[0].context_tokens,
-            Some(200000)
+            Some(200_000)
         );
         assert_eq!(
             config.providers[name].models.len(),
@@ -389,10 +521,14 @@ async fn all_api_connections_refresh_with_scoped_caches_and_independent_failures
         .get_mut("orbit-failure")
         .unwrap()
         .auto_refresh_models = false;
-    assert!(refresh(&mut reloaded, false).await.is_empty());
+    assert!(
+        refresh(&mut reloaded, false)
+            .await
+            .is_empty()
+    );
     assert_eq!(
         reloaded.providers["orbit-chat"].models[0].context_tokens,
-        Some(200000)
+        Some(200_000)
     );
     assert_eq!(
         reloaded.providers["orbit-disabled"].models[0].id,
@@ -418,15 +554,25 @@ async fn all_api_connections_refresh_with_scoped_caches_and_independent_failures
         .get_mut("orbit-failure")
         .unwrap()
         .auto_refresh_models = false;
-    rotated.providers.get_mut("orbit-chat").unwrap().api_key = "orbit-rotated-inline".into();
-    let endpoint = rotated.providers["orbit-responses"].base_url.clone();
+    rotated
+        .providers
+        .get_mut("orbit-chat")
+        .unwrap()
+        .api_key = "orbit-rotated-inline".into();
+    let endpoint = rotated.providers["orbit-responses"]
+        .base_url
+        .clone();
     store
         .set_api_key("orbit-responses", "orbit-rotated-saved".into(), &endpoint)
         .await
         .unwrap();
     let diagnostics = refresh(&mut rotated, false).await;
     assert_eq!(diagnostics.len(), 2, "{diagnostics:?}");
-    assert!(rotated.providers["orbit-chat"].models.is_empty());
+    assert!(
+        rotated.providers["orbit-chat"]
+            .models
+            .is_empty()
+    );
     assert!(
         rotated.providers["orbit-responses"].models[0]
             .context_tokens
@@ -496,15 +642,19 @@ fn antigravity_discovery_removes_retired_models_and_preserves_available_settings
         .format(ApiFormat::GoogleCodeAssist)
         .endpoint("https://daily-cloudcode-pa.googleapis.com")
         .credential("antigravity")
-        .models([crate::test_support::TestModel::new("claude-sonnet-4-6").context(123456)])
+        .models([crate::test_support::TestModel::new("claude-sonnet-4-6").context(123_456)])
         .automatic()
         .build();
     let (models, _) = normalize(
         ApiFormat::GoogleCodeAssist,
         &json!({
             "models": {
-                "claude-sonnet-4-6": { "maxTokens": 250000 },
-                "claude-opus-4-6-thinking": { "maxTokens": 250000 }
+                "claude-sonnet-4-6": {
+                    "maxTokens": 250_000
+                },
+                "claude-opus-4-6-thinking": {
+                    "maxTokens": 250_000
+                }
             }
         }),
     )
@@ -518,28 +668,57 @@ fn antigravity_discovery_removes_retired_models_and_preserves_available_settings
         .iter()
         .find(|m| m.id == "claude-sonnet-4-6")
         .unwrap();
-    assert_eq!(sonnet.context_tokens, Some(123456));
+    assert_eq!(sonnet.context_tokens, Some(123_456));
     assert!(sonnet.reasoning.is_some());
-    assert!(provider.models.iter().any(|m| m.id == "claude-opus-4-6"));
+    assert!(
+        provider
+            .models
+            .iter()
+            .any(|m| m.id == "claude-opus-4-6")
+    );
 }
 
 #[test]
 fn codex_discovery_preserves_new_models_and_advertised_efforts() {
-    let payload = json!({ "models": [
-            { "slug": "gpt-new", "tool_mode": "code_mode_only", "context_window": 1000000,
-              "input_modalities": ["text", "image"], "default_reasoning_level": "high",
-              "supported_reasoning_levels": [{ "effort": "low" }, { "effort": "high" }, { "effort": "unknown" }] },
-            { "slug": "internal", "visibility": "hidden" }
-        ] });
+    let payload = json!({
+        "models": [
+            {
+                "slug": "gpt-new",
+                "tool_mode": "code_mode_only",
+                "context_window": 1_000_000,
+                "input_modalities": ["text", "image"],
+                "default_reasoning_level": "high",
+                "supported_reasoning_levels": [
+                    {
+                        "effort": "low"
+                    },
+                    {
+                        "effort": "high"
+                    },
+                    {
+                        "effort": "unknown"
+                    }
+                ]
+            },
+            {
+                "slug": "internal",
+                "visibility": "hidden"
+            }
+        ]
+    });
 
     let (models, unavailable) = normalize(ApiFormat::ChatgptCodex, &payload).unwrap();
 
     assert_eq!(models.len(), 1);
     assert_eq!(models[0].id, "gpt-new");
-    assert_eq!(models[0].context_tokens, Some(1000000));
+    assert_eq!(models[0].context_tokens, Some(1_000_000));
     assert_eq!(models[0].supports_vision, Some(true));
     assert_eq!(
-        models[0].reasoning.as_ref().unwrap().efforts,
+        models[0]
+            .reasoning
+            .as_ref()
+            .unwrap()
+            .efforts,
         [ReasoningEffort::Low, ReasoningEffort::High]
     );
     assert!(unavailable.is_empty());
@@ -547,24 +726,49 @@ fn codex_discovery_preserves_new_models_and_advertised_efforts() {
 
 #[test]
 fn antigravity_keeps_unknown_models_and_collapses_known_routes() {
-    let payload = json!({ "models": {
-            "gemini-3.8-flash-low": { "maxTokens": 1048576, "supportsImages": true },
-            "gemini-3.8-flash-high": { "maxTokens": 1048576, "supportsImages": true },
-            "future-model": { "maxTokens": 128000 },
-            "private-model": { "isInternal": true }
-        } });
+    let payload = json!({
+        "models": {
+            "gemini-3.8-flash-low": {
+                "maxTokens": 1_048_576,
+                "supportsImages": true
+            },
+            "gemini-3.8-flash-high": {
+                "maxTokens": 1_048_576,
+                "supportsImages": true
+            },
+            "future-model": {
+                "maxTokens": 128_000
+            },
+            "private-model": {
+                "isInternal": true
+            }
+        }
+    });
 
     let (models, _) = normalize(ApiFormat::GoogleCodeAssist, &payload).unwrap();
 
     assert_eq!(models.len(), 2);
-    assert!(models.iter().any(|model| model.id == "future-model"));
-    assert!(models.iter().any(|model| model.id == "gemini-3.8-flash"));
+    assert!(
+        models
+            .iter()
+            .any(|model| model.id == "future-model")
+    );
+    assert!(
+        models
+            .iter()
+            .any(|model| model.id == "gemini-3.8-flash")
+    );
     assert!(normalize(ApiFormat::GoogleCodeAssist, &json!({})).is_err());
     assert!(
-        normalize(ApiFormat::ChatgptCodex, &json!({ "models": [] }))
-            .unwrap()
-            .0
-            .is_empty()
+        normalize(
+            ApiFormat::ChatgptCodex,
+            &json!({
+                "models": []
+            })
+        )
+        .unwrap()
+        .0
+        .is_empty()
     );
 }
 
@@ -573,31 +777,59 @@ fn antigravity_refresh_uses_agent_selectors_instead_of_the_full_definition_table
     let mut provider = crate::test_support::TestProvider::new("test")
         .format(ApiFormat::GoogleCodeAssist)
         .endpoint("https://daily-cloudcode-pa.googleapis.com")
-        .models([crate::test_support::TestModel::new("claude-sonnet-4-6").context(123456)])
+        .models([crate::test_support::TestModel::new("claude-sonnet-4-6").context(123_456)])
         .automatic()
         .build();
     let mut payload = json!({
         "models": {
-            "gemini-3.7-flash-high": {"maxTokens": 1048576},
-            "gemini-3.8-flash-high": {"maxTokens": 1048576},
-            "gemini-3.8-flash-medium": {"maxTokens": 1048576},
-            "gemini-3.8-flash-low": {"maxTokens": 1048576},
-            "claude-sonnet-4-6": {"maxTokens": 250000},
-            "claude-opus-4-6-thinking": {"maxTokens": 250000},
-            "gpt-oss-120b-medium": {"maxTokens": 131072},
-            "gemini-4-argon-disabled": {"disabled": true},
-            "gemini-2.5-pro": {"maxTokens": 1048576}
+            "gemini-3.7-flash-high": {
+                "maxTokens": 1_048_576
+            },
+            "gemini-3.8-flash-high": {
+                "maxTokens": 1_048_576
+            },
+            "gemini-3.8-flash-medium": {
+                "maxTokens": 1_048_576
+            },
+            "gemini-3.8-flash-low": {
+                "maxTokens": 1_048_576
+            },
+            "claude-sonnet-4-6": {
+                "maxTokens": 250_000
+            },
+            "claude-opus-4-6-thinking": {
+                "maxTokens": 250_000
+            },
+            "gpt-oss-120b-medium": {
+                "maxTokens": 131_072
+            },
+            "gemini-4-argon-disabled": {
+                "disabled": true
+            },
+            "gemini-2.5-pro": {
+                "maxTokens": 1_048_576
+            }
         },
-        "agentModelSorts": [{"groups": [{"modelIds": [
-            "gemini-3.7-flash-high", "gemini-3.8-flash-high",
-            "gemini-3.8-flash-medium", "gemini-3.8-flash-low",
-            "claude-sonnet-4-6", "claude-opus-4-6-thinking",
-            "gpt-oss-120b-medium", "gemini-4-argon-disabled"
-        ]}]}]
+        "agentModelSorts": [{
+            "groups": [{
+                "modelIds": [
+                    "gemini-3.7-flash-high",
+                    "gemini-3.8-flash-high",
+                    "gemini-3.8-flash-medium",
+                    "gemini-3.8-flash-low",
+                    "claude-sonnet-4-6",
+                    "claude-opus-4-6-thinking",
+                    "gpt-oss-120b-medium",
+                    "gemini-4-argon-disabled"
+                ]
+            }]
+        }]
     });
     merge_discovered_models(
         &mut provider,
-        normalize(ApiFormat::GoogleCodeAssist, &payload).unwrap().0,
+        normalize(ApiFormat::GoogleCodeAssist, &payload)
+            .unwrap()
+            .0,
     );
     assert_eq!(provider.models.len(), 5);
     // Retired models remain defined for other workflows, but disappear from
@@ -606,7 +838,9 @@ fn antigravity_refresh_uses_agent_selectors_instead_of_the_full_definition_table
         .as_array_mut()
         .unwrap()
         .remove(0);
-    let models = normalize(ApiFormat::GoogleCodeAssist, &payload).unwrap().0;
+    let models = normalize(ApiFormat::GoogleCodeAssist, &payload)
+        .unwrap()
+        .0;
     merge_discovered_models(&mut provider, models);
     let ids = provider
         .models
@@ -631,7 +865,7 @@ fn antigravity_refresh_uses_agent_selectors_instead_of_the_full_definition_table
             .find(|model| model.id == "claude-sonnet-4-6")
             .unwrap()
             .context_tokens,
-        Some(123456)
+        Some(123_456)
     );
     provider.resolve();
     assert_eq!(provider.models.len(), 4);
@@ -639,32 +873,73 @@ fn antigravity_refresh_uses_agent_selectors_instead_of_the_full_definition_table
 
 #[test]
 fn antigravity_empty_agent_selectors_clear_the_catalog_but_missing_selectors_remain_compatible() {
-    let mut payload = json!({"models":{"future-model":{},"disabled-model":{"disabled":true}},"agentModelSorts":[]});
+    let mut payload = json!({
+        "models": {
+            "future-model": {},
+            "disabled-model": {
+                "disabled": true
+            }
+        },
+        "agentModelSorts": []
+    });
     assert!(
         normalize(ApiFormat::GoogleCodeAssist, &payload)
             .unwrap()
             .0
             .is_empty()
     );
-    payload.as_object_mut().unwrap().remove("agentModelSorts");
-    let models = normalize(ApiFormat::GoogleCodeAssist, &payload).unwrap().0;
+    payload
+        .as_object_mut()
+        .unwrap()
+        .remove("agentModelSorts");
+    let models = normalize(ApiFormat::GoogleCodeAssist, &payload)
+        .unwrap()
+        .0;
     assert_eq!(models.len(), 1);
     assert_eq!(models[0].id, "future-model");
-    payload["agentModelSorts"] = json!([{"groups":[{"modelIds":"malformed"}]}]);
+    payload["agentModelSorts"] = json!([{
+        "groups": [{
+            "modelIds": "malformed"
+        }]
+    }]);
     assert!(normalize(ApiFormat::GoogleCodeAssist, &payload).is_err());
 }
 
 #[test]
 fn antigravity_uses_every_selector_group_and_excludes_deprecated_models() {
     let payload = json!({
-        "models":{"a":{},"b":{},"retired":{},"defined-only":{}},
-        "deprecatedModelIds":{"retired":{"newModelId":"b"}},
-        "agentModelSorts":[
-            {"groups":[{"modelIds":["a","retired"]}]},
-            {"groups":[{"modelIds":["b"]},{"modelIds":["a"]}]}
+        "models": {
+            "a": {},
+            "b": {},
+            "retired": {},
+            "defined-only": {}
+        },
+        "deprecatedModelIds": {
+            "retired": {
+                "newModelId": "b"
+            }
+        },
+        "agentModelSorts": [
+            {
+                "groups": [{
+                    "modelIds": ["a", "retired"]
+                }]
+            },
+            {
+                "groups": [
+                    {
+                        "modelIds": ["b"]
+                    },
+                    {
+                        "modelIds": ["a"]
+                    }
+                ]
+            }
         ]
     });
-    let models = normalize(ApiFormat::GoogleCodeAssist, &payload).unwrap().0;
+    let models = normalize(ApiFormat::GoogleCodeAssist, &payload)
+        .unwrap()
+        .0;
     assert_eq!(
         models
             .iter()
@@ -682,20 +957,40 @@ async fn antigravity_cached_refresh_does_not_restore_unselectable_definitions() 
         .endpoint("https://daily-cloudcode-pa.googleapis.com")
         .automatic()
         .build();
-    let binding = json!({"version":2,"identity":{"key_fingerprint":fingerprint("")},
-        "format":ApiFormat::GoogleCodeAssist,"endpoint":provider.base_url});
+    let binding = json!({
+        "version": 2,
+        "identity": {
+            "key_fingerprint": fingerprint("")
+        },
+        "format": ApiFormat::GoogleCodeAssist,
+        "endpoint": provider.base_url
+    });
     let cache_dir = directory.path().join("model-catalog");
     std::fs::create_dir(&cache_dir).unwrap();
     let cache = cache_dir.join(format!("{}.json", fingerprint("account")));
     let mut payload = json!({
-        "models":{"live-model":{},"retired-model":{},"disabled-model":{"disabled":true}},
-        "agentModelSorts":[{"groups":[{"modelIds":["live-model","disabled-model"]}]}]
+        "models": {
+            "live-model": {},
+            "retired-model": {},
+            "disabled-model": {
+                "disabled": true
+            }
+        },
+        "agentModelSorts": [{
+            "groups": [{
+                "modelIds": ["live-model", "disabled-model"]
+            }]
+        }]
     });
     let mut diagnostics = Vec::new();
     for expected in [vec!["live-model"], vec![]] {
         std::fs::write(
             &cache,
-            serde_json::to_vec(&json!({"binding":binding,"payload":payload})).unwrap(),
+            serde_json::to_vec(&json!({
+                "binding": binding,
+                "payload": payload
+            }))
+            .unwrap(),
         )
         .unwrap();
         // Exercise the shared cache/resolve path without credentials or any
@@ -726,7 +1021,11 @@ async fn antigravity_cached_refresh_does_not_restore_unselectable_definitions() 
 
 #[test]
 fn deepseek_refresh_uses_advertised_models_without_inventing_capabilities() {
-    let payload = json!({ "data": [{ "id": "future-model" }] });
+    let payload = json!({
+        "data": [{
+            "id": "future-model"
+        }]
+    });
 
     let (models, unavailable) = normalize(ApiFormat::OpenaiChatCompletions, &payload).unwrap();
 
@@ -744,15 +1043,31 @@ fn deepseek_refresh_uses_advertised_models_without_inventing_capabilities() {
 fn cache_never_crosses_accounts() {
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().join("catalog.json");
-    let binding = json!({ "account_id": "first" });
+    let binding = json!({
+        "account_id": "first"
+    });
     std::fs::write(
         &path,
-        serde_json::to_vec(&json!({ "binding": binding, "payload": { "models": [] } })).unwrap(),
+        serde_json::to_vec(&json!({
+            "binding": binding,
+            "payload": {
+                "models": []
+            }
+        }))
+        .unwrap(),
     )
     .unwrap();
 
     assert!(read_cache(&path, &binding).is_some());
-    assert!(read_cache(&path, &json!({ "account_id": "second" })).is_none());
+    assert!(
+        read_cache(
+            &path,
+            &json!({
+                "account_id": "second"
+            })
+        )
+        .is_none()
+    );
 }
 
 #[test]

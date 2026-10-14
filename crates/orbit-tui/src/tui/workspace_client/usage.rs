@@ -8,7 +8,9 @@ impl Tab {
     pub(super) fn show_usage(&mut self) {
         let mut dialog = InfoDialog::new("用量", String::new());
         dialog.source = Some(ReportSource::Usage);
-        self.state.usage.update_dialog(&mut dialog);
+        self.state
+            .usage
+            .update_dialog(&mut dialog);
         self.state.info_dialog = Some(dialog);
         if !self.state.usage.fresh() {
             self.refresh_usage();
@@ -19,7 +21,11 @@ impl Tab {
         if self.usage_task.is_some() {
             return;
         }
-        let Some((connection, session)) = self.connection.clone().zip(self.id.clone()) else {
+        let Some((connection, session)) = self
+            .connection
+            .clone()
+            .zip(self.id.clone())
+        else {
             self.state.usage.error = Some("请先连接工作区".into());
             self.update_usage_dialog();
             return;
@@ -30,7 +36,10 @@ impl Tab {
         // queue. The separate connection attaches to the same running service.
         self.usage_task = Some(AbortOnDropHandle::new(tokio::spawn(async move {
             let mut client = connection.connect().await?;
-            match client.request(Request::Usage { session }).await? {
+            match client
+                .request(Request::Usage { session })
+                .await?
+            {
                 Response::Usage(snapshot) => Ok(snapshot),
                 _ => anyhow::bail!("工作区服务未返回用量信息"),
             }

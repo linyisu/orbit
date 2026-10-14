@@ -35,6 +35,7 @@ pub(super) struct Resources {
     import_events: Option<Subscription>,
     _query_events: Subscription,
 }
+
 impl Resources {
     pub(super) fn has_pending_work(&self) -> bool {
         self.busy || (self.editing && !self.readonly) || self.importer.is_some()
@@ -81,6 +82,7 @@ impl Resources {
             _query_events: query_events,
         }
     }
+
     fn request(&mut self, request: Request, cx: &mut Context<Self>) {
         if self.busy {
             return;
@@ -122,18 +124,25 @@ impl Resources {
             .as_ref()
             .map(|name| format!("正在将 /{name} 载入当前会话…"));
         self.task = cx.spawn(async move |owner, cx| {
-            let result = receiver.await.map_err(|e| e.to_string()).and_then(|r| r);
+            let result = receiver
+                .await
+                .map_err(|e| e.to_string())
+                .and_then(|r| r);
             let _ = owner.update_in(cx, |view, window, cx| {
                 view.busy = false;
                 view.status = None;
                 if loading_skill.is_some()
-                    && !view.owner.upgrade().is_some_and(|owner| {
-                        let owner = owner.read(cx);
-                        owner.connected
-                            && owner.info.as_ref().is_some_and(|info| {
-                                Some(&info.id) == session.as_ref() && info.workspace == workspace
-                            })
-                    })
+                    && !view
+                        .owner
+                        .upgrade()
+                        .is_some_and(|owner| {
+                            let owner = owner.read(cx);
+                            owner.connected
+                                && owner.info.as_ref().is_some_and(|info| {
+                                    Some(&info.id) == session.as_ref()
+                                        && info.workspace == workspace
+                                })
+                        })
                 {
                     view.error = Some(
                         "连接或目标会话已改变，加载结果尚未确认。请返回原会话核对；不会自动重发。"
@@ -181,6 +190,7 @@ impl Resources {
         });
         cx.notify();
     }
+
     fn action(&mut self, action: Action, cx: &mut Context<Self>) {
         if let Some(session) = self.session.clone() {
             self.request(
@@ -203,6 +213,7 @@ impl Resources {
             Kind::Memory => self.action(Action::Memories, cx),
         }
     }
+
     fn load_skill(&mut self, name: String, cx: &mut Context<Self>) {
         let Some(session) = self.session.clone() else {
             self.error = Some("请先打开工作区会话。".into());
@@ -217,6 +228,7 @@ impl Resources {
             cx,
         );
     }
+
     fn new_item(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.editing = true;
         self.original = None;
@@ -225,15 +237,36 @@ impl Resources {
         self.status = None;
         self.name
             .update(cx, |input, cx| input.set_value("", window, cx));
-        self.body.update(cx,|input,cx|input.set_value(if matches!(self.kind,Kind::Skills) { "---\nname: 新技能\ndescription: 描述这个技能的用途\n---\n\n在这里编写 Agent 执行步骤。\n" } else { "" },window,cx));
+        self.body.update(cx, |input, cx| {
+            input.set_value(
+                if matches!(self.kind, Kind::Skills) {
+                    "---\nname: \
+            新技能\ndescription: 描述这个技能的用途\n---\n\n在这里编写 Agent 执行步骤。\n"
+                } else {
+                    ""
+                },
+                window,
+                cx,
+            )
+        });
         match self.kind {
-            Kind::Memory => self.body.update(cx, |input, cx| input.focus(window, cx)),
-            _ => self.name.update(cx, |input, cx| input.focus(window, cx)),
+            Kind::Memory => self
+                .body
+                .update(cx, |input, cx| input.focus(window, cx)),
+            _ => self
+                .name
+                .update(cx, |input, cx| input.focus(window, cx)),
         };
         cx.notify();
     }
+
     fn save(&mut self, cx: &mut Context<Self>) {
-        let name = self.name.read(cx).value().trim().to_string();
+        let name = self
+            .name
+            .read(cx)
+            .value()
+            .trim()
+            .to_string();
         let content = self.body.read(cx).value().to_string();
         match self.kind {
             Kind::Skills => self.action(
@@ -277,7 +310,8 @@ impl Resources {
                 }
                 view.importer = None;
                 view.import_events = None;
-                view.query.update(cx, |input, cx| input.focus(window, cx));
+                view.query
+                    .update(cx, |input, cx| input.focus(window, cx));
                 cx.notify();
             },
         ));
@@ -287,10 +321,14 @@ impl Resources {
         cx.notify();
     }
 }
+
 impl Render for Resources {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if let Some(importer) = &self.importer {
-            return v_flex().w_full().min_w_0().child(importer.clone());
+            return v_flex()
+                .w_full()
+                .min_w_0()
+                .child(importer.clone());
         }
         let (description, add, empty) = match self.kind {
             Kind::Skills => (
@@ -329,10 +367,20 @@ impl Render for Resources {
                     ),
             )
             .when_some(self.error.clone(), |v, e| {
-                v.child(div().text_sm().text_color(cx.theme().danger).child(e))
+                v.child(
+                    div()
+                        .text_sm()
+                        .text_color(cx.theme().danger)
+                        .child(e),
+                )
             })
             .when_some(self.status.clone(), |view, status| {
-                view.child(div().text_sm().whitespace_normal().child(status))
+                view.child(
+                    div()
+                        .text_sm()
+                        .whitespace_normal()
+                        .child(status),
+                )
             });
         if self.editing {
             let mut form = v_flex().gap_3();
@@ -345,9 +393,13 @@ impl Render for Resources {
                                 .position(|category| *category == self.category),
                         )
                         .disabled(self.busy)
-                        .children(MemoryCategory::ALL.into_iter().map(|category| {
-                            Radio::new(category.as_str()).label(category_label(category))
-                        }))
+                        .children(
+                            MemoryCategory::ALL
+                                .into_iter()
+                                .map(|category| {
+                                    Radio::new(category.as_str()).label(category_label(category))
+                                }),
+                        )
                         .on_change(cx.listener(|view, ix, _, cx| {
                             view.category = MemoryCategory::ALL[*ix];
                             cx.notify();
@@ -448,7 +500,12 @@ impl Render for Resources {
                     )
                 }),
         );
-        let query = self.query.read(cx).value().trim().to_lowercase();
+        let query = self
+            .query
+            .read(cx)
+            .value()
+            .trim()
+            .to_lowercase();
         let mut rows = Vec::new();
         match self.kind {
             Kind::Skills => {
@@ -502,15 +559,15 @@ impl Render for Resources {
                                 ))
                                 .tooltip(format!(
                                     "会话：{} · 工作区：{}",
-                                    self.session.as_deref().unwrap_or("尚未连接"),
+                                    self.session
+                                        .as_deref()
+                                        .unwrap_or("尚未连接"),
                                     self.workspace
                                 ))
                                 .disabled(self.busy || self.session.is_none())
-                                .on_click(cx.listener(
-                                    move |view, _, _, cx| {
-                                        view.load_skill(load_name.clone(), cx);
-                                    },
-                                )),
+                                .on_click(cx.listener(move |view, _, _, cx| {
+                                    view.load_skill(load_name.clone(), cx);
+                                })),
                             )
                             .child(
                                 Button::new(SharedString::from(format!("skill-{}", skill.name)))

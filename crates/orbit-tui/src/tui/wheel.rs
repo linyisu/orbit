@@ -26,9 +26,12 @@ impl Wheel {
             return true;
         }
 
-        if self.last.is_some_and(|(direction, last)| {
-            direction == mouse.kind && now.saturating_duration_since(last) < INTERVAL
-        }) {
+        if self
+            .last
+            .is_some_and(|(direction, last)| {
+                direction == mouse.kind && now.saturating_duration_since(last) < INTERVAL
+            })
+        {
             // Do not accumulate a backlog: stopping the wheel stops the viewport.
             return false;
         }

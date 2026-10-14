@@ -15,8 +15,8 @@ fn mouse(kind: MouseEventKind, point: (u16, u16)) -> Event {
     })
 }
 
+/// Allow scheduling headroom on busy CI runners.
 fn draw_ready(preview: &mut Preview, terminal: &mut Terminal<TestBackend>) {
-    // Allow scheduling headroom on busy CI runners.
     let deadline = Instant::now() + Duration::from_secs(60);
     loop {
         super::super::begin_frame();
@@ -65,7 +65,9 @@ fn draw_ready(preview: &mut Preview, terminal: &mut Terminal<TestBackend>) {
 
 fn wait_for_worker(preview: &Preview, deadline: Instant) {
     let view = View {
-        quality: preview.requested_quality.unwrap_or(preview.view.quality),
+        quality: preview
+            .requested_quality
+            .unwrap_or(preview.view.quality),
         ..preview.view
     };
     let error = preview
@@ -86,7 +88,8 @@ fn wait_for_worker(preview: &Preview, deadline: Instant) {
         });
     let describe = || {
         format!(
-            "protocol={:?}, source={:?}, body={:?}, view={:?}, requested_quality={:?}, error={error:?}",
+            "protocol={:?}, source={:?}, body={:?}, view={:?}, requested_quality={:?}, \
+                error={error:?}",
             preview
                 .context
                 .shared
@@ -111,7 +114,9 @@ fn wait_for_worker(preview: &Preview, deadline: Instant) {
 fn background_switches_keep_the_view_and_use_separate_cached_uploads() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("transparent.png");
-    image::RgbaImage::new(200, 200).save(&path).unwrap();
+    image::RgbaImage::new(200, 200)
+        .save(&path)
+        .unwrap();
     for protocol in [
         ProtocolType::Kitty,
         ProtocolType::Sixel,
@@ -128,7 +133,11 @@ fn background_switches_keep_the_view_and_use_separate_cached_uploads() {
         preview.view.zoom = 200;
         preview.view.pan = (500, -500);
         draw_ready(&mut preview, &mut terminal);
-        let light = preview.picture.as_ref().unwrap().clone();
+        let light = preview
+            .picture
+            .as_ref()
+            .unwrap()
+            .clone();
         let background_button = preview
             .controls
             .iter()
@@ -279,10 +288,15 @@ fn image_previews_zoom_pan_reset_and_clip_on_every_protocol() {
                 .0;
             let point = (button.x, button.y);
             preview.handle(&mouse(MouseEventKind::Moved, point));
-            terminal.draw(|frame| preview.draw(frame)).unwrap();
+            terminal
+                .draw(|frame| preview.draw(frame))
+                .unwrap();
             assert_eq!(
                 terminal.backend().buffer()[(button.x, button.y)].bg,
-                preview.control_style(control).bg.unwrap()
+                preview
+                    .control_style(control)
+                    .bg
+                    .unwrap()
             );
             assert_eq!(
                 preview.handle(&mouse(MouseEventKind::Down(MouseButton::Left), point)),
@@ -300,12 +314,12 @@ fn image_previews_zoom_pan_reset_and_clip_on_every_protocol() {
             if let Some(native) = &layer.current_preview {
                 assert_eq!(native.area().intersection(preview.body), native.area());
             }
-            assert!(
-                layer
-                    .current
-                    .iter()
-                    .all(|placement| placement.area.intersection(preview.body) == placement.area)
-            );
+            assert!(layer.current.iter().all(|placement| {
+                placement
+                    .area
+                    .intersection(preview.body)
+                    == placement.area
+            }));
         });
         assert_eq!(
             preview.handle(&mouse(MouseEventKind::Down(MouseButton::Left), (0, 0))),
@@ -320,7 +334,7 @@ fn large_pixel_cells_use_the_entire_preview_width_before_clipping() {
     let dir = tempfile::tempdir().unwrap();
     let png = dir.path().join("wide.png");
     let svg = dir.path().join("wide.svg");
-    image::RgbaImage::from_pixel(1600, 450, image::Rgba([230, 100, 50, 255]))
+    image::RgbaImage::from_pixel(1_600, 450, image::Rgba([230, 100, 50, 255]))
         .save(&png)
         .unwrap();
     std::fs::write(&svg, r#"<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="450"><rect width="1600" height="450" fill="red"/></svg>"#).unwrap();
@@ -339,7 +353,7 @@ fn large_pixel_cells_use_the_entire_preview_width_before_clipping() {
             preview.view.zoom = zoom;
             draw_ready(&mut preview, &mut terminal);
             let picture = preview.picture.as_ref().unwrap();
-            assert!(u32::from(preview.body.width) * 32 > 2048);
+            assert!(u32::from(preview.body.width) * 32 > 2_048);
             let extent = preview.pan_extent();
             let native_area = picture.native.as_ref().map(|image| {
                 super::super::kitty_preview::Placement {
@@ -360,13 +374,26 @@ fn large_pixel_cells_use_the_entire_preview_width_before_clipping() {
                 assert!((extent.0 - f32::from(preview.body.width) * 0.25).abs() < 0.01);
             }
             assert!(picture.selected_protocol.is_none());
-            let bytes = super::super::Value::Ready(picture.clone())
-                .bytes(&preview.context.shared.as_ref().unwrap().picker);
+            let bytes = super::super::Value::Ready(picture.clone()).bytes(
+                &preview
+                    .context
+                    .shared
+                    .as_ref()
+                    .unwrap()
+                    .picker,
+            );
             assert!(bytes <= super::super::MAX_CACHE_BYTES);
             super::super::LAYER.with(|layer| {
-                assert!(layer.borrow().current.iter().all(|placement| {
-                    placement.area.x == preview.body.x && placement.area.width == preview.body.width
-                }));
+                assert!(
+                    layer
+                        .borrow()
+                        .current
+                        .iter()
+                        .all(|placement| {
+                            placement.area.x == preview.body.x
+                                && placement.area.width == preview.body.width
+                        })
+                );
             });
         }
         super::super::clear_layers();
@@ -393,9 +420,15 @@ fn interaction_keeps_the_last_frame_and_idle_requests_full_quality_once() {
     draw_ready(&mut preview, &mut terminal);
     assert_eq!(preview.requested_quality, Some(Quality::Interactive));
     assert!(!preview.tick());
-    let previous = preview.picture.as_ref().unwrap().clone();
+    let previous = preview
+        .picture
+        .as_ref()
+        .unwrap()
+        .clone();
     preview.zoom(true);
-    terminal.draw(|frame| preview.draw(frame)).unwrap();
+    terminal
+        .draw(|frame| preview.draw(frame))
+        .unwrap();
     assert!(Arc::ptr_eq(&previous, preview.picture.as_ref().unwrap()));
 
     preview.changed_at = Some(Instant::now() - QUALITY_SETTLE_TIME);
@@ -407,7 +440,9 @@ fn interaction_keeps_the_last_frame_and_idle_requests_full_quality_once() {
 
     let point = (preview.body.x, preview.body.y);
     preview.handle(&mouse(MouseEventKind::Down(MouseButton::Left), point));
-    terminal.draw(|frame| preview.draw(frame)).unwrap();
+    terminal
+        .draw(|frame| preview.draw(frame))
+        .unwrap();
     assert_eq!(preview.requested_quality, Some(Quality::Interactive));
     assert!(!preview.tick());
     preview.handle(&mouse(MouseEventKind::Up(MouseButton::Left), point));
@@ -435,9 +470,20 @@ fn kitty_drag_tracks_the_pointer_without_requesting_or_uploading_another_image()
     draw_ready(&mut preview, &mut terminal);
     preview.view.zoom = 400;
     draw_ready(&mut preview, &mut terminal);
-    let picture = preview.picture.as_ref().unwrap().clone();
-    let shared = preview.context.shared.as_ref().unwrap().clone();
-    let revision = shared.revision.load(std::sync::atomic::Ordering::Acquire);
+    let picture = preview
+        .picture
+        .as_ref()
+        .unwrap()
+        .clone();
+    let shared = preview
+        .context
+        .shared
+        .as_ref()
+        .unwrap()
+        .clone();
+    let revision = shared
+        .revision
+        .load(std::sync::atomic::Ordering::Acquire);
     shared.cache.lock().unwrap().clear();
     let origin = (
         preview.body.x + preview.body.width / 2,
@@ -462,7 +508,12 @@ fn kitty_drag_tracks_the_pointer_without_requesting_or_uploading_another_image()
         assert!(Arc::ptr_eq(&picture, preview.picture.as_ref().unwrap()));
         super::super::LAYER.with(|layer| {
             assert_eq!(
-                layer.borrow().current_preview.as_ref().unwrap().view,
+                layer
+                    .borrow()
+                    .current_preview
+                    .as_ref()
+                    .unwrap()
+                    .view,
                 preview.view
             )
         });
@@ -470,7 +521,9 @@ fn kitty_drag_tracks_the_pointer_without_requesting_or_uploading_another_image()
     assert!(preview.view.pan.0 > 0);
     assert!(shared.cache.lock().unwrap().is_empty());
     assert_eq!(
-        shared.revision.load(std::sync::atomic::Ordering::Acquire),
+        shared
+            .revision
+            .load(std::sync::atomic::Ordering::Acquire),
         revision
     );
     let before_release = preview.view.pan;

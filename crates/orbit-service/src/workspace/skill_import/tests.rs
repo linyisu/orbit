@@ -9,6 +9,7 @@ fn skill(root: &Path, relative: &str, name: &str) {
     )
     .unwrap();
 }
+
 async fn scan(source: &Path, workspace: &Path) -> Scan {
     Scan::acquire(
         "session".into(),
@@ -37,6 +38,7 @@ async fn discovery_freezes_complete_packages_and_installs_without_executing_scri
         fs::create_dir_all(file.parent().unwrap()).unwrap();
         fs::write(&file, content).unwrap();
     }
+
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -67,7 +69,11 @@ async fn discovery_freezes_complete_packages_and_installs_without_executing_scri
         fs::read_to_string(installed.join("references/guide.md")).unwrap(),
         "original"
     );
-    assert!(installed.join("assets/icon.svg").is_file());
+    assert!(
+        installed
+            .join("assets/icon.svg")
+            .is_file()
+    );
     assert_eq!(
         fs::read_to_string(installed.join("scripts/check.sh")).unwrap(),
         "#!/bin/sh\nexit 99"
@@ -159,7 +165,11 @@ async fn conflicts_preflight_whole_selection_and_snapshot_identity_is_bound() {
         scan.install(&scan.token, "session", &workspace, &paths, &HashSet::new())
             .is_err()
     );
-    assert!(!workspace.join(".orbit/skills/first").exists());
+    assert!(
+        !workspace
+            .join(".orbit/skills/first")
+            .exists()
+    );
     assert_eq!(
         fs::read_to_string(existing.join("keep.txt")).unwrap(),
         "do not replace"
@@ -198,7 +208,11 @@ async fn duplicate_names_and_installed_user_skills_are_reported_as_conflicts() {
     .await
     .unwrap();
     assert_eq!(scan.candidates.len(), 3);
-    assert!(scan.candidates.iter().all(|candidate| candidate.conflict));
+    assert!(
+        scan.candidates
+            .iter()
+            .all(|candidate| candidate.conflict)
+    );
     assert!(
         scan.install(
             &scan.token,
@@ -234,7 +248,11 @@ async fn direct_skill_file_and_relative_workspace_source_are_supported() {
         &HashSet::new(),
     )
     .unwrap();
-    assert!(root.path().join(".orbit/skills/review/SKILL.md").is_file());
+    assert!(
+        root.path()
+            .join(".orbit/skills/review/SKILL.md")
+            .is_file()
+    );
 }
 
 #[cfg(unix)]
@@ -265,7 +283,10 @@ async fn symlink_sources_resources_and_destinations_are_rejected() {
         Scan::acquire(
             "session".into(),
             workspace.clone(),
-            root.path().join("alias").display().to_string(),
+            root.path()
+                .join("alias")
+                .display()
+                .to_string(),
             None,
             HashSet::new()
         )
@@ -331,7 +352,11 @@ async fn empty_or_heading_only_skills_are_rejected_before_selection() {
         .await
         .err()
         .unwrap();
-        assert!(error.to_string().contains("缺少说明或正文"));
+        assert!(
+            error
+                .to_string()
+                .contains("缺少说明或正文")
+        );
         assert!(!workspace.join(".orbit").exists());
     }
 }

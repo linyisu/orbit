@@ -16,15 +16,27 @@ static NEXT: AtomicU64 = AtomicU64::new(0);
 #[tokio::test]
 async fn incremental_refresh_preserves_receipts_and_detects_stale_model_context() {
     let dir = tempfile::tempdir().unwrap();
-    let store = Store::open(dir.path().join("sessions.db")).await.unwrap();
+    let store = Store::open(dir.path().join("sessions.db"))
+        .await
+        .unwrap();
     let mut writer = store
-        .create(dir.path().to_string_lossy().into_owned(), "model".into())
+        .create(
+            dir.path()
+                .to_string_lossy()
+                .into_owned(),
+            "model".into(),
+        )
         .await
         .unwrap();
     let id = writer.id().to_owned();
     let mut snapshot = store.load(&id).await.unwrap();
     for turn in 0..24 {
-        assert!(store.matches_snapshot(&snapshot).await.unwrap());
+        assert!(
+            store
+                .matches_snapshot(&snapshot)
+                .await
+                .unwrap()
+        );
         writer
             .begin(format!("question {turn}"), "model".into())
             .await
@@ -41,11 +53,24 @@ async fn incremental_refresh_preserves_receipts_and_detects_stale_model_context(
             )
             .await
             .unwrap();
-        assert!(!store.matches_snapshot(&snapshot).await.unwrap());
-        store.refresh(&mut snapshot).await.unwrap();
+        assert!(
+            !store
+                .matches_snapshot(&snapshot)
+                .await
+                .unwrap()
+        );
+        store
+            .refresh(&mut snapshot)
+            .await
+            .unwrap();
         assert_eq!(snapshot.runs.len(), turn + 1);
         assert_eq!(snapshot.runs[0].prompt, "question 0");
-        assert!(store.matches_snapshot(&snapshot).await.unwrap());
+        assert!(
+            store
+                .matches_snapshot(&snapshot)
+                .await
+                .unwrap()
+        );
     }
     assert_eq!(
         serde_json::to_value(&snapshot).unwrap(),
@@ -60,8 +85,16 @@ async fn incremental_refresh_preserves_receipts_and_detects_stale_model_context(
         .append_context(ChatMessage::user("follow-up constraint"))
         .await
         .unwrap();
-    assert!(!store.matches_snapshot(&snapshot).await.unwrap());
-    store.refresh(&mut snapshot).await.unwrap();
+    assert!(
+        !store
+            .matches_snapshot(&snapshot)
+            .await
+            .unwrap()
+    );
+    store
+        .refresh(&mut snapshot)
+        .await
+        .unwrap();
     assert_eq!(snapshot.session.model, "other-model");
     assert_eq!(
         serde_json::to_value(&snapshot).unwrap(),
@@ -112,9 +145,16 @@ fn command_receipt(command: &str, exit_code: i32) -> AgentEvent {
         call: ToolCall::function(
             "command-1",
             "run_command",
-            serde_json::json!({ "command": command }),
+            serde_json::json!({
+                "command": command
+            }),
         ),
-        content: serde_json::json!({ "exit_code": exit_code, "timed_out": false, "cancelled": false, "elapsed_ms": 42 })
+        content: serde_json::json!({
+            "exit_code": exit_code,
+            "timed_out": false,
+            "cancelled": false,
+            "elapsed_ms": 42
+        })
         .to_string(),
         changes: Vec::new(),
     }
@@ -129,8 +169,14 @@ async fn restart_preserves_event_order_and_successful_context() {
         .await
         .unwrap();
     let id = writer.id().to_owned();
-    writer.begin("你好".into(), "mock".into()).await.unwrap();
-    writer.append(vec![text("一"), text("二")]).await.unwrap();
+    writer
+        .begin("你好".into(), "mock".into())
+        .await
+        .unwrap();
+    writer
+        .append(vec![text("一"), text("二")])
+        .await
+        .unwrap();
     let history = vec![ChatMessage::user("你好"), ChatMessage::assistant("一二三")];
     writer
         .finish("completed", vec![text("三")], Some(history.clone()))
@@ -164,7 +210,12 @@ async fn restart_preserves_event_order_and_successful_context() {
     assert_eq!(replay, "一二三");
 
     assert_eq!(snapshot.runs[1].status, "cancelled");
-    assert!(snapshot.runs.iter().all(|run| run.elapsed_ms.is_some()));
+    assert!(
+        snapshot
+            .runs
+            .iter()
+            .all(|run| run.elapsed_ms.is_some())
+    );
     assert_eq!(store.list().await.unwrap()[0].title, "你好");
 }
 
@@ -177,7 +228,10 @@ async fn workspace_change_ledger_keeps_only_successful_write_receipts() {
         .await
         .unwrap();
     let id = writer.id().to_owned();
-    writer.begin("change".into(), "mock".into()).await.unwrap();
+    writer
+        .begin("change".into(), "mock".into())
+        .await
+        .unwrap();
     writer
         .finish(
             "completed",
@@ -189,7 +243,10 @@ async fn workspace_change_ledger_keeps_only_successful_write_receipts() {
         )
         .await
         .unwrap();
-    let changes = store.workspace_changes(&id).await.unwrap();
+    let changes = store
+        .workspace_changes(&id)
+        .await
+        .unwrap();
 
     assert_eq!(changes.len(), 1);
     assert_eq!(changes[0].tool, "write_file");
@@ -197,19 +254,36 @@ async fn workspace_change_ledger_keeps_only_successful_write_receipts() {
     assert_eq!(changes[0].change.after, "new");
     assert!(!changes[0].undone);
 
-    store.record_workspace_undo(&id, &changes[0]).await.unwrap();
+    store
+        .record_workspace_undo(&id, &changes[0])
+        .await
+        .unwrap();
 
-    assert!(store.workspace_changes(&id).await.unwrap()[0].undone);
+    assert!(
+        store
+            .workspace_changes(&id)
+            .await
+            .unwrap()[0]
+            .undone
+    );
 
     let baseline = serde_json::json!({
-        "branch": { "oid": "abc" },
+        "branch": {
+            "oid": "abc"
+        },
         "entries": []
     });
-    store.save_git_baseline(&id, &baseline).await.unwrap();
+    store
+        .save_git_baseline(&id, &baseline)
+        .await
+        .unwrap();
 
     assert_eq!(store.git_baseline(&id).await.unwrap(), Some(baseline));
 
-    let verification = store.verification_records(&id).await.unwrap();
+    let verification = store
+        .verification_records(&id)
+        .await
+        .unwrap();
 
     assert_eq!(verification.len(), 1);
     assert_eq!(verification[0].command, "cargo test");
@@ -231,12 +305,18 @@ async fn lease_blocks_second_writer_and_recovers_only_after_release() {
         .begin("unfinished".into(), "mock".into())
         .await
         .unwrap();
-    writer.append(vec![text("partial")]).await.unwrap();
+    writer
+        .append(vec![text("partial")])
+        .await
+        .unwrap();
 
     assert!(other.acquire(&id).await.is_err());
     assert_eq!(other.load(&id).await.unwrap().runs[0].status, "running");
 
-    let lock_file = store.path().with_extension("session-locks").join(&id);
+    let lock_file = store
+        .path()
+        .with_extension("session-locks")
+        .join(&id);
     assert!(lock_file.is_file());
     drop(writer);
     // A leftover lock file is not a live lease and must not prevent reopening.
@@ -247,7 +327,12 @@ async fn lease_blocks_second_writer_and_recovers_only_after_release() {
     assert_eq!(snapshot.runs[0].status, "interrupted");
     assert_eq!(snapshot.runs[0].events.len(), 1);
     assert!(snapshot.history.is_empty());
-    assert!(other.acquire("../escape").await.is_err());
+    assert!(
+        other
+            .acquire("../escape")
+            .await
+            .is_err()
+    );
 }
 
 #[tokio::test]
@@ -258,16 +343,37 @@ async fn invalid_finish_keeps_run_recoverable() {
         .create(db.0.to_string_lossy().into_owned(), "mock".into())
         .await
         .unwrap();
-    writer.begin("prompt".into(), "mock".into()).await.unwrap();
+    writer
+        .begin("prompt".into(), "mock".into())
+        .await
+        .unwrap();
 
-    assert!(writer.finish("completed", vec![], None).await.is_err());
-    assert!(writer.finish("failed", vec![], Some(vec![])).await.is_err());
+    assert!(
+        writer
+            .finish("completed", vec![], None)
+            .await
+            .is_err()
+    );
+    assert!(
+        writer
+            .finish("failed", vec![], Some(vec![]))
+            .await
+            .is_err()
+    );
     assert_eq!(
-        store.load(writer.id()).await.unwrap().runs[0].status,
+        store
+            .load(writer.id())
+            .await
+            .unwrap()
+            .runs[0]
+            .status,
         "running"
     );
 
-    writer.finish("failed", vec![], None).await.unwrap();
+    writer
+        .finish("failed", vec![], None)
+        .await
+        .unwrap();
     drop(writer);
     drop(store);
 
@@ -280,7 +386,9 @@ async fn rejects_a_database_from_a_newer_schema() {
     let store = Store::open(db.path()).await.unwrap();
     drop(store);
     let connection = support::connect(db.path()).await;
-    let current = sqlite::schema_version(&connection).await.unwrap();
+    let current = sqlite::schema_version(&connection)
+        .await
+        .unwrap();
     sqlite::set_schema_version(&connection, (current + 1).try_into().unwrap())
         .await
         .unwrap();
@@ -303,21 +411,39 @@ async fn deleting_a_closed_session_reclaims_its_private_sidecars() {
         .await
         .unwrap();
     let id = writer.id().to_owned();
-    let usage = store.session_storage_usage().await.unwrap();
+    let usage = store
+        .session_storage_usage()
+        .await
+        .unwrap();
 
     assert_eq!(usage.len(), 1);
     assert_eq!(usage[0].id, id);
     assert!(usage[0].payload_bytes > 0);
 
-    writer.begin("prompt".into(), "mock".into()).await.unwrap();
-    writer.append(vec![text("stored event")]).await.unwrap();
-    writer.finish("failed", Vec::new(), None).await.unwrap();
-    let with_event = store.session_storage_usage().await.unwrap();
+    writer
+        .begin("prompt".into(), "mock".into())
+        .await
+        .unwrap();
+    writer
+        .append(vec![text("stored event")])
+        .await
+        .unwrap();
+    writer
+        .finish("failed", Vec::new(), None)
+        .await
+        .unwrap();
+    let with_event = store
+        .session_storage_usage()
+        .await
+        .unwrap();
 
     assert!(with_event[0].payload_bytes > usage[0].payload_bytes);
 
     for extension in ["workspaces", "command-output", "artifacts"] {
-        let sidecar = db.path().with_extension(extension).join(&id);
+        let sidecar = db
+            .path()
+            .with_extension(extension)
+            .join(&id);
         std::fs::create_dir_all(&sidecar).unwrap();
         std::fs::write(sidecar.join("retained"), b"data").unwrap();
     }
@@ -329,7 +455,13 @@ async fn deleting_a_closed_session_reclaims_its_private_sidecars() {
 
     assert!(store.delete_session(&id).await.unwrap());
     assert!(store.load(&id).await.is_err());
-    assert!(store.session_storage_usage().await.unwrap().is_empty());
+    assert!(
+        store
+            .session_storage_usage()
+            .await
+            .unwrap()
+            .is_empty()
+    );
 
     assert!(
         !db.path()
@@ -353,7 +485,10 @@ async fn deleting_a_closed_session_reclaims_its_private_sidecars() {
 
     assert!(!store.delete_session(&id).await.unwrap());
 
-    store.reclaim_unused_space().await.unwrap();
+    store
+        .reclaim_unused_space()
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
@@ -364,7 +499,10 @@ async fn finalization_rolls_back_events_status_and_context_together() {
         .create(db.0.to_string_lossy().into_owned(), "mock".into())
         .await
         .unwrap();
-    writer.begin("prompt".into(), "mock".into()).await.unwrap();
+    writer
+        .begin("prompt".into(), "mock".into())
+        .await
+        .unwrap();
     let connection = support::connect(db.path()).await;
     support::restrict_history(&connection, true).await;
 
@@ -377,7 +515,9 @@ async fn finalization_rolls_back_events_status_and_context_together() {
         .await
         .unwrap_err();
     assert!(
-        error.to_string().contains("CHECK constraint failed"),
+        error
+            .to_string()
+            .contains("CHECK constraint failed"),
         "{error:#}"
     );
 
@@ -399,7 +539,13 @@ async fn finalization_rolls_back_events_status_and_context_together() {
         .unwrap();
 
     assert_eq!(
-        store.load(writer.id()).await.unwrap().runs[0].events.len(),
+        store
+            .load(writer.id())
+            .await
+            .unwrap()
+            .runs[0]
+            .events
+            .len(),
         1
     );
 }
@@ -413,7 +559,10 @@ async fn project_rename_preserves_history_without_markers_and_copy_is_separate()
     let copy = db.0.join("copy");
     std::fs::create_dir(&old).unwrap();
     std::fs::write(old.join("user.txt"), "user content").unwrap();
-    let project = store.resolve_project(&old).await.unwrap();
+    let project = store
+        .resolve_project(&old)
+        .await
+        .unwrap();
     let mut writer = store
         .create(old.to_str().unwrap().into(), "mock".into())
         .await
@@ -436,32 +585,79 @@ async fn project_rename_preserves_history_without_markers_and_copy_is_separate()
     assert_eq!(std::fs::read_dir(&old).unwrap().count(), 1);
 
     std::fs::rename(&old, &moved).unwrap();
-    let renamed = store.resolve_project(&moved).await.unwrap();
+    let renamed = store
+        .resolve_project(&moved)
+        .await
+        .unwrap();
 
-    if std::fs::metadata(&moved).unwrap().created().is_ok() && cfg!(any(unix, windows)) {
+    if std::fs::metadata(&moved)
+        .unwrap()
+        .created()
+        .is_ok()
+        && cfg!(any(unix, windows))
+    {
         assert_eq!(renamed.id, project.id);
         assert_eq!(
-            store.load(&session).await.unwrap().session.workspace,
+            store
+                .load(&session)
+                .await
+                .unwrap()
+                .session
+                .workspace,
             moved.to_str().unwrap()
         );
     } else {
-        store.link_project(&project.id, &moved).await.unwrap();
+        store
+            .link_project(&project.id, &moved)
+            .await
+            .unwrap();
     }
 
     std::fs::create_dir(&copy).unwrap();
     std::fs::copy(moved.join("user.txt"), copy.join("user.txt")).unwrap();
 
-    assert_ne!(store.resolve_project(&copy).await.unwrap().id, project.id);
+    assert_ne!(
+        store
+            .resolve_project(&copy)
+            .await
+            .unwrap()
+            .id,
+        project.id
+    );
 
     std::fs::create_dir(&old).unwrap();
 
-    assert_ne!(store.resolve_project(&old).await.unwrap().id, project.id);
+    assert_ne!(
+        store
+            .resolve_project(&old)
+            .await
+            .unwrap()
+            .id,
+        project.id
+    );
 
     std::fs::write(moved.join("user.txt"), "changed").unwrap();
 
-    assert_eq!(store.resolve_project(&moved).await.unwrap().id, project.id);
-    assert_eq!(store.load(&session).await.unwrap().runs[0].events.len(), 1);
-    assert_eq!(std::fs::read_dir(&moved).unwrap().count(), 1);
+    assert_eq!(
+        store
+            .resolve_project(&moved)
+            .await
+            .unwrap()
+            .id,
+        project.id
+    );
+    assert_eq!(
+        store.load(&session).await.unwrap().runs[0]
+            .events
+            .len(),
+        1
+    );
+    assert_eq!(
+        std::fs::read_dir(&moved)
+            .unwrap()
+            .count(),
+        1
+    );
 }
 
 #[tokio::test]
@@ -471,7 +667,10 @@ async fn project_plugins_are_central_stable_and_independent_from_market_cache() 
     let original = db.0.join("plugin-project");
     let renamed = db.0.join("renamed-plugin-project");
     std::fs::create_dir(&original).unwrap();
-    let project = store.resolve_project(&original).await.unwrap();
+    let project = store
+        .resolve_project(&original)
+        .await
+        .unwrap();
     let enabled = store
         .enable_project_plugin(ProjectPlugin {
             project_id: project.id.clone(),
@@ -486,15 +685,33 @@ async fn project_plugins_are_central_stable_and_independent_from_market_cache() 
         .unwrap();
 
     assert!(enabled.enabled_at > 0);
-    assert_eq!(store.project_plugins(&project.id).await.unwrap().len(), 1);
-    assert_eq!(std::fs::read_dir(&original).unwrap().count(), 0);
+    assert_eq!(
+        store
+            .project_plugins(&project.id)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        std::fs::read_dir(&original)
+            .unwrap()
+            .count(),
+        0
+    );
 
     std::fs::rename(&original, &renamed).unwrap();
-    let same_project = store.resolve_project(&renamed).await.unwrap();
+    let same_project = store
+        .resolve_project(&renamed)
+        .await
+        .unwrap();
 
     assert_eq!(same_project.id, project.id);
 
-    let plugins = store.project_plugins(&same_project.id).await.unwrap();
+    let plugins = store
+        .project_plugins(&same_project.id)
+        .await
+        .unwrap();
 
     assert_eq!(plugins[0].plugin_name, "reviewer");
     assert_eq!(plugins[0].package_source, "plugins/reviewer");
@@ -535,33 +752,69 @@ async fn explicit_link_rejects_copies_active_writers_and_populated_destinations(
     let new = db.0.join("new");
     std::fs::create_dir(&old).unwrap();
     std::fs::create_dir(&new).unwrap();
-    let project = store.resolve_project(&old).await.unwrap();
+    let project = store
+        .resolve_project(&old)
+        .await
+        .unwrap();
     let writer = store
         .create(old.to_str().unwrap().into(), "mock".into())
         .await
         .unwrap();
     let session = writer.id().to_owned();
 
-    assert!(store.link_project(&project.id, &new).await.is_err());
+    assert!(
+        store
+            .link_project(&project.id, &new)
+            .await
+            .is_err()
+    );
 
     std::fs::remove_dir(&old).unwrap();
 
-    assert!(store.link_project(&project.id, &new).await.is_err());
+    assert!(
+        store
+            .link_project(&project.id, &new)
+            .await
+            .is_err()
+    );
     assert_eq!(
-        store.load(&session).await.unwrap().session.workspace,
+        store
+            .load(&session)
+            .await
+            .unwrap()
+            .session
+            .workspace,
         old.to_str().unwrap()
     );
 
     drop(writer);
-    let empty = store.resolve_project(&new).await.unwrap();
+    let empty = store
+        .resolve_project(&new)
+        .await
+        .unwrap();
 
     assert_ne!(empty.id, project.id);
 
-    store.link_project(&project.id, &new).await.unwrap();
+    store
+        .link_project(&project.id, &new)
+        .await
+        .unwrap();
 
-    assert_eq!(store.resolve_project(&new).await.unwrap().id, project.id);
     assert_eq!(
-        store.load(&session).await.unwrap().session.workspace,
+        store
+            .resolve_project(&new)
+            .await
+            .unwrap()
+            .id,
+        project.id
+    );
+    assert_eq!(
+        store
+            .load(&session)
+            .await
+            .unwrap()
+            .session
+            .workspace,
         new.to_str().unwrap()
     );
 
@@ -575,11 +828,19 @@ async fn explicit_link_rejects_copies_active_writers_and_populated_destinations(
         .begin("keep separate".into(), "mock".into())
         .await
         .unwrap();
-    other.finish("failed", vec![], None).await.unwrap();
+    other
+        .finish("failed", vec![], None)
+        .await
+        .unwrap();
     drop(other);
     std::fs::remove_dir(&new).unwrap();
 
-    assert!(store.link_project(&project.id, &destination).await.is_err());
+    assert!(
+        store
+            .link_project(&project.id, &destination)
+            .await
+            .is_err()
+    );
 }
 
 #[tokio::test]
@@ -598,7 +859,12 @@ async fn schema_one_migration_preserves_sessions_runs_and_context() {
             ("workspace", db.0.to_str().unwrap().into()),
             ("model", "mock".into()),
             ("demo", true.into()),
-            ("history", serde_json::to_string(&history).unwrap().into()),
+            (
+                "history",
+                serde_json::to_string(&history)
+                    .unwrap()
+                    .into(),
+            ),
         ],
     )
     .await
@@ -623,7 +889,9 @@ async fn schema_one_migration_preserves_sessions_runs_and_context() {
             ("run_id", 1.into()),
             (
                 "payload",
-                serde_json::to_string(&text("old answer")).unwrap().into(),
+                serde_json::to_string(&text("old answer"))
+                    .unwrap()
+                    .into(),
             ),
         ],
     )
@@ -636,7 +904,11 @@ async fn schema_one_migration_preserves_sessions_runs_and_context() {
     assert_eq!(snapshot.history, history);
     assert_eq!(snapshot.runs[0].events.len(), 1);
     assert_eq!(
-        store.resolve_project(&db.0).await.unwrap().id,
+        store
+            .resolve_project(&db.0)
+            .await
+            .unwrap()
+            .id,
         snapshot.session.project_id
     );
 
@@ -644,7 +916,12 @@ async fn schema_one_migration_preserves_sessions_runs_and_context() {
     let reopened = Store::open(db.path()).await.unwrap();
 
     assert_eq!(
-        reopened.load(&id).await.unwrap().session.project_id,
+        reopened
+            .load(&id)
+            .await
+            .unwrap()
+            .session
+            .project_id,
         snapshot.session.project_id
     );
 }
@@ -697,7 +974,10 @@ async fn project_memory_migration_keeps_only_unambiguous_session_ownership() {
     connection.close().await.unwrap();
 
     let store = Store::open(db.path()).await.unwrap();
-    let first = store.session_memories("first", true).await.unwrap();
+    let first = store
+        .session_memories("first", true)
+        .await
+        .unwrap();
 
     assert_eq!(first.len(), 1);
     assert_eq!(first[0].title, "Attributed");
@@ -709,7 +989,10 @@ async fn project_memory_migration_keeps_only_unambiguous_session_ownership() {
             .is_empty()
     );
 
-    let only = store.session_memories("only", true).await.unwrap();
+    let only = store
+        .session_memories("only", true)
+        .await
+        .unwrap();
 
     assert_eq!(only.len(), 1);
     assert_eq!(only[0].title, "Single session");
@@ -726,7 +1009,10 @@ async fn compaction_audit_survives_failure_without_publishing_failed_context() {
         .await
         .unwrap();
     let id = writer.id().to_owned();
-    writer.begin("initial".into(), "mock".into()).await.unwrap();
+    writer
+        .begin("initial".into(), "mock".into())
+        .await
+        .unwrap();
     let original = vec![ChatMessage::user("initial"), ChatMessage::assistant("done")];
     writer
         .finish("completed", vec![], Some(original.clone()))
@@ -742,8 +1028,8 @@ async fn compaction_audit_survives_failure_without_publishing_failed_context() {
         source_messages: 7,
         retained_from: 4,
         pinned_user: Some(1),
-        before_tokens: 9000,
-        after_tokens: 3000,
+        before_tokens: 9_000,
+        after_tokens: 3_000,
         fallback: false,
         fallback_reason: None,
         summary: TaskSummary {
@@ -774,7 +1060,10 @@ async fn compaction_audit_survives_failure_without_publishing_failed_context() {
         "running"
     );
 
-    writer.finish("failed", vec![], None).await.unwrap();
+    writer
+        .finish("failed", vec![], None)
+        .await
+        .unwrap();
     drop(writer);
     drop(store);
     let store = Store::open(db.path()).await.unwrap();
@@ -786,7 +1075,10 @@ async fn compaction_audit_survives_failure_without_publishing_failed_context() {
     assert_eq!(store.load(&id).await.unwrap().history, original);
 
     let mut writer = store.acquire(&id).await.unwrap();
-    writer.begin("retry".into(), "mock".into()).await.unwrap();
+    writer
+        .begin("retry".into(), "mock".into())
+        .await
+        .unwrap();
     let connection = support::connect(db.path()).await;
     support::restrict_history(&connection, true).await;
     connection.close().await.unwrap();
@@ -800,12 +1092,26 @@ async fn compaction_audit_survives_failure_without_publishing_failed_context() {
         .await
         .unwrap_err();
     assert!(
-        error.to_string().contains("CHECK constraint failed"),
+        error
+            .to_string()
+            .contains("CHECK constraint failed"),
         "{error:#}"
     );
-    assert_eq!(store.compactions(&id).await.unwrap().len(), 1);
+    assert_eq!(
+        store
+            .compactions(&id)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
     assert_eq!(store.load(&id).await.unwrap().history, original);
-    assert!(store.compactions("missing").await.is_err());
+    assert!(
+        store
+            .compactions("missing")
+            .await
+            .is_err()
+    );
 }
 
 #[tokio::test]
@@ -816,7 +1122,10 @@ async fn project_tasks_and_session_memories_stay_isolated_without_workspace_file
     let moved = db.0.join("moved");
     std::fs::create_dir(&old).unwrap();
     std::fs::write(old.join("user-file.txt"), "only user content").unwrap();
-    let project = store.resolve_project(&old).await.unwrap();
+    let project = store
+        .resolve_project(&old)
+        .await
+        .unwrap();
     let first_writer = store
         .create(old.to_string_lossy().into_owned(), "mock".into())
         .await
@@ -880,7 +1189,14 @@ async fn project_tasks_and_session_memories_stay_isolated_without_workspace_file
         .unwrap();
 
     assert!(memory.active);
-    assert_eq!(store.tasks(&project.id, false).await.unwrap().len(), 2);
+    assert_eq!(
+        store
+            .tasks(&project.id, false)
+            .await
+            .unwrap()
+            .len(),
+        2
+    );
     assert_eq!(
         store
             .session_memories(&first_session, false)
@@ -939,13 +1255,22 @@ async fn project_tasks_and_session_memories_stay_isolated_without_workspace_file
     assert_eq!(std::fs::read_dir(&old).unwrap().count(), 1);
 
     std::fs::rename(&old, &moved).unwrap();
-    let renamed = store.resolve_project(&moved).await.unwrap();
+    let renamed = store
+        .resolve_project(&moved)
+        .await
+        .unwrap();
 
     if renamed.id != project.id {
-        store.link_project(&project.id, &moved).await.unwrap();
+        store
+            .link_project(&project.id, &moved)
+            .await
+            .unwrap();
     }
 
-    let tasks = store.tasks(&project.id, false).await.unwrap();
+    let tasks = store
+        .tasks(&project.id, false)
+        .await
+        .unwrap();
 
     assert_eq!(
         tasks
@@ -956,7 +1281,11 @@ async fn project_tasks_and_session_memories_stay_isolated_without_workspace_file
         None
     );
     assert_eq!(
-        store.session_memories(&first_session, false).await.unwrap()[0].id,
+        store
+            .session_memories(&first_session, false)
+            .await
+            .unwrap()[0]
+            .id,
         preference.id
     );
 
@@ -1008,7 +1337,10 @@ async fn checkpoint_receipts_survive_restart_without_replaying_tools() {
         .await
         .unwrap();
     let id = writer.id().to_owned();
-    writer.begin("repair".into(), "mock".into()).await.unwrap();
+    writer
+        .begin("repair".into(), "mock".into())
+        .await
+        .unwrap();
     let journal = writer.execution_journal().unwrap();
     let calls: Vec<_> = (0..3)
         .map(|i| ToolCall::function(i.to_string(), "write_file", serde_json::json!({})))
@@ -1063,13 +1395,21 @@ async fn checkpoint_receipts_survive_restart_without_replaying_tools() {
     let restored = store.load(&id).await.unwrap();
 
     assert_eq!(&restored.history[..3], &history);
-    assert!(
-        matches!(&restored.history[3], ChatMessage::Tool {content,..} if content.contains("UNKNOWN"))
+    assert!(matches!(
+        &restored.history[3],
+        ChatMessage::Tool { content, .. } if content.contains("UNKNOWN")
+    ));
+    assert!(matches!(
+        &restored.history[4],
+        ChatMessage::Tool { content, .. } if content.contains("NOT executed")
+    ));
+    assert_eq!(
+        restored
+            .recovery
+            .unwrap()
+            .unresolved_tools,
+        2
     );
-    assert!(
-        matches!(&restored.history[4], ChatMessage::Tool {content,..} if content.contains("NOT executed"))
-    );
-    assert_eq!(restored.recovery.unwrap().unresolved_tools, 2);
     assert_eq!(restored.runs[0].events.len(), 3);
     assert!(matches!(restored.runs[0].events[0], AgentEvent::Model(_)));
     assert!(matches!(
@@ -1082,7 +1422,10 @@ async fn checkpoint_receipts_survive_restart_without_replaying_tools() {
         .begin("continue".into(), "mock".into())
         .await
         .unwrap();
-    writer.finish("cancelled", vec![], None).await.unwrap();
+    writer
+        .finish("cancelled", vec![], None)
+        .await
+        .unwrap();
 
     assert_eq!(store.load(&id).await.unwrap().history, restored.history);
 
@@ -1101,7 +1444,14 @@ async fn checkpoint_receipts_survive_restart_without_replaying_tools() {
         .unwrap();
 
     assert_eq!(store.load(&id).await.unwrap().history, complete);
-    assert!(store.load(&id).await.unwrap().recovery.is_none());
+    assert!(
+        store
+            .load(&id)
+            .await
+            .unwrap()
+            .recovery
+            .is_none()
+    );
     assert!(
         old_journal
             .save(
@@ -1135,7 +1485,10 @@ async fn verification_evidence_and_start_baseline_are_durable_and_session_scoped
         digest: "first".into(),
         ..Default::default()
     };
-    store.save_workspace_baseline(&id, &baseline).await.unwrap();
+    store
+        .save_workspace_baseline(&id, &baseline)
+        .await
+        .unwrap();
     store
         .save_workspace_baseline(
             &id,
@@ -1148,7 +1501,11 @@ async fn verification_evidence_and_start_baseline_are_durable_and_session_scoped
         .unwrap();
 
     assert_eq!(
-        store.workspace_baseline(&id).await.unwrap().unwrap(),
+        store
+            .workspace_baseline(&id)
+            .await
+            .unwrap()
+            .unwrap(),
         baseline
     );
 
@@ -1165,7 +1522,10 @@ async fn verification_evidence_and_start_baseline_are_durable_and_session_scoped
             .is_none()
     );
 
-    writer.begin("verify".into(), "mock".into()).await.unwrap();
+    writer
+        .begin("verify".into(), "mock".into())
+        .await
+        .unwrap();
     let evidence = VerificationEvidence {
         input: baseline,
         output: None,
@@ -1187,7 +1547,10 @@ async fn verification_evidence_and_start_baseline_are_durable_and_session_scoped
         )
         .await
         .unwrap();
-    let records = store.verification_records(&id).await.unwrap();
+    let records = store
+        .verification_records(&id)
+        .await
+        .unwrap();
 
     assert_eq!(records[0].evidence, Some(evidence));
     assert_eq!(records[0].exit_code, Some(1));
@@ -1220,7 +1583,12 @@ async fn moving_session_preserves_history_and_scopes_undo_to_the_new_workspace()
         .begin("change old project".into(), "mock".into())
         .await
         .unwrap();
-    assert!(writer.move_to(&new, None).await.is_err());
+    assert!(
+        writer
+            .move_to(&new, None)
+            .await
+            .is_err()
+    );
     writer
         .finish(
             "completed",
@@ -1230,9 +1598,19 @@ async fn moving_session_preserves_history_and_scopes_undo_to_the_new_workspace()
         .await
         .unwrap();
     let original = store.load(&id).await.unwrap();
-    assert_eq!(store.workspace_changes(&id).await.unwrap().len(), 1);
+    assert_eq!(
+        store
+            .workspace_changes(&id)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
 
-    let moved = writer.move_to(&new, None).await.unwrap();
+    let moved = writer
+        .move_to(&new, None)
+        .await
+        .unwrap();
 
     assert_eq!(moved.id, id);
     assert_ne!(moved.project_id, original.session.project_id);
@@ -1241,7 +1619,13 @@ async fn moving_session_preserves_history_and_scopes_undo_to_the_new_workspace()
     assert_eq!(restored.history, history);
     assert_eq!(restored.runs.len(), original.runs.len());
     assert_eq!(restored.runs[0].events.len(), original.runs[0].events.len());
-    assert!(store.workspace_changes(&id).await.unwrap().is_empty());
+    assert!(
+        store
+            .workspace_changes(&id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
 
     writer
         .begin("change new project".into(), "mock".into())
@@ -1256,7 +1640,10 @@ async fn moving_session_preserves_history_and_scopes_undo_to_the_new_workspace()
         .await
         .unwrap();
 
-    let changes = store.workspace_changes(&id).await.unwrap();
+    let changes = store
+        .workspace_changes(&id)
+        .await
+        .unwrap();
     assert_eq!(changes.len(), 1);
     assert_eq!(changes[0].change.after, "new content");
 }
@@ -1314,7 +1701,9 @@ async fn schema_19_migrates_with_or_without_file_grants_without_losing_sessions(
                 ("run_id", 1.into()),
                 (
                     "payload",
-                    serde_json::to_string(&text("saved answer")).unwrap().into(),
+                    serde_json::to_string(&text("saved answer"))
+                        .unwrap()
+                        .into(),
                 ),
             ],
         )
@@ -1359,7 +1748,10 @@ async fn schema_19_migrates_with_or_without_file_grants_without_losing_sessions(
         assert_eq!(saved.history, vec![ChatMessage::user("saved prompt")]);
         assert_eq!(store.tui_mode(&id).await.unwrap(), "ask");
         assert_eq!(
-            store.tui_tabs(&saved.session.project_id).await.unwrap(),
+            store
+                .tui_tabs(&saved.session.project_id)
+                .await
+                .unwrap(),
             vec![id.clone()]
         );
         assert_eq!(
@@ -1370,7 +1762,10 @@ async fn schema_19_migrates_with_or_without_file_grants_without_losing_sessions(
                 .contains("existing.txt"),
             had_grants
         );
-        store.grant_tui_file(&id, "new.txt").await.unwrap();
+        store
+            .grant_tui_file(&id, "new.txt")
+            .await
+            .unwrap();
         drop(store);
         let reopened = Store::open(db.path()).await.unwrap();
         assert!(
@@ -1382,7 +1777,9 @@ async fn schema_19_migrates_with_or_without_file_grants_without_losing_sessions(
         );
         let connection = support::connect(db.path()).await;
         assert_eq!(
-            sqlite::schema_version(&connection).await.unwrap(),
+            sqlite::schema_version(&connection)
+                .await
+                .unwrap(),
             crate::migrations::Migrator::migrations().len() as i64
         );
         connection.close().await.unwrap();
@@ -1394,7 +1791,10 @@ async fn write_transactions_serialize_across_independent_store_connections() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("orbit.db");
     let store = Store::open(&path).await.unwrap();
-    let project = store.resolve_project(dir.path()).await.unwrap();
+    let project = store
+        .resolve_project(dir.path())
+        .await
+        .unwrap();
     let barrier = std::sync::Arc::new(tokio::sync::Barrier::new(8));
     let mut writers = tokio::task::JoinSet::new();
     for worker in 0..8 {
@@ -1418,7 +1818,14 @@ async fn write_transactions_serialize_across_independent_store_connections() {
     while let Some(result) = writers.join_next().await {
         result.unwrap();
     }
-    assert_eq!(store.tasks(&project.id, true).await.unwrap().len(), 160);
+    assert_eq!(
+        store
+            .tasks(&project.id, true)
+            .await
+            .unwrap()
+            .len(),
+        160
+    );
 }
 
 #[tokio::test]
@@ -1483,11 +1890,18 @@ async fn developer_role_migration_preserves_children_and_queued_messages() {
     connection.close().await.unwrap();
     let store = Store::open(path).await.unwrap();
     assert_eq!(
-        store.subagent_parent(&child_id).await.unwrap(),
+        store
+            .subagent_parent(&child_id)
+            .await
+            .unwrap(),
         Some(parent_id.clone())
     );
     assert_eq!(
-        store.pending_agent_messages(&child_id).await.unwrap()[0].content,
+        store
+            .pending_agent_messages(&child_id)
+            .await
+            .unwrap()[0]
+            .content,
         "preserve queued input"
     );
     let developer = store
@@ -1517,10 +1931,26 @@ async fn resume_history_excludes_drafts_but_keeps_failed_and_untitled_runs() {
         .create(db.0.to_string_lossy().into_owned(), "mock".into())
         .await
         .unwrap();
-    draft.set_title("named draft".into()).await.unwrap();
-    assert!(store.list_resumable().await.unwrap().is_empty());
+    draft
+        .set_title("named draft".into())
+        .await
+        .unwrap();
+    assert!(
+        store
+            .list_resumable()
+            .await
+            .unwrap()
+            .is_empty()
+    );
     assert_eq!(store.list().await.unwrap().len(), 1);
-    assert!(store.load(draft.id()).await.unwrap().runs.is_empty());
+    assert!(
+        store
+            .load(draft.id())
+            .await
+            .unwrap()
+            .runs
+            .is_empty()
+    );
     let mut conversation = store
         .create(db.0.to_string_lossy().into_owned(), "mock".into())
         .await

@@ -10,15 +10,18 @@ pub(super) struct Panel {
     save: Task<()>,
     owner: WeakEntity<Workspace>,
 }
+
 impl Panel {
     pub(super) fn title(&self) -> &str {
         &self.title
     }
+
     pub(super) fn set(&mut self, text: String, cx: &mut Context<Self>) {
         self.text = cx.new(|cx| TextViewState::markdown(&text, cx));
         self.source = text;
         cx.notify();
     }
+
     pub(super) fn new(
         title: String,
         text: String,
@@ -33,6 +36,7 @@ impl Panel {
             owner,
         }
     }
+
     fn save(&mut self, cx: &mut Context<Self>) {
         let directory = std::env::current_dir().unwrap_or_default();
         let name = if self.title == "Git patch" {
@@ -65,6 +69,7 @@ impl Panel {
         });
     }
 }
+
 impl Render for Panel {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let owner = self.owner.clone();
@@ -116,33 +121,38 @@ impl Render for Panel {
                             .accessibility_label("关闭面板")
                             .tooltip("关闭面板")
                             .on_click(move |_, _, cx| {
-                                let _ =
-                                    owner.update(cx, |view, cx| {
-                                        if view.panel.as_ref().is_some_and(|panel| {
-                                            panel.read(cx).title() == "旁路提问"
-                                        }) && let Some(info) = &view.info
-                                        {
-                                            view.command(
-                                                Command::Request(Request::CloseQuestions {
-                                                    session: info.id.clone(),
-                                                }),
-                                                cx,
-                                            );
-                                        }
-                                        view.panel = None;
-                                        cx.notify();
-                                    });
+                                let _ = owner.update(cx, |view, cx| {
+                                    if view
+                                        .panel
+                                        .as_ref()
+                                        .is_some_and(|panel| panel.read(cx).title() == "旁路提问")
+                                        && let Some(info) = &view.info
+                                    {
+                                        view.command(
+                                            Command::Request(Request::CloseQuestions {
+                                                session: info.id.clone(),
+                                            }),
+                                            cx,
+                                        );
+                                    }
+                                    view.panel = None;
+                                    cx.notify();
+                                });
                             }),
                     ),
             )
             .child(
-                div().flex_1().min_h_0().overflow_y_scrollbar().child(
-                    div().p_4().child(
-                        TextView::new(&self.text)
-                            .style(crate::theme::document_style())
-                            .selectable(true),
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scrollbar()
+                    .child(
+                        div().p_4().child(
+                            TextView::new(&self.text)
+                                .style(crate::theme::document_style())
+                                .selectable(true),
+                        ),
                     ),
-                ),
             )
     }
 }

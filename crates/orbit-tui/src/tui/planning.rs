@@ -23,6 +23,7 @@ enum Focus {
     Send,
     Close,
 }
+
 #[derive(Debug, Default)]
 pub(super) struct State {
     pub snapshot: Snapshot,
@@ -40,18 +41,22 @@ pub(super) struct State {
     error: Option<String>,
     cached: Option<(u64, u16, Vec<Line<'static>>)>,
 }
+
 impl State {
     pub(super) fn invalidate_geometry(&mut self) {
         self.hits.clear();
         self.pointer.invalidate();
         self.editor = Rect::default();
     }
+
     pub fn visible(&self) -> bool {
         self.open
     }
+
     pub fn mode(&self) -> WorkMode {
         self.snapshot.mode
     }
+
     pub fn open(&mut self) {
         self.open = true;
         self.error = None;
@@ -61,13 +66,18 @@ impl State {
         self.hits.clear();
         self.offset = 0;
     }
+
     pub fn sync(&mut self, state: Snapshot) {
         if state.generation < self.snapshot.generation {
             return;
         }
         let changed = state.generation != self.snapshot.generation;
         if changed {
-            let old_id = self.snapshot.plan.as_ref().map(|p| &p.id);
+            let old_id = self
+                .snapshot
+                .plan
+                .as_ref()
+                .map(|p| &p.id);
             if old_id != state.plan.as_ref().map(|p| &p.id) {
                 self.draft.clear();
             }
@@ -84,17 +94,20 @@ impl State {
         }
         self.snapshot = state;
     }
+
     pub fn succeeded(&mut self) {
         self.sending = false;
         self.open = false;
         self.draft.clear();
         self.hits.clear();
     }
+
     pub fn failed(&mut self, error: String) {
         self.sending = false;
         self.error = Some(error);
         self.open = true;
     }
+
     fn editable(&self) -> bool {
         self.snapshot.mode == WorkMode::Plan
             && self
@@ -103,6 +116,7 @@ impl State {
                 .as_ref()
                 .is_some_and(|p| p.status == Status::Review)
     }
+
     fn activate(&mut self, focus: Focus) -> Option<Action> {
         match focus {
             Focus::Document => {
@@ -144,11 +158,14 @@ impl State {
         }
         None
     }
+
     pub fn handle(&mut self, event: &Event) -> Option<Action> {
         if !self.open {
             if let Event::Mouse(m) = event
                 && m.kind == MouseEventKind::Down(MouseButton::Left)
-                && self.badge.contains((m.column, m.row).into())
+                && self
+                    .badge
+                    .contains((m.column, m.row).into())
             {
                 self.open();
             }
@@ -235,7 +252,10 @@ impl State {
                 return None;
             }
             if self.feedback_page && self.focus == Some(Focus::Editor) {
-                if k.code == KeyCode::Enter && k.modifiers.contains(KeyModifiers::CONTROL) {
+                if k.code == KeyCode::Enter
+                    && k.modifiers
+                        .contains(KeyModifiers::CONTROL)
+                {
                     return self.activate(Focus::Send);
                 }
                 if k.code == KeyCode::Enter {
@@ -245,27 +265,31 @@ impl State {
             } else {
                 match k.code {
                     KeyCode::Enter if k.kind == KeyEventKind::Press => {
-                        return self.focus.and_then(|f| self.activate(f));
+                        return self
+                            .focus
+                            .and_then(|f| self.activate(f));
                     }
                     KeyCode::Down | KeyCode::PageDown => {
-                        self.offset =
-                            self.offset
-                                .saturating_add(if k.code == KeyCode::Down { 1 } else { 10 })
+                        self.offset = self
+                            .offset
+                            .saturating_add(if k.code == KeyCode::Down { 1 } else { 10 })
                     }
                     KeyCode::Up | KeyCode::PageUp => {
-                        self.offset =
-                            self.offset
-                                .saturating_sub(if k.code == KeyCode::Up { 1 } else { 10 })
+                        self.offset = self
+                            .offset
+                            .saturating_sub(if k.code == KeyCode::Up { 1 } else { 10 })
                     }
                     _ => {}
                 }
             }
         }
         if self.feedback_page && self.focus == Some(Focus::Editor) && !self.sending {
-            self.draft.edit(event, self.editor.width.max(1) as usize);
+            self.draft
+                .edit(event, self.editor.width.max(1) as usize);
         }
         None
     }
+
     pub fn draw_badge(&mut self, frame: &mut Frame<'_>) {
         self.badge = Rect::default();
         if !self.editable() {
@@ -291,6 +315,7 @@ impl State {
             self.badge,
         );
     }
+
     fn button(
         &mut self,
         frame: &mut Frame<'_>,
@@ -313,6 +338,7 @@ impl State {
             self.hits.push((area, focus));
         }
     }
+
     pub fn draw(&mut self, frame: &mut Frame<'_>) -> Option<Position> {
         if !self.open {
             return None;
@@ -362,7 +388,9 @@ impl State {
         if self.feedback_page && self.editable() {
             self.editor = body;
             self.hits.push((body, Focus::Editor));
-            let (lines, caret) = self.draft.visual_lines(body.width as usize);
+            let (lines, caret) = self
+                .draft
+                .visual_lines(body.width as usize);
             let row = caret.row;
             if row < self.editor_offset {
                 self.editor_offset = row;
@@ -388,10 +416,32 @@ impl State {
                 cursor = caret.in_viewport(body, self.editor_offset);
             }
         } else {
-            let text = self.snapshot.plan.as_ref().map_or_else(|| "已进入只读规划。收起弹窗后发送任务，Agent 可以读取、搜索、调用探索子代理并向你提问。计划提交后会在这里等待确认。".into(),|p| format!("{}\n\n### 实施步骤\n{}",p.markdown,p.steps.iter().enumerate().map(|(i,s)|format!("{}. {}",i+1,s)).collect::<Vec<_>>().join("\n")));
-            if self.cached.as_ref().is_none_or(|(generation, width, _)| {
-                *generation != self.snapshot.generation || *width != body.width
-            }) {
+            let text = self.snapshot.plan.as_ref().map_or_else(
+                || {
+                    "已进入只读规划。收起弹窗后发送任务，Agent \
+                可以读取、搜索、调用探索子代理并向你提问。计划提交后会在这里等待确认。"
+                        .into()
+                },
+                |p| {
+                    format!(
+                        "{}\n\n### 实施步骤\n{}",
+                        p.markdown,
+                        p.steps
+                            .iter()
+                            .enumerate()
+                            .map(|(i, s)| format!("{}. {}", i + 1, s))
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    )
+                },
+            );
+            if self
+                .cached
+                .as_ref()
+                .is_none_or(|(generation, width, _)| {
+                    *generation != self.snapshot.generation || *width != body.width
+                })
+            {
                 let lines =
                     super::markdown::document(&super::render::safe_output(&text), body.width)
                         .into_iter()
@@ -401,9 +451,11 @@ impl State {
                 self.cached = Some((self.snapshot.generation, body.width, lines));
             }
             let lines = &self.cached.as_ref().unwrap().2;
-            self.offset = self
-                .offset
-                .min(lines.len().saturating_sub(body.height as usize));
+            self.offset = self.offset.min(
+                lines
+                    .len()
+                    .saturating_sub(body.height as usize),
+            );
             frame.render_widget(
                 Paragraph::new(
                     lines

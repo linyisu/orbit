@@ -11,7 +11,7 @@ use super::protocol::{self, Request, Response};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(45);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
-const MAX_DIAGNOSTIC_BYTES: usize = 16 * 1024;
+const MAX_DIAGNOSTIC_BYTES: usize = 16 * 1_024;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct SshOptions {
@@ -149,9 +149,14 @@ impl Connection {
             self.workspace.clone(),
             "--config".into(),
             if let Some(configuration) = &self.local_configuration {
-                configuration.config.to_string_lossy().into_owned()
+                configuration
+                    .config
+                    .to_string_lossy()
+                    .into_owned()
             } else {
-                self.config.to_string_lossy().into_owned()
+                self.config
+                    .to_string_lossy()
+                    .into_owned()
             },
         ];
         for (flag, path) in [
@@ -216,7 +221,7 @@ impl Connection {
         });
         let log_progress = progress.clone();
         let drain = tokio::spawn(async move {
-            let mut bytes = [0; 4096];
+            let mut bytes = [0; 4_096];
             while let Ok(count) = stderr.read(&mut bytes).await {
                 if count == 0 {
                     break;
@@ -226,7 +231,9 @@ impl Connection {
                 }
                 let mut output = captured.lock().await;
                 output.extend_from_slice(&bytes[..count]);
-                let excess = output.len().saturating_sub(MAX_DIAGNOSTIC_BYTES);
+                let excess = output
+                    .len()
+                    .saturating_sub(MAX_DIAGNOSTIC_BYTES);
                 output.drain(..excess);
             }
         });
@@ -264,12 +271,19 @@ impl Connection {
         )
         .await;
         match result {
-            Ok(Ok(Response::Hello { version: protocol::VERSION, capabilities, .. })) => {
+            Ok(Ok(Response::Hello {
+                version: protocol::VERSION,
+                capabilities,
+                ..
+            })) => {
                 client.capabilities = Some(capabilities);
                 Ok(client)
-            },
+            }
             Ok(Ok(response)) => bail!("incompatible workspace server: {response:?}"),
-            Ok(Err(error)) => Err(error.context("workspace connection failed; ensure Orbit is installed on the target and available through --server")),
+            Ok(Err(error)) => Err(error.context(
+                "workspace connection failed; ensure Orbit is \
+                installed on the target and available through --server",
+            )),
             Err(_) => bail!("workspace connection timed out"),
         }
     }
@@ -399,7 +413,10 @@ mod tests {
             .get_args()
             .map(|arg| arg.to_string_lossy().into_owned())
             .collect();
-        assert!(args.windows(2).any(|pair| pair == ["--", "my-jump-host"]));
+        assert!(
+            args.windows(2)
+                .any(|pair| pair == ["--", "my-jump-host"])
+        );
         let remote = shlex::split(args.last().unwrap()).unwrap();
         assert_eq!(
             &remote[..4],
@@ -414,9 +431,15 @@ mod tests {
             .command()
             .is_err()
         );
-        let local = connection(Target::Local).command().unwrap();
+        let local = connection(Target::Local)
+            .command()
+            .unwrap();
         assert_eq!(
-            local.as_std().get_args().next().unwrap(),
+            local
+                .as_std()
+                .get_args()
+                .next()
+                .unwrap(),
             "workspace-service"
         );
         let wsl = connection(Target::Wsl {

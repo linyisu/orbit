@@ -69,7 +69,8 @@ impl Store {
                 diagnostics.push(summarize(
                     row.id,
                     row.status,
-                    row.elapsed_ms.map(|ms| ms.max(0) as u64),
+                    row.elapsed_ms
+                        .map(|ms| ms.max(0) as u64),
                     events,
                 ));
             }
@@ -118,7 +119,9 @@ fn summarize(
 
     for (payload, timestamp) in events {
         if let Some(timestamp) = timestamp {
-            result.first_event_at_ms.get_or_insert(timestamp);
+            result
+                .first_event_at_ms
+                .get_or_insert(timestamp);
             result.last_event_at_ms = Some(timestamp);
         }
 
@@ -196,7 +199,9 @@ fn summarize(
                 result.known_retries = result
                     .known_retries
                     .saturating_add(u64::from(retries.unwrap_or(0)));
-                result.model_elapsed_ms = result.model_elapsed_ms.saturating_add(elapsed_ms);
+                result.model_elapsed_ms = result
+                    .model_elapsed_ms
+                    .saturating_add(elapsed_ms);
                 result.latest_estimated_input = Some(estimated_input);
 
                 if usage.is_some() {
@@ -241,7 +246,8 @@ pub fn text(diagnostics: &SessionDiagnostics) -> String {
             .unwrap_or_else(|| "耗时未记录".into());
         let _ = writeln!(
             output,
-            "\n#{}  {} · {}\n  轮次 {} · 模型事件 {} · 正文 {} 字 · 思考 {} 字\n  工具 启动 {} / 成功 {} / 失败 {} · 上下文整理 {}{}",
+            "\n#{}  {} · {}\n  轮次 {} · 模型事件 {} · 正文 {} 字 · 思考 {} 字\n  工具 启动 {} / 成功 {} / 失败 {} · \
+                上下文整理 {}{}",
             run.run_id,
             run.status,
             elapsed,
@@ -331,14 +337,26 @@ mod tests {
             .unwrap();
         let mut writer = store
             .create(
-                directory.path().to_string_lossy().into_owned(),
+                directory
+                    .path()
+                    .to_string_lossy()
+                    .into_owned(),
                 "test".into(),
             )
             .await
             .unwrap();
         let id = writer.id().to_owned();
-        writer.begin("inspect".into(), "test".into()).await.unwrap();
-        let call = ToolCall::function("call", "read_file", json!({ "path": "missing" }));
+        writer
+            .begin("inspect".into(), "test".into())
+            .await
+            .unwrap();
+        let call = ToolCall::function(
+            "call",
+            "read_file",
+            json!({
+                "path": "missing"
+            }),
+        );
         writer
             .append(vec![
                 AgentEvent::TurnStarted { turn: 1 },
@@ -369,7 +387,11 @@ mod tests {
             )
             .await
             .unwrap();
-        let run = &store.diagnostics(&id).await.unwrap().runs[0];
+        let run = &store
+            .diagnostics(&id)
+            .await
+            .unwrap()
+            .runs[0];
 
         assert_eq!(run.turns, 1);
         assert_eq!(run.reasoning_characters, 3);

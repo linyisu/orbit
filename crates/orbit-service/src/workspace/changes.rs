@@ -7,7 +7,7 @@ use std::time::Duration;
 use orbit_store::types::WorkspaceChange;
 use similar::TextDiff;
 
-const MAX_DIFF_CHARS: usize = 48 * 1024;
+const MAX_DIFF_CHARS: usize = 48 * 1_024;
 
 pub(super) fn list(changes: &[WorkspaceChange]) -> String {
     if changes.is_empty() {
@@ -55,7 +55,11 @@ pub(super) fn diff(changes: &[WorkspaceChange], path: &str) -> String {
         return format!("当前会话没有 {path} 的 Orbit 写入检查点。先运行 /changes 查看路径。");
     };
 
-    let before = record.change.before.as_deref().unwrap_or_default();
+    let before = record
+        .change
+        .before
+        .as_deref()
+        .unwrap_or_default();
     let text = TextDiff::configure()
         .timeout(Duration::from_millis(250))
         .diff_lines(before, &record.change.after)

@@ -4,9 +4,15 @@ use super::*;
 async fn failed_start_reports_the_error_chain_and_stderr() {
     let workspace = tempfile::tempdir().unwrap();
     let config: McpServerConfig = serde_json::from_value(json!({
-        "command":"/bin/sh", "args":["-c", "printf 'missing MCP subcommand: use --mcp\\n' >&2; exit 7"],
-        "enabled":true, "timeout_seconds":1
-    })).unwrap();
+        "command": "/bin/sh",
+        "args": [
+            "-c",
+            "printf 'missing MCP subcommand: use --mcp\\n' >&2; exit 7"
+        ],
+        "enabled": true,
+        "timeout_seconds": 1
+    }))
+    .unwrap();
     let (approvals, _receiver) = crate::approval::channel();
     let statuses = register(
         &mut ToolRegistry::new(),
@@ -20,7 +26,9 @@ async fn failed_start_reports_the_error_chain_and_stderr() {
     .await;
     assert!(!statuses[0].connected);
     assert!(
-        statuses[0].detail.contains("MCP initialize failed"),
+        statuses[0]
+            .detail
+            .contains("MCP initialize failed"),
         "{}",
         statuses[0].detail
     );
@@ -52,7 +60,10 @@ async fn interrupted_read_keeps_the_partial_json_rpc_line() {
     let (mut writer, reader) = tokio::io::duplex(64);
     let mut reader = BufReader::new(reader);
     let mut pending = Vec::new();
-    writer.write_all(b"{\"id\":").await.unwrap();
+    writer
+        .write_all(b"{\"id\":")
+        .await
+        .unwrap();
 
     let timed_out = time::timeout(
         Duration::from_millis(10),
@@ -64,7 +75,9 @@ async fn interrupted_read_keeps_the_partial_json_rpc_line() {
     assert_eq!(pending, b"{\"id\":");
 
     writer.write_all(b"1}\n").await.unwrap();
-    let value = read_protocol_line(&mut reader, &mut pending).await.unwrap();
+    let value = read_protocol_line(&mut reader, &mut pending)
+        .await
+        .unwrap();
 
     assert_eq!(value["id"], 1);
 }
@@ -140,7 +153,13 @@ fn rejects_remote_transport_until_credential_boundary_exists() {
     )
     .unwrap();
 
-    assert!(config.validate().unwrap_err().to_string().contains("stdio"));
+    assert!(
+        config
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("stdio")
+    );
 }
 
 #[cfg(unix)]
@@ -169,7 +188,9 @@ done
 "#,
         )
         .unwrap();
-    let mut permissions = std::fs::metadata(&script).unwrap().permissions();
+    let mut permissions = std::fs::metadata(&script)
+        .unwrap()
+        .permissions();
     permissions.set_mode(0o700);
     std::fs::set_permissions(&script, permissions).unwrap();
     let config = McpConfig {
@@ -189,7 +210,10 @@ done
     let mut registry = ToolRegistry::new();
     let (approvals, mut receiver) = crate::approval::channel();
     let approval = tokio::spawn(async move {
-        let request = receiver.recv().await.expect("MCP call requests approval");
+        let request = receiver
+            .recv()
+            .await
+            .expect("MCP call requests approval");
         let ApprovalPreview::Mcp(preview) = request.preview else {
             panic!("expected MCP approval");
         };
@@ -219,7 +243,13 @@ done
 
     let output = registry
         .execute(
-            ToolCall::function("call", "mcp__fixture__echo", json!({ "message": "hello" })),
+            ToolCall::function(
+                "call",
+                "mcp__fixture__echo",
+                json!({
+                    "message": "hello"
+                }),
+            ),
             CancellationToken::new(),
         )
         .await
@@ -227,7 +257,11 @@ done
 
     approval.await.unwrap();
 
-    assert!(output.content.contains("\"text\":\"ok\""));
+    assert!(
+        output
+            .content
+            .contains("\"text\":\"ok\"")
+    );
 }
 
 #[tokio::test]
@@ -269,7 +303,11 @@ async fn configured_server_requires_startup_authorization() {
     )
     .await;
 
-    assert!(statuses[0].detail.contains("--allow-mcp-start"));
+    assert!(
+        statuses[0]
+            .detail
+            .contains("--allow-mcp-start")
+    );
     assert!(statuses[0].tools.is_empty());
     assert!(registry.definitions().is_empty());
 }
@@ -286,5 +324,11 @@ fn rejects_mcp_environment_overrides_of_runtime_isolation() {
     )
     .unwrap();
 
-    assert!(config.validate().unwrap_err().to_string().contains("PATH"));
+    assert!(
+        config
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("PATH")
+    );
 }

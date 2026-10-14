@@ -12,9 +12,12 @@ use std::{
 
 use crate::error::{RuntimeError, failed};
 
-pub const MAX_OUTPUT: usize = 32 * 1024;
-pub const MAX_RETAINED_OUTPUT_PER_STREAM: u64 = 16 * 1024 * 1024;
-pub const MAX_RETAINED_OUTPUT_PER_RUN: u64 = 128 * 1024 * 1024;
+/// Maximum in-memory tail bytes captured for one command output stream.
+pub const MAX_OUTPUT: usize = 32 * 1_024;
+/// Maximum raw log bytes retained for one stdout or stderr stream.
+pub const MAX_RETAINED_OUTPUT_PER_STREAM: u64 = 16 * 1_024 * 1_024;
+/// Combined retained-log byte budget shared by commands in one run.
+pub const MAX_RETAINED_OUTPUT_PER_RUN: u64 = 128 * 1_024 * 1_024;
 
 static OUTPUT_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 static OUTPUT_BUDGETS: OnceLock<Mutex<HashMap<PathBuf, Weak<OutputBudget>>>> = OnceLock::new();
@@ -60,7 +63,9 @@ impl RetainedOutput {
             .expect("output budget update always succeeds");
         let allowed = requested.min(MAX_RETAINED_OUTPUT_PER_RUN.saturating_sub(prior));
         if allowed != 0 {
-            self.file.write_all(&bytes[..allowed as usize]).await?;
+            self.file
+                .write_all(&bytes[..allowed as usize])
+                .await?;
             self.written += allowed;
             self.file.flush().await?;
         }
@@ -84,14 +89,22 @@ fn output_budget(directory: &Path) -> Result<Arc<OutputBudget>, RuntimeError> {
         .lock()
         .expect("output budgets lock poisoned");
     budgets.retain(|_, budget| budget.strong_count() != 0);
-    if let Some(budget) = budgets.get(directory).and_then(Weak::upgrade) {
+    if let Some(budget) = budgets
+        .get(directory)
+        .and_then(Weak::upgrade)
+    {
         return Ok(budget);
     }
     let mut used = 0u64;
     for entry in std::fs::read_dir(directory).map_err(failed)? {
         let entry = entry.map_err(failed)?;
         let metadata = std::fs::symlink_metadata(entry.path()).map_err(failed)?;
-        if metadata.is_file() && entry.file_name().to_string_lossy().starts_with("cmd-") {
+        if metadata.is_file()
+            && entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with("cmd-")
+        {
             used = used.saturating_add(metadata.len());
         }
     }
@@ -128,9 +141,14 @@ impl OutputLog {
             return Err(failed("command output directory must be a real directory"));
         }
 
-        let directory = directory.canonicalize().map_err(failed)?;
+        let directory = directory
+            .canonicalize()
+            .map_err(failed)?;
         let budget = output_budget(&directory)?;
-        let mut active = budget.active.lock().expect("output log lock poisoned");
+        let mut active = budget
+            .active
+            .lock()
+            .expect("output log lock poisoned");
         prune_output_directory(&directory, &budget, &active)?;
 
         let id = format!(
@@ -210,14 +228,18 @@ fn prune_output_directory(
         .filter_map(|entry| {
             let metadata = std::fs::symlink_metadata(entry.path()).ok()?;
 
-            (metadata.is_file() && entry.file_name().to_string_lossy().starts_with("cmd-"))
-                .then_some((
-                    entry.path(),
-                    metadata.len(),
-                    metadata
-                        .modified()
-                        .unwrap_or(std::time::SystemTime::UNIX_EPOCH),
-                ))
+            (metadata.is_file()
+                && entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("cmd-"))
+            .then_some((
+                entry.path(),
+                metadata.len(),
+                metadata
+                    .modified()
+                    .unwrap_or(std::time::SystemTime::UNIX_EPOCH),
+            ))
         })
         .collect::<Vec<_>>();
 
@@ -230,14 +252,19 @@ fn prune_output_directory(
             break;
         }
 
-        let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) else {
+        let Some(stem) = path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+        else {
             continue;
         };
         if active.contains(stem) {
             continue;
         }
         std::fs::remove_file(path).map_err(failed)?;
-        budget.used.fetch_sub(size, Ordering::AcqRel);
+        budget
+            .used
+            .fetch_sub(size, Ordering::AcqRel);
     }
 
     Ok(())
@@ -250,17 +277,28 @@ mod tests {
     #[tokio::test]
     async fn failed_log_writes_preserve_exit_status_and_drain_large_output() {
         let directory = tempfile::tempdir().unwrap();
-        let mut log = OutputLog::create(directory.path()).await.unwrap();
-        // A real read-only descriptor makes retention fail independently of
-        // the pipe, without relying on disk exhaustion or device files.
-        log.stdout = tokio::fs::File::open(directory.path().join(format!("{}.stdout", log.id())))
+        let mut log = OutputLog::create(directory.path())
             .await
             .unwrap();
+        // A real read-only descriptor makes retention fail independently of
+        // the pipe, without relying on disk exhaustion or device files.
+        log.stdout = tokio::fs::File::open(
+            directory
+                .path()
+                .join(format!("{}.stdout", log.id())),
+        )
+        .await
+        .unwrap();
         let child = tokio::process::Command::new("/bin/sh")
-            .args(["-c", "i=0; while [ $i -lt 20000 ]; do printf 'sample output\\n'; i=$((i+1)); done; printf 'FINAL'; printf 'stderr intact' >&2"])
+            .args([
+                "-c",
+                "i=0; while [ $i -lt 20000 ]; do printf 'sample output\\n'; i=$((i+1)); \
+                done; printf 'FINAL'; printf 'stderr intact' >&2",
+            ])
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
-            .spawn().unwrap();
+            .spawn()
+            .unwrap();
         let result = super::super::supervisor::run_child_process(
             child,
             std::time::Duration::from_secs(10),
@@ -275,7 +313,7 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(result.exit_code, Some(0));
-        assert_eq!(result.stdout_total_bytes, 280005);
+        assert_eq!(result.stdout_total_bytes, 280_005);
         assert!(result.stdout.ends_with("FINAL") && result.stdout.len() <= MAX_OUTPUT);
         assert_eq!(result.stderr, "stderr intact");
         assert!(result.retained_output_truncated && result.retained_output_error.is_some());
@@ -285,8 +323,12 @@ mod tests {
     #[tokio::test]
     async fn concurrent_logs_share_the_task_byte_budget() {
         let directory = tempfile::tempdir().unwrap();
-        let first = OutputLog::create(directory.path()).await.unwrap();
-        let second = OutputLog::create(directory.path()).await.unwrap();
+        let first = OutputLog::create(directory.path())
+            .await
+            .unwrap();
+        let second = OutputLog::create(directory.path())
+            .await
+            .unwrap();
         assert!(Arc::ptr_eq(&first.lease.budget, &second.lease.budget));
         first
             .lease
@@ -303,7 +345,11 @@ mod tests {
         second.unwrap();
         assert_eq!(first_stdout.written() + second_stdout.written(), 10);
         assert_eq!(
-            first_stdout.lease.budget.used.load(Ordering::Acquire),
+            first_stdout
+                .lease
+                .budget
+                .used
+                .load(Ordering::Acquire),
             MAX_RETAINED_OUTPUT_PER_RUN
         );
         assert!(first_stdout.written() <= 10 && second_stdout.written() <= 10);
@@ -313,36 +359,59 @@ mod tests {
     #[tokio::test]
     async fn pruning_keeps_live_logs_pinned_until_both_streams_close() {
         let directory = tempfile::tempdir().unwrap();
-        let live = OutputLog::create(directory.path()).await.unwrap();
-        let live_path = directory.path().join(format!("{}.stdout", live.id()));
+        let live = OutputLog::create(directory.path())
+            .await
+            .unwrap();
+        let live_path = directory
+            .path()
+            .join(format!("{}.stdout", live.id()));
         std::fs::OpenOptions::new()
             .write(true)
             .open(&live_path)
             .unwrap()
-            .set_len(100 * 1024 * 1024)
+            .set_len(100 * 1_024 * 1_024)
             .unwrap();
         live.lease
             .budget
             .used
-            .store(100 * 1024 * 1024, Ordering::Release);
-        let stale_path = directory.path().join("cmd-orbit-stale.stdout");
+            .store(100 * 1_024 * 1_024, Ordering::Release);
+        let stale_path = directory
+            .path()
+            .join("cmd-orbit-stale.stdout");
         std::fs::File::create(&stale_path)
             .unwrap()
-            .set_len(10 * 1024 * 1024)
+            .set_len(10 * 1_024 * 1_024)
             .unwrap();
         live.lease
             .budget
             .used
-            .fetch_add(10 * 1024 * 1024, Ordering::AcqRel);
-        let next = OutputLog::create(directory.path()).await.unwrap();
+            .fetch_add(10 * 1_024 * 1_024, Ordering::AcqRel);
+        let next = OutputLog::create(directory.path())
+            .await
+            .unwrap();
         assert!(live_path.exists());
         assert!(!stale_path.exists());
         let id = live.id().to_owned();
         let (_, stdout, stderr) = live.split();
         drop(stdout);
-        assert!(next.lease.budget.active.lock().unwrap().contains(&id));
+        assert!(
+            next.lease
+                .budget
+                .active
+                .lock()
+                .unwrap()
+                .contains(&id)
+        );
         drop(stderr);
-        assert!(!next.lease.budget.active.lock().unwrap().contains(&id));
+        assert!(
+            !next
+                .lease
+                .budget
+                .active
+                .lock()
+                .unwrap()
+                .contains(&id)
+        );
     }
 }
 

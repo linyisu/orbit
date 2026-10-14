@@ -8,6 +8,7 @@ use crate::{client::ApiFormat, error::ModelError};
 
 const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(15);
 
+/// Protocol compatibility identity sent to the account model-discovery endpoint.
 pub const CODEX_CLIENT_VERSION: &str = "0.153.0";
 
 /// Only fixed account endpoints are accepted; credentials never follow redirects.
@@ -44,7 +45,8 @@ pub async fn discover(
             AuthTarget::ChatgptCodex,
             vec![
                 format!(
-                    "https://chatgpt.com/backend-api/codex/models?client_version={CODEX_CLIENT_VERSION}"
+                    "https://chatgpt.com/backend-api/codex/models?client_version={CODEX_CLIENT_VERS\
+                        ION}"
                 ),
                 format!(
                     "https://chatgpt.com/backend-api/models?client_version={CODEX_CLIENT_VERSION}"
@@ -75,7 +77,9 @@ pub async fn discover(
     for path in paths {
         let request = if format == ApiFormat::GoogleCodeAssist {
             let body = if base.trim_end_matches('/') == "https://cloudcode-pa.googleapis.com" {
-                json!({ "project": auth.project_id })
+                json!({
+                    "project": auth.project_id
+                })
             } else {
                 json!({})
             };
@@ -115,7 +119,7 @@ pub async fn discover(
 
         let mut bytes = Vec::new();
         while let Some(chunk) = response.chunk().await? {
-            if bytes.len().saturating_add(chunk.len()) > 4 * 1024 * 1024 {
+            if bytes.len().saturating_add(chunk.len()) > 4 * 1_024 * 1_024 {
                 return Err(ModelError::Protocol(
                     "model discovery response exceeds 4 MiB".into(),
                 ));
@@ -216,7 +220,9 @@ async fn discover_api_catalog_inner(
     } else {
         None
     };
-    let mut request = client.get(endpoint).header("accept", "application/json");
+    let mut request = client
+        .get(endpoint)
+        .header("accept", "application/json");
     if let Some(auth) = auth {
         request = request.headers(auth.headers);
     }
@@ -236,7 +242,9 @@ async fn discover_api_catalog_inner(
     let mut all = Vec::new();
     let mut size = 0usize;
     for _ in 0..100 {
-        let mut page = request.try_clone().expect("model discovery GET request");
+        let mut page = request
+            .try_clone()
+            .expect("model discovery GET request");
         if let Some(cursor) = &cursor {
             page.url_mut()
                 .query_pairs_mut()
@@ -263,7 +271,7 @@ async fn discover_api_catalog_inner(
         let mut bytes = Vec::new();
         while let Some(chunk) = response.chunk().await? {
             size = size.saturating_add(chunk.len());
-            if size > 4 * 1024 * 1024 {
+            if size > 4 * 1_024 * 1_024 {
                 return Err(ModelError::Protocol("model catalog is too large".into()));
             }
             bytes.extend_from_slice(&chunk);
@@ -310,7 +318,9 @@ fn api_model_ids(payload: &Value) -> Result<Vec<String>, ModelError> {
             && !id.trim().is_empty()
             && id.len() <= 256
             && !id.chars().any(char::is_control)
-            && !ids.iter().any(|existing| existing == id)
+            && !ids
+                .iter()
+                .any(|existing| existing == id)
         {
             ids.push(id.to_owned());
         }
@@ -341,8 +351,13 @@ mod tests {
             "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
             body.len()
         );
-        socket.write_all(response.as_bytes()).await.unwrap();
-        String::from_utf8(request).unwrap().to_ascii_lowercase()
+        socket
+            .write_all(response.as_bytes())
+            .await
+            .unwrap();
+        String::from_utf8(request)
+            .unwrap()
+            .to_ascii_lowercase()
     }
 
     #[tokio::test]
@@ -360,7 +375,9 @@ mod tests {
             ),
             (ApiFormat::OpenaiChatCompletions, "", None),
         ] {
-            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+                .await
+                .unwrap();
             let base = format!("http://{}/custom/v1/", listener.local_addr().unwrap());
             let server = catalog_server(
                 listener,
@@ -385,7 +402,9 @@ mod tests {
 
     #[tokio::test]
     async fn api_catalog_reads_all_pages_and_retains_capabilities() {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .unwrap();
         let base = format!("http://{}/orbit/v1", listener.local_addr().unwrap());
         let server = async {
             let mut requests = Vec::new();
@@ -398,8 +417,22 @@ mod tests {
                 while !request.ends_with(b"\r\n\r\n") {
                     request.push(socket.read_u8().await.unwrap());
                 }
-                socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).as_bytes()).await.unwrap();
-                requests.push(String::from_utf8(request).unwrap().to_ascii_lowercase());
+                socket
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: \
+                    close\r\n\r\n{body}",
+                            body.len()
+                        )
+                        .as_bytes(),
+                    )
+                    .await
+                    .unwrap();
+                requests.push(
+                    String::from_utf8(request)
+                        .unwrap()
+                        .to_ascii_lowercase(),
+                );
             }
 
             requests
@@ -410,7 +443,7 @@ mod tests {
         );
         let payload = result.unwrap();
         assert_eq!(api_model_ids(&payload).unwrap(), ["orbit-a", "orbit-b"]);
-        assert_eq!(payload["data"][0]["max_input_tokens"], 200000);
+        assert_eq!(payload["data"][0]["max_input_tokens"], 200_000);
         assert_eq!(
             payload["data"][1]["capabilities"]["image_input"]["supported"],
             true
@@ -426,7 +459,9 @@ mod tests {
 
     #[tokio::test]
     async fn pagination_with_no_cursor_does_not_publish_a_partial_catalog() {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .unwrap();
         let base = format!("http://{}/orbit/v1", listener.local_addr().unwrap());
         let server = catalog_server(
             listener,
@@ -437,12 +472,19 @@ mod tests {
             discover_api_catalog(&base, ApiFormat::AnthropicMessages, "orbit-fixture-key"),
             server
         );
-        assert!(result.unwrap_err().to_string().contains("cursor"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("cursor")
+        );
     }
 
     #[tokio::test]
     async fn discovery_failure_does_not_expose_response_body_or_infer_models() {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .unwrap();
         let base = format!("http://{}/v1", listener.local_addr().unwrap());
         let server = catalog_server(listener, "403 Forbidden", "private-response");
 

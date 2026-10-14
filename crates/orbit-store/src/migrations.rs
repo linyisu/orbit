@@ -39,8 +39,8 @@ mod m00000000000029_task_collaboration;
 mod m00000000000030_attachments;
 mod m00000000000031_queued_images;
 const LEGACY_VERSION: i64 = 27;
+/// SQLite expression defaults need parentheses; a single-item tuple supplies them.
 fn timestamp_default() -> SimpleExpr {
-    // SQLite expression defaults need parentheses; a single-item tuple supplies them.
     Expr::tuple([Func::cust(Alias::new("unixepoch")).into()]).into()
 }
 pub(crate) struct Migrator;
@@ -82,11 +82,13 @@ impl MigratorTrait for Migrator {
         ]
     }
 }
+
 fn forward_only() -> Result<(), DbErr> {
     Err(DbErr::Migration(
         "Conversation migrations are forward-only; automatic rollback would discard history".into(),
     ))
 }
+
 async fn copy(
     manager: &SchemaManager<'_>,
     from: &str,
@@ -105,10 +107,15 @@ async fn copy(
         .to_owned();
     manager
         .get_connection()
-        .execute(manager.get_database_backend().build(&insert))
+        .execute(
+            manager
+                .get_database_backend()
+                .build(&insert),
+        )
         .await?;
     Ok(())
 }
+
 pub(crate) async fn run(connection: &DatabaseConnection) -> Result<()> {
     sqlite::foreign_keys(connection, false).await?;
     let result = upgrade(connection).await;
@@ -129,7 +136,9 @@ async fn upgrade(connection: &DatabaseConnection) -> Result<()> {
             "database schema {version} is newer than this Orbit supports"
         );
         Migrator::install(&transaction).await?;
-        let applied = seaql_migrations::Entity::find().all(&transaction).await?;
+        let applied = seaql_migrations::Entity::find()
+            .all(&transaction)
+            .await?;
         if !applied.is_empty() {
             let mut names = applied
                 .iter()
@@ -173,7 +182,9 @@ async fn upgrade(connection: &DatabaseConnection) -> Result<()> {
                 );
                 for &column in columns {
                     ensure!(
-                        manager.has_column(table, column).await?,
+                        manager
+                            .has_column(table, column)
+                            .await?,
                         "database schema missing {table}.{column}"
                     );
                 }
@@ -189,7 +200,10 @@ async fn upgrade(connection: &DatabaseConnection) -> Result<()> {
     }
     .await;
     match result {
-        Ok(()) => transaction.commit().await.map_err(Into::into),
+        Ok(()) => transaction
+            .commit()
+            .await
+            .map_err(Into::into),
         Err(error) => {
             transaction.rollback().await?;
             Err(error)

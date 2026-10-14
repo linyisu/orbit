@@ -65,8 +65,10 @@ impl Spec {
         auth: &std::path::Path,
         model: Option<&str>,
     ) {
-        self.config.get_or_insert_with(|| config.to_owned());
-        self.auth_dir.get_or_insert_with(|| auth.to_owned());
+        self.config
+            .get_or_insert_with(|| config.to_owned());
+        self.auth_dir
+            .get_or_insert_with(|| auth.to_owned());
         if self.model.is_none() {
             self.model = model.map(str::to_owned);
         }
@@ -90,10 +92,16 @@ impl Spec {
         let mut arguments = vec![
             "workspace".to_owned(),
             flag.into(),
-            words.get(1).cloned().unwrap_or_default(),
+            words
+                .get(1)
+                .cloned()
+                .unwrap_or_default(),
         ];
         let mut rest = &words[words.len().min(2)..];
-        if rest.first().is_some_and(|word| !word.starts_with('-')) {
+        if rest
+            .first()
+            .is_some_and(|word| !word.starts_with('-'))
+        {
             arguments.extend(["--workspace".into(), rest[0].clone()]);
             rest = &rest[1..];
         }
@@ -175,7 +183,9 @@ impl Spec {
     ) -> Result<Arc<Connection>> {
         let mut connection = crate::workspace::prepare_connection(
             &self.args.options(),
-            self.config.clone().unwrap_or_else(|| "config.toml".into()),
+            self.config
+                .clone()
+                .unwrap_or_else(|| "config.toml".into()),
             self.database.clone(),
             self.auth_dir.clone(),
             Some(progress),
@@ -221,7 +231,10 @@ impl Spec {
                 .ssh_port
                 .map(|port| port.to_string())
                 .unwrap_or_default(),
-            self.args.identity.clone().unwrap_or_default(),
+            self.args
+                .identity
+                .clone()
+                .unwrap_or_default(),
             if self.args.workspace == "." {
                 String::new()
             } else {

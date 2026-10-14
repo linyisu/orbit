@@ -80,16 +80,22 @@ impl Viewer {
                 Update::Started {
                     prompt,
                     presentation,
-                } => self.view.ui.start_remote(prompt, presentation),
+                } => self
+                    .view
+                    .ui
+                    .start_remote(prompt, presentation),
                 Update::Agent(event) => self.view.ui.apply(*event),
-                Update::Finished { status, elapsed_ms } => {
-                    self.view.ui.finish_remote(&status, elapsed_ms)
-                }
+                Update::Finished { status, elapsed_ms } => self
+                    .view
+                    .ui
+                    .finish_remote(&status, elapsed_ms),
                 Update::Profile(_) | Update::Report(_) => {}
             }
         }
         if !page.more {
-            self.view.ui.apply_tool_progress(page.tool_progress);
+            self.view
+                .ui
+                .apply_tool_progress(page.tool_progress);
         }
         if !page.more
             && let Some(timing) = page.timing
@@ -126,16 +132,21 @@ impl Viewer {
                 RunStatus::Idle => "等待运行",
             }
         };
-        let metadata = self.view.ui.resume_loading.clone().unwrap_or_else(|| {
-            if self.view.ui.model.is_empty() {
-                "记录不可用".into()
-            } else {
-                format!(
-                    "{} · {} 次调用",
-                    self.view.ui.model, self.view.ui.tool_calls
-                )
-            }
-        });
+        let metadata = self
+            .view
+            .ui
+            .resume_loading
+            .clone()
+            .unwrap_or_else(|| {
+                if self.view.ui.model.is_empty() {
+                    "记录不可用".into()
+                } else {
+                    format!(
+                        "{} · {} 次调用",
+                        self.view.ui.model, self.view.ui.tool_calls
+                    )
+                }
+            });
 
         self.view.draw(
             &format!("子代理 · {status}"),
@@ -190,7 +201,11 @@ fn task(args: &Value) -> &str {
 fn statistics(value: &Value) -> Vec<String> {
     let seconds = value["elapsed_seconds"]
         .as_u64()
-        .or_else(|| value["elapsed_ms"].as_u64().map(|ms| ms / 1000));
+        .or_else(|| {
+            value["elapsed_ms"]
+                .as_u64()
+                .map(|ms| ms / 1_000)
+        });
     let calls = value["tool_calls"]
         .as_u64()
         .or(value["_activity"]["tool_calls"].as_u64());
@@ -223,7 +238,10 @@ pub(super) fn header(
     }
     let args: Value = serde_json::from_str(&row.arguments).unwrap_or_default();
     let value: Value = serde_json::from_str(&row.output).unwrap_or_default();
-    let role = match value["role"].as_str().or(args["role"].as_str()) {
+    let role = match value["role"]
+        .as_str()
+        .or(args["role"].as_str())
+    {
         Some("review") => "审查",
         _ => "探索",
     };
@@ -267,7 +285,10 @@ pub(super) fn header(
     let mut header = LinkedLine::plain(Line::from(spans));
     header.links.clear();
     if let Some(id) = id {
-        header.line.spans.push(Span::raw(padding));
+        header
+            .line
+            .spans
+            .push(Span::raw(padding));
         let start = header.line.to_string().len();
         decoration.push(header.line.spans.len());
         header.line.spans.push(Span::styled(
@@ -276,7 +297,10 @@ pub(super) fn header(
                 .fg(THEME.accent)
                 .add_modifier(Modifier::UNDERLINED),
         ));
-        header.line.spans.push(Span::raw(padding));
+        header
+            .line
+            .spans
+            .push(Span::raw(padding));
         header.links.push(LinkTarget {
             start,
             end: start + "查看".len(),

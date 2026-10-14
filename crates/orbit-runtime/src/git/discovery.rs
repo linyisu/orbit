@@ -38,7 +38,9 @@ impl GitRepositoryInfo {
             .unwrap_or_else(|_| workspace_root.to_path_buf());
 
         if metadata.is_dir() {
-            let git_dir = dot_git.canonicalize().unwrap_or_else(|_| dot_git.clone());
+            let git_dir = dot_git
+                .canonicalize()
+                .unwrap_or_else(|_| dot_git.clone());
             let common_dir = resolve_commondir(&git_dir).unwrap_or_else(|| git_dir.clone());
             let kind = if common_dir != git_dir {
                 GitRepoKind::Worktree {
@@ -80,8 +82,12 @@ impl GitRepositoryInfo {
 
             let common_dir = resolve_commondir(&git_dir).unwrap_or_else(|| git_dir.clone());
 
-            let kind = if git_dir.to_string_lossy().contains("/modules/")
-                || git_dir.to_string_lossy().contains("\\modules\\")
+            let kind = if git_dir
+                .to_string_lossy()
+                .contains("/modules/")
+                || git_dir
+                    .to_string_lossy()
+                    .contains("\\modules\\")
             {
                 let parent_repo = common_dir
                     .ancestors()
@@ -163,7 +169,10 @@ fn resolve_commondir(git_dir: &Path) -> Option<PathBuf> {
                 git_dir.join(p)
             };
 
-            return resolved.canonicalize().ok().or(Some(resolved));
+            return resolved
+                .canonicalize()
+                .ok()
+                .or(Some(resolved));
         }
     }
 
@@ -183,14 +192,19 @@ mod tests {
         fs::create_dir(&dot_git).unwrap();
         fs::write(dot_git.join("config"), "[core]\n").unwrap();
 
-        let info = GitRepositoryInfo::discover(dir.path()).unwrap().unwrap();
+        let info = GitRepositoryInfo::discover(dir.path())
+            .unwrap()
+            .unwrap();
         assert!(!info.is_gitfile);
         assert_eq!(info.kind, GitRepoKind::Standard);
         assert_eq!(info.git_dir, dot_git.canonicalize().unwrap());
         assert_eq!(info.common_dir, dot_git.canonicalize().unwrap());
         assert_eq!(
             info.config_path(),
-            dot_git.canonicalize().unwrap().join("config")
+            dot_git
+                .canonicalize()
+                .unwrap()
+                .join("config")
         );
     }
 
@@ -212,13 +226,18 @@ mod tests {
         let commondir_target = "../..";
         fs::write(gitdir_target.join("commondir"), commondir_target).unwrap();
 
-        let info = GitRepositoryInfo::discover(&worktree_dir).unwrap().unwrap();
+        let info = GitRepositoryInfo::discover(&worktree_dir)
+            .unwrap()
+            .unwrap();
         assert!(info.is_gitfile);
         assert!(info.is_worktree());
         assert_eq!(info.git_dir, gitdir_target.canonicalize().unwrap());
         assert_eq!(
             info.common_dir,
-            main_repo.join(".git").canonicalize().unwrap()
+            main_repo
+                .join(".git")
+                .canonicalize()
+                .unwrap()
         );
     }
 
@@ -248,6 +267,10 @@ mod tests {
     #[test]
     fn returns_none_when_no_git() {
         let dir = tempdir().unwrap();
-        assert!(GitRepositoryInfo::discover(dir.path()).unwrap().is_none());
+        assert!(
+            GitRepositoryInfo::discover(dir.path())
+                .unwrap()
+                .is_none()
+        );
     }
 }

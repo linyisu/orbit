@@ -51,11 +51,18 @@ impl Client {
             child,
         };
         let mut marker = vec![0; b"\0ORBIT-WORKSPACE/1\n".len()];
-        client.output.read_exact(&mut marker).await.unwrap();
+        client
+            .output
+            .read_exact(&mut marker)
+            .await
+            .unwrap();
         assert_eq!(marker, b"\0ORBIT-WORKSPACE/1\n");
         assert_eq!(
             client
-                .request(json!({"method":"hello","version":orbit_protocol::VERSION}))
+                .request(json!({
+                    "method": "hello",
+                    "version": orbit_protocol::VERSION
+                }))
                 .await["type"],
             "hello"
         );
@@ -65,13 +72,22 @@ impl Client {
     async fn request(&mut self, request: Value) -> Value {
         tokio::time::timeout(Duration::from_secs(20), async {
             let request = serde_json::to_vec(&request).unwrap();
-            self.input.write_u32(request.len() as u32).await.unwrap();
-            self.input.write_all(&request).await.unwrap();
+            self.input
+                .write_u32(request.len() as u32)
+                .await
+                .unwrap();
+            self.input
+                .write_all(&request)
+                .await
+                .unwrap();
             self.input.flush().await.unwrap();
             let size = self.output.read_u32().await.unwrap();
-            assert!(size < 32 * 1024 * 1024);
+            assert!(size < 32 * 1_024 * 1_024);
             let mut response = vec![0; size as usize];
-            self.output.read_exact(&mut response).await.unwrap();
+            self.output
+                .read_exact(&mut response)
+                .await
+                .unwrap();
             serde_json::from_slice(&response).unwrap()
         })
         .await
@@ -88,7 +104,10 @@ impl Drop for Client {
 async fn mock_model() -> (String, tokio::task::JoinHandle<()>) {
     mock_tool_model(
         "write_file",
-        json!({"path":"result.txt","content":"written remotely"}),
+        json!({
+            "path": "result.txt",
+            "content": "written remotely"
+        }),
         None,
     )
     .await
@@ -99,7 +118,9 @@ async fn mock_tool_model(
     arguments: Value,
     expected: Option<&'static str>,
 ) -> (String, tokio::task::JoinHandle<()>) {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .unwrap();
     let address = listener.local_addr().unwrap();
     let task = tokio::spawn(async move {
         let mut index = 0;
@@ -108,7 +129,10 @@ async fn mock_tool_model(
             let mut request = Vec::new();
             let mut byte = [0; 1];
             while !request.ends_with(b"\r\n\r\n") {
-                socket.read_exact(&mut byte).await.unwrap();
+                socket
+                    .read_exact(&mut byte)
+                    .await
+                    .unwrap();
                 request.push(byte[0]);
             }
             let header = String::from_utf8(request).unwrap();
@@ -126,37 +150,97 @@ async fn mock_tool_model(
                 })
                 .unwrap();
             let mut body = vec![0; length];
-            socket.read_exact(&mut body).await.unwrap();
+            socket
+                .read_exact(&mut body)
+                .await
+                .unwrap();
             let request: Value = serde_json::from_slice(&body).unwrap();
             if request["stream"] == false {
-                let response = json!({"id":"title","model":"mock","choices":[{"index":0,"message":{"role":"assistant","content":"test title"},"finish_reason":"stop"}]}).to_string();
-                socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}", response.len()).as_bytes()).await.unwrap();
+                let response = json!({
+                    "id": "title",
+                    "model": "mock",
+                    "choices": [{
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": "test title"
+                        },
+                        "finish_reason": "stop"
+                    }]
+                })
+                .to_string();
+                socket
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: \
+                    application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}",
+                            response.len()
+                        )
+                        .as_bytes(),
+                    )
+                    .await
+                    .unwrap();
                 continue;
             }
             assert_eq!(request["stream"], true);
             let delta = if index == 0 {
-                json!({"tool_calls":[{"index":0,"id":"write","type":"function","function":{"name":name,"arguments":arguments.to_string()}}]})
+                json!({
+                    "tool_calls": [{
+                        "index": 0,
+                        "id": "write",
+                        "type": "function",
+                        "function": {
+                            "name": name,
+                            "arguments": arguments.to_string()
+                        }
+                    }]
+                })
             } else {
                 if let Some(expected) = expected {
                     assert!(
-                        request["messages"].as_array().unwrap().iter().any(
-                            |message| message["role"] == "tool"
+                        request["messages"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .any(|message| message["role"] == "tool"
                                 && message["content"]
                                     .as_str()
-                                    .is_some_and(|text| text.contains(expected))
-                        ),
+                                    .is_some_and(|text| text.contains(expected))),
                         "tool result missing expected output"
                     );
                 }
-                json!({"content":"任务完成。"})
+                json!({
+                    "content": "任务完成。"
+                })
             };
             let finish = if index == 0 { "tool_calls" } else { "stop" };
             let events = format!(
                 "data: {}\n\ndata: {}\n\ndata: [DONE]\n\n",
-                json!({"choices":[{"index":0,"delta":delta}]}),
-                json!({"choices":[{"index":0,"delta":{},"finish_reason":finish}]})
+                json!({
+                    "choices": [{
+                        "index": 0,
+                        "delta": delta
+                    }]
+                }),
+                json!({
+                    "choices": [{
+                        "index": 0,
+                        "delta": {},
+                        "finish_reason": finish
+                    }]
+                })
             );
-            socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{events}", events.len()).as_bytes()).await.unwrap();
+            socket
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: \
+                text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{events}",
+                        events.len()
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .unwrap();
             index += 1;
         }
     });
@@ -183,28 +267,53 @@ async fn disconnect_preserves_approval_and_run_duplicate_submission_does_not_rep
     .unwrap();
     let mut client = Client::connect(root).await;
     let opened = client
-        .request(json!({"method":"open","resume":null,"model":"test::mock"}))
+        .request(json!({
+            "method": "open",
+            "resume": null,
+            "model": "test::mock"
+        }))
         .await;
     assert_eq!(opened["type"], "opened", "{opened}");
-    let id = opened["value"]["id"].as_str().unwrap().to_owned();
+    let id = opened["value"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     let store = orbit_store::store::Store::open(root.join("sessions.db"))
         .await
         .unwrap();
     assert_eq!(
         client
-            .request(json!({"method":"set_mode","session":id,"mode":"ask"}))
+            .request(json!({
+                "method": "set_mode",
+                "session": id,
+                "mode": "ask"
+            }))
             .await["type"],
         "profile"
     );
-    let start = json!({"method":"start","session":id,"request_id":"stable-request","prompt":"write a file","model":null});
+    let start = json!({
+        "method": "start",
+        "session": id,
+        "request_id": "stable-request",
+        "prompt": "write a file",
+        "model": null
+    });
     assert_eq!(client.request(start.clone()).await["type"], "ok");
     let approval = tokio::time::timeout(Duration::from_secs(15), async {
         loop {
             let page = client
-                .request(json!({"method":"poll","session":id,"after":0}))
+                .request(json!({
+                    "method": "poll",
+                    "session": id,
+                    "after": 0
+                }))
                 .await;
             assert_eq!(page["type"], "page", "{page}");
-            if let Some(approval) = page["value"]["approvals"].as_array().unwrap().first() {
+            if let Some(approval) = page["value"]["approvals"]
+                .as_array()
+                .unwrap()
+                .first()
+            {
                 break approval["id"].as_u64().unwrap();
             }
             assert_eq!(
@@ -242,25 +351,48 @@ async fn disconnect_preserves_approval_and_run_duplicate_submission_does_not_rep
             ]
         })
         .collect();
-    child.append(child_events.clone()).await.unwrap();
+    child
+        .append(child_events.clone())
+        .await
+        .unwrap();
     let child_page = client
-        .request(json!({"method":"read_subagent","session":id,"agent":child.id(),"after":0}))
+        .request(json!({
+            "method": "read_subagent",
+            "session": id,
+            "agent": child.id(),
+            "after": 0
+        }))
         .await;
     assert_eq!(child_page["type"], "subagent");
     assert_eq!(child_page["value"]["more"], true);
-    let mut child_updates = child_page["value"]["updates"].as_array().unwrap().clone();
-    let cursor = child_page["value"]["next"].as_u64().unwrap();
+    let mut child_updates = child_page["value"]["updates"]
+        .as_array()
+        .unwrap()
+        .clone();
+    let cursor = child_page["value"]["next"]
+        .as_u64()
+        .unwrap();
     child
         .finish("completed", vec![], Some(vec![]))
         .await
         .unwrap();
     let child_page = client
-        .request(json!({"method":"read_subagent","session":id,"agent":child.id(),"after":cursor}))
+        .request(json!({
+            "method": "read_subagent",
+            "session": id,
+            "agent": child.id(),
+            "after": cursor
+        }))
         .await;
     assert_eq!(child_page["type"], "subagent", "{child_page}");
     assert_eq!(child_page["value"]["busy"], false);
     assert_eq!(child_page["value"]["more"], false);
-    child_updates.extend(child_page["value"]["updates"].as_array().unwrap().clone());
+    child_updates.extend(
+        child_page["value"]["updates"]
+            .as_array()
+            .unwrap()
+            .clone(),
+    );
     assert_eq!(
         child_updates
             .iter()
@@ -281,15 +413,23 @@ async fn disconnect_preserves_approval_and_run_duplicate_submission_does_not_rep
     );
     for method in ["read_subagent", "send_subagent"] {
         let response = client
-            .request(
-                json!({"method":method,"session":id,"agent":id,"after":0,"message":"unrelated"}),
-            )
+            .request(json!({
+                "method": method,
+                "session": id,
+                "agent": id,
+                "after": 0,
+                "message": "unrelated"
+            }))
             .await;
         assert_eq!(response["type"], "error");
     }
     assert!(!root.join("result.txt").exists());
     assert_eq!(
-        client.request(json!({"method":"shutdown"})).await["type"],
+        client
+            .request(json!({
+                "method": "shutdown"
+            }))
+            .await["type"],
         "error"
     );
     let upgraded = root.join("upgraded-server");
@@ -302,11 +442,20 @@ async fn disconnect_preserves_approval_and_run_duplicate_submission_does_not_rep
     )
     .await;
     assert_eq!(
-        observer.request(json!({"method":"open","resume":id})).await["type"],
+        observer
+            .request(json!({
+                "method": "open",
+                "resume": id
+            }))
+            .await["type"],
         "opened"
     );
     let observed = observer
-        .request(json!({"method":"poll","session":id,"after":0}))
+        .request(json!({
+            "method": "poll",
+            "session": id,
+            "after": 0
+        }))
         .await;
     assert_eq!(observed["value"]["busy"], true);
     assert_eq!(observed["value"]["approvals"][0]["id"], approval);
@@ -316,19 +465,50 @@ async fn disconnect_preserves_approval_and_run_duplicate_submission_does_not_rep
     drop(client);
     let mut client = Client::connect(root).await;
     assert_eq!(
-        client.request(json!({"method":"open","resume":id})).await["type"],
+        client
+            .request(json!({
+                "method": "open",
+                "resume": id
+            }))
+            .await["type"],
         "opened"
     );
     assert_eq!(client.request(start.clone()).await["type"], "ok");
     let mut conflicting = start.clone();
     conflicting["prompt"] = "different prompt".into();
     assert_eq!(client.request(conflicting).await["type"], "error");
-    assert_eq!(observer.request(json!({"method":"approve","session":id,"approval":approval,"allow":true,"remember":false})).await["type"], "ok");
-    assert_eq!(client.request(json!({"method":"approve","session":id,"approval":approval,"allow":true,"remember":false})).await["type"], "error");
+    assert_eq!(
+        observer
+            .request(json!({
+                "method": "approve",
+                "session": id,
+                "approval": approval,
+                "allow": true,
+                "remember": false
+            }))
+            .await["type"],
+        "ok"
+    );
+    assert_eq!(
+        client
+            .request(json!({
+                "method": "approve",
+                "session": id,
+                "approval": approval,
+                "allow": true,
+                "remember": false
+            }))
+            .await["type"],
+        "error"
+    );
     let page = tokio::time::timeout(Duration::from_secs(15), async {
         loop {
             let page = client
-                .request(json!({"method":"poll","session":id,"after":0}))
+                .request(json!({
+                    "method": "poll",
+                    "session": id,
+                    "after": 0
+                }))
                 .await;
             if page["value"]["busy"] == false {
                 break page;
@@ -339,7 +519,11 @@ async fn disconnect_preserves_approval_and_run_duplicate_submission_does_not_rep
     .await
     .unwrap();
     let observed = observer
-        .request(json!({"method":"poll","session":id,"after":0}))
+        .request(json!({
+            "method": "poll",
+            "session": id,
+            "after": 0
+        }))
         .await;
     assert_eq!(observed["value"]["busy"], false);
     assert_eq!(observed["value"]["approvals"], json!([]));
@@ -353,13 +537,19 @@ async fn disconnect_preserves_approval_and_run_duplicate_submission_does_not_rep
                 .count(),
             1
         );
-        assert!(updates.to_string().contains("任务完成。"));
+        assert!(
+            updates
+                .to_string()
+                .contains("任务完成。")
+        );
     }
     assert_eq!(
         std::fs::read_to_string(root.join("result.txt")).unwrap(),
         "written remotely"
     );
-    let updates = page["value"]["updates"].as_array().unwrap();
+    let updates = page["value"]["updates"]
+        .as_array()
+        .unwrap();
     assert_eq!(
         updates
             .iter()
@@ -379,25 +569,41 @@ async fn disconnect_preserves_approval_and_run_duplicate_submission_does_not_rep
     assert_eq!(client.request(start.clone()).await["type"], "ok");
     assert_eq!(
         client
-            .request(json!({"method":"read_file","session":id,"path":"result.txt"}))
+            .request(json!({
+                "method": "read_file",
+                "session": id,
+                "path": "result.txt"
+            }))
             .await["type"],
         "file"
     );
     assert_eq!(
         client
-            .request(json!({"method":"read_file","session":id,"path":"config.toml"}))
+            .request(json!({
+                "method": "read_file",
+                "session": id,
+                "path": "config.toml"
+            }))
             .await["type"],
         "error"
     );
     assert_eq!(
         client
-            .request(json!({"method":"read_file","session":id,"path":"../outside"}))
+            .request(json!({
+                "method": "read_file",
+                "session": id,
+                "path": "../outside"
+            }))
             .await["type"],
         "error"
     );
     let cursor = page["value"]["next"].as_u64().unwrap();
     let empty = client
-        .request(json!({"method":"poll","session":id,"after":cursor}))
+        .request(json!({
+            "method": "poll",
+            "session": id,
+            "after": cursor
+        }))
         .await;
     assert!(
         empty["value"]["updates"]
@@ -409,24 +615,41 @@ async fn disconnect_preserves_approval_and_run_duplicate_submission_does_not_rep
     let cursor = empty["value"]["next"].as_u64().unwrap();
     assert_eq!(
         client
-            .request(json!({"method":"poll","session":id,"after":cursor+1}))
+            .request(json!({
+                "method": "poll",
+                "session": id,
+                "after": cursor + 1
+            }))
             .await["type"],
         "error"
     );
     assert_eq!(
-        client.request(json!({"method":"shutdown"})).await["type"],
+        client
+            .request(json!({
+                "method": "shutdown"
+            }))
+            .await["type"],
         "ok"
     );
     drop(client);
     tokio::time::sleep(Duration::from_millis(50)).await;
     let mut client = Client::connect(root).await;
     assert_eq!(
-        client.request(json!({"method":"open","resume":id})).await["type"],
+        client
+            .request(json!({
+                "method": "open",
+                "resume": id
+            }))
+            .await["type"],
         "opened"
     );
     assert_eq!(client.request(start).await["type"], "ok");
     let restored = client
-        .request(json!({"method":"poll","session":id,"after":0}))
+        .request(json!({
+            "method": "poll",
+            "session": id,
+            "after": 0
+        }))
         .await;
     assert_eq!(restored["value"]["busy"], false);
     assert_eq!(
@@ -438,21 +661,50 @@ async fn disconnect_preserves_approval_and_run_duplicate_submission_does_not_rep
             .count(),
         1
     );
-    assert_eq!(client.request(json!({"method":"session_action","session":id,"action":{"action":"rename","title":"restored title"}})).await["type"], "report");
-    let profile = client.request(json!({"method":"open","resume":id})).await;
+    assert_eq!(
+        client
+            .request(json!({
+                "method": "session_action",
+                "session": id,
+                "action": {
+                    "action": "rename",
+                    "title": "restored title"
+                }
+            }))
+            .await["type"],
+        "report"
+    );
+    let profile = client
+        .request(json!({
+            "method": "open",
+            "resume": id
+        }))
+        .await;
     assert_eq!(profile["value"]["title"], "restored title");
     assert_eq!(
         client
-            .request(json!({"method":"undo","session":id,"path":"result.txt"}))
+            .request(json!({
+                "method": "undo",
+                "session": id,
+                "path": "result.txt"
+            }))
             .await["type"],
         "ok"
     );
     let approval = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             let page = client
-                .request(json!({"method":"poll","session":id,"after":0}))
+                .request(json!({
+                    "method": "poll",
+                    "session": id,
+                    "after": 0
+                }))
                 .await;
-            if let Some(approval) = page["value"]["approvals"].as_array().unwrap().first() {
+            if let Some(approval) = page["value"]["approvals"]
+                .as_array()
+                .unwrap()
+                .first()
+            {
                 break approval["id"].as_u64().unwrap();
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -463,11 +715,26 @@ async fn disconnect_preserves_approval_and_run_duplicate_submission_does_not_rep
     assert!(root.join("result.txt").exists());
     drop(client);
     let mut client = Client::connect(root).await;
-    assert_eq!(client.request(json!({"method":"approve","session":id,"approval":approval,"allow":true,"remember":false})).await["type"], "ok");
+    assert_eq!(
+        client
+            .request(json!({
+                "method": "approve",
+                "session": id,
+                "approval": approval,
+                "allow": true,
+                "remember": false
+            }))
+            .await["type"],
+        "ok"
+    );
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             let page = client
-                .request(json!({"method":"poll","session":id,"after":0}))
+                .request(json!({
+                    "method": "poll",
+                    "session": id,
+                    "after": 0
+                }))
                 .await;
             if page["value"]["busy"] == false {
                 break;
@@ -487,7 +754,11 @@ async fn disconnect_preserves_approval_and_run_duplicate_submission_does_not_rep
             .all(|change| change.undone)
     );
     assert_eq!(
-        client.request(json!({"method":"shutdown"})).await["type"],
+        client
+            .request(json!({
+                "method": "shutdown"
+            }))
+            .await["type"],
         "ok"
     );
     model.await.unwrap();
@@ -557,22 +828,52 @@ async fn cancelling_a_disconnected_pending_approval_does_not_write_the_file() {
     .unwrap();
     let mut client = Client::connect(root).await;
     let opened = client
-        .request(json!({"method":"open","resume":null,"model":"test::mock"}))
+        .request(json!({
+            "method": "open",
+            "resume": null,
+            "model": "test::mock"
+        }))
         .await;
-    let id = opened["value"]["id"].as_str().unwrap().to_owned();
+    let id = opened["value"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     assert_eq!(
         client
-            .request(json!({"method":"set_mode","session":id,"mode":"ask"}))
+            .request(json!({
+                "method": "set_mode",
+                "session": id,
+                "mode": "ask"
+            }))
             .await["type"],
         "profile"
     );
-    assert_eq!(client.request(json!({"method":"start","session":id,"request_id":"cancel-me","prompt":"write a file","model":null})).await["type"], "ok");
+    assert_eq!(
+        client
+            .request(json!({
+                "method": "start",
+                "session": id,
+                "request_id": "cancel-me",
+                "prompt": "write a file",
+                "model": null
+            }))
+            .await["type"],
+        "ok"
+    );
     tokio::time::timeout(Duration::from_secs(15), async {
         loop {
             let page = client
-                .request(json!({"method":"poll","session":id,"after":0}))
+                .request(json!({
+                    "method": "poll",
+                    "session": id,
+                    "after": 0
+                }))
                 .await;
-            if !page["value"]["approvals"].as_array().unwrap().is_empty() {
+            if !page["value"]["approvals"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+            {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(25)).await;
@@ -584,14 +885,21 @@ async fn cancelling_a_disconnected_pending_approval_does_not_write_the_file() {
     let mut client = Client::connect(root).await;
     assert_eq!(
         client
-            .request(json!({"method":"cancel","session":id}))
+            .request(json!({
+                "method": "cancel",
+                "session": id
+            }))
             .await["type"],
         "ok"
     );
     tokio::time::timeout(Duration::from_secs(15), async {
         loop {
             let page = client
-                .request(json!({"method":"poll","session":id,"after":0}))
+                .request(json!({
+                    "method": "poll",
+                    "session": id,
+                    "after": 0
+                }))
                 .await;
             if page["value"]["busy"] == false {
                 assert_eq!(
@@ -604,7 +912,12 @@ async fn cancelling_a_disconnected_pending_approval_does_not_write_the_file() {
                         .unwrap()["Finished"]["status"],
                     "cancelled"
                 );
-                assert!(page["value"]["approvals"].as_array().unwrap().is_empty());
+                assert!(
+                    page["value"]["approvals"]
+                        .as_array()
+                        .unwrap()
+                        .is_empty()
+                );
                 break;
             }
             tokio::time::sleep(Duration::from_millis(25)).await;
@@ -614,7 +927,11 @@ async fn cancelling_a_disconnected_pending_approval_does_not_write_the_file() {
     .unwrap();
     assert!(!root.join("result.txt").exists());
     assert_eq!(
-        client.request(json!({"method":"shutdown"})).await["type"],
+        client
+            .request(json!({
+                "method": "shutdown"
+            }))
+            .await["type"],
         "ok"
     );
 }
@@ -706,7 +1023,12 @@ async fn remote_prompt_uses_local_configuration_and_credentials_in_an_unconfigur
             std::fs::read_to_string(project.path().join("result.txt")).unwrap(),
             "written remotely"
         );
-        assert!(!project.path().join("config.toml").exists());
+        assert!(
+            !project
+                .path()
+                .join("config.toml")
+                .exists()
+        );
         assert!(!project.path().join("auth").exists());
         assert!(!String::from_utf8_lossy(&output.stderr).contains("test-only"));
         model.await.unwrap();
@@ -735,7 +1057,14 @@ async fn remote_prompt_uses_local_configuration_and_credentials_in_an_unconfigur
 async fn workspace_controls_follow_directory_and_preserve_saved_profile() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();
-    let (url, model) = mock_tool_model("read_file", json!({"path":"proof.txt"}), None).await;
+    let (url, model) = mock_tool_model(
+        "read_file",
+        json!({
+            "path": "proof.txt"
+        }),
+        None,
+    )
+    .await;
     std::fs::write(
         root.join("config.toml"),
         TestConfig::new()
@@ -754,12 +1083,22 @@ async fn workspace_controls_follow_directory_and_preserve_saved_profile() {
     std::fs::write(project.join("proof.txt"), "target directory").unwrap();
     let mut client = Client::connect(root).await;
     let opened = client
-        .request(json!({"method":"open","model":"test::mock"}))
+        .request(json!({
+            "method": "open",
+            "model": "test::mock"
+        }))
         .await;
     assert_eq!(opened["type"], "opened", "{opened}");
-    let id = opened["value"]["id"].as_str().unwrap().to_owned();
+    let id = opened["value"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     let completion = client
-        .request(json!({"method":"complete","session":id,"input":"/cd next"}))
+        .request(json!({
+            "method": "complete",
+            "session": id,
+            "input": "/cd next"
+        }))
         .await;
     assert_eq!(completion["type"], "completions", "{completion}");
     assert_eq!(
@@ -770,7 +1109,11 @@ async fn workspace_controls_follow_directory_and_preserve_saved_profile() {
         std::fs::create_dir(root.join(name)).unwrap();
     }
     let completion = client
-        .request(json!({"method":"complete","session":id,"input":"/cd ~/Tes"}))
+        .request(json!({
+            "method": "complete",
+            "session": id,
+            "input": "/cd ~/Tes"
+        }))
         .await;
     assert_eq!(
         completion["value"]["entries"]
@@ -782,9 +1125,22 @@ async fn workspace_controls_follow_directory_and_preserve_saved_profile() {
         ["Tests/", "Templates/", "T_e_s/"]
     );
     for request in [
-        json!({"method":"set_mode","session":id,"mode":"ask"}),
-        json!({"method":"set_model","session":id,"model":"test::other","effort":null}),
-        json!({"method":"configure_models","session":id,"configuration":null}),
+        json!({
+            "method": "set_mode",
+            "session": id,
+            "mode": "ask"
+        }),
+        json!({
+            "method": "set_model",
+            "session": id,
+            "model": "test::other",
+            "effort": null
+        }),
+        json!({
+            "method": "configure_models",
+            "session": id,
+            "configuration": null
+        }),
     ] {
         let expected = if request["method"] == "set_mode" {
             "profile"
@@ -794,14 +1150,31 @@ async fn workspace_controls_follow_directory_and_preserve_saved_profile() {
         let response = client.request(request).await;
         assert_eq!(response["type"], expected, "{response}");
     }
-    let moved = client.request(json!({"method":"session_action","session":id,"action":{"action":"change_directory","path":"'~/next project'"}})).await;
+    let moved = client
+        .request(json!({
+            "method": "session_action",
+            "session": id,
+            "action": {
+                "action": "change_directory",
+                "path": "'~/next project'"
+            }
+        }))
+        .await;
     assert_eq!(moved["type"], "ok", "{moved}");
     let page = client
-        .request(json!({"method":"poll","session":id,"after":0}))
+        .request(json!({
+            "method": "poll",
+            "session": id,
+            "after": 0
+        }))
         .await;
-    let updates = page["value"]["updates"].as_array().unwrap();
+    let updates = page["value"]["updates"]
+        .as_array()
+        .unwrap();
     assert!(
-        updates.iter().all(|update| update.get("Report").is_none()),
+        updates
+            .iter()
+            .all(|update| update.get("Report").is_none()),
         "{page}"
     );
     assert!(
@@ -810,9 +1183,23 @@ async fn workspace_controls_follow_directory_and_preserve_saved_profile() {
             .any(|update| update["Profile"]["workspace"] == project.to_string_lossy().as_ref()),
         "{page}"
     );
-    let invalid = client.request(json!({"method":"session_action","session":id,"action":{"action":"change_directory","path":"missing-directory"}})).await;
+    let invalid = client
+        .request(json!({
+            "method": "session_action",
+            "session": id,
+            "action": {
+                "action": "change_directory",
+                "path": "missing-directory"
+            }
+        }))
+        .await;
     assert_eq!(invalid["type"], "error", "{invalid}");
-    let info = client.request(json!({"method":"open","resume":id})).await;
+    let info = client
+        .request(json!({
+            "method": "open",
+            "resume": id
+        }))
+        .await;
     assert_eq!(
         info["value"]["workspace"],
         project.to_string_lossy().as_ref()
@@ -820,24 +1207,57 @@ async fn workspace_controls_follow_directory_and_preserve_saved_profile() {
     assert_eq!(info["value"]["mode"], "ask");
     assert_eq!(info["value"]["model"], "test::other");
     let file = client
-        .request(json!({"method":"read_file","session":id,"path":"proof.txt"}))
+        .request(json!({
+            "method": "read_file",
+            "session": id,
+            "path": "proof.txt"
+        }))
         .await;
     assert_eq!(file["type"], "file", "{file}");
-    let task = client.request(json!({"method":"session_action","session":id,"action":{"action":"task","task":{"action":"add","title":"service task"}}})).await;
+    let task = client
+        .request(json!({
+            "method": "session_action",
+            "session": id,
+            "action": {
+                "action": "task",
+                "task": {
+                    "action": "add",
+                    "title": "service task"
+                }
+            }
+        }))
+        .await;
     assert_eq!(task["type"], "report", "{task}");
     let task_completion = client
-        .request(json!({"method":"complete","session":id,"input":"/tasks done "}))
+        .request(json!({
+            "method": "complete",
+            "session": id,
+            "input": "/tasks done "
+        }))
         .await;
     assert_eq!(
         task_completion["value"]["entries"][0]["description"], "service task",
         "{task_completion}"
     );
     let list = client
-        .request(json!({"method":"list_sessions","session":id}))
+        .request(json!({
+            "method": "list_sessions",
+            "session": id
+        }))
         .await;
-    assert!(list["value"].as_array().unwrap().is_empty(), "{list}");
+    assert!(
+        list["value"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        "{list}"
+    );
     let completions = client
-        .request(json!({"method":"complete","session":id,"input":"/resume "}))
+        .request(json!({
+            "method": "complete",
+            "session": id,
+            "input": "/resume "
+        }))
         .await;
     assert!(
         completions["value"]["entries"]
@@ -850,18 +1270,45 @@ async fn workspace_controls_follow_directory_and_preserve_saved_profile() {
         .await
         .unwrap();
     let saved = client
-        .request(json!({"method":"open","model":"test::mock"}))
+        .request(json!({
+            "method": "open",
+            "model": "test::mock"
+        }))
         .await;
     assert_eq!(saved["type"], "opened", "{saved}");
-    let saved_id = saved["value"]["id"].as_str().unwrap().to_owned();
-    let moved = client.request(json!({"method":"session_action","session":saved_id,"action":{"action":"change_directory","path":project}})).await;
+    let saved_id = saved["value"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let moved = client
+        .request(json!({
+            "method": "session_action",
+            "session": saved_id,
+            "action": {
+                "action": "change_directory",
+                "path": project
+            }
+        }))
+        .await;
     assert_eq!(moved["type"], "ok", "{moved}");
-    let started = client.request(json!({"method":"start","session":saved_id,"request_id":"history-run","prompt":"read proof.txt","model":null})).await;
+    let started = client
+        .request(json!({
+            "method": "start",
+            "session": saved_id,
+            "request_id": "history-run",
+            "prompt": "read proof.txt",
+            "model": null
+        }))
+        .await;
     assert_eq!(started["type"], "ok", "{started}");
     let page = tokio::time::timeout(Duration::from_secs(15), async {
         loop {
             let page = client
-                .request(json!({"method":"poll","session":saved_id,"after":0}))
+                .request(json!({
+                    "method": "poll",
+                    "session": saved_id,
+                    "after": 0
+                }))
                 .await;
             if page["value"]["busy"] == false {
                 break page;
@@ -871,17 +1318,31 @@ async fn workspace_controls_follow_directory_and_preserve_saved_profile() {
     })
     .await
     .unwrap();
-    assert!(page.to_string().contains("target directory"), "{page}");
+    assert!(
+        page.to_string()
+            .contains("target directory"),
+        "{page}"
+    );
     let list = client
-        .request(json!({"method":"list_sessions","session":id}))
+        .request(json!({
+            "method": "list_sessions",
+            "session": id
+        }))
         .await;
     assert_eq!(list["value"].as_array().unwrap().len(), 1, "{list}");
     assert_eq!(list["value"][0]["id"], saved_id);
     let completions = client
-        .request(json!({"method":"complete","session":id,"input":"/resume "}))
+        .request(json!({
+            "method": "complete",
+            "session": id,
+            "input": "/resume "
+        }))
         .await;
     assert_eq!(
-        completions["value"]["entries"].as_array().unwrap().len(),
+        completions["value"]["entries"]
+            .as_array()
+            .unwrap()
+            .len(),
         1,
         "{completions}"
     );
@@ -890,9 +1351,16 @@ async fn workspace_controls_follow_directory_and_preserve_saved_profile() {
         format!("/resume {saved_id}")
     );
     let legacy_window = store.open_tui_window().await.unwrap();
-    legacy_window.update(vec![saved_id.clone()]).await.unwrap();
+    legacy_window
+        .update(vec![saved_id.clone()])
+        .await
+        .unwrap();
     legacy_window.close().await.unwrap();
-    let restored = client.request(json!({"method":"restore_sessions"})).await;
+    let restored = client
+        .request(json!({
+            "method": "restore_sessions"
+        }))
+        .await;
     assert!(
         restored["value"]
             .as_array()
@@ -902,11 +1370,21 @@ async fn workspace_controls_follow_directory_and_preserve_saved_profile() {
         "{restored}"
     );
     let deletion = client
-        .request(json!({"method":"admin","action":{"action":"delete_session","id":saved_id}}))
+        .request(json!({
+            "method": "admin",
+            "action": {
+                "action": "delete_session",
+                "id": saved_id
+            }
+        }))
         .await;
     assert_eq!(deletion["type"], "report", "{deletion}");
     assert_eq!(
-        client.request(json!({"method":"shutdown"})).await["type"],
+        client
+            .request(json!({
+                "method": "shutdown"
+            }))
+            .await["type"],
         "ok"
     );
     model.abort();
@@ -926,7 +1404,9 @@ async fn native_execution_and_model_inheritance_use_the_packaged_local_service()
     let root = directory.path();
     let (url, model) = mock_tool_model(
         "run_command",
-        json!({"command":"echo native-command-ok; pwd"}),
+        json!({
+            "command": "echo native-command-ok; pwd"
+        }),
         Some("native-command-ok"),
     )
     .await;
@@ -1019,9 +1499,14 @@ async fn native_execution_and_model_inheritance_use_the_packaged_local_service()
     assert!(history.contains("native-command-ok"));
     assert!(history.contains(root.to_str().unwrap()));
     let mut connection = (*opened.connection).clone();
-    let local = connection.local_configuration.as_mut().unwrap();
+    let local = connection
+        .local_configuration
+        .as_mut()
+        .unwrap();
     local.model = None;
-    local.remember_model("test::first").unwrap();
+    local
+        .remember_model("test::first")
+        .unwrap();
     let connection = Arc::new(connection);
     let fresh = Opened::connect_progress(connection.clone(), None, interaction::channel().0)
         .await
@@ -1042,7 +1527,11 @@ async fn native_execution_and_model_inheritance_use_the_packaged_local_service()
         Some("test::first")
     );
     assert!(matches!(
-        opened.client.request(Request::Shutdown).await.unwrap(),
+        opened
+            .client
+            .request(Request::Shutdown)
+            .await
+            .unwrap(),
         Response::Ok
     ));
 }
@@ -1090,20 +1579,39 @@ async fn packaged_service_lists_history_created_by_the_native_store() {
 
     let mut client = Client::connect(root).await;
     let opened = client
-        .request(json!({"method":"open","model":"test::mock"}))
+        .request(json!({
+            "method": "open",
+            "model": "test::mock"
+        }))
         .await;
     assert_eq!(opened["type"], "opened", "{opened}");
     let id = opened["value"]["id"].as_str().unwrap();
     for request in [
-        json!({"method":"sessions"}),
-        json!({"method":"list_sessions","session":id}),
+        json!({
+            "method": "sessions"
+        }),
+        json!({
+            "method": "list_sessions",
+            "session": id
+        }),
     ] {
         let history = client.request(request).await;
-        assert_eq!(history["value"].as_array().unwrap().len(), 1, "{history}");
+        assert_eq!(
+            history["value"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1,
+            "{history}"
+        );
         assert_eq!(history["value"][0]["id"], history_id);
     }
     let completions = client
-        .request(json!({"method":"complete","session":id,"input":"/resume "}))
+        .request(json!({
+            "method": "complete",
+            "session": id,
+            "input": "/resume "
+        }))
         .await;
     assert_eq!(
         completions["value"]["entries"][0]["name"],
@@ -1116,7 +1624,11 @@ async fn packaged_service_lists_history_created_by_the_native_store() {
     assert!(store.session(&history_id).await.is_ok());
     assert_eq!(store.projects().await.unwrap().len(), 1);
     assert_eq!(
-        client.request(json!({"method":"shutdown"})).await["type"],
+        client
+            .request(json!({
+                "method": "shutdown"
+            }))
+            .await["type"],
         "ok"
     );
 }
@@ -1135,16 +1647,27 @@ async fn model_selection_is_explicit_and_catalog_refresh_never_switches_it() {
         .unwrap();
     std::fs::write(root.join("config.toml"), config).unwrap();
     let mut client = Client::connect(root).await;
-    let missing = client.request(json!({"method":"open"})).await;
+    let missing = client
+        .request(json!({
+            "method": "open"
+        }))
+        .await;
     assert_eq!(missing["type"], "error", "{missing}");
     let opened = client
-        .request(json!({"method":"open","model":"test::chosen"}))
+        .request(json!({
+            "method": "open",
+            "model": "test::chosen"
+        }))
         .await;
     assert_eq!(opened["type"], "opened", "{opened}");
     assert_eq!(opened["value"]["model"], "test::chosen");
     let id = opened["value"]["id"].as_str().unwrap();
     let restored = client
-        .request(json!({"method":"open","resume":id,"model":"test::first"}))
+        .request(json!({
+            "method": "open",
+            "resume": id,
+            "model": "test::first"
+        }))
         .await;
     assert_eq!(restored["value"]["model"], "test::chosen");
     std::fs::write(
@@ -1160,24 +1683,50 @@ async fn model_selection_is_explicit_and_catalog_refresh_never_switches_it() {
     )
     .unwrap();
     let refreshed = client
-        .request(json!({"method":"configure_models","session":id}))
+        .request(json!({
+            "method": "configure_models",
+            "session": id
+        }))
         .await;
     assert_eq!(refreshed["type"], "ok", "{refreshed}");
-    let profile = client.request(json!({"method":"open","resume":id})).await;
+    let profile = client
+        .request(json!({
+            "method": "open",
+            "resume": id
+        }))
+        .await;
     assert_eq!(profile["value"]["model"], "test::chosen");
     assert_eq!(profile["value"]["models"], json!(["test::first"]));
     let refused = client
-        .request(json!({"method":"start","session":id,"request_id":"removed","prompt":"hello"}))
+        .request(json!({
+            "method": "start",
+            "session": id,
+            "request_id": "removed",
+            "prompt": "hello"
+        }))
         .await;
     assert_eq!(refused["type"], "error", "{refused}");
     let selected = client
-        .request(json!({"method":"set_model","session":id,"model":"test::first"}))
+        .request(json!({
+            "method": "set_model",
+            "session": id,
+            "model": "test::first"
+        }))
         .await;
     assert_eq!(selected["type"], "ok", "{selected}");
-    let profile = client.request(json!({"method":"open","resume":id})).await;
+    let profile = client
+        .request(json!({
+            "method": "open",
+            "resume": id
+        }))
+        .await;
     assert_eq!(profile["value"]["model"], "test::first");
     assert_eq!(
-        client.request(json!({"method":"shutdown"})).await["type"],
+        client
+            .request(json!({
+                "method": "shutdown"
+            }))
+            .await["type"],
         "ok"
     );
 }
@@ -1188,7 +1737,11 @@ async fn two_sessions_share_a_service_across_executables_configs_and_database_al
     let root = directory.path();
     for name in ["first", "second"] {
         TestConfig::new()
-            .provider(TestProvider::new(name).key("test-only").models(["mock"]))
+            .provider(
+                TestProvider::new(name)
+                    .key("test-only")
+                    .models(["mock"]),
+            )
             .write(root.join(format!("{name}.toml")))
             .unwrap();
     }
@@ -1206,19 +1759,37 @@ async fn two_sessions_share_a_service_across_executables_configs_and_database_al
     .await;
     let mut second = Client::connect_with(root, &upgraded, &root.join("second.toml"), &alias).await;
     let a = first
-        .request(json!({"method":"open","model":"first::mock"}))
+        .request(json!({
+            "method": "open",
+            "model": "first::mock"
+        }))
         .await;
     let b = second
-        .request(json!({"method":"open","model":"second::mock"}))
+        .request(json!({
+            "method": "open",
+            "model": "second::mock"
+        }))
         .await;
     assert_eq!(a["type"], "opened", "{a}");
     assert_eq!(b["type"], "opened", "{b}");
-    let a = a["value"]["id"].as_str().unwrap().to_owned();
-    let b = b["value"]["id"].as_str().unwrap().to_owned();
+    let a = a["value"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let b = b["value"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     assert_ne!(a, b);
     let (a_restored, b_restored) = tokio::join!(
-        second.request(json!({"method":"open","resume":a})),
-        first.request(json!({"method":"open","resume":b})),
+        second.request(json!({
+            "method": "open",
+            "resume": a
+        })),
+        first.request(json!({
+            "method": "open",
+            "resume": b
+        })),
     );
     assert_eq!(a_restored["type"], "opened", "{a_restored}");
     assert_eq!(b_restored["type"], "opened", "{b_restored}");
@@ -1227,24 +1798,57 @@ async fn two_sessions_share_a_service_across_executables_configs_and_database_al
     for id in [&a, &b] {
         assert_eq!(
             second
-                .request(json!({"method":"set_mode","session":id,"mode":"ask"}))
+                .request(json!({
+                    "method": "set_mode",
+                    "session": id,
+                    "mode": "ask"
+                }))
                 .await["type"],
             "profile"
         );
-        assert_eq!(first.request(json!({"method":"session_action","session":id,"action":{"action":"rename","title":id}})).await["type"], "report");
+        assert_eq!(
+            first
+                .request(json!({
+                    "method": "session_action",
+                    "session": id,
+                    "action": {
+                        "action": "rename",
+                        "title": id
+                    }
+                }))
+                .await["type"],
+            "report"
+        );
         let left = first
-            .request(json!({"method":"poll","session":id,"after":0}))
+            .request(json!({
+                "method": "poll",
+                "session": id,
+                "after": 0
+            }))
             .await;
         let right = second
-            .request(json!({"method":"poll","session":id,"after":0}))
+            .request(json!({
+                "method": "poll",
+                "session": id,
+                "after": 0
+            }))
             .await;
         assert_eq!(left, right);
-        let profile = second.request(json!({"method":"open","resume":id})).await;
+        let profile = second
+            .request(json!({
+                "method": "open",
+                "resume": id
+            }))
+            .await;
         assert_eq!(profile["value"]["title"], *id);
         assert_eq!(profile["value"]["mode"], "ask");
     }
     assert_eq!(
-        second.request(json!({"method":"shutdown"})).await["type"],
+        second
+            .request(json!({
+                "method": "shutdown"
+            }))
+            .await["type"],
         "ok"
     );
 }

@@ -72,7 +72,13 @@ fn desktop_review_distinguishes_index_worktree_and_untracked_content() {
     fs::write(directory.path().join("tracked.txt"), "working\n").unwrap();
     fs::write(directory.path().join("new.txt"), "new\n").unwrap();
     fs::create_dir(directory.path().join("new-directory")).unwrap();
-    fs::write(directory.path().join("new-directory/note.txt"), "nested\n").unwrap();
+    fs::write(
+        directory
+            .path()
+            .join("new-directory/note.txt"),
+        "nested\n",
+    )
+    .unwrap();
     let workspace = Workspace::new(directory.path()).unwrap();
     let status = review_status(&workspace, 0).unwrap();
     assert!(
@@ -110,7 +116,13 @@ fn desktop_review_retains_protected_paths_and_inode_checks_but_allows_deleted_fi
     fs::write(external.path().join("outside.txt"), "outside secret").unwrap();
     fs::write(directory.path().join("config.toml"), "original secret").unwrap();
     fs::create_dir(directory.path().join("private")).unwrap();
-    fs::write(directory.path().join("private/auth.json"), "credential").unwrap();
+    fs::write(
+        directory
+            .path()
+            .join("private/auth.json"),
+        "credential",
+    )
+    .unwrap();
     fs::create_dir(directory.path().join("removed")).unwrap();
     fs::write(
         directory.path().join("removed/old.txt"),
@@ -125,23 +137,35 @@ fn desktop_review_retains_protected_paths_and_inode_checks_but_allows_deleted_fi
     fs::write(directory.path().join("config.toml"), "changed secret").unwrap();
     fs::hard_link(
         directory.path().join("config.toml"),
-        directory.path().join("config-alias.txt"),
+        directory
+            .path()
+            .join("config-alias.txt"),
     )
     .unwrap();
     symlink("private/auth.json", directory.path().join("auth-alias.txt")).unwrap();
     symlink(
         external.path().join("outside.txt"),
-        directory.path().join("outside-alias.txt"),
+        directory
+            .path()
+            .join("outside-alias.txt"),
     )
     .unwrap();
-    symlink(external.path(), directory.path().join("outside-directory")).unwrap();
+    symlink(
+        external.path(),
+        directory
+            .path()
+            .join("outside-directory"),
+    )
+    .unwrap();
     fs::remove_file(directory.path().join("removed/old.txt")).unwrap();
     fs::remove_dir(directory.path().join("removed")).unwrap();
     let mut workspace = Workspace::new(directory.path()).unwrap();
     workspace
         .protect(directory.path().join("config.toml"))
         .unwrap();
-    workspace.protect(directory.path().join("private")).unwrap();
+    workspace
+        .protect(directory.path().join("private"))
+        .unwrap();
 
     for path in [
         "config.toml",
@@ -222,7 +246,13 @@ fn git_inspection_never_executes_repository_clean_or_process_filters() {
     fs::write(directory.path().join("process.txt"), "process changed\n").unwrap();
     let workspace = Workspace::new(directory.path()).unwrap();
     let status = review_status(&workspace, 0).unwrap();
-    assert_eq!(status["entries"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        status["entries"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
     assert!(
         review_patch(&workspace, "tracked.txt", false, false)
             .unwrap()
@@ -238,8 +268,18 @@ fn git_inspection_never_executes_repository_clean_or_process_filters() {
             .unwrap()
             .contains("+process changed")
     );
-    assert!(!directory.path().join(".clean-filter-executed").exists());
-    assert!(!directory.path().join(".process-filter-executed").exists());
+    assert!(
+        !directory
+            .path()
+            .join(".clean-filter-executed")
+            .exists()
+    );
+    assert!(
+        !directory
+            .path()
+            .join(".process-filter-executed")
+            .exists()
+    );
 }
 
 #[test]
@@ -257,10 +297,22 @@ fn desktop_review_paginates_individual_nested_untracked_files_without_omissions(
     }
     let workspace = Workspace::new(directory.path()).unwrap();
     let first = review_status(&workspace, 0).unwrap();
-    assert_eq!(first["entries"].as_array().unwrap().len(), 500);
+    assert_eq!(
+        first["entries"]
+            .as_array()
+            .unwrap()
+            .len(),
+        500
+    );
     assert_eq!(first["next_offset"], 500);
     let second = review_status(&workspace, 500).unwrap();
-    assert_eq!(second["entries"].as_array().unwrap().len(), 5);
+    assert_eq!(
+        second["entries"]
+            .as_array()
+            .unwrap()
+            .len(),
+        5
+    );
     assert_eq!(second["next_offset"], Value::Null);
     let paths: std::collections::BTreeSet<_> = first["entries"]
         .as_array()
@@ -280,22 +332,67 @@ async fn reports_branch_status_diff_and_history_without_writing() {
     fs::write(directory.path().join("new.txt"), "new\n").unwrap();
     let baseline = capture_baseline(directory.path()).expect("Git baseline");
 
-    assert_eq!(baseline["entries"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        baseline["entries"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
     assert!(capture_baseline(Path::new("/tmp")).is_none());
 
     let tool = GitInspect::new(Workspace::new(directory.path()).unwrap());
 
-    let status = run(&tool, json!({ "view": "status", "limit": 1 })).await;
+    let status = run(
+        &tool,
+        json!({
+            "view": "status",
+            "limit": 1
+        }),
+    )
+    .await;
 
-    assert!(status["branch"]["oid"].as_str().unwrap().len() >= 7);
-    assert_eq!(status["entries"].as_array().unwrap().len(), 1);
+    assert!(
+        status["branch"]["oid"]
+            .as_str()
+            .unwrap()
+            .len()
+            >= 7
+    );
+    assert_eq!(
+        status["entries"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
     assert_eq!(status["has_more"], true);
 
-    let next = run(&tool, json!({ "view": "status", "offset": 1 })).await;
+    let next = run(
+        &tool,
+        json!({
+            "view": "status",
+            "offset": 1
+        }),
+    )
+    .await;
 
-    assert_eq!(next["entries"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        next["entries"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
 
-    let diff = run(&tool, json!({ "view": "diff", "path": "tracked.txt" })).await;
+    let diff = run(
+        &tool,
+        json!({
+            "view": "diff",
+            "path": "tracked.txt"
+        }),
+    )
+    .await;
 
     assert!(
         diff["lines"]
@@ -312,7 +409,13 @@ async fn reports_branch_status_diff_and_history_without_writing() {
             .any(|line| line == "+second")
     );
 
-    let history = run(&tool, json!({ "view": "history" })).await;
+    let history = run(
+        &tool,
+        json!({
+            "view": "history"
+        }),
+    )
+    .await;
 
     assert_eq!(history["commits"][0]["subject"], "initial commit");
     assert_eq!(
@@ -327,7 +430,13 @@ async fn reports_both_paths_for_a_staged_rename() {
     git(directory.path(), &["mv", "tracked.txt", "renamed.txt"]);
     let tool = GitInspect::new(Workspace::new(directory.path()).unwrap());
 
-    let status = run(&tool, json!({ "view": "status" })).await;
+    let status = run(
+        &tool,
+        json!({
+            "view": "status"
+        }),
+    )
+    .await;
     let entry = &status["entries"][0];
 
     assert_eq!(entry["kind"], "renamed_or_copied");
@@ -345,7 +454,13 @@ async fn rejects_paths_outside_workspace_and_non_root_workspaces() {
     assert!(matches!(
         root_tool
             .execute(
-                ToolCall::function("git", "git_inspect", json!({ "path": ".." })),
+                ToolCall::function(
+                    "git",
+                    "git_inspect",
+                    json!({
+                        "path": ".."
+                    })
+                ),
                 CancellationToken::new(),
             )
             .await,
@@ -383,12 +498,27 @@ async fn history_keeps_commit_fields_aligned_across_records_and_pages() {
     }
 
     let tool = GitInspect::new(Workspace::new(directory.path()).unwrap());
-    let first = run(&tool, json!({ "view": "history", "limit": 2 })).await;
+    let first = run(
+        &tool,
+        json!({
+            "view": "history",
+            "limit": 2
+        }),
+    )
+    .await;
 
     assert_eq!(first["has_more"], true);
     assert_eq!(first["next_offset"], 2);
 
-    let second = run(&tool, json!({ "view": "history", "offset": 2, "limit": 2 })).await;
+    let second = run(
+        &tool,
+        json!({
+            "view": "history",
+            "offset": 2,
+            "limit": 2
+        }),
+    )
+    .await;
 
     assert_eq!(second["has_more"], false);
     assert_eq!(second["next_offset"], Value::Null);
@@ -412,9 +542,17 @@ async fn history_keeps_commit_fields_aligned_across_records_and_pages() {
         let id = commit["id"].as_str().unwrap();
 
         assert_eq!(id.len(), 40);
-        assert!(id.bytes().all(|b| b.is_ascii_hexdigit()));
+        assert!(
+            id.bytes()
+                .all(|b| b.is_ascii_hexdigit())
+        );
         assert!(id.starts_with(commit["short_id"].as_str().unwrap()));
-        assert!(commit["authored_at"].as_str().unwrap().contains('T'));
+        assert!(
+            commit["authored_at"]
+                .as_str()
+                .unwrap()
+                .contains('T')
+        );
 
         let actual = Command::new("git")
             .arg("-C")

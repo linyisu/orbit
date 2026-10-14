@@ -14,9 +14,16 @@ fn tool(index: usize, name: &str, status: ToolStatus) -> TranscriptItem {
         name: name.into(),
         status,
         arguments: if name == "read_agent" {
-            serde_json::json!({"agent_id":"orbit-agent","message_id":100+index,"offset":index*100})
+            serde_json::json!({
+                "agent_id": "orbit-agent",
+                "message_id": 100 + index,
+                "offset": index * 100
+            })
         } else {
-            serde_json::json!({"path":"orbit.rs","start_line":index+1})
+            serde_json::json!({
+                "path": "orbit.rs",
+                "start_line": index + 1
+            })
         }
         .to_string(),
         output: format!("Orbit 结果 {index}\nhttps://orbit.test/result/{index}"),
@@ -49,11 +56,15 @@ fn text(buffer: &Buffer) -> String {
 
 fn point(state: &UiState, index: usize, group: bool) -> (u16, u16) {
     let area = state.selection.viewport;
-    let offset = state.max_scroll.saturating_sub(state.scroll);
+    let offset = state
+        .max_scroll
+        .saturating_sub(state.scroll);
     for y in area.y..area.bottom() {
         for x in area.x..area.right() {
             let hit = if group {
-                state.transcript_layout.group_at(area, offset, (x, y))
+                state
+                    .transcript_layout
+                    .group_at(area, offset, (x, y))
             } else {
                 state
                     .transcript_layout
@@ -73,250 +84,460 @@ fn grouping_compares_operation_targets_and_ignores_only_read_pagination() {
     let cases = [
         (
             "read_file",
-            json!({"path":"Orbit.md","start_line":1}),
-            json!({"path":"Orbit.md","cursor":{"version":"orbit-version","offset":400,"line":50,"character":0}}),
+            json!({
+                "path": "Orbit.md",
+                "start_line": 1
+            }),
+            json!({
+                "path": "Orbit.md",
+                "cursor": {
+                    "version": "orbit-version",
+                    "offset": 400,
+                    "line": 50,
+                    "character": 0
+                }
+            }),
             true,
         ),
         (
             "read_file",
-            json!({"path":"Orbit.md"}),
-            json!({"path":"Orbit.rs"}),
+            json!({
+                "path": "Orbit.md"
+            }),
+            json!({
+                "path": "Orbit.rs"
+            }),
             false,
         ),
         (
             "write_file",
-            json!({"path":"Orbit.rs","content":"a"}),
-            json!({"path":"Orbit.rs","content":"b"}),
+            json!({
+                "path": "Orbit.rs",
+                "content": "a"
+            }),
+            json!({
+                "path": "Orbit.rs",
+                "content": "b"
+            }),
             true,
         ),
         (
             "edit_file",
-            json!({"path":"Orbit.rs"}),
-            json!({"path":"Other.rs"}),
+            json!({
+                "path": "Orbit.rs"
+            }),
+            json!({
+                "path": "Other.rs"
+            }),
             false,
         ),
         (
             "read_image",
-            json!({"path":"Orbit.png"}),
-            json!({"path":"Other.png"}),
+            json!({
+                "path": "Orbit.png"
+            }),
+            json!({
+                "path": "Other.png"
+            }),
             false,
         ),
         (
             "read_document",
-            json!({"path":"Orbit.pdf"}),
-            json!({"path":"Orbit.pdf","start_char":500}),
+            json!({
+                "path": "Orbit.pdf"
+            }),
+            json!({
+                "path": "Orbit.pdf",
+                "start_char": 500
+            }),
             true,
         ),
         (
             "read_document",
-            json!({"path":"Orbit.pdf"}),
-            json!({"path":"Other.pdf"}),
+            json!({
+                "path": "Orbit.pdf"
+            }),
+            json!({
+                "path": "Other.pdf"
+            }),
             false,
         ),
         (
             "list_files",
             json!({}),
-            json!({"path":".","depth":1,"offset":200}),
+            json!({
+                "path": ".",
+                "depth": 1,
+                "offset": 200
+            }),
             true,
         ),
         (
             "list_files",
-            json!({"path":"crates/orbit-cli"}),
-            json!({"path":"crates/orbit-tools"}),
+            json!({
+                "path": "crates/orbit-cli"
+            }),
+            json!({
+                "path": "crates/orbit-tools"
+            }),
             false,
         ),
         (
             "search_text",
-            json!({"query":"Orbit"}),
-            json!({"query":"Orbit","path":".","offset":100,"context_lines":3}),
+            json!({
+                "query": "Orbit"
+            }),
+            json!({
+                "query": "Orbit",
+                "path": ".",
+                "offset": 100,
+                "context_lines": 3
+            }),
             true,
         ),
         (
             "search_text",
-            json!({"query":"Orbit"}),
-            json!({"query":"Other"}),
+            json!({
+                "query": "Orbit"
+            }),
+            json!({
+                "query": "Other"
+            }),
             false,
         ),
         (
             "search_text",
-            json!({"query":"Orbit","path":"src"}),
-            json!({"query":"Orbit","path":"docs"}),
+            json!({
+                "query": "Orbit",
+                "path": "src"
+            }),
+            json!({
+                "query": "Orbit",
+                "path": "docs"
+            }),
             false,
         ),
         (
             "search_text",
-            json!({"query":"Orbit"}),
-            json!({"query":"Orbit","regex":true}),
+            json!({
+                "query": "Orbit"
+            }),
+            json!({
+                "query": "Orbit",
+                "regex": true
+            }),
             false,
         ),
         (
             "search_text",
-            json!({"query":"Orbit"}),
-            json!({"query":"Orbit","glob":"*.rs"}),
+            json!({
+                "query": "Orbit"
+            }),
+            json!({
+                "query": "Orbit",
+                "glob": "*.rs"
+            }),
             false,
         ),
         (
             "project_overview",
-            json!({"path":"."}),
-            json!({"path":".","max_tokens":8000}),
+            json!({
+                "path": "."
+            }),
+            json!({
+                "path": ".",
+                "max_tokens": 8_000
+            }),
             true,
         ),
         (
             "project_overview",
-            json!({"path":"src","query":"Orbit"}),
-            json!({"path":"src","query":"Other"}),
+            json!({
+                "path": "src",
+                "query": "Orbit"
+            }),
+            json!({
+                "path": "src",
+                "query": "Other"
+            }),
             false,
         ),
         (
             "web_fetch",
-            json!({"url":"https://orbit.test/guide"}),
-            json!({"url":"https://orbit.test/guide","start_char":100}),
+            json!({
+                "url": "https://orbit.test/guide"
+            }),
+            json!({
+                "url": "https://orbit.test/guide",
+                "start_char": 100
+            }),
             true,
         ),
         (
             "web_fetch",
-            json!({"url":"https://orbit.test/guide"}),
-            json!({"url":"https://orbit.test/api"}),
+            json!({
+                "url": "https://orbit.test/guide"
+            }),
+            json!({
+                "url": "https://orbit.test/api"
+            }),
             false,
         ),
         (
             "web_search",
-            json!({"query":"Orbit"}),
-            json!({"query":"Orbit","max_results":10}),
+            json!({
+                "query": "Orbit"
+            }),
+            json!({
+                "query": "Orbit",
+                "max_results": 10
+            }),
             true,
         ),
         (
             "web_search",
-            json!({"query":"Orbit"}),
-            json!({"query":"Other"}),
+            json!({
+                "query": "Orbit"
+            }),
+            json!({
+                "query": "Other"
+            }),
             false,
         ),
         (
             "read_agent",
-            json!({"agent_id":"orbit-explore","message_id":1}),
-            json!({"agent_id":"orbit-explore","message_id":2,"offset":300}),
+            json!({
+                "agent_id": "orbit-explore",
+                "message_id": 1
+            }),
+            json!({
+                "agent_id": "orbit-explore",
+                "message_id": 2,
+                "offset": 300
+            }),
             true,
         ),
         (
             "read_agent",
-            json!({"agent_id":"orbit-explore"}),
-            json!({"agent_id":"orbit-review"}),
+            json!({
+                "agent_id": "orbit-explore"
+            }),
+            json!({
+                "agent_id": "orbit-review"
+            }),
             false,
         ),
         (
             "read_agent",
             json!({}),
-            json!({"agent_id":"orbit-explore"}),
+            json!({
+                "agent_id": "orbit-explore"
+            }),
             false,
         ),
-        ("read_agent", json!({}), json!({"offset":32}), true),
         (
-            "read_command_output",
-            json!({"output_id":"orbit-log"}),
-            json!({"output_id":"orbit-log","stream":"stdout","offset":100}),
+            "read_agent",
+            json!({}),
+            json!({
+                "offset": 32
+            }),
             true,
         ),
         (
             "read_command_output",
-            json!({"output_id":"orbit-log"}),
-            json!({"output_id":"other-log"}),
+            json!({
+                "output_id": "orbit-log"
+            }),
+            json!({
+                "output_id": "orbit-log",
+                "stream": "stdout",
+                "offset": 100
+            }),
+            true,
+        ),
+        (
+            "read_command_output",
+            json!({
+                "output_id": "orbit-log"
+            }),
+            json!({
+                "output_id": "other-log"
+            }),
             false,
         ),
         (
             "read_command_output",
-            json!({"output_id":"orbit-log"}),
-            json!({"output_id":"orbit-log","stream":"stderr"}),
+            json!({
+                "output_id": "orbit-log"
+            }),
+            json!({
+                "output_id": "orbit-log",
+                "stream": "stderr"
+            }),
             false,
         ),
         (
             "wait_agents",
-            json!({"agent_ids":["orbit-a","orbit-b"]}),
-            json!({"agent_ids":["orbit-b","orbit-a"]}),
+            json!({
+                "agent_ids": ["orbit-a", "orbit-b"]
+            }),
+            json!({
+                "agent_ids": ["orbit-b", "orbit-a"]
+            }),
             true,
         ),
         (
             "wait_agents",
-            json!({"agent_ids":["orbit-a"]}),
-            json!({"agent_ids":["orbit-b"]}),
+            json!({
+                "agent_ids": ["orbit-a"]
+            }),
+            json!({
+                "agent_ids": ["orbit-b"]
+            }),
             false,
         ),
         ("wait_agents", json!({}), json!({}), false),
         (
             "wait_commands",
-            json!({"job_ids":["orbit-job"]}),
-            json!({"job_ids":["other-job"]}),
+            json!({
+                "job_ids": ["orbit-job"]
+            }),
+            json!({
+                "job_ids": ["other-job"]
+            }),
             false,
         ),
         (
             "run_command",
-            json!({"command":"cargo check"}),
-            json!({"command":"cargo check","cwd":"."}),
+            json!({
+                "command": "cargo check"
+            }),
+            json!({
+                "command": "cargo check",
+                "cwd": "."
+            }),
             true,
         ),
         (
             "run_command",
-            json!({"command":"cargo check"}),
-            json!({"command":"cargo test"}),
+            json!({
+                "command": "cargo check"
+            }),
+            json!({
+                "command": "cargo test"
+            }),
             false,
         ),
         (
             "run_command",
-            json!({"command":"cargo check","cwd":"crates/orbit-cli"}),
-            json!({"command":"cargo check","cwd":"crates/orbit-tools"}),
+            json!({
+                "command": "cargo check",
+                "cwd": "crates/orbit-cli"
+            }),
+            json!({
+                "command": "cargo check",
+                "cwd": "crates/orbit-tools"
+            }),
             false,
         ),
         (
             "git_inspect",
-            json!({"view":"diff","path":"Orbit.rs"}),
-            json!({"view":"diff","path":"Orbit.rs","offset":100}),
+            json!({
+                "view": "diff",
+                "path": "Orbit.rs"
+            }),
+            json!({
+                "view": "diff",
+                "path": "Orbit.rs",
+                "offset": 100
+            }),
             true,
         ),
         (
             "git_inspect",
-            json!({"view":"diff","path":"Orbit.rs"}),
-            json!({"view":"diff","path":"Other.rs"}),
+            json!({
+                "view": "diff",
+                "path": "Orbit.rs"
+            }),
+            json!({
+                "view": "diff",
+                "path": "Other.rs"
+            }),
             false,
         ),
         (
             "git_inspect",
-            json!({"view":"diff"}),
-            json!({"view":"diff","staged":true}),
+            json!({
+                "view": "diff"
+            }),
+            json!({
+                "view": "diff",
+                "staged": true
+            }),
             false,
         ),
         (
             "read_history",
-            json!({"archive_id":1}),
-            json!({"archive_id":2}),
+            json!({
+                "archive_id": 1
+            }),
+            json!({
+                "archive_id": 2
+            }),
             false,
         ),
         (
             "memory_search",
-            json!({"query":"Orbit"}),
-            json!({"query":"Other"}),
+            json!({
+                "query": "Orbit"
+            }),
+            json!({
+                "query": "Other"
+            }),
             false,
         ),
         (
             "task_update",
-            json!({"action":"update","id":1}),
-            json!({"action":"update","id":2}),
+            json!({
+                "action": "update",
+                "id": 1
+            }),
+            json!({
+                "action": "update",
+                "id": 2
+            }),
             false,
         ),
         (
             "memory_save",
-            json!({"title":"Orbit"}),
-            json!({"title":"Orbit"}),
+            json!({
+                "title": "Orbit"
+            }),
+            json!({
+                "title": "Orbit"
+            }),
             false,
         ),
         (
             "task_update",
-            json!({"action":"create","title":"Orbit"}),
-            json!({"action":"create","title":"Orbit"}),
+            json!({
+                "action": "create",
+                "title": "Orbit"
+            }),
+            json!({
+                "action": "create",
+                "title": "Orbit"
+            }),
             false,
         ),
         (
             "orbit_extension",
-            json!({"path":"Orbit.rs"}),
-            json!({"path":"Orbit.rs"}),
+            json!({
+                "path": "Orbit.rs"
+            }),
+            json!({
+                "path": "Orbit.rs"
+            }),
             false,
         ),
     ];
@@ -356,7 +577,11 @@ fn file_groups_keep_each_file_separate_and_name_their_targets() {
                 id: format!("orbit-{i}"),
                 name: "read_file".into(),
                 status: ToolStatus::Finished,
-                arguments: json!({"path":path,"start_line":i+1}).to_string(),
+                arguments: json!({
+                    "path": path,
+                    "start_line": i + 1
+                })
+                .to_string(),
                 output: String::new(),
             })
         })
@@ -379,7 +604,10 @@ fn file_groups_keep_each_file_separate_and_name_their_targets() {
         let TranscriptItem::Tool(row) = item else {
             unreachable!()
         };
-        row.arguments = json!({"path":path}).to_string();
+        row.arguments = json!({
+            "path": path
+        })
+        .to_string();
     }
 
     let header = header(&state.transcript[..2], 50, false);
@@ -400,7 +628,10 @@ fn long_group_targets_leave_room_for_running_status_and_trailing_count() {
             id: "orbit-read".into(),
             name: "read_file".into(),
             status,
-            arguments: json!({"path":path}).to_string(),
+            arguments: json!({
+                "path": path
+            })
+            .to_string(),
             output: String::new(),
         })
     });
@@ -411,7 +642,8 @@ fn long_group_targets_leave_room_for_running_status_and_trailing_count() {
             let text = header.line.to_string();
             assert!(header.line.width() <= usize::from(width), "{text}");
             assert!(
-                text.trim_end_matches([' ', '│']).ends_with(" · 2 次调用"),
+                text.trim_end_matches([' ', '│'])
+                    .ends_with(" · 2 次调用"),
                 "{text}"
             );
             assert!(text.contains(" · 1 进行中 · 2 次调用"), "{text}");
@@ -435,7 +667,10 @@ fn appending_different_targets_and_editing_targets_match_a_fresh_layout() {
             id: format!("orbit-{index}"),
             name: "read_file".into(),
             status: ToolStatus::Finished,
-            arguments: json!({"path":path}).to_string(),
+            arguments: json!({
+                "path": path
+            })
+            .to_string(),
             output: String::new(),
         }));
         layout.update_expanded(&items, &Default::default(), &Default::default(), 100);
@@ -448,7 +683,10 @@ fn appending_different_targets_and_editing_targets_match_a_fresh_layout() {
         let TranscriptItem::Tool(row) = &mut items[index] else {
             unreachable!()
         };
-        row.arguments = json!({"path":path}).to_string();
+        row.arguments = json!({
+            "path": path
+        })
+        .to_string();
         layout.invalidate_from(index);
         layout.update_expanded(&items, &Default::default(), &Default::default(), 100);
         let mut fresh = TranscriptLayout::default();
@@ -497,10 +735,14 @@ fn grouped_calls_expand_inline_without_rewriting_history() {
     assert!(detail.contains("Orbit 结果 3"));
     assert!(!detail.contains("Orbit 结果 2"));
     let area = state.selection.viewport;
-    let offset = state.max_scroll.saturating_sub(state.scroll);
+    let offset = state
+        .max_scroll
+        .saturating_sub(state.scroll);
     assert!((area.y..area.bottom()).any(|y| {
         (area.x..area.right()).any(|x| {
-            state.transcript_layout.link_at(area, offset, (x, y))
+            state
+                .transcript_layout
+                .link_at(area, offset, (x, y))
                 == Some("https://orbit.test/result/3")
         })
     }));
@@ -549,10 +791,29 @@ fn grouped_calls_share_one_frame_with_connected_separators() {
                 screen.matches('├').count(),
                 expanded.len() * 2 - usize::from(expanded.contains(&2))
             );
-            assert!(screen.lines().next().unwrap().starts_with('╭'));
-            assert!((1..width - 1).all(|x| buffer[(x, 2)].symbol().trim().is_empty()));
-            assert!(layout.group_at(area, 0, (2, 2)).is_none());
-            assert!(layout.disclosure_at(&items, area, 0, (2, 2)).is_none());
+            assert!(
+                screen
+                    .lines()
+                    .next()
+                    .unwrap()
+                    .starts_with('╭')
+            );
+            assert!((1..width - 1).all(|x| {
+                buffer[(x, 2)]
+                    .symbol()
+                    .trim()
+                    .is_empty()
+            }));
+            assert!(
+                layout
+                    .group_at(area, 0, (2, 2))
+                    .is_none()
+            );
+            assert!(
+                layout
+                    .disclosure_at(&items, area, 0, (2, 2))
+                    .is_none()
+            );
             if width >= 50 {
                 assert!(
                     screen
@@ -572,14 +833,22 @@ fn grouped_calls_share_one_frame_with_connected_separators() {
 
             if expanded.is_empty() {
                 let titles = (0..area.bottom())
-                    .filter(|&y| layout.disclosure_at(&items, area, 0, (2, y)).is_some())
+                    .filter(|&y| {
+                        layout
+                            .disclosure_at(&items, area, 0, (2, y))
+                            .is_some()
+                    })
                     .collect::<Vec<_>>();
                 assert_eq!(titles, vec![3, 4, 5]);
             }
 
             for y in 0..area.bottom() {
                 if matches!(buffer[(0, y)].symbol(), "╭" | "├" | "╰") {
-                    assert!(layout.disclosure_at(&items, area, 0, (2, y)).is_none());
+                    assert!(
+                        layout
+                            .disclosure_at(&items, area, 0, (2, y))
+                            .is_none()
+                    );
                 }
                 assert!(matches!(buffer[(0, y)].symbol(), "╭" | "│" | "├" | "╰"));
                 assert!(matches!(
@@ -593,10 +862,18 @@ fn grouped_calls_share_one_frame_with_connected_separators() {
                             .iter()
                             .any(|range| range.contains(&(x as usize)))
                     );
-                    assert!(layout.group_at(area, 0, (x, y)).is_none());
+                    assert!(
+                        layout
+                            .group_at(area, 0, (x, y))
+                            .is_none()
+                    );
                     if matches!(buffer[(x, y)].symbol(), "╭" | "├" | "╰" | "╮" | "┤" | "╯")
                     {
-                        assert!(layout.disclosure_at(&items, area, 0, (x, y)).is_none());
+                        assert!(
+                            layout
+                                .disclosure_at(&items, area, 0, (x, y))
+                                .is_none()
+                        );
                     }
                 }
             }
@@ -657,7 +934,9 @@ fn framed_group_heading_keeps_its_borders_on_hover_and_closes_the_whole_group() 
     let before = render(&mut state, 100, 60);
     let heading = point(&state, 0, true);
     let area = state.selection.viewport;
-    let offset = state.max_scroll.saturating_sub(state.scroll);
+    let offset = state
+        .max_scroll
+        .saturating_sub(state.scroll);
     assert_eq!(
         state
             .transcript_layout
@@ -673,7 +952,9 @@ fn framed_group_heading_keeps_its_borders_on_hover_and_closes_the_whole_group() 
     assert!((area.x..area.right()).any(|x| {
         before[(x, heading.1)].fg == THEME.tool_finished
             && hovered[(x, heading.1)].fg == THEME.tool_hover
-            && hovered[(x, heading.1)].modifier.contains(Modifier::BOLD)
+            && hovered[(x, heading.1)]
+                .modifier
+                .contains(Modifier::BOLD)
     }));
     assert!(super::super::toggle_transcript_at(&mut state, heading));
     let collapsed = text(&render(&mut state, 100, 60));
@@ -688,7 +969,11 @@ fn framed_group_heading_keeps_its_borders_on_hover_and_closes_the_whole_group() 
 fn tool_frames_replace_adjacent_spacing_and_cached_toggles_match_fresh_layouts() {
     let mut search = tool(1, "search_text", ToolStatus::Finished);
     if let TranscriptItem::Tool(row) = &mut search {
-        row.arguments = json!({"path":".","query":"Orbit"}).to_string();
+        row.arguments = json!({
+            "path": ".",
+            "query": "Orbit"
+        })
+        .to_string();
     }
     let items = vec![
         TranscriptItem::Assistant("Orbit before".into()),
@@ -720,8 +1005,16 @@ fn tool_frames_replace_adjacent_spacing_and_cached_toggles_match_fresh_layouts()
             assert_eq!(actual, expected);
 
             let screen = text(&actual);
-            let lines = screen.lines().map(str::trim).collect::<Vec<_>>();
-            let row = |label| lines.iter().position(|line| line.contains(label)).unwrap();
+            let lines = screen
+                .lines()
+                .map(str::trim)
+                .collect::<Vec<_>>();
+            let row = |label| {
+                lines
+                    .iter()
+                    .position(|line| line.contains(label))
+                    .unwrap()
+            };
             let first_open = expanded.contains(&1);
             let second_open = expanded.contains(&2);
             let first_start = row("read_file") - usize::from(first_open);
@@ -761,7 +1054,11 @@ fn tool_frames_replace_adjacent_spacing_and_cached_toggles_match_fresh_layouts()
                 ),
             ] {
                 assert_eq!(end - start, gap, "{width}: {expanded:?}\n{screen}");
-                assert!(lines[start..end].iter().all(|line| line.is_empty()));
+                assert!(
+                    lines[start..end]
+                        .iter()
+                        .all(|line| line.is_empty())
+                );
             }
         }
     }
@@ -786,8 +1083,18 @@ fn errors_messages_and_subagent_view_links_keep_calls_separate() {
     assert!(screen.contains("read_file · orbit.rs · 1 进行中 · 2 次调用"));
     assert_eq!(screen.matches("read_file").count(), 4);
     assert_eq!(screen.matches("spawn_agent").count(), 2);
-    assert!(state.transcript_layout.group_range(2).is_none());
-    assert!(state.transcript_layout.group_range(7).is_none());
+    assert!(
+        state
+            .transcript_layout
+            .group_range(2)
+            .is_none()
+    );
+    assert!(
+        state
+            .transcript_layout
+            .group_range(7)
+            .is_none()
+    );
 }
 
 #[test]
@@ -855,20 +1162,35 @@ fn ctrl_o_and_collapse_from_scrolled_details_return_to_the_group_header() {
     state.invalidate_transcript(2);
     state.expanded.insert(2);
     render(&mut state, 90, 24);
-    let child = state.transcript_layout.item_offset(2).unwrap();
+    let child = state
+        .transcript_layout
+        .item_offset(2)
+        .unwrap();
     state.follow_bottom = false;
-    state.scroll = state.max_scroll.saturating_sub(child + 4);
+    state.scroll = state
+        .max_scroll
+        .saturating_sub(child + 4);
     render(&mut state, 90, 24);
-    assert_eq!(state.max_scroll.saturating_sub(state.scroll), child + 4);
+    assert_eq!(
+        state
+            .max_scroll
+            .saturating_sub(state.scroll),
+        child + 4
+    );
     super::super::toggle_transcript_group(&mut state, 0);
     assert!(text(&render(&mut state, 90, 24)).contains("read_file · orbit.rs · 4 次调用"));
-    assert_eq!(state.max_scroll.saturating_sub(state.scroll), 0);
+    assert_eq!(
+        state
+            .max_scroll
+            .saturating_sub(state.scroll),
+        0
+    );
 }
 
 #[test]
+/// Standalone cards, group headings and second-level children use the same reveal behavior, both at
+/// the end of a run and while browsing history.
 fn expanding_a_bottom_tool_reveals_its_content_without_jumping_to_later_messages() {
-    // Standalone cards, group headings and second-level children use the same
-    // reveal behavior, both at the end of a run and while browsing history.
     for kind in 0..3 {
         for later_messages in [false, true] {
             let mut state = UiState::new("orbit-model");
@@ -876,14 +1198,18 @@ fn expanding_a_bottom_tool_reveals_its_content_without_jumping_to_later_messages
                 .transcript
                 .push(TranscriptItem::Assistant("earlier\n".repeat(60)));
             let calls = if kind == 0 { 1 } else { 2 };
-            state.transcript.extend((0..calls).map(|i| {
-                let mut item = tool(i, "read_file", ToolStatus::Finished);
-                let TranscriptItem::Tool(row) = &mut item else {
-                    unreachable!()
-                };
-                row.output = (0..30).map(|n| format!("detail {n}\n")).collect();
-                item
-            }));
+            state
+                .transcript
+                .extend((0..calls).map(|i| {
+                    let mut item = tool(i, "read_file", ToolStatus::Finished);
+                    let TranscriptItem::Tool(row) = &mut item else {
+                        unreachable!()
+                    };
+                    row.output = (0..30)
+                        .map(|n| format!("detail {n}\n"))
+                        .collect();
+                    item
+                }));
             let after = state.transcript.len();
             if later_messages {
                 state
@@ -896,9 +1222,14 @@ fn expanding_a_bottom_tool_reveals_its_content_without_jumping_to_later_messages
             render(&mut state, 90, 30);
             let index = if kind == 2 { 2 } else { 1 };
             let group = kind == 1;
-            let start = state.transcript_layout.item_offset(index).unwrap();
+            let start = state
+                .transcript_layout
+                .item_offset(index)
+                .unwrap();
             let height = usize::from(state.selection.viewport.height);
-            let old_offset = start.saturating_sub(height - 3).min(state.max_scroll);
+            let old_offset = start
+                .saturating_sub(height - 3)
+                .min(state.max_scroll);
             state.follow_bottom = false;
             state.scroll = state.max_scroll - old_offset;
             render(&mut state, 90, 30);
@@ -952,7 +1283,10 @@ fn expanding_visible_content_does_not_scroll_and_oversized_groups_keep_their_tit
             .transcript
             .push(TranscriptItem::Assistant("later\n".repeat(100)));
         render(&mut state, 90, 30);
-        let start = state.transcript_layout.item_offset(1).unwrap();
+        let start = state
+            .transcript_layout
+            .item_offset(1)
+            .unwrap();
         let old_offset = start - 2;
         state.follow_bottom = false;
         state.scroll = state.max_scroll - old_offset;
@@ -966,11 +1300,19 @@ fn expanding_visible_content_does_not_scroll_and_oversized_groups_keep_their_tit
             if calls == 2 {
                 old_offset
             } else {
-                state.transcript_layout.item_offset(1).unwrap()
+                state
+                    .transcript_layout
+                    .item_offset(1)
+                    .unwrap()
             }
         );
         let heading = point(&state, 1, true);
-        assert!(state.selection.viewport.contains(heading.into()));
+        assert!(
+            state
+                .selection
+                .viewport
+                .contains(heading.into())
+        );
     }
 }
 
@@ -1017,7 +1359,9 @@ fn expanded_children_respect_the_body_limit_and_scroll_independently() {
     let child_point = (area.y..area.bottom())
         .find_map(|y| {
             (area.x..area.right()).find_map(|x| {
-                (state.transcript_layout.link_at(area, 0, (x, y))
+                (state
+                    .transcript_layout
+                    .link_at(area, 0, (x, y))
                     == Some("https://orbit.example/1/00"))
                 .then_some((x, y))
             })
@@ -1043,7 +1387,9 @@ fn expanded_children_respect_the_body_limit_and_scroll_independently() {
     let shown = text(&render(&mut state, 90, 50));
     assert!(shown.contains(&format!("{}–24 / 24", last_start + 1)));
     assert_eq!(
-        state.transcript_layout.link_at(area, 0, child_point),
+        state
+            .transcript_layout
+            .link_at(area, 0, child_point),
         Some(format!("https://orbit.example/1/{last_start:02}").as_str())
     );
     assert!(!shown.contains(&format!("https://orbit.example/1/{:02}", last_start - 1)));

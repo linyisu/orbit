@@ -22,7 +22,8 @@ pub(super) fn seed(workspace: &str) -> anyhow::Result<Vec<Value>> {
     let embedded = base64::engine::general_purpose::STANDARD
         .encode(std::fs::read(root.join("reply image.png"))?);
     let mut reply = format!(
-        "本地相对路径：![relative](reply%20image.png)\n\n绝对路径：![absolute]({})\n\nSVG：![vector]({vector})\n\n内嵌图片：![embedded](data:image/png;base64,{embedded})",
+        "本地相对路径：![relative](reply%20image.png)\n\n绝对路径：![absolute]({})\n\nSVG：![vector]({vector})\n\
+            \n内嵌图片：![embedded](data:image/png;base64,{embedded})",
         absolute.path()
     );
     if let Ok(url) = std::fs::read_to_string(root.join(".fixture-image-http")) {
@@ -30,16 +31,35 @@ pub(super) fn seed(workspace: &str) -> anyhow::Result<Vec<Value>> {
     }
     reply.push_str("\n\n失效图片：![missing](missing.png)\n\n图片后的正文仍然可见。");
     Ok(vec![
-        json!({"Started":{"prompt":"展示合成的几何图案"}}),
-        json!({"Agent":{"Model":{"TextDelta":reply}}}),
-        json!({"Finished":{"status":"completed"}}),
+        json!({
+            "Started": {
+                "prompt": "展示合成的几何图案"
+            }
+        }),
+        json!({
+            "Agent": {
+                "Model": {
+                    "TextDelta": reply
+                }
+            }
+        }),
+        json!({
+            "Finished": {
+                "status": "completed"
+            }
+        }),
     ])
 }
 
 pub(super) fn replace(workspace: &str) -> anyhow::Result<Value> {
     image::RgbaImage::from_pixel(180, 54, image::Rgba([174, 65, 171, 255]))
         .save(Path::new(workspace).join("reply image.png"))?;
-    Ok(
-        json!({"Agent":{"Model":{"TextDelta":"重新生成同名图片：![new](reply%20image.png)\n\n![standalone](reply%20image.png)\n\n上面的旧回答保留原图。"}}}),
-    )
+    Ok(json!({
+        "Agent": {
+            "Model": {
+                "TextDelta": "重新生成同名图片：![new](reply%20image.png)\n\n![standalone](reply%20image.png\
+                    )\n\n上面的旧回答保留原图。"
+            }
+        }
+    }))
 }

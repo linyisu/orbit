@@ -1,5 +1,6 @@
 //! Task-scoped stdout/stderr. Drafts allocate nothing; the first command lazily
-//! opens a private directory under the system temporary directory. Leases protect active readers/writers.
+//! opens a private directory under the system temporary directory. Leases protect active
+//! readers/writers.
 use std::{
     fs::{File, OpenOptions},
     os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt},
@@ -40,16 +41,19 @@ pub(super) struct RunDirectory {
 }
 
 impl CommandOutputs {
+    /// Native command execution is Unix-only. Include the effective user so separate OS accounts
+    /// never share the maintenance directory.
     pub fn root() -> PathBuf {
-        // Native command execution is Unix-only. Include the effective user so
-        // separate OS accounts never share the maintenance directory.
         std::env::temp_dir().join(format!("orbit-command-output-{}", unsafe {
             libc::geteuid()
         }))
     }
 
     pub fn begin_run(&self) -> Result<OutputRun, RuntimeError> {
-        let mut state = self.0.lock().expect("command output lock poisoned");
+        let mut state = self
+            .0
+            .lock()
+            .expect("command output lock poisoned");
         if state.active.is_some() {
             return Err(failed("command output task is already active"));
         }
@@ -87,7 +91,10 @@ impl CommandOutputs {
             .generation;
         let outputs = self.clone();
         let lease = tokio::task::spawn_blocking(move || {
-            let mut state = outputs.0.lock().expect("command output lock poisoned");
+            let mut state = outputs
+                .0
+                .lock()
+                .expect("command output lock poisoned");
             let active = state
                 .active
                 .as_mut()
@@ -98,7 +105,13 @@ impl CommandOutputs {
             if active.directory.is_none() {
                 active.directory = Some(Arc::new(create_directory(&Self::root())?));
             }
-            Ok::<_, RuntimeError>(OutputLease(active.directory.as_ref().unwrap().clone()))
+            Ok::<_, RuntimeError>(OutputLease(
+                active
+                    .directory
+                    .as_ref()
+                    .unwrap()
+                    .clone(),
+            ))
         })
         .await
         .map_err(failed)??;
@@ -118,7 +131,11 @@ impl OutputLease {
 
 impl Drop for OutputRun {
     fn drop(&mut self) {
-        let mut state = self.outputs.0.lock().expect("command output lock poisoned");
+        let mut state = self
+            .outputs
+            .0
+            .lock()
+            .expect("command output lock poisoned");
         let retired = if state
             .active
             .as_ref()
@@ -134,7 +151,10 @@ impl Drop for OutputRun {
 }
 
 fn create_directory(root: &Path) -> Result<RunDirectory, RuntimeError> {
-    match std::fs::DirBuilder::new().mode(0o700).create(root) {
+    match std::fs::DirBuilder::new()
+        .mode(0o700)
+        .create(root)
+    {
         Ok(()) => (),
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => (),
         Err(error) => return Err(error.into()),
@@ -204,7 +224,11 @@ fn private_lock(path: &Path, create: bool) -> Result<File, RuntimeError> {
 fn prune_orphans(root: &Path) -> Result<(), RuntimeError> {
     for entry in std::fs::read_dir(root)? {
         let entry = entry?;
-        if !entry.file_name().as_encoded_bytes().starts_with(b"run-") {
+        if !entry
+            .file_name()
+            .as_encoded_bytes()
+            .starts_with(b"run-")
+        {
             continue;
         }
         let metadata = match entry.path().symlink_metadata() {

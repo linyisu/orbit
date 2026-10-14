@@ -11,8 +11,11 @@ fn nested_html_clicks_do_not_collapse_the_enclosing_tool_or_thinking_item() {
         name: "web_fetch".into(),
         arguments: "{}".into(),
         status: app::ToolStatus::Finished,
-        output: serde_json::json!({"url":"https://orbit.example/page", "content":source})
-            .to_string(),
+        output: serde_json::json!({
+            "url": "https://orbit.example/page",
+            "content": source
+        })
+        .to_string(),
     };
 
     for item in [
@@ -87,7 +90,21 @@ fn child_session_links_open_a_dialog_without_switching_tabs() {
     state
         .transcript
         .push(TranscriptItem::User("inspect Orbit".into()));
-    state.transcript.push(TranscriptItem::Tool(app::ToolRow{id:"child".into(),name:"spawn_agent".into(),arguments:"{\"task\":\"inspect\"}".into(),output:serde_json::json!({"agent_id":id,"role":"explore","model":"orbit::model","status":"running"}).to_string(),status:app::ToolStatus::Running}));
+    state
+        .transcript
+        .push(TranscriptItem::Tool(app::ToolRow {
+            id: "child".into(),
+            name: "spawn_agent".into(),
+            arguments: "{\"task\":\"inspect\"}".into(),
+            output: serde_json::json!({
+                "agent_id": id,
+                "role": "explore",
+                "model": "orbit::model",
+                "status": "running"
+            })
+            .to_string(),
+            status: app::ToolStatus::Running,
+        }));
     let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 24)).unwrap();
     terminal
         .draw(|frame| render::draw(frame, &mut state))

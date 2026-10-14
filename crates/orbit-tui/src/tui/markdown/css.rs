@@ -21,7 +21,9 @@ pub(super) fn parse(source: &str) -> Presentation {
     let mut result = Presentation::default();
     while !parser.is_exhausted() {
         let _ = parser.parse_until_after(Delimiter::Semicolon, |value| {
-            let property = value.expect_ident_cloned()?.to_ascii_lowercase();
+            let property = value
+                .expect_ident_cloned()?
+                .to_ascii_lowercase();
             value.expect_colon()?;
             let mut tokens = Vec::new();
             while let Ok(token) = value.next() {
@@ -80,13 +82,21 @@ fn apply(out: &mut Presentation, property: &str, tokens: &[Token<'_>]) {
 
         "font-weight" => {
             if matches!(ident.as_str(), "bold" | "bolder")
-                || matches!(first, Some(Token::Number { value, .. }) if *value >= 600.0)
+                || matches!(
+                    first,
+                    Some(Token::Number { value, .. }) if *value >= 600.0
+                )
             {
                 out.style = out.style.add_modifier(Modifier::BOLD);
             } else if ident == "normal"
-                || matches!(first, Some(Token::Number { value, .. }) if *value < 600.0)
+                || matches!(
+                    first,
+                    Some(Token::Number { value, .. }) if *value < 600.0
+                )
             {
-                out.style = out.style.remove_modifier(Modifier::BOLD);
+                out.style = out
+                    .style
+                    .remove_modifier(Modifier::BOLD);
             }
         }
 
@@ -97,8 +107,16 @@ fn apply(out: &mut Presentation, property: &str, tokens: &[Token<'_>]) {
             for token in tokens {
                 if let Token::Ident(value) = token {
                     match value.to_ascii_lowercase().as_str() {
-                        "underline" => out.style = out.style.add_modifier(Modifier::UNDERLINED),
-                        "line-through" => out.style = out.style.add_modifier(Modifier::CROSSED_OUT),
+                        "underline" => {
+                            out.style = out
+                                .style
+                                .add_modifier(Modifier::UNDERLINED)
+                        }
+                        "line-through" => {
+                            out.style = out
+                                .style
+                                .add_modifier(Modifier::CROSSED_OUT)
+                        }
                         _ => {}
                     }
                 }
@@ -108,7 +126,13 @@ fn apply(out: &mut Presentation, property: &str, tokens: &[Token<'_>]) {
         "text-align" => out.alignment = alignment(&ident),
         "border-left" | "border-left-color" => out.rail = tokens.iter().find_map(color),
         "padding" | "margin" => {
-            let nonzero = tokens.iter().any(|token| matches!(token, Token::Dimension { value, .. } | Token::Number { value, .. } if *value > 0.0));
+            let nonzero = tokens.iter().any(|token| {
+                matches!(
+                    token,
+                    Token::Dimension { value, .. } | Token::Number { value, .. }
+                        if *value > 0.0
+                )
+            });
             if property == "padding" {
                 out.padding = nonzero;
             } else {
@@ -136,7 +160,10 @@ mod tests {
     #[test]
     fn css_parser_skips_invalid_and_unsupported_declarations_and_obeys_later_values() {
         let value = parse(
-            "broken; color:red; color: #12ab34; /* separator */ font-weight:bold; font-style:italic; text-decoration:underline line-through; background-image:url('https://orbit.example/no-fetch'); text-align:center; font-size:200px;",
+            "broken; color:red; color: #12ab34; /* separator */ font-weight:bold; \
+                font-style:italic; text-decoration:underline line-through; \
+                background-image:url('https://orbit.example/no-fetch'); text-align:center; \
+                font-size:200px;",
         );
         assert_eq!(value.style.fg, Some(Color::Rgb(18, 171, 52)));
         assert!(value.style.add_modifier.contains(
@@ -144,6 +171,11 @@ mod tests {
         ));
         assert_eq!(value.alignment, Some(Alignment::Center));
         assert_eq!(value.style.bg, None);
-        assert_eq!(parse("color: rgba(0,0,0,0.3); color:#1234").style.fg, None);
+        assert_eq!(
+            parse("color: rgba(0,0,0,0.3); color:#1234")
+                .style
+                .fg,
+            None
+        );
     }
 }

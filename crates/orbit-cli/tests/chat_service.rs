@@ -13,7 +13,9 @@ use tokio::{
 async fn headless_chat_uses_the_service_policy_and_persists_the_answer() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .unwrap();
     let address = listener.local_addr().unwrap();
     let model = tokio::spawn(async move {
         loop {
@@ -32,20 +34,53 @@ async fn headless_chat_uses_the_service_policy_and_persists_the_answer() {
                 })
                 .unwrap();
             let mut body = vec![0; length];
-            socket.read_exact(&mut body).await.unwrap();
+            socket
+                .read_exact(&mut body)
+                .await
+                .unwrap();
             let body: Value = serde_json::from_slice(&body).unwrap();
             let (kind, response) = if body["stream"] == true {
                 assert!(
                     body.get("tools")
-                        .is_none_or(|tools| tools.as_array().is_some_and(Vec::is_empty)),
+                        .is_none_or(|tools| tools
+                            .as_array()
+                            .is_some_and(Vec::is_empty)),
                     "{body}"
                 );
                 assert_eq!(body["model"], "second");
-                ("text/event-stream", "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Service answer\"}}]}\n\ndata: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n".into())
+                (
+                    "text/event-stream",
+                    "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Se\
+                    rvice answer\"}}]}\n\ndata: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_r\
+                    eason\":\"stop\"}]}\n\ndata: [DONE]\n\n"
+                        .into(),
+                )
             } else {
-                ("application/json", json!({"choices":[{"message":{"role":"assistant","content":"Title"},"finish_reason":"stop"}]}).to_string())
+                (
+                    "application/json",
+                    json!({
+                        "choices": [{
+                            "message": {
+                                "role": "assistant",
+                                "content": "Title"
+                            },
+                            "finish_reason": "stop"
+                        }]
+                    })
+                    .to_string(),
+                )
             };
-            socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: {kind}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}", response.len()).as_bytes()).await.unwrap();
+            socket
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: {kind}\r\nContent-Length: \
+                {}\r\nConnection: close\r\n\r\n{response}",
+                        response.len()
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .unwrap();
         }
     });
     let model = tokio_util::task::AbortOnDropHandle::new(model);
@@ -96,7 +131,9 @@ async fn headless_chat_uses_the_service_policy_and_persists_the_answer() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(
-        String::from_utf8(output.stdout).unwrap().trim(),
+        String::from_utf8(output.stdout)
+            .unwrap()
+            .trim(),
         "Service answer"
     );
     let store = orbit_store::store::Store::open(root.join("sessions.db"))
@@ -104,7 +141,10 @@ async fn headless_chat_uses_the_service_policy_and_persists_the_answer() {
         .unwrap();
     let sessions = store.list().await.unwrap();
     assert_eq!(sessions.len(), 1);
-    let snapshot = store.load(&sessions[0].id).await.unwrap();
+    let snapshot = store
+        .load(&sessions[0].id)
+        .await
+        .unwrap();
     assert_eq!(snapshot.session.model, "test::second");
     assert!(
         serde_json::to_string(&snapshot.history)

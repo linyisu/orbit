@@ -21,7 +21,11 @@ impl Deliveries {
     pub fn filter(&mut self, viewer: u64, updates: &mut [ToolProgress]) {
         use sha2::{Digest, Sha256};
         let seen = self.0.entry(viewer).or_default();
-        seen.retain(|id, _| updates.iter().any(|update| &update.call_id == id));
+        seen.retain(|id, _| {
+            updates
+                .iter()
+                .any(|update| &update.call_id == id)
+        });
         for update in updates {
             if let Some(stdout) = &update.stdout {
                 let digest: [u8; 32] = Sha256::digest(stdout.as_bytes()).into();
@@ -81,7 +85,11 @@ impl Progress {
                 if let Some(tracked) = self.calls.get_mut(&call.id) {
                     tracked.job = serde_json::from_str::<serde_json::Value>(content)
                         .ok()
-                        .and_then(|value| value["job_id"].as_str().map(str::to_owned));
+                        .and_then(|value| {
+                            value["job_id"]
+                                .as_str()
+                                .map(str::to_owned)
+                        });
                 }
             }
             AgentEvent::ToolFinished { call, .. } | AgentEvent::ToolFailed { call, .. } => {
@@ -91,6 +99,7 @@ impl Progress {
             _ => {}
         }
     }
+
     pub fn clear(&mut self) {
         self.calls.clear();
         self.previews.clear();
@@ -99,6 +108,7 @@ impl Progress {
     pub fn is_empty(&self) -> bool {
         self.calls.is_empty()
     }
+
     pub fn start_snapshot(
         &mut self,
         tools: &ToolRegistry,
@@ -114,7 +124,9 @@ impl Progress {
         let mut previews = std::mem::take(&mut self.previews);
         tokio_util::task::AbortOnDropHandle::new(tokio::task::spawn_blocking(move || {
             let jobs = tools.background_jobs();
-            let snapshots = jobs.snapshots(&[], false).unwrap_or_default();
+            let snapshots = jobs
+                .snapshots(&[], false)
+                .unwrap_or_default();
             let updates = calls
                 .into_iter()
                 .filter_map(|(call_id, call)| {
@@ -143,12 +155,15 @@ impl Progress {
                         let elapsed = call
                             .job
                             .and_then(|id| {
-                                tools.task_groups().skip(1).find_map(|jobs| {
-                                    jobs.snapshots(std::slice::from_ref(&id), false)
-                                        .ok()?
-                                        .into_iter()
-                                        .next()
-                                })
+                                tools
+                                    .task_groups()
+                                    .skip(1)
+                                    .find_map(|jobs| {
+                                        jobs.snapshots(std::slice::from_ref(&id), false)
+                                            .ok()?
+                                            .into_iter()
+                                            .next()
+                                    })
                             })
                             .map(|job| job.elapsed_ms);
                         (None, elapsed)
@@ -168,18 +183,23 @@ impl Progress {
         }))
     }
 
+    /// A tool may finish while its file is being read. Never resurrect its progress, or let that
+    /// reader publish into the next run.
     pub fn accept(&mut self, mut snapshot: Snapshot) -> Vec<ToolProgress> {
-        // A tool may finish while its file is being read. Never resurrect its
-        // progress, or let that reader publish into the next run.
         snapshot.previews.retain(|id, _| {
             self.calls
                 .get(id)
                 .is_some_and(|call| snapshot.generations.get(id) == Some(&call.generation))
         });
         snapshot.updates.retain(|update| {
-            self.calls.get(&update.call_id).is_some_and(|call| {
-                snapshot.generations.get(&update.call_id) == Some(&call.generation)
-            })
+            self.calls
+                .get(&update.call_id)
+                .is_some_and(|call| {
+                    snapshot
+                        .generations
+                        .get(&update.call_id)
+                        == Some(&call.generation)
+                })
         });
         self.previews = snapshot.previews;
         snapshot.updates
@@ -191,7 +211,10 @@ impl Progress {
         tools: &ToolRegistry,
         output: &orbit_runtime::execution::output::CommandOutputs,
     ) -> Vec<ToolProgress> {
-        let snapshot = self.start_snapshot(tools, output).await.unwrap();
+        let snapshot = self
+            .start_snapshot(tools, output)
+            .await
+            .unwrap();
         self.accept(snapshot)
     }
 }
@@ -216,7 +239,9 @@ mod tests {
         );
         let mut progress = Progress::default();
         progress.record(&AgentEvent::ToolStarted { call: call.clone() });
-        let path = directory.path().join("cmd-orbit-preview.stdout");
+        let path = directory
+            .path()
+            .join("cmd-orbit-preview.stdout");
         std::fs::write(&path, "first line").unwrap();
         assert_eq!(
             progress.snapshot(&tools, &output).await[0]
@@ -224,7 +249,9 @@ mod tests {
                 .as_deref(),
             Some("first line")
         );
-        let text = progress.previews["active-call"].text.clone();
+        let text = progress.previews["active-call"]
+            .text
+            .clone();
         assert_eq!(
             progress.snapshot(&tools, &output).await[0]
                 .stdout
@@ -251,13 +278,22 @@ mod tests {
         // Providers may reuse a call ID in a later turn. Its old reader must
         // not publish into the new tool instance either.
         progress.record(&AgentEvent::ToolStarted { call: call.clone() });
-        assert!(progress.accept(in_flight.await.unwrap()).is_empty());
+        assert!(
+            progress
+                .accept(in_flight.await.unwrap())
+                .is_empty()
+        );
         assert!(progress.previews.is_empty());
         progress.record(&AgentEvent::ToolFailed {
             call,
             error: "cancelled".into(),
         });
-        assert!(progress.snapshot(&tools, &output).await.is_empty());
+        assert!(
+            progress
+                .snapshot(&tools, &output)
+                .await
+                .is_empty()
+        );
     }
 
     #[test]

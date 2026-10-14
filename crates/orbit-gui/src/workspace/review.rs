@@ -92,7 +92,10 @@ impl Review {
     pub(super) fn focus(&self, window: &mut Window, cx: &mut App) {
         let list = self.list.focus_handle(cx);
         if !list.contains_focused(window, cx)
-            && !self.diff.focus_handle(cx).contains_focused(window, cx)
+            && !self
+                .diff
+                .focus_handle(cx)
+                .contains_focused(window, cx)
         {
             list.focus(window, cx);
         }
@@ -132,8 +135,10 @@ impl Review {
         self.index_receipt = None;
         self.entries.clear();
         self.loaded = false;
-        self.diff.update(cx, |diff, cx| diff.set_files([], cx));
-        self.list.update(cx, |_, cx| cx.notify());
+        self.diff
+            .update(cx, |diff, cx| diff.set_files([], cx));
+        self.list
+            .update(cx, |_, cx| cx.notify());
         self.activate(path, cx);
     }
 
@@ -198,9 +203,13 @@ impl Review {
             let (result, response) = tokio::sync::oneshot::channel();
             let sent = workspace_owner
                 .update(cx, |view, _| {
-                    view.backend.as_ref().is_some_and(|backend| {
-                        backend.send(Command::Settings { request, result }).is_ok()
-                    })
+                    view.backend
+                        .as_ref()
+                        .is_some_and(|backend| {
+                            backend
+                                .send(Command::Settings { request, result })
+                                .is_ok()
+                        })
                 })
                 .unwrap_or(false);
             let result = if sent {
@@ -244,19 +253,22 @@ impl Review {
                         view.next = next;
                         view.branch = branch;
                         view.loaded = true;
-                        view.list.update(cx, |_, cx| cx.notify());
+                        view.list
+                            .update(cx, |_, cx| cx.notify());
                         if !append
-                            && let Some(path) = view
-                                .selected
-                                .clone()
-                                .or_else(|| view.entries.first().map(|entry| entry.path.clone()))
+                            && let Some(path) = view.selected.clone().or_else(|| {
+                                view.entries
+                                    .first()
+                                    .map(|entry| entry.path.clone())
+                            })
                         {
                             view.select(path, cx);
                         } else if !append && view.entries.is_empty() {
                             view.selected = None;
                             view.checkpoint = None;
                             view.index_receipt = None;
-                            view.diff.update(cx, |diff, cx| diff.set_files([], cx));
+                            view.diff
+                                .update(cx, |diff, cx| diff.set_files([], cx));
                         }
                     }
                     Ok(Response::Review(Snapshot::Diff {
@@ -272,7 +284,8 @@ impl Review {
                         match parsed.unwrap_or_else(|| Ok(Vec::new())) {
                             Ok(files) => {
                                 view.index_receipt = index_receipt;
-                                view.diff.update(cx, |diff, cx| diff.set_files(files, cx));
+                                view.diff
+                                    .update(cx, |diff, cx| diff.set_files(files, cx));
                             }
                             Err(error) => {
                                 view.index_receipt = None;
@@ -285,7 +298,8 @@ impl Review {
                         view.index_receipt = None;
                         view.selected = None;
                         view.note = detail.into();
-                        view.diff.update(cx, |diff, cx| diff.set_files([], cx));
+                        view.diff
+                            .update(cx, |diff, cx| diff.set_files([], cx));
                         view.fetch(
                             Action::List {
                                 kind: view.kind,
@@ -303,7 +317,8 @@ impl Review {
                             "已取消暂存，工作区内容已保留"
                         }
                         .into();
-                        view.diff.update(cx, |diff, cx| diff.set_files([], cx));
+                        view.diff
+                            .update(cx, |diff, cx| diff.set_files([], cx));
                         view.fetch(
                             Action::List {
                                 kind: view.kind,
@@ -335,7 +350,11 @@ impl Review {
         if self.busy {
             return;
         }
-        let Some(checkpoint) = self.checkpoint.clone().filter(|value| !value.undone) else {
+        let Some(checkpoint) = self
+            .checkpoint
+            .clone()
+            .filter(|value| !value.undone)
+        else {
             return;
         };
         let Some(path) = self.selected.clone() else {
@@ -412,7 +431,10 @@ impl Render for Review {
             .upgrade()
             .map(|owner| owner.read(cx).approvals.clone())
             .unwrap_or_default();
-        let narrow = self.width.unwrap_or(window.bounds().size.width) < window.rem_size() * 46.;
+        let narrow = self
+            .width
+            .unwrap_or(window.bounds().size.width)
+            < window.rem_size() * 46.;
         let owner = cx.weak_entity();
         let measured = self.width;
         let list = v_flex()
@@ -516,7 +538,11 @@ impl Render for Review {
                             .position(|(kind, _)| *kind == self.kind)
                             .unwrap_or(0),
                     )
-                    .children(KINDS.iter().map(|(_, label)| Tab::new().label(*label)))
+                    .children(
+                        KINDS
+                            .iter()
+                            .map(|(_, label)| Tab::new().label(*label)),
+                    )
                     .on_click(cx.listener(|view, index: &usize, _, cx| {
                         if view.mutating() {
                             return;
@@ -533,8 +559,10 @@ impl Render for Review {
                         view.index_receipt = None;
                         view.entries.clear();
                         view.loaded = false;
-                        view.diff.update(cx, |diff, cx| diff.set_files([], cx));
-                        view.list.update(cx, |_, cx| cx.notify());
+                        view.diff
+                            .update(cx, |diff, cx| diff.set_files([], cx));
+                        view.list
+                            .update(cx, |_, cx| cx.notify());
                         view.fetch(
                             Action::List {
                                 kind: *kind,
@@ -545,18 +573,27 @@ impl Render for Review {
                     })),
             )
             .when_some(self.error.clone(), |view, error| {
-                view.child(div().text_sm().text_color(cx.theme().danger).child(error))
+                view.child(
+                    div()
+                        .text_sm()
+                        .text_color(cx.theme().danger)
+                        .child(error),
+                )
             })
             .when(self.undoing, |view| {
                 view.child(
                     h_flex()
                         .gap_2()
                         .flex_wrap()
-                        .child(div().text_sm().child(if approvals.is_empty() {
-                            "正在撤销检查点…"
-                        } else {
-                            "撤销操作等待审批"
-                        }))
+                        .child(
+                            div()
+                                .text_sm()
+                                .child(if approvals.is_empty() {
+                                    "正在撤销检查点…"
+                                } else {
+                                    "撤销操作等待审批"
+                                }),
+                        )
                         .children(approvals.into_iter().map(|approval| {
                             Button::new(("review-approval", approval.id))
                                 .small()
@@ -604,11 +641,16 @@ impl Render for Review {
                                     .gap_2()
                                     .flex_wrap()
                                     .child(
-                                        div().min_w_0().flex_1().text_sm().text_ellipsis().child(
-                                            self.selected
-                                                .clone()
-                                                .unwrap_or_else(|| "选择文件查看差异".into()),
-                                        ),
+                                        div()
+                                            .min_w_0()
+                                            .flex_1()
+                                            .text_sm()
+                                            .text_ellipsis()
+                                            .child(
+                                                self.selected
+                                                    .clone()
+                                                    .unwrap_or_else(|| "选择文件查看差异".into()),
+                                            ),
                                     )
                                     .child(
                                         Button::new("review-mode")
@@ -718,6 +760,7 @@ struct ReviewList {
     owner: WeakEntity<Review>,
     selected: Option<IndexPath>,
 }
+
 impl ListDelegate for ReviewList {
     type Item = ListItem;
     fn items_count(&self, _: usize, cx: &App) -> usize {
@@ -725,6 +768,7 @@ impl ListDelegate for ReviewList {
             .upgrade()
             .map_or(0, |owner| owner.read(cx).entries.len())
     }
+
     fn render_item(
         &mut self,
         index: IndexPath,
@@ -745,7 +789,12 @@ impl ListDelegate for ReviewList {
                         .min_w_0()
                         .w_full()
                         .gap_1()
-                        .child(div().text_sm().text_ellipsis().child(entry.path.clone()))
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_ellipsis()
+                                .child(entry.path.clone()),
+                        )
                         .child(
                             div()
                                 .text_xs()
@@ -759,6 +808,7 @@ impl ListDelegate for ReviewList {
                 ),
         )
     }
+
     fn set_selected_index(
         &mut self,
         selected: Option<IndexPath>,
@@ -767,6 +817,7 @@ impl ListDelegate for ReviewList {
     ) {
         self.selected = selected;
     }
+
     fn confirm(&mut self, _: bool, _: &mut Window, cx: &mut Context<ListState<Self>>) {
         let Some(index) = self.selected else { return };
         let _ = self.owner.update(cx, |view, cx| {

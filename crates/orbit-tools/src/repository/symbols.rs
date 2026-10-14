@@ -36,8 +36,8 @@ pub(super) fn analyze(path: &Path, source: &str) -> Source {
         None => extract_fallback_symbols(path, source),
     };
     let mut identifiers = Vec::new();
-    let mut truncated = symbols.len() > 1024;
-    symbols.truncate(1024);
+    let mut truncated = symbols.len() > 1_024;
+    symbols.truncate(1_024);
     if let Some(tree) = &tree {
         let mut pending = vec![tree.root_node()];
         let mut seen = std::collections::BTreeSet::new();
@@ -65,36 +65,40 @@ pub(super) fn analyze(path: &Path, source: &str) -> Source {
                 }) {
                     declaration = parent;
                 }
-                let declaration_name = declaration.parent().is_some_and(|parent| {
-                    let kind = parent.kind();
-                    ((kind.ends_with("_item")
-                        || kind.ends_with("_definition")
-                        || kind.ends_with("_declaration")
-                        || matches!(
-                            kind,
-                            "variable_declarator"
-                                | "type_spec"
-                                | "method_signature"
-                                | "struct_specifier"
-                                | "class_specifier"
-                                | "enum_specifier"
-                                | "union_specifier"
-                        ))
-                        && parent.child_by_field_name("name") == Some(declaration))
-                        || (matches!(kind, "function_declarator" | "type_definition")
-                            && parent.child_by_field_name("declarator") == Some(declaration))
-                });
+                let declaration_name = declaration
+                    .parent()
+                    .is_some_and(|parent| {
+                        let kind = parent.kind();
+                        ((kind.ends_with("_item")
+                            || kind.ends_with("_definition")
+                            || kind.ends_with("_declaration")
+                            || matches!(
+                                kind,
+                                "variable_declarator"
+                                    | "type_spec"
+                                    | "method_signature"
+                                    | "struct_specifier"
+                                    | "class_specifier"
+                                    | "enum_specifier"
+                                    | "union_specifier"
+                            ))
+                            && parent.child_by_field_name("name") == Some(declaration))
+                            || (matches!(kind, "function_declarator" | "type_definition")
+                                && parent.child_by_field_name("declarator") == Some(declaration))
+                    });
                 if declaration_name {
                     continue;
                 }
-                let name = node.utf8_text(source.as_bytes()).unwrap_or_default();
+                let name = node
+                    .utf8_text(source.as_bytes())
+                    .unwrap_or_default();
                 let line = node.start_position().row + 1;
                 if name.len() <= 128 && seen.insert((name.to_owned(), line)) {
                     identifiers.push(Identifier {
                         name: name.to_owned(),
                         line,
                     });
-                    if identifiers.len() >= 8192 {
+                    if identifiers.len() >= 8_192 {
                         truncated = true;
                         break;
                     }
@@ -142,16 +146,17 @@ fn extract_c_symbols(tree: &tree_sitter::Tree, source: &str) -> Vec<AstSymbol> {
     while let Some(node) = pending.pop() {
         let (name, kind) = match node.kind() {
             "function_declarator" => (
-                node.child_by_field_name("declarator").filter(|n| {
-                    matches!(
-                        n.kind(),
-                        "identifier"
-                            | "field_identifier"
-                            | "qualified_identifier"
-                            | "destructor_name"
-                            | "operator_name"
-                    )
-                }),
+                node.child_by_field_name("declarator")
+                    .filter(|n| {
+                        matches!(
+                            n.kind(),
+                            "identifier"
+                                | "field_identifier"
+                                | "qualified_identifier"
+                                | "destructor_name"
+                                | "operator_name"
+                        )
+                    }),
                 "function",
             ),
             "struct_specifier" => (node.child_by_field_name("name"), "struct"),
@@ -197,12 +202,15 @@ fn extract_c_symbols(tree: &tree_sitter::Tree, source: &str) -> Vec<AstSymbol> {
                 .child_by_field_name("body")
                 .map_or(owner.end_byte(), |body| body.start_byte());
             symbols.push(AstSymbol {
-                name: name.utf8_text(source.as_bytes()).unwrap_or_default().into(),
+                name: name
+                    .utf8_text(source.as_bytes())
+                    .unwrap_or_default()
+                    .into(),
                 kind: kind.into(),
                 line: name.start_position().row + 1,
                 signature: clean_signature(&source[owner.start_byte()..end]),
             });
-            if symbols.len() > 1024 {
+            if symbols.len() > 1_024 {
                 break;
             }
         }
@@ -225,7 +233,9 @@ fn extract_rust_symbols(tree: &tree_sitter::Tree, source: &str) -> Vec<AstSymbol
         match node.kind() {
             "function_item" => {
                 if let Some(name_node) = node.child_by_field_name("name") {
-                    let name = name_node.utf8_text(bytes).unwrap_or_default();
+                    let name = name_node
+                        .utf8_text(bytes)
+                        .unwrap_or_default();
                     let sig_end = node
                         .child_by_field_name("body")
                         .map(|b| b.start_byte())
@@ -257,7 +267,9 @@ fn extract_rust_symbols(tree: &tree_sitter::Tree, source: &str) -> Vec<AstSymbol
 
             "struct_item" => {
                 if let Some(name_node) = node.child_by_field_name("name") {
-                    let name = name_node.utf8_text(bytes).unwrap_or_default();
+                    let name = name_node
+                        .utf8_text(bytes)
+                        .unwrap_or_default();
                     let sig_end = node
                         .child_by_field_name("body")
                         .map(|b| b.start_byte())
@@ -289,7 +301,9 @@ fn extract_rust_symbols(tree: &tree_sitter::Tree, source: &str) -> Vec<AstSymbol
 
             "enum_item" => {
                 if let Some(name_node) = node.child_by_field_name("name") {
-                    let name = name_node.utf8_text(bytes).unwrap_or_default();
+                    let name = name_node
+                        .utf8_text(bytes)
+                        .unwrap_or_default();
                     let sig_end = node
                         .child_by_field_name("body")
                         .map(|b| b.start_byte())
@@ -321,7 +335,9 @@ fn extract_rust_symbols(tree: &tree_sitter::Tree, source: &str) -> Vec<AstSymbol
 
             "trait_item" => {
                 if let Some(name_node) = node.child_by_field_name("name") {
-                    let name = name_node.utf8_text(bytes).unwrap_or_default();
+                    let name = name_node
+                        .utf8_text(bytes)
+                        .unwrap_or_default();
                     let sig_end = node
                         .child_by_field_name("body")
                         .map(|b| b.start_byte())
@@ -353,7 +369,9 @@ fn extract_rust_symbols(tree: &tree_sitter::Tree, source: &str) -> Vec<AstSymbol
 
             "type_item" => {
                 if let Some(name_node) = node.child_by_field_name("name") {
-                    let name = name_node.utf8_text(bytes).unwrap_or_default();
+                    let name = name_node
+                        .utf8_text(bytes)
+                        .unwrap_or_default();
                     let raw_sig = source
                         .get(node.start_byte()..node.end_byte())
                         .unwrap_or("")
@@ -370,11 +388,13 @@ fn extract_rust_symbols(tree: &tree_sitter::Tree, source: &str) -> Vec<AstSymbol
             }
 
             "impl_item" => {
-                let body_node = node.child_by_field_name("body").or_else(|| {
-                    let mut c = node.walk();
-                    node.children(&mut c)
-                        .find(|n| n.kind() == "declaration_list")
-                });
+                let body_node = node
+                    .child_by_field_name("body")
+                    .or_else(|| {
+                        let mut c = node.walk();
+                        node.children(&mut c)
+                            .find(|n| n.kind() == "declaration_list")
+                    });
 
                 if let Some(body) = body_node {
                     let mut body_cursor = body.walk();
@@ -382,7 +402,9 @@ fn extract_rust_symbols(tree: &tree_sitter::Tree, source: &str) -> Vec<AstSymbol
                         if child.kind() == "function_item"
                             && let Some(name_node) = child.child_by_field_name("name")
                         {
-                            let name = name_node.utf8_text(bytes).unwrap_or_default();
+                            let name = name_node
+                                .utf8_text(bytes)
+                                .unwrap_or_default();
                             let sig_end = child
                                 .child_by_field_name("body")
                                 .map(|b| b.start_byte())
@@ -435,12 +457,14 @@ fn extract_python_symbols(tree: &tree_sitter::Tree, source: &str) -> Vec<AstSymb
     ) {
         match node.kind() {
             "decorated_definition" => {
-                let def_node = node.child_by_field_name("definition").or_else(|| {
-                    let mut c = node.walk();
-                    node.children(&mut c).find(|n| {
-                        n.kind() == "function_definition" || n.kind() == "class_definition"
-                    })
-                });
+                let def_node = node
+                    .child_by_field_name("definition")
+                    .or_else(|| {
+                        let mut c = node.walk();
+                        node.children(&mut c).find(|n| {
+                            n.kind() == "function_definition" || n.kind() == "class_definition"
+                        })
+                    });
                 if let Some(def) = def_node {
                     process_py_node(def, bytes, source, is_method, symbols);
                 }
@@ -448,7 +472,9 @@ fn extract_python_symbols(tree: &tree_sitter::Tree, source: &str) -> Vec<AstSymb
 
             "function_definition" => {
                 if let Some(name_node) = node.child_by_field_name("name") {
-                    let name = name_node.utf8_text(bytes).unwrap_or_default();
+                    let name = name_node
+                        .utf8_text(bytes)
+                        .unwrap_or_default();
                     let sig_end = node
                         .child_by_field_name("body")
                         .map(|b| b.start_byte())
@@ -475,7 +501,9 @@ fn extract_python_symbols(tree: &tree_sitter::Tree, source: &str) -> Vec<AstSymb
 
             "class_definition" => {
                 if let Some(name_node) = node.child_by_field_name("name") {
-                    let name = name_node.utf8_text(bytes).unwrap_or_default();
+                    let name = name_node
+                        .utf8_text(bytes)
+                        .unwrap_or_default();
                     let sig_end = node
                         .child_by_field_name("body")
                         .map(|b| b.start_byte())
@@ -527,19 +555,21 @@ fn extract_ts_js_symbols(tree: &tree_sitter::Tree, source: &str) -> Vec<AstSymbo
     ) {
         match node.kind() {
             "export_statement" => {
-                let decl = node.child_by_field_name("declaration").or_else(|| {
-                    let mut c = node.walk();
-                    node.children(&mut c).find(|n| {
-                        matches!(
-                            n.kind(),
-                            "function_declaration"
-                                | "class_declaration"
-                                | "interface_declaration"
-                                | "type_alias_declaration"
-                                | "lexical_declaration"
-                        )
-                    })
-                });
+                let decl = node
+                    .child_by_field_name("declaration")
+                    .or_else(|| {
+                        let mut c = node.walk();
+                        node.children(&mut c).find(|n| {
+                            matches!(
+                                n.kind(),
+                                "function_declaration"
+                                    | "class_declaration"
+                                    | "interface_declaration"
+                                    | "type_alias_declaration"
+                                    | "lexical_declaration"
+                            )
+                        })
+                    });
                 if let Some(decl) = decl {
                     process_js_node(decl, bytes, source, true, symbols);
                 }
@@ -547,12 +577,17 @@ fn extract_ts_js_symbols(tree: &tree_sitter::Tree, source: &str) -> Vec<AstSymbo
 
             "function_declaration" => {
                 if let Some(name_node) = node.child_by_field_name("name") {
-                    let name = name_node.utf8_text(bytes).unwrap_or_default();
+                    let name = name_node
+                        .utf8_text(bytes)
+                        .unwrap_or_default();
                     let sig_end = node
                         .child_by_field_name("body")
                         .map(|b| b.start_byte())
                         .unwrap_or_else(|| node.end_byte());
-                    let raw_sig = source.get(node.start_byte()..sig_end).unwrap_or("").trim();
+                    let raw_sig = source
+                        .get(node.start_byte()..sig_end)
+                        .unwrap_or("")
+                        .trim();
                     let sig = clean_signature(raw_sig);
                     let signature = if is_export && !sig.starts_with("export") {
                         format!("export {sig}")
@@ -571,12 +606,17 @@ fn extract_ts_js_symbols(tree: &tree_sitter::Tree, source: &str) -> Vec<AstSymbo
 
             "class_declaration" => {
                 if let Some(name_node) = node.child_by_field_name("name") {
-                    let name = name_node.utf8_text(bytes).unwrap_or_default();
+                    let name = name_node
+                        .utf8_text(bytes)
+                        .unwrap_or_default();
                     let sig_end = node
                         .child_by_field_name("body")
                         .map(|b| b.start_byte())
                         .unwrap_or_else(|| node.end_byte());
-                    let raw_sig = source.get(node.start_byte()..sig_end).unwrap_or("").trim();
+                    let raw_sig = source
+                        .get(node.start_byte()..sig_end)
+                        .unwrap_or("")
+                        .trim();
                     let sig = clean_signature(raw_sig);
                     let signature = if is_export && !sig.starts_with("export") {
                         format!("export {sig}")
@@ -605,7 +645,10 @@ fn extract_ts_js_symbols(tree: &tree_sitter::Tree, source: &str) -> Vec<AstSymbo
                                     .unwrap_or("")
                                     .trim();
                                 symbols.push(AstSymbol {
-                                    name: m_name.utf8_text(bytes).unwrap_or_default().to_string(),
+                                    name: m_name
+                                        .utf8_text(bytes)
+                                        .unwrap_or_default()
+                                        .to_string(),
                                     kind: "method".into(),
                                     line: child.start_position().row + 1,
                                     signature: clean_signature(m_raw),
@@ -618,12 +661,17 @@ fn extract_ts_js_symbols(tree: &tree_sitter::Tree, source: &str) -> Vec<AstSymbo
 
             "interface_declaration" => {
                 if let Some(name_node) = node.child_by_field_name("name") {
-                    let name = name_node.utf8_text(bytes).unwrap_or_default();
+                    let name = name_node
+                        .utf8_text(bytes)
+                        .unwrap_or_default();
                     let sig_end = node
                         .child_by_field_name("body")
                         .map(|b| b.start_byte())
                         .unwrap_or_else(|| node.end_byte());
-                    let raw_sig = source.get(node.start_byte()..sig_end).unwrap_or("").trim();
+                    let raw_sig = source
+                        .get(node.start_byte()..sig_end)
+                        .unwrap_or("")
+                        .trim();
                     let sig = clean_signature(raw_sig);
                     let signature = if is_export && !sig.starts_with("export") {
                         format!("export {sig}")
@@ -642,7 +690,9 @@ fn extract_ts_js_symbols(tree: &tree_sitter::Tree, source: &str) -> Vec<AstSymbo
 
             "type_alias_declaration" => {
                 if let Some(name_node) = node.child_by_field_name("name") {
-                    let name = name_node.utf8_text(bytes).unwrap_or_default();
+                    let name = name_node
+                        .utf8_text(bytes)
+                        .unwrap_or_default();
                     let raw_sig = source
                         .get(node.start_byte()..node.end_byte())
                         .unwrap_or("")
@@ -671,7 +721,9 @@ fn extract_ts_js_symbols(tree: &tree_sitter::Tree, source: &str) -> Vec<AstSymbo
                     if child.kind() == "variable_declarator"
                         && let Some(name_node) = child.child_by_field_name("name")
                     {
-                        let name = name_node.utf8_text(bytes).unwrap_or_default();
+                        let name = name_node
+                            .utf8_text(bytes)
+                            .unwrap_or_default();
                         let val_start = child
                             .child_by_field_name("value")
                             .map(|v| v.start_byte())
@@ -720,12 +772,17 @@ fn extract_go_symbols(tree: &tree_sitter::Tree, source: &str) -> Vec<AstSymbol> 
         match node.kind() {
             "function_declaration" => {
                 if let Some(name_node) = node.child_by_field_name("name") {
-                    let name = name_node.utf8_text(bytes).unwrap_or_default();
+                    let name = name_node
+                        .utf8_text(bytes)
+                        .unwrap_or_default();
                     let sig_end = node
                         .child_by_field_name("body")
                         .map(|b| b.start_byte())
                         .unwrap_or_else(|| node.end_byte());
-                    let raw_sig = source.get(node.start_byte()..sig_end).unwrap_or("").trim();
+                    let raw_sig = source
+                        .get(node.start_byte()..sig_end)
+                        .unwrap_or("")
+                        .trim();
                     symbols.push(AstSymbol {
                         name: name.to_string(),
                         kind: "function".into(),
@@ -737,12 +794,17 @@ fn extract_go_symbols(tree: &tree_sitter::Tree, source: &str) -> Vec<AstSymbol> 
 
             "method_declaration" => {
                 if let Some(name_node) = node.child_by_field_name("name") {
-                    let name = name_node.utf8_text(bytes).unwrap_or_default();
+                    let name = name_node
+                        .utf8_text(bytes)
+                        .unwrap_or_default();
                     let sig_end = node
                         .child_by_field_name("body")
                         .map(|b| b.start_byte())
                         .unwrap_or_else(|| node.end_byte());
-                    let raw_sig = source.get(node.start_byte()..sig_end).unwrap_or("").trim();
+                    let raw_sig = source
+                        .get(node.start_byte()..sig_end)
+                        .unwrap_or("")
+                        .trim();
                     symbols.push(AstSymbol {
                         name: name.to_string(),
                         kind: "method".into(),
@@ -758,7 +820,9 @@ fn extract_go_symbols(tree: &tree_sitter::Tree, source: &str) -> Vec<AstSymbol> 
                     if child.kind() == "type_spec"
                         && let Some(name_node) = child.child_by_field_name("name")
                     {
-                        let name = name_node.utf8_text(bytes).unwrap_or_default();
+                        let name = name_node
+                            .utf8_text(bytes)
+                            .unwrap_or_default();
                         let type_node = child.child_by_field_name("type");
                         let kind = match type_node.map(|t| t.kind()) {
                             Some("struct_type") => "struct",
@@ -776,7 +840,10 @@ fn extract_go_symbols(tree: &tree_sitter::Tree, source: &str) -> Vec<AstSymbol> 
                             })
                             .map(|b| b.start_byte())
                             .unwrap_or_else(|| child.end_byte());
-                        let raw_sig = source.get(node.start_byte()..sig_end).unwrap_or("").trim();
+                        let raw_sig = source
+                            .get(node.start_byte()..sig_end)
+                            .unwrap_or("")
+                            .trim();
                         symbols.push(AstSymbol {
                             name: name.to_string(),
                             kind: kind.into(),
@@ -806,16 +873,23 @@ fn extract_fallback_symbols(path: &Path, text: &str) -> Vec<AstSymbol> {
     text.lines()
         .enumerate()
         .filter_map(|(index, line)| {
-            FALLBACK.captures(line).and_then(|c| c.get(1)).map(|m| {
-                let name = m.as_str().to_string();
-                let sig = clean_signature(line.trim_end_matches('{').trim_end_matches(':').trim());
-                AstSymbol {
-                    name,
-                    kind: "symbol".into(),
-                    line: index + 1,
-                    signature: sig,
-                }
-            })
+            FALLBACK
+                .captures(line)
+                .and_then(|c| c.get(1))
+                .map(|m| {
+                    let name = m.as_str().to_string();
+                    let sig = clean_signature(
+                        line.trim_end_matches('{')
+                            .trim_end_matches(':')
+                            .trim(),
+                    );
+                    AstSymbol {
+                        name,
+                        kind: "symbol".into(),
+                        line: index + 1,
+                        signature: sig,
+                    }
+                })
         })
         .take(128)
         .collect()

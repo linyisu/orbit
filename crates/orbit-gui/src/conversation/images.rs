@@ -15,10 +15,12 @@ pub(crate) struct ImageRequest {
     path: String,
     response: Arc<Mutex<Option<ImageResponse>>>,
 }
+
 impl ImageRequest {
     pub fn path(&self) -> &str {
         &self.path
     }
+
     pub fn take_response(&self) -> Option<ImageResponse> {
         self.response
             .lock()
@@ -39,6 +41,7 @@ pub(super) struct ReplyImages {
     cache: Cache,
     loads: Vec<Task<()>>,
 }
+
 impl EventEmitter<ImageRequest> for ReplyImages {}
 
 impl ReplyImages {
@@ -95,37 +98,38 @@ impl ReplyImages {
             response: Arc::new(Mutex::new(Some(response))),
         });
         let uri = uri.to_owned();
-        self.loads.push(cx.spawn(async move |owner, cx| {
-            let response = received
-                .await
-                .map_err(|_| "图片读取已取消".to_owned())
-                .and_then(|r| r);
-            let decoded = cx
-                .background_spawn(async move {
-                    let Response::File(encoded) = response? else {
-                        return Err("图片响应格式无效".into());
+        self.loads
+            .push(cx.spawn(async move |owner, cx| {
+                let response = received
+                    .await
+                    .map_err(|_| "图片读取已取消".to_owned())
+                    .and_then(|r| r);
+                let decoded = cx
+                    .background_spawn(async move {
+                        let Response::File(encoded) = response? else {
+                            return Err("图片响应格式无效".into());
+                        };
+                        let bytes = base64::engine::general_purpose::STANDARD
+                            .decode(encoded)
+                            .map_err(|e| e.to_string())?;
+                        crate::image_preview::decode_image(bytes)
+                            .map(|(image, _)| image)
+                            .map_err(|e| e.to_string())
+                    })
+                    .await;
+                let _ = owner.update(cx, |images, cx| {
+                    let load = match decoded {
+                        Ok(image) => Load::Ready(image),
+                        Err(error) => Load::Failed(error.into()),
                     };
-                    let bytes = base64::engine::general_purpose::STANDARD
-                        .decode(encoded)
-                        .map_err(|e| e.to_string())?;
-                    crate::image_preview::decode_image(bytes)
-                        .map(|(image, _)| image)
-                        .map_err(|e| e.to_string())
-                })
-                .await;
-            let _ = owner.update(cx, |images, cx| {
-                let load = match decoded {
-                    Ok(image) => Load::Ready(image),
-                    Err(error) => Load::Failed(error.into()),
-                };
-                images
-                    .cache
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .insert(uri, load);
-                cx.notify();
-            });
-        }));
+                    images
+                        .cache
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .insert(uri, load);
+                    cx.notify();
+                });
+            }));
         Load::Pending
     }
 }
@@ -141,7 +145,10 @@ fn local_path(source: &str) -> Option<String> {
             .then(|| url.to_file_path().ok())?
             .map(|path| path.to_string_lossy().into_owned());
     }
-    let url = url::Url::parse("file:///").ok()?.join(source).ok()?;
+    let url = url::Url::parse("file:///")
+        .ok()?
+        .join(source)
+        .ok()?;
     let path = url.to_file_path().ok()?;
     let path = if source.starts_with('/') {
         path.as_path()

@@ -13,7 +13,7 @@ use orbit_store::types::ProjectPlugin;
 use serde::{Deserialize, Serialize};
 use tokio::process::Command;
 
-const MAX_MANIFEST_BYTES: u64 = 64 * 1024;
+const MAX_MANIFEST_BYTES: u64 = 64 * 1_024;
 mod package;
 
 pub use orbit_protocol::plugins::{Marketplace, Plugin, PluginPackage};
@@ -119,8 +119,14 @@ fn enabled_skill_roots_from_markets(
                 package.version == configured.version,
                 "插件 {} 的版本已从 {} 变为 {}；请重新检查后启用",
                 configured.plugin_name,
-                configured.version.as_deref().unwrap_or("未声明"),
-                package.version.as_deref().unwrap_or("未声明")
+                configured
+                    .version
+                    .as_deref()
+                    .unwrap_or("未声明"),
+                package
+                    .version
+                    .as_deref()
+                    .unwrap_or("未声明")
             );
 
             Ok(inspected.skill_directories)
@@ -228,7 +234,9 @@ impl Store {
     async fn refresh(&self, source: String) -> Result<Marketplace> {
         let source = source.trim().to_owned();
         ensure!(
-            self.list()?.iter().any(|market| market.source == source),
+            self.list()?
+                .iter()
+                .any(|market| market.source == source),
             "插件市场已移除，请重新添加"
         );
         self.add(source).await
@@ -237,9 +245,12 @@ impl Store {
     fn register(&self, market: Marketplace) -> Result<Marketplace> {
         let mut stored = self.load()?;
         ensure!(
-            !stored.marketplaces.iter().any(|existing| {
-                existing.name == market.name && existing.source != market.source
-            }),
+            !stored
+                .marketplaces
+                .iter()
+                .any(|existing| {
+                    existing.name == market.name && existing.source != market.source
+                }),
             "已存在同名的插件市场，请先移除旧来源"
         );
         stored
@@ -256,7 +267,9 @@ impl Store {
     fn remove(&self, source: &str) -> Result<()> {
         let mut stored = self.load()?;
         let previous_len = stored.marketplaces.len();
-        stored.marketplaces.retain(|market| market.source != source);
+        stored
+            .marketplaces
+            .retain(|market| market.source != source);
         ensure!(
             stored.marketplaces.len() != previous_len,
             "插件市场已移除，请刷新列表"
@@ -313,9 +326,14 @@ impl Store {
             "downloaded marketplace has no Git commit"
         );
 
-        let revision = String::from_utf8(revision_output.stdout)?.trim().to_owned();
+        let revision = String::from_utf8(revision_output.stdout)?
+            .trim()
+            .to_owned();
         ensure!(
-            revision.len() == 40 && revision.bytes().all(|byte| byte.is_ascii_hexdigit()),
+            revision.len() == 40
+                && revision
+                    .bytes()
+                    .all(|byte| byte.is_ascii_hexdigit()),
             "downloaded marketplace has an invalid Git commit"
         );
 
@@ -489,7 +507,11 @@ fn parse_catalog_value(directory: &Path, raw: &serde_json::Value) -> Result<Mark
 
         plugins.push(Plugin {
             name: plugin_name.into(),
-            description: description.trim().chars().take(240).collect(),
+            description: description
+                .trim()
+                .chars()
+                .take(240)
+                .collect(),
             source,
         });
     }
@@ -505,12 +527,15 @@ fn parse_catalog_value(directory: &Path, raw: &serde_json::Value) -> Result<Mark
 
 fn resolve_package_path(market_root: &Path, source: &str) -> Result<PathBuf> {
     validate_relative_package_source(source)?;
-    let package = market_root.join(source).canonicalize().with_context(|| {
-        format!(
-            "plugin package source {source:?} cannot be opened below {}",
-            market_root.display()
-        )
-    })?;
+    let package = market_root
+        .join(source)
+        .canonicalize()
+        .with_context(|| {
+            format!(
+                "plugin package source {source:?} cannot be opened below {}",
+                market_root.display()
+            )
+        })?;
 
     ensure!(
         package.starts_with(market_root),
@@ -572,7 +597,10 @@ fn declared_markdown_files(directory: &Path, required_file: &str) -> Result<Vec<
         .filter_map(Result::ok)
         .filter_map(|entry| {
             let path = entry.path();
-            let name = entry.file_name().to_string_lossy().into_owned();
+            let name = entry
+                .file_name()
+                .to_string_lossy()
+                .into_owned();
 
             if required_file == ".md" {
                 (path.is_file() && name.ends_with(".md")).then_some(name)
@@ -596,9 +624,11 @@ fn valid_name(value: &str) -> bool {
 }
 
 fn stable_hash(value: &str) -> u64 {
-    value.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
-        (hash ^ u64::from(byte)).wrapping_mul(0x100_0000_01b3)
-    })
+    value
+        .bytes()
+        .fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
+            (hash ^ u64::from(byte)).wrapping_mul(0x100_0000_01b3)
+        })
 }
 
 #[cfg(test)]

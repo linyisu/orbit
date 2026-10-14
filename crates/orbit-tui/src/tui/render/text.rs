@@ -143,7 +143,10 @@ pub(in crate::tui) fn sanitize_line(line: &mut Line<'_>) {
 
 pub(in crate::tui) fn sanitize_linked_line(linked: &mut LinkedLine) {
     let original = linked.text();
-    if !original.chars().any(|c| c.is_control() && c != '\n') {
+    if !original
+        .chars()
+        .any(|c| c.is_control() && c != '\n')
+    {
         return;
     }
     // Semantic display math can span several lines. Layout splits these into
@@ -154,11 +157,12 @@ pub(in crate::tui) fn sanitize_linked_line(linked: &mut LinkedLine) {
         link.end = offset(link.end);
     }
 
-    for range in linked
-        .decorations
-        .iter_mut()
-        .chain(linked.media.iter_mut().map(|t| &mut t.range))
-    {
+    for range in linked.decorations.iter_mut().chain(
+        linked
+            .media
+            .iter_mut()
+            .map(|t| &mut t.range),
+    ) {
         range.start = offset(range.start);
         range.end = offset(range.end);
     }

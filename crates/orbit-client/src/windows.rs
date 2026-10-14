@@ -26,7 +26,9 @@ pub struct SavedTab {
 
 impl SavedTab {
     pub fn from_connection(connection: &Connection, id: String, title: String) -> Option<Self> {
-        let local = connection.local_configuration.as_ref()?;
+        let local = connection
+            .local_configuration
+            .as_ref()?;
         Some(Self {
             id,
             title,
@@ -42,7 +44,11 @@ impl SavedTab {
 
 fn private_file(path: &Path) -> Result<File> {
     let mut options = std::fs::OpenOptions::new();
-    options.create(true).truncate(false).read(true).write(true);
+    options
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true);
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
@@ -119,7 +125,12 @@ fn reap(directory: &Path, registry: &mut Registry) -> Result<()> {
         }
     }
 
-    if !registry.windows.is_empty() && registry.windows.values().all(|window| window.closed) {
+    if !registry.windows.is_empty()
+        && registry
+            .windows
+            .values()
+            .all(|window| window.closed)
+    {
         let mut seen = std::collections::HashSet::new();
         registry.previous = registry
             .windows
@@ -182,7 +193,9 @@ impl TuiWindow {
             let lease = private_file(&directory.join(&id))?;
             lease.lock()?;
             let previous = registry.previous.clone();
-            registry.windows.insert(id.clone(), Window::default());
+            registry
+                .windows
+                .insert(id.clone(), Window::default());
             save(&directory, &registry)?;
             Ok(TuiWindow {
                 directory,
@@ -260,8 +273,12 @@ mod tests {
     #[tokio::test]
     async fn last_window_merges_targets_and_crashed_window_records() {
         let root = tempfile::tempdir().unwrap();
-        let first = TuiWindow::open(root.path().into()).await.unwrap();
-        let mut crashed = TuiWindow::open(root.path().into()).await.unwrap();
+        let first = TuiWindow::open(root.path().into())
+            .await
+            .unwrap();
+        let mut crashed = TuiWindow::open(root.path().into())
+            .await
+            .unwrap();
         let local = tab(Target::Local, "same-id");
         let ssh = tab(
             Target::Ssh {
@@ -270,7 +287,10 @@ mod tests {
             },
             "same-id",
         );
-        first.update(vec![local.clone()]).await.unwrap();
+        first
+            .update(vec![local.clone()])
+            .await
+            .unwrap();
         crashed
             .update(vec![ssh.clone(), local.clone()])
             .await
@@ -278,7 +298,9 @@ mod tests {
         crashed.lease.take();
         drop(crashed);
         first.close().await.unwrap();
-        let restored = TuiWindow::open(root.path().into()).await.unwrap();
+        let restored = TuiWindow::open(root.path().into())
+            .await
+            .unwrap();
         assert_eq!(restored.previous().len(), 2);
         assert!(restored.previous().contains(&local));
         assert!(restored.previous().contains(&ssh));
@@ -289,19 +311,29 @@ mod tests {
     async fn live_windows_do_not_replace_previous_restore_snapshot() {
         let root = tempfile::tempdir().unwrap();
         let previous = tab(Target::Local, "previous");
-        let first = TuiWindow::open(root.path().into()).await.unwrap();
-        first.update(vec![previous.clone()]).await.unwrap();
+        let first = TuiWindow::open(root.path().into())
+            .await
+            .unwrap();
+        first
+            .update(vec![previous.clone()])
+            .await
+            .unwrap();
         first.close().await.unwrap();
-        let second = TuiWindow::open(root.path().into()).await.unwrap();
+        let second = TuiWindow::open(root.path().into())
+            .await
+            .unwrap();
         second
             .update(vec![tab(Target::Local, "running")])
             .await
             .unwrap();
-        let third = TuiWindow::open(root.path().into()).await.unwrap();
+        let third = TuiWindow::open(root.path().into())
+            .await
+            .unwrap();
         assert_eq!(third.previous(), [previous]);
         third.close().await.unwrap();
         second.close().await.unwrap();
     }
+
     #[tokio::test]
     async fn legacy_tabs_seed_only_the_first_client_registry() {
         let root = tempfile::tempdir().unwrap();
@@ -311,7 +343,10 @@ mod tests {
             .unwrap();
         assert_eq!(migrated.previous(), [legacy]);
         let current = tab(Target::Local, "current");
-        migrated.update(vec![current.clone()]).await.unwrap();
+        migrated
+            .update(vec![current.clone()])
+            .await
+            .unwrap();
         migrated.close().await.unwrap();
         let next =
             TuiWindow::open_with_previous(root.path().into(), vec![tab(Target::Local, "stale")])

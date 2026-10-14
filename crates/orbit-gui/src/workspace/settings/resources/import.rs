@@ -70,7 +70,12 @@ impl Importer {
     }
 
     fn scan_source(&mut self, cx: &mut Context<Self>) {
-        let source = self.source.read(cx).value().trim().to_owned();
+        let source = self
+            .source
+            .read(cx)
+            .value()
+            .trim()
+            .to_owned();
         if source.is_empty() || self.busy {
             return;
         }
@@ -139,14 +144,16 @@ impl Importer {
             let _ = entity.update(cx, |view, cx| {
                 view.busy = false;
                 view.installing = false;
-                let current = view.owner.upgrade().is_some_and(|owner| {
-                    let owner = owner.read(cx);
-                    owner.connected
-                        && owner
-                            .info
-                            .as_ref()
-                            .is_some_and(|info| info.id == session && info.workspace == workspace)
-                });
+                let current = view
+                    .owner
+                    .upgrade()
+                    .is_some_and(|owner| {
+                        let owner = owner.read(cx);
+                        owner.connected
+                            && owner.info.as_ref().is_some_and(|info| {
+                                info.id == session && info.workspace == workspace
+                            })
+                    });
                 if !current {
                     view.scan = None;
                     view.error =
@@ -204,18 +211,47 @@ impl Render for Importer {
                 .child(h_flex().gap_2()
                     .child(div().flex_1().min_w_0().child(Input::new(&self.source)
                         .aria_label("技能来源").disabled(self.busy).cleanable(true)))
-                    .child(Button::new("scan-skill-source").label(if self.busy && !self.installing {"扫描中…"} else {"扫描来源"})
+                    .child(Button::new("scan-skill-source")
+                        .label(if self
+                        .busy
+                        && !self
+                        .installing {
+                        "扫描中…"
+                    } else {
+                        "扫描来源"
+                    })
                         .disabled(self.busy || self.source.read(cx).value().trim().is_empty())
                         .on_click(cx.listener(|view, _, _, cx| view.scan_source(cx)))))
                 .child(div().text_xs().text_color(cx.theme().muted_foreground)
                     .child("支持 owner/repo、Git URL、GitHub 子目录链接和本地技能目录。远程项目中的路径由远程主机读取。")))
             .when(self.busy, |view| view.child(h_flex().gap_2()
                 .child(Spinner::new().small())
-                .child(div().text_sm().child(if self.installing {"正在安装所选技能…"} else {"正在获取来源并扫描 SKILL.md…"}))))
-            .when_some(self.error.clone(), |view, error| view.child(div().text_sm().text_color(cx.theme().danger).child(error)));
+                .child(div()
+                    .text_sm()
+                    .child(if self
+                    .installing {
+                    "正在安装所选技能…"
+                } else {
+                    "正在获取来源并扫描 SKILL.md…"
+                }))))
+            .when_some(self
+                .error
+                .clone(),
+                |view,
+                error| view
+                .child(div()
+                .text_sm()
+                .text_color(cx
+                .theme()
+                .danger)
+                .child(error)));
 
         if let Some(scan) = &self.scan {
-            let available = scan.skills.iter().filter(|skill| !skill.conflict).count();
+            let available = scan
+                .skills
+                .iter()
+                .filter(|skill| !skill.conflict)
+                .count();
             let selected = scan.selected.len();
             content = content.child(
                 v_flex()

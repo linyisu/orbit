@@ -40,7 +40,7 @@ use view::View;
 
 const MAX_CACHE_ENTRIES: usize = 48;
 const WORKER_QUEUE_CAPACITY: usize = 32;
-const MAX_CACHE_BYTES: usize = 96 * 1024 * 1024;
+const MAX_CACHE_BYTES: usize = 96 * 1_024 * 1_024;
 
 // A compression probe can succeed while larger uploads crash the terminal's
 // inflater. Keep both the probe and RGBA transfers uncompressed.
@@ -256,7 +256,9 @@ impl Context {
         }
         self.network = Network(client);
         if let Some(shared) = &self.shared {
-            shared.revision.fetch_add(1, Ordering::Release);
+            shared
+                .revision
+                .fetch_add(1, Ordering::Release);
         }
     }
 
@@ -285,16 +287,25 @@ impl Context {
                     while let Ok(work) = receive.recv() {
                         let Some(shared) = weak.upgrade() else { break };
                         let Work { key, ticket } = work;
-                        if ticket.as_ref().is_some_and(|ticket| !ticket.current()) {
+                        if ticket
+                            .as_ref()
+                            .is_some_and(|ticket| !ticket.current())
+                        {
                             if let Some(ticket) = &ticket
                                 && let Ok(mut cache) = shared.cache.lock()
                                 && cache.get(&key).is_some_and(|entry| {
-                                    matches!(&entry.value, Value::Pending(Some(pending)) if ticket.same_request(pending))
+                                    matches!(
+                                        &entry.value,
+                                        Value::Pending(Some(pending))
+                                            if ticket.same_request(pending)
+                                    )
                                 })
                             {
                                 cache.remove(&key);
                             }
-                            shared.revision.fetch_add(1, Ordering::Release);
+                            shared
+                                .revision
+                                .fetch_add(1, Ordering::Release);
                             continue;
                         }
                         let result = decoder.prepare(&key, &shared.picker);
@@ -335,7 +346,9 @@ impl Context {
                             if let Some(entry) = cache.get_mut(&key) {
                                 entry.value = value;
                             }
-                            shared.revision.fetch_add(1, Ordering::Release);
+                            shared
+                                .revision
+                                .fetch_add(1, Ordering::Release);
                         }
                     }
                 });
@@ -372,7 +385,9 @@ impl Context {
             && let Ok(mut cache) = shared.cache.lock()
         {
             cache.clear();
-            shared.revision.fetch_add(1, Ordering::Release);
+            shared
+                .revision
+                .fetch_add(1, Ordering::Release);
         }
     }
 
@@ -459,7 +474,9 @@ impl Context {
             return None;
         }
         let mut cache = shared.cache.lock().ok()?;
-        let touched = shared.clock.fetch_add(1, Ordering::Relaxed);
+        let touched = shared
+            .clock
+            .fetch_add(1, Ordering::Relaxed);
         if let Some(entry) = cache.get_mut(&key) {
             entry.touched = touched;
             return match &entry.value {

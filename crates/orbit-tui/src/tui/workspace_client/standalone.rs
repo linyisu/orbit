@@ -41,15 +41,23 @@ pub(super) async fn run(mut opened: Opened) -> Result<()> {
             event = input_events::next(&mut events, &mut pending_event) => {
                 let Some(event) = event else { break };
                 let event = event?;
-                if !wheel.accept(&event, std::time::Instant::now()) { continue; }
+                if !wheel.accept(&event, std::time::Instant::now()) {
+                    continue;
+                }
                 tabs.sync_remote_ui();
                 let id = tabs.active_remote.clone().unwrap();
                 let tab = tabs.remote.get_mut(&id).unwrap();
                 tui::update_tab_hover(&event, &mut tab.state);
                 let action = match tui::tab_target(&event, &tab.state) {
-                    Some(TabAction::Select(next)) => { tabs.active_remote = Some(next); Action::None }
+                    Some(TabAction::Select(next)) => {
+                        tabs.active_remote = Some(next);
+                        Action::None
+                    }
                     Some(TabAction::New) => Action::SameTarget(None),
-                    Some(TabAction::Close(closing)) => { close(&mut tabs, &closing); Action::None }
+                    Some(TabAction::Close(closing)) => {
+                        close(&mut tabs, &closing);
+                        Action::None
+                    }
                     None => tab.handle(event)?,
                 };
                 match action {
@@ -63,70 +71,134 @@ pub(super) async fn run(mut opened: Opened) -> Result<()> {
                         tabs.open_session(&id, resume);
                     }
                     Action::Restore => {
-                        tabs.remote.get_mut(&id).unwrap().state.restore_picker = Some(tui::restore::RestorePicker::from_tabs(&previous));
+                        tabs.remote
+                            .get_mut(&id)
+                            .unwrap()
+                            .state
+                            .restore_picker =
+                            Some(tui::restore::RestorePicker::from_tabs(&previous));
                     }
                     Action::Connect => {
                         let tab = &tabs.remote[&id];
-                        if let Some(local) = tab.connection.as_ref().and_then(|connection| connection.local_configuration.as_ref()) {
-                            let settings = crate::ConnectionSettings { config: local.config.clone(), auth_directory: local.auth.clone() };
+                        if let Some(local) = tab
+                            .connection
+                            .as_ref()
+                            .and_then(|connection| connection.local_configuration.as_ref())
+                        {
+                            let settings = crate::ConnectionSettings {
+                                config: local.config.clone(),
+                                auth_directory: local.auth.clone(),
+                            };
                             match tui::connect::run(&mut terminal, &mut events, &settings).await {
                                 Ok(Some(_)) => {
-                                    for tab in tabs.remote.values_mut().filter(|tab| tab.connection.as_ref().and_then(|c| c.local_configuration.as_ref()).is_some_and(|local| local.config == settings.config)) { tab.reload_models(); }
+                                    for tab in tabs.remote.values_mut().filter(|tab| {
+                                        tab.connection
+                                            .as_ref()
+                                            .and_then(|c| c.local_configuration.as_ref())
+                                            .is_some_and(|local| local.config == settings.config)
+                                    }) {
+                                        tab.reload_models();
+                                    }
                                 }
-                                Ok(None) => {},
-                                Err(error) => tabs.remote.get_mut(&id).unwrap().state.report_local(TranscriptItem::CommandError(error.to_string())),
+                                Ok(None) => {}
+                                Err(error) => tabs
+                                    .remote
+                                    .get_mut(&id)
+                                    .unwrap()
+                                    .state
+                                    .report_local(TranscriptItem::CommandError(error.to_string())),
                             }
                         }
                     }
-                    Action::RefreshModels => tabs.remote.get_mut(&id).unwrap().reload_models(),
+                    Action::RefreshModels => tabs
+                        .remote
+                        .get_mut(&id)
+                        .unwrap()
+                        .reload_models(),
                     Action::Editor => {
-                        let draft = tabs.remote[&id].state.input.text.clone();
-                        let command = std::env::var("VISUAL").ok().filter(|value| !value.trim().is_empty()).or_else(|| std::env::var("EDITOR").ok()).unwrap_or_else(|| "vi".into());
+                        let draft = tabs.remote[&id]
+                            .state
+                            .input
+                            .text
+                            .clone();
+                        let command = std::env::var("VISUAL")
+                            .ok()
+                            .filter(|value| !value.trim().is_empty())
+                            .or_else(|| std::env::var("EDITOR").ok())
+                            .unwrap_or_else(|| "vi".into());
                         terminal::suspend();
-                        let result = workspace::platform::editor::Editor::new(command).edit(&draft, &tabs.remote[&id].local_directory()?).await;
+                        let result = workspace::platform::editor::Editor::new(command)
+                            .edit(&draft, &tabs.remote[&id].local_directory()?)
+                            .await;
                         terminal::resume(&mut terminal)?;
                         let state = &mut tabs.remote.get_mut(&id).unwrap().state;
                         state.media.invalidate();
                         match result {
                             Ok(draft) => state.restore_editor_draft(draft),
-                            Err(error) => state.report_local(TranscriptItem::CommandError(error.to_string())),
+                            Err(error) => {
+                                state.report_local(TranscriptItem::CommandError(error.to_string()))
+                            }
                         }
                     }
                     Action::Local => {
                         let media = tabs.remote[&id].state.media.clone();
                         let mut spec = Spec::local();
-                        if let Some(configuration) = tabs.remote[&id].connection.as_ref().and_then(|connection| connection.local_configuration.as_ref()) {
+                        if let Some(configuration) = tabs.remote[&id]
+                            .connection
+                            .as_ref()
+                            .and_then(|connection| connection.local_configuration.as_ref())
+                        {
                             spec.inherit(&configuration.config, &configuration.auth, None);
                         }
                         tabs.add_remote(Tab::connecting(spec, media));
                     }
                     Action::None | Action::Redraw => {}
                 }
-                if let Some(selected) = tabs.remote.get_mut(&id).and_then(|tab| tab.state.restore_selection.take()) {
-                    let saved: Vec<_> = selected.into_iter()
+                if let Some(selected) = tabs
+                    .remote
+                    .get_mut(&id)
+                    .and_then(|tab| tab.state.restore_selection.take())
+                {
+                    let saved: Vec<_> = selected
+                        .into_iter()
                         .filter_map(|value| value.parse::<usize>().ok())
-                        .filter_map(|index| previous.get(index)).collect();
+                        .filter_map(|index| previous.get(index))
+                        .collect();
                     tabs.restore_tabs(&id, &saved);
                 }
                 frames.request(time::Instant::now());
             }
             _ = ticks.tick() => {
-                if tabs.poll_remote().await { frames.request(time::Instant::now()); }
+                if tabs.poll_remote().await {
+                    frames.request(time::Instant::now());
+                }
                 if persisted.elapsed() >= Duration::from_millis(500) {
                     persisted = std::time::Instant::now();
                     tabs.sync_remote_ui();
                     let saved = saved_tabs(&tabs);
-                    if saved != remembered { window.update(saved.clone()).await?; remembered = saved; }
+                    if saved != remembered {
+                        window.update(saved.clone()).await?;
+                        remembered = saved;
+                    }
                 }
             }
             _ = time::sleep_until(frames.deadline()), if frames.pending() => {
                 tabs.sync_remote_ui();
-                let state = &mut tabs.remote.get_mut(tabs.active_remote.as_ref().unwrap()).unwrap().state;
+                let state = &mut tabs
+                    .remote
+                    .get_mut(tabs.active_remote.as_ref().unwrap())
+                    .unwrap()
+                    .state;
                 terminal::draw_synchronized(&mut terminal, |frame| {
                     render::draw_frame(frame, state);
                 })?;
                 frames.drawn(time::Instant::now());
-                if state.cursor_motion.active(std::time::Instant::now()) { frames.request(time::Instant::now() + Duration::from_millis(16)); }
+                if state
+                    .cursor_motion
+                    .active(std::time::Instant::now())
+                {
+                    frames.request(time::Instant::now() + Duration::from_millis(16));
+                }
             }
         }
     }

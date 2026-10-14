@@ -56,7 +56,9 @@ impl Draft {
         if let Some(user) = &user {
             anyhow::ensure!(
                 !user.starts_with('-')
-                    && !user.chars().any(|c| c.is_whitespace() || c.is_control()),
+                    && !user
+                        .chars()
+                        .any(|c| c.is_whitespace() || c.is_control()),
                 "用户名不能以横线开头或包含空格"
             );
         }
@@ -86,13 +88,17 @@ impl Draft {
         );
         let mut options = base.clone();
         options.ssh = (self.mode == Mode::Ssh).then(|| target.into());
-        options.ssh_user = (self.mode == Mode::Ssh).then_some(user.clone()).flatten();
+        options.ssh_user = (self.mode == Mode::Ssh)
+            .then_some(user.clone())
+            .flatten();
         options.ssh_port = port;
         options.identity = (self.mode == Mode::Ssh)
             .then(|| optional(&self.identity))
             .flatten();
         options.wsl = (self.mode == Mode::Wsl).then(|| target.into());
-        options.wsl_user = (self.mode == Mode::Wsl).then_some(user).flatten();
+        options.wsl_user = (self.mode == Mode::Wsl)
+            .then_some(user)
+            .flatten();
         options.workspace = Some(path.into());
         options.server = optional(&self.server);
         options.database = optional(&self.database).map(PathBuf::from);
@@ -282,11 +288,17 @@ impl RemoteConnection {
             "~/workspace/project",
         );
         let ssh_user = field(
-            options.ssh_user.clone().unwrap_or_default(),
+            options
+                .ssh_user
+                .clone()
+                .unwrap_or_default(),
             "使用 SSH 配置中的用户",
         );
         let wsl_user = field(
-            options.wsl_user.clone().unwrap_or_default(),
+            options
+                .wsl_user
+                .clone()
+                .unwrap_or_default(),
             "使用发行版的默认用户",
         );
         let port = field(
@@ -297,12 +309,18 @@ impl RemoteConnection {
             "使用 SSH 配置中的端口",
         );
         let identity = field(
-            options.identity.clone().unwrap_or_default(),
+            options
+                .identity
+                .clone()
+                .unwrap_or_default(),
             "~/.ssh/id_ed25519",
         );
         let server = field(
             if remote {
-                options.server.clone().unwrap_or_default()
+                options
+                    .server
+                    .clone()
+                    .unwrap_or_default()
             } else {
                 String::new()
             },
@@ -524,7 +542,11 @@ impl RemoteConnection {
         v_flex()
             .gap_1p5()
             .child(div().text_sm().child(label))
-            .child(Input::new(input).aria_label(label).w_full())
+            .child(
+                Input::new(input)
+                    .aria_label(label)
+                    .w_full(),
+            )
     }
 
     fn choose_identity(&mut self, cx: &mut Context<Self>) {
@@ -634,11 +656,15 @@ impl Render for RemoteConnection {
         rows.push(
             v_flex()
                 .gap_1p5()
-                .child(div().text_sm().child(if mode == Mode::Ssh {
-                    "SSH 主机"
-                } else {
-                    "WSL 发行版"
-                }))
+                .child(
+                    div()
+                        .text_sm()
+                        .child(if mode == Mode::Ssh {
+                            "SSH 主机"
+                        } else {
+                            "WSL 发行版"
+                        }),
+                )
                 .child(target_controls)
                 .into_any_element(),
         );
@@ -691,7 +717,12 @@ impl Render for RemoteConnection {
                         ),
                 )
                 .when_some(self.browser.clone(), |view, browser| {
-                    view.child(div().flex_shrink_0().pt_2().child(browser))
+                    view.child(
+                        div()
+                            .flex_shrink_0()
+                            .pt_2()
+                            .child(browser),
+                    )
                 })
                 .into_any_element(),
         );
@@ -718,21 +749,35 @@ impl Render for RemoteConnection {
                 &self.wsl_user
             };
             field_rows.insert(user.entity_id(), rows.len());
-            rows.push(self.field("用户（可选）", user).into_any_element());
+            rows.push(
+                self.field("用户（可选）", user)
+                    .into_any_element(),
+            );
             if mode == Mode::Ssh {
                 field_rows.insert(self.port.entity_id(), rows.len());
-                rows.push(self.field("端口（可选）", &self.port).into_any_element());
+                rows.push(
+                    self.field("端口（可选）", &self.port)
+                        .into_any_element(),
+                );
                 field_rows.insert(self.identity.entity_id(), rows.len());
                 rows.push(
                     v_flex()
                         .gap_1p5()
-                        .child(div().text_sm().child("本机私钥（可选）"))
+                        .child(
+                            div()
+                                .text_sm()
+                                .child("本机私钥（可选）"),
+                        )
                         .child(
                             h_flex()
                                 .gap_2()
-                                .child(div().flex_1().min_w_0().child(
-                                    Input::new(&self.identity).aria_label("本机私钥").w_full(),
-                                ))
+                                .child(
+                                    div().flex_1().min_w_0().child(
+                                        Input::new(&self.identity)
+                                            .aria_label("本机私钥")
+                                            .w_full(),
+                                    ),
+                                )
                                 .child(
                                     Button::new("remote-key-file")
                                         .icon(IconName::FolderOpen)
@@ -761,7 +806,11 @@ impl Render for RemoteConnection {
         }
         let row_focus: std::collections::HashMap<_, _> = field_rows
             .iter()
-            .filter_map(|(id, row)| self.field_focus.get(id).map(|focus| (*row, focus.clone())))
+            .filter_map(|(id, row)| {
+                self.field_focus
+                    .get(id)
+                    .map(|focus| (*row, focus.clone()))
+            })
             .collect();
         self.field_rows = field_rows;
         v_flex()
@@ -774,16 +823,27 @@ impl Render for RemoteConnection {
                     .max_h(window.bounds().size.height * 0.55)
                     .overflow_y_scroll()
                     .track_scroll(&self.scroll)
-                    .children(rows.into_iter().enumerate().map(|(index, row)| {
-                        div()
-                            .flex_shrink_0()
-                            .when_some(row_focus.get(&index), |row, focus| row.track_focus(focus))
-                            .child(row)
-                    }))
+                    .children(
+                        rows.into_iter()
+                            .enumerate()
+                            .map(|(index, row)| {
+                                div()
+                                    .flex_shrink_0()
+                                    .when_some(row_focus.get(&index), |row, focus| {
+                                        row.track_focus(focus)
+                                    })
+                                    .child(row)
+                            }),
+                    )
                     .vertical_scrollbar(&self.scroll),
             )
             .when_some(self.error.clone(), |view, error| {
-                view.child(div().text_sm().text_color(cx.theme().danger).child(error))
+                view.child(
+                    div()
+                        .text_sm()
+                        .text_color(cx.theme().danger)
+                        .child(error),
+                )
             })
             .child(
                 h_flex()
@@ -839,7 +899,9 @@ mod tests {
         local.server = Some("/desktop/orbit".into());
         local.database = Some("/desktop/orbit.db".into());
         local.resume = Some("old-local-session".into());
-        let options = draft(Mode::Ssh).options(&local).unwrap();
+        let options = draft(Mode::Ssh)
+            .options(&local)
+            .unwrap();
         assert_eq!(options.ssh.as_deref(), Some("dev"));
         assert_eq!(
             options.workspace.as_deref(),
@@ -864,7 +926,7 @@ mod tests {
         draft.port = "2222".into();
         draft.identity = "~/.ssh/custom key".into();
         let ssh = draft.options(&local).unwrap();
-        assert_eq!(ssh.ssh_port, Some(2222));
+        assert_eq!(ssh.ssh_port, Some(2_222));
         draft.mode = Mode::Wsl;
         draft.target = "Ubuntu 24.04".into();
         draft.user = "linux-user".into();
@@ -886,7 +948,7 @@ mod tests {
         let options = draft.options(&base).unwrap();
         assert_eq!(options.ssh.as_deref(), Some("dev-alias"));
         assert_eq!(options.ssh_user.as_deref(), Some("builder"));
-        assert_eq!(options.ssh_port, Some(2222));
+        assert_eq!(options.ssh_port, Some(2_222));
         assert!(std::path::Path::new(options.identity.as_ref().unwrap()).is_absolute());
         assert_eq!(options.server.as_deref(), Some("/opt/orbit service/orbit"));
         assert_eq!(

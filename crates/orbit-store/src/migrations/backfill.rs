@@ -15,7 +15,10 @@ pub(super) async fn projects(manager: &SchemaManager<'_>) -> Result<(), DbErr> {
         .from(id("sessions"))
         .distinct()
         .to_owned();
-    for row in db.query_all(backend.build(&workspaces)).await? {
+    for row in db
+        .query_all(backend.build(&workspaces))
+        .await?
+    {
         let workspace: String = row.try_get("", "workspace")?;
         let project = crate::database::new_id().map_err(|e| DbErr::Custom(e.to_string()))?;
         let insert = Query::insert()
@@ -23,24 +26,47 @@ pub(super) async fn projects(manager: &SchemaManager<'_>) -> Result<(), DbErr> {
             .columns([id("id"), id("path"), id("legacy")])
             .values_panic([project.clone().into(), workspace.clone().into(), 1.into()])
             .to_owned();
-        db.execute(backend.build(&insert)).await?;
+        db.execute(backend.build(&insert))
+            .await?;
         let insert = Query::insert()
             .into_table(id("project_paths"))
             .columns([id("project_id"), id("path")])
             .values_panic([project.into(), workspace.into()])
             .to_owned();
-        db.execute(backend.build(&insert)).await?;
+        db.execute(backend.build(&insert))
+            .await?;
     }
     // SQLite cannot add a foreign-key constraint with ALTER TABLE. Rebuild explicitly.
     manager
         .create_table(
             Table::create()
                 .table(id("sessions_v2"))
-                .col(ColumnDef::new(id("id")).text().primary_key())
-                .col(ColumnDef::new(id("workspace")).text().not_null())
-                .col(ColumnDef::new(id("model")).text().not_null())
-                .col(ColumnDef::new(id("demo")).integer().not_null())
-                .col(ColumnDef::new(id("title")).text().not_null().default(""))
+                .col(
+                    ColumnDef::new(id("id"))
+                        .text()
+                        .primary_key(),
+                )
+                .col(
+                    ColumnDef::new(id("workspace"))
+                        .text()
+                        .not_null(),
+                )
+                .col(
+                    ColumnDef::new(id("model"))
+                        .text()
+                        .not_null(),
+                )
+                .col(
+                    ColumnDef::new(id("demo"))
+                        .integer()
+                        .not_null(),
+                )
+                .col(
+                    ColumnDef::new(id("title"))
+                        .text()
+                        .not_null()
+                        .default(""),
+                )
                 .col(
                     ColumnDef::new(id("updated_at"))
                         .integer()
@@ -82,13 +108,23 @@ pub(super) async fn projects(manager: &SchemaManager<'_>) -> Result<(), DbErr> {
         .to_owned();
     let insert = Query::insert()
         .into_table(id("sessions_v2"))
-        .columns(columns.into_iter().chain(["project_id"]).map(id))
+        .columns(
+            columns
+                .into_iter()
+                .chain(["project_id"])
+                .map(id),
+        )
         .select_from(select)
         .map_err(|e| DbErr::Custom(e.to_string()))?
         .to_owned();
-    db.execute(backend.build(&insert)).await?;
+    db.execute(backend.build(&insert))
+        .await?;
     manager
-        .drop_table(Table::drop().table(id("sessions")).to_owned())
+        .drop_table(
+            Table::drop()
+                .table(id("sessions"))
+                .to_owned(),
+        )
         .await?;
     manager
         .rename_table(
@@ -108,7 +144,10 @@ pub(super) async fn session_memories(manager: &SchemaManager<'_>) -> Result<(), 
         .from(id("sessions"))
         .to_owned();
     let mut by_project: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    for row in db.query_all(backend.build(&select)).await? {
+    for row in db
+        .query_all(backend.build(&select))
+        .await?
+    {
         if let Some(project) = row.try_get::<Option<String>>("", "project_id")? {
             by_project
                 .entry(project)
@@ -133,7 +172,10 @@ pub(super) async fn session_memories(manager: &SchemaManager<'_>) -> Result<(), 
         .from(id("project_memories"))
         .order_by(id("id"), Order::Asc)
         .to_owned();
-    for row in db.query_all(backend.build(&select)).await? {
+    for row in db
+        .query_all(backend.build(&select))
+        .await?
+    {
         let project: String = row.try_get("", "project_id")?;
         let source: Option<String> = row.try_get("", "source_session_id")?;
         let Some(sessions) = by_project.get(&project) else {
@@ -160,15 +202,21 @@ pub(super) async fn session_memories(manager: &SchemaManager<'_>) -> Result<(), 
             )
             .values_panic([
                 owner.into(),
-                row.try_get::<String>("", "category")?.into(),
-                row.try_get::<String>("", "title")?.into(),
-                row.try_get::<String>("", "content")?.into(),
+                row.try_get::<String>("", "category")?
+                    .into(),
+                row.try_get::<String>("", "title")?
+                    .into(),
+                row.try_get::<String>("", "content")?
+                    .into(),
                 row.try_get::<i64>("", "active")?.into(),
-                row.try_get::<i64>("", "created_at")?.into(),
-                row.try_get::<i64>("", "updated_at")?.into(),
+                row.try_get::<i64>("", "created_at")?
+                    .into(),
+                row.try_get::<i64>("", "updated_at")?
+                    .into(),
             ])
             .to_owned();
-        db.execute(backend.build(&insert)).await?;
+        db.execute(backend.build(&insert))
+            .await?;
     }
     Ok(())
 }
@@ -187,7 +235,11 @@ pub(super) async fn message_gaps(manager: &SchemaManager<'_>) -> Result<(), DbEr
         .to_owned();
     manager
         .get_connection()
-        .execute(manager.get_database_backend().build(&insert))
+        .execute(
+            manager
+                .get_database_backend()
+                .build(&insert),
+        )
         .await?;
     Ok(())
 }

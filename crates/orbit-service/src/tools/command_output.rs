@@ -13,7 +13,11 @@ pub(crate) struct Preview {
 
 #[cfg(test)]
 pub fn read_command_stdout(dir: &std::path::Path, output_id: &str) -> Option<String> {
-    Some(read_preview(dir, output_id, None)?.text.to_string())
+    Some(
+        read_preview(dir, output_id, None)?
+            .text
+            .to_string(),
+    )
 }
 
 pub(crate) fn read_preview(
@@ -49,10 +53,14 @@ pub(crate) fn read_preview(
         return Some(previous);
     }
     let mut file = std::fs::File::open(path).ok()?;
-    let start = metadata.len().saturating_sub(16 * 1024);
+    let start = metadata
+        .len()
+        .saturating_sub(16 * 1_024);
     file.seek(SeekFrom::Start(start)).ok()?;
     let mut content = Vec::new();
-    file.take(16 * 1024).read_to_end(&mut content).ok()?;
+    file.take(16 * 1_024)
+        .read_to_end(&mut content)
+        .ok()?;
     let skip = if start > 0 {
         content
             .iter()
@@ -63,7 +71,9 @@ pub(crate) fn read_preview(
     };
     Some(Preview {
         stamp,
-        text: String::from_utf8_lossy(&content[skip..]).as_ref().into(),
+        text: String::from_utf8_lossy(&content[skip..])
+            .as_ref()
+            .into(),
     })
 }
 

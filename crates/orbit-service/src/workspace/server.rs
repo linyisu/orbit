@@ -29,7 +29,7 @@ const IDLE_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 const START_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_SESSIONS: usize = 32;
 const MAX_CLIENTS: usize = 32;
-const MAX_FILE_BYTES: u64 = 20 * 1024 * 1024;
+const MAX_FILE_BYTES: u64 = 20 * 1_024 * 1_024;
 
 mod endpoints;
 mod lifecycle;
@@ -61,7 +61,11 @@ pub async fn serve(
             .map(|path| resolve_database(path, &directory))
             .transpose()?,
     )?;
-    fs::create_dir_all(database.parent().context("database has no parent")?)?;
+    fs::create_dir_all(
+        database
+            .parent()
+            .context("database has no parent")?,
+    )?;
     OpenOptions::new()
         .create(true)
         .truncate(false)
@@ -88,11 +92,17 @@ pub async fn serve(
         let (mut reader, mut writer) = child.split();
         let mut stdin = tokio::io::stdin();
         let mut stdout = tokio::io::stdout();
-        stdout.write_all(protocol::PREAMBLE).await?;
+        stdout
+            .write_all(protocol::PREAMBLE)
+            .await?;
         stdout.flush().await?;
         tokio::select! {
-            result = tokio::io::copy(&mut stdin, &mut writer) => { result?; }
-            result = tokio::io::copy(&mut reader, &mut stdout) => { result?; }
+            result = tokio::io::copy(&mut stdin, &mut writer) => {
+                result?;
+            }
+            result = tokio::io::copy(&mut reader, &mut stdout) => {
+                result?;
+            }
         }
         return Ok(());
     }
@@ -129,7 +139,10 @@ pub async fn serve(
         allow_mcp_start: args.allow_mcp_start,
         config_home: std::env::var_os("XDG_CONFIG_HOME")
             .map(PathBuf::from)
-            .or_else(|| home.as_ref().map(|home| home.join(".config"))),
+            .or_else(|| {
+                home.as_ref()
+                    .map(|home| home.join(".config"))
+            }),
         home,
         instruction_dir: crate::instructions::default_user_instruction_dir(),
         editor_command: "vi".into(),
@@ -148,13 +161,18 @@ pub async fn serve(
         tokio::select! {
             connection = listener.accept() => {
                 let (socket, _) = connection?;
-                let Ok(permit) = permits.clone().try_acquire_owned() else { continue; };
+                let Ok(permit) = permits.clone().try_acquire_owned() else {
+                    continue;
+                };
                 let service = service.clone();
                 tokio::spawn(async move {
                     let _permit = permit;
                     let (reader, writer) = socket.into_split();
                     if let Err(error) = service.client(reader, writer).await
-                        && !error.downcast_ref::<std::io::Error>().is_some_and(|error| error.kind() == std::io::ErrorKind::UnexpectedEof) {
+                        && !error
+                            .downcast_ref::<std::io::Error>()
+                            .is_some_and(|error| error.kind() == std::io::ErrorKind::UnexpectedEof)
+                    {
                         eprintln!("workspace connection closed: {error}");
                     }
                 });
@@ -163,8 +181,17 @@ pub async fn serve(
             _ = idle.tick() => {
                 let _opening = service.opening.lock().await;
                 service.collect_idle_sessions().await;
-                if service.last_activity.lock().await.elapsed() >= IDLE_TIMEOUT && !service.busy().await {
-                    service.closing.store(true, Ordering::Release);
+                if service
+                    .last_activity
+                    .lock()
+                    .await
+                    .elapsed()
+                    >= IDLE_TIMEOUT
+                    && !service.busy().await
+                {
+                    service
+                        .closing
+                        .store(true, Ordering::Release);
                     break;
                 }
             }
@@ -172,10 +199,14 @@ pub async fn serve(
     }
     // Release session writers before publishing the endpoint as replaceable.
     // A replacement daemon may restore the same session immediately.
-    service.closing.store(true, Ordering::Release);
+    service
+        .closing
+        .store(true, Ordering::Release);
     let _opening = service.opening.lock().await;
     for handle in service.sessions.lock().await.values() {
-        handle.command(session::Command::Close).await?;
+        handle
+            .command(session::Command::Close)
+            .await?;
     }
     fs::remove_file(socket)?;
     Ok(())
@@ -184,7 +215,10 @@ pub async fn serve(
 pub fn runtime_directory() -> Result<PathBuf> {
     let uid = unsafe { libc::geteuid() };
     let directory = std::env::temp_dir().join(format!("orbit-workspace-{uid}"));
-    match fs::DirBuilder::new().mode(0o700).create(&directory) {
+    match fs::DirBuilder::new()
+        .mode(0o700)
+        .create(&directory)
+    {
         Ok(()) => {}
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
         Err(error) => return Err(error.into()),
@@ -228,7 +262,13 @@ struct Service {
 
 impl Service {
     async fn busy(&self) -> bool {
-        let sessions: Vec<_> = self.sessions.lock().await.values().cloned().collect();
+        let sessions: Vec<_> = self
+            .sessions
+            .lock()
+            .await
+            .values()
+            .cloned()
+            .collect();
         for session in sessions {
             if session.running().await {
                 return true;
@@ -296,7 +336,10 @@ impl Service {
                 version,
                 build_generation: lifecycle::build_generation(),
                 capabilities: capabilities().await,
-                workspace: options.initial_directory.to_string_lossy().into_owned(),
+                workspace: options
+                    .initial_directory
+                    .to_string_lossy()
+                    .into_owned(),
             },
         )
         .await?;
@@ -308,7 +351,10 @@ impl Service {
                 let request = protocol::read::<Request>(&mut reader).await?;
                 *self.last_activity.lock().await = tokio::time::Instant::now();
                 let shutdown = matches!(request, Request::Shutdown);
-                let response = match self.dispatch(request, &options, viewer).await {
+                let response = match self
+                    .dispatch(request, &options, viewer)
+                    .await
+                {
                     Ok(response) => response,
                     Err(error) => Response::Error(format!("{error:#}")),
                 };
@@ -324,7 +370,8 @@ impl Service {
             }
         }
         .await;
-        self.release_client(opened, viewer).await;
+        self.release_client(opened, viewer)
+            .await;
         result
     }
 
@@ -338,7 +385,9 @@ impl Service {
             let Some(handle) = sessions.get(&id) else {
                 continue;
             };
-            handle.clients.fetch_sub(1, Ordering::AcqRel);
+            handle
+                .clients
+                .fetch_sub(1, Ordering::AcqRel);
         }
         self.collect_idle_sessions().await;
     }
@@ -391,7 +440,7 @@ impl Service {
                 ))
             }
             Request::Complete { session, input } => {
-                ensure!(input.len() <= 4096, "completion input is too long");
+                ensure!(input.len() <= 4_096, "completion input is too long");
                 let handle = self.session(&session).await?;
                 let info = handle.current_info().await;
                 let entries = super::completion::complete(
@@ -418,15 +467,21 @@ impl Service {
                 );
                 let existing = {
                     let sessions = self.sessions.lock().await;
-                    resume.as_ref().and_then(|id| sessions.get(id).cloned())
+                    resume
+                        .as_ref()
+                        .and_then(|id| sessions.get(id).cloned())
                 };
                 if let Some(handle) = existing {
                     ensure!(
                         handle.requested_policy == policy,
                         "open session has a different capability policy"
                     );
-                    handle.clients.fetch_add(1, Ordering::AcqRel);
-                    handle.reset_progress_delivery(viewer).await;
+                    handle
+                        .clients
+                        .fetch_add(1, Ordering::AcqRel);
+                    handle
+                        .reset_progress_delivery(viewer)
+                        .await;
                     return Ok(Response::Opened(handle.current_info().await));
                 }
                 self.collect_idle_sessions().await;
@@ -453,8 +508,13 @@ impl Service {
                 handle.requested_policy = policy;
                 let handle = Arc::new(handle);
                 let info = handle.info.clone();
-                handle.clients.fetch_add(1, Ordering::AcqRel);
-                self.sessions.lock().await.insert(info.id.clone(), handle);
+                handle
+                    .clients
+                    .fetch_add(1, Ordering::AcqRel);
+                self.sessions
+                    .lock()
+                    .await
+                    .insert(info.id.clone(), handle);
                 Ok(Response::Opened(info))
             }
             Request::Plugins {
@@ -538,7 +598,12 @@ impl Service {
                 );
                 if let orbit_protocol::admin::Action::RenameSession { id, title } = &action {
                     super::admin::ensure_title(title)?;
-                    let handle = self.sessions.lock().await.get(id).cloned();
+                    let handle = self
+                        .sessions
+                        .lock()
+                        .await
+                        .get(id)
+                        .cloned();
                     if let Some(handle) = handle {
                         return Ok(Response::Report(
                             handle
@@ -550,9 +615,16 @@ impl Service {
                     }
                 }
                 if let orbit_protocol::admin::Action::DeleteSession { id } = &action {
-                    let handle = self.sessions.lock().await.get(id).cloned();
+                    let handle = self
+                        .sessions
+                        .lock()
+                        .await
+                        .get(id)
+                        .cloned();
                     if let Some(handle) = handle {
-                        handle.command(session::Command::Close).await?;
+                        handle
+                            .command(session::Command::Close)
+                            .await?;
                         self.sessions.lock().await.remove(id);
                     }
                 }
@@ -566,10 +638,17 @@ impl Service {
             Request::ListSessions { session } => {
                 let handle = self.session(&session).await?;
                 let info = handle.current_info().await;
-                let Some(project) = handle.store.project_at(&info.workspace).await? else {
+                let Some(project) = handle
+                    .store
+                    .project_at(&info.workspace)
+                    .await?
+                else {
                     return Ok(Response::Sessions(Vec::new()));
                 };
-                let projects = handle.store.equivalent_project_ids(&project.id).await?;
+                let projects = handle
+                    .store
+                    .equivalent_project_ids(&project.id)
+                    .await?;
                 let sessions = handle
                     .store
                     .list_resumable()
@@ -590,7 +669,9 @@ impl Service {
                     .project_at(&connection_options.initial_directory)
                     .await?
                 {
-                    let ids = store.equivalent_project_ids(&project.id).await?;
+                    let ids = store
+                        .equivalent_project_ids(&project.id)
+                        .await?;
                     if let Some(path) = project.path {
                         for session in &mut sessions {
                             if ids.contains(&session.project_id) {
@@ -610,7 +691,9 @@ impl Service {
                 else {
                     return Ok(Response::Sessions(Vec::new()));
                 };
-                let projects = store.equivalent_project_ids(&project.id).await?;
+                let projects = store
+                    .equivalent_project_ids(&project.id)
+                    .await?;
                 let sessions = store
                     .list_resumable()
                     .await?
@@ -668,7 +751,11 @@ impl Service {
                 ))
             }
             Request::OpenQuestions { session } => Ok(Response::Questions(
-                self.session(&session).await?.questions.open(viewer).await?,
+                self.session(&session)
+                    .await?
+                    .questions
+                    .open(viewer)
+                    .await?,
             )),
             Request::CloseQuestions { session } => {
                 self.session(&session)
@@ -698,7 +785,11 @@ impl Service {
                     action,
                     orbit_protocol::SessionAction::ChangeDirectory { .. }
                 );
-                let report = self.session(&session).await?.action(action).await?;
+                let report = self
+                    .session(&session)
+                    .await?
+                    .action(action)
+                    .await?;
                 Ok(if directory_change {
                     Response::Ok
                 } else {
@@ -732,7 +823,9 @@ impl Service {
             }
             Request::SetMode { session, mode } => {
                 let handle = self.session(&session).await?;
-                handle.command(session::Command::SetMode { mode }).await?;
+                handle
+                    .command(session::Command::SetMode { mode })
+                    .await?;
                 Ok(Response::Profile(Box::new(handle.current_info().await)))
             }
             Request::SetModel {
@@ -802,11 +895,17 @@ impl Service {
             Request::UserInputHistory { session, before } => {
                 let handle = self.session(&session).await?;
                 Ok(Response::UserInputs(
-                    handle.store.user_input_history(&session, before).await?,
+                    handle
+                        .store
+                        .user_input_history(&session, before)
+                        .await?,
                 ))
             }
             Request::Poll { session, after } => Ok(Response::Page(
-                self.session(&session).await?.page(viewer, after).await?,
+                self.session(&session)
+                    .await?
+                    .page(viewer, after)
+                    .await?,
             )),
             Request::Undo { session, path } => {
                 self.session(&session)
@@ -855,7 +954,8 @@ impl Service {
                         .map_err(|_| anyhow::anyhow!("workspace state unavailable"))?
                         .authorize_read(Path::new(&path))?;
                     let mut bytes = Vec::new();
-                    file.take(MAX_FILE_BYTES + 1).read_to_end(&mut bytes)?;
+                    file.take(MAX_FILE_BYTES + 1)
+                        .read_to_end(&mut bytes)?;
                     ensure!(
                         bytes.len() as u64 <= MAX_FILE_BYTES,
                         "workspace file exceeds 20 MiB"
@@ -874,7 +974,9 @@ impl Service {
             } => {
                 let session = self.session(&session).await?;
                 Ok(Response::Subagent(
-                    session.subagent_page(&agent, after).await?,
+                    session
+                        .subagent_page(&agent, after)
+                        .await?,
                 ))
             }
             Request::SendSubagent {
@@ -888,11 +990,13 @@ impl Service {
                     "workspace service is shutting down"
                 );
                 ensure!(
-                    !message.trim().is_empty() && message.len() <= 1024 * 1024,
+                    !message.trim().is_empty() && message.len() <= 1_024 * 1_024,
                     "invalid subagent message"
                 );
                 let session = self.session(&session).await?;
-                session.authorize_subagent(&agent).await?;
+                session
+                    .authorize_subagent(&agent)
+                    .await?;
                 session
                     .command(session::Command::SendSubagent { agent, message })
                     .await?;
@@ -904,7 +1008,8 @@ impl Service {
                     !self.busy().await,
                     "workspace has active tasks; cancel them before stopping the service"
                 );
-                self.closing.store(true, Ordering::Release);
+                self.closing
+                    .store(true, Ordering::Release);
                 Ok(Response::Ok)
             }
         }

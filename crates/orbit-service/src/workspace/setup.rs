@@ -44,7 +44,10 @@ impl PreparedWorkspace {
                 },
             )
             .await?;
-        self.resources.planning.persist().await?;
+        self.resources
+            .planning
+            .persist()
+            .await?;
         Ok(())
     }
 }
@@ -147,7 +150,10 @@ async fn prepare(
         session
             .set_model_profile(
                 resources.model_name.clone(),
-                resources.model.config().reasoning_effort,
+                resources
+                    .model
+                    .config()
+                    .reasoning_effort,
             )
             .await?;
     }
@@ -158,7 +164,11 @@ async fn prepare(
         .iter()
         .find(|model| model.qualified_name() == saved_model)
     {
-        let effort = effort.filter(|effort| choice.reasoning_efforts.contains(effort));
+        let effort = effort.filter(|effort| {
+            choice
+                .reasoning_efforts
+                .contains(effort)
+        });
         super::profile::apply(&mut resources, saved_model, effort)?;
     }
     session
@@ -223,13 +233,18 @@ async fn prepare_resolved_resources(
         instructions::MAX_INSTRUCTION_BYTES,
     );
     let (approvals, approval_receiver) = orbit_tools::approval::channel();
-    file_config.disabled_tools.sort_unstable();
+    file_config
+        .disabled_tools
+        .sort_unstable();
     file_config.disabled_tools.dedup();
     // Persisted ceilings only narrow the caller's policy; they never replace it.
     let mut policy = policy;
-    policy
-        .disabled
-        .extend(file_config.disabled_capabilities.iter().copied());
+    policy.disabled.extend(
+        file_config
+            .disabled_capabilities
+            .iter()
+            .copied(),
+    );
     policy.disabled.sort_unstable();
     policy.disabled.dedup();
     let model_options = file_config.model_options()?;
@@ -251,8 +266,17 @@ async fn prepare_resolved_resources(
     let context_tokens = selected_model.context_tokens;
     let input_context_tokens = selected_model.input_context_tokens;
     let client = ModelClient::new(selected_model.config)?;
-    let enabled_plugins = match session.store.project_at(directory).await? {
-        Some(project) => session.store.project_plugins(&project.id).await?,
+    let enabled_plugins = match session
+        .store
+        .project_at(directory)
+        .await?
+    {
+        Some(project) => {
+            session
+                .store
+                .project_plugins(&project.id)
+                .await?
+        }
         None => Vec::new(),
     };
     let plugin_skill_roots = crate::marketplaces::enabled_skill_roots(&enabled_plugins);
@@ -350,7 +374,12 @@ async fn prepare_resolved_resources(
         tools.remove("verification_status");
     }
 
-    if !policy.disabled(Capability::All) && !session.store.is_subagent(session.id()).await? {
+    if !policy.disabled(Capability::All)
+        && !session
+            .store
+            .is_subagent(session.id())
+            .await?
+    {
         planning.register(&mut tools);
     }
     // Apply ceilings after every group, including subagents and planning, so
@@ -383,7 +412,12 @@ async fn prepare_resolved_resources(
         model_refresh,
         mode_revision: 0,
         planning,
-        mode: match session.store.tui_mode(session.id()).await?.as_str() {
+        mode: match session
+            .store
+            .tui_mode(session.id())
+            .await?
+            .as_str()
+        {
             "ask" => orbit_protocol::Mode::Ask,
             "YOLO" => orbit_protocol::Mode::Yolo,
             _ => orbit_protocol::Mode::Auto,
@@ -427,7 +461,14 @@ pub(super) fn filter_configured_tools(
     policy: &orbit_protocol::SessionPolicy,
     disabled_tools: &[String],
 ) {
-    crate::policy::filter_tools(tools, &policy.disabled.iter().copied().collect());
+    crate::policy::filter_tools(
+        tools,
+        &policy
+            .disabled
+            .iter()
+            .copied()
+            .collect(),
+    );
     for name in disabled_tools {
         tools.remove(name);
     }
@@ -486,9 +527,13 @@ mod tests {
         .unwrap();
         let mut configuration =
             TestConfig::new().provider(TestProvider::new("test").models([TestModel::new("mock")]));
-        configuration.config.disabled_capabilities = vec![Capability::Files];
+        configuration
+            .config
+            .disabled_capabilities = vec![Capability::Files];
         configuration.config.disabled_tools = vec!["load_skill".into()];
-        configuration.write(root.join("config.toml")).unwrap();
+        configuration
+            .write(root.join("config.toml"))
+            .unwrap();
         let options = WorkspaceOptions {
             model: Some("test::mock".into()),
             initial_directory: root.into(),
@@ -501,8 +546,17 @@ mod tests {
             instruction_dir: None,
             editor_command: "vi".into(),
         };
-        let mut setup = prepare_service(&options, None).await.unwrap();
-        assert!(setup.resources.budget.skills.get("example").is_some());
+        let mut setup = prepare_service(&options, None)
+            .await
+            .unwrap();
+        assert!(
+            setup
+                .resources
+                .budget
+                .skills
+                .get("example")
+                .is_some()
+        );
         for name in ["code_symbols", "load_skill"] {
             assert!(!setup.resources.tools.contains(name));
             assert!(matches!(
@@ -513,7 +567,10 @@ mod tests {
                         orbit_model::types::ToolCall::function(
                             "ceiling",
                             name,
-                            serde_json::json!({"query":"example","name":"example"})
+                            serde_json::json!({
+                                "query": "example",
+                                "name": "example"
+                            })
                         ),
                         tokio_util::sync::CancellationToken::new(),
                     )
@@ -523,9 +580,17 @@ mod tests {
         }
         // Changes on disk affect later sessions. Refreshing the current skill
         // catalogue (also used after plugin updates) must keep its startup ceiling.
-        configuration.config.disabled_capabilities.clear();
-        configuration.config.disabled_tools.clear();
-        configuration.write(&options.config).unwrap();
+        configuration
+            .config
+            .disabled_capabilities
+            .clear();
+        configuration
+            .config
+            .disabled_tools
+            .clear();
+        configuration
+            .write(&options.config)
+            .unwrap();
         super::super::actions::execute(
             &mut setup,
             orbit_protocol::SessionAction::RefreshSkills,
@@ -540,9 +605,13 @@ mod tests {
         )
         .await
         .unwrap();
-        assert!(
-            matches!(snapshot, orbit_protocol::resources::Snapshot::Skills(skills) if skills.iter().any(|skill| skill.name == "example"))
-        );
+        assert!(matches!(
+            snapshot,
+            orbit_protocol::resources::Snapshot::Skills(skills)
+                if skills
+                    .iter()
+                    .any(|skill| skill.name == "example")
+        ));
         for name in ["code_symbols", "load_skill"] {
             assert!(
                 !setup.resources.tools.contains(name),
@@ -562,12 +631,34 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(setup.resources.disabled_tools, ["load_skill"]);
-        assert!(!setup.resources.tools.contains("load_skill"));
-        assert!(!setup.resources.tools.contains("code_symbols"));
+        assert!(
+            !setup
+                .resources
+                .tools
+                .contains("load_skill")
+        );
+        assert!(
+            !setup
+                .resources
+                .tools
+                .contains("code_symbols")
+        );
         drop(setup);
-        let fresh = prepare_service(&options, None).await.unwrap();
-        assert!(fresh.resources.tools.contains("code_symbols"));
-        assert!(fresh.resources.tools.contains("load_skill"));
+        let fresh = prepare_service(&options, None)
+            .await
+            .unwrap();
+        assert!(
+            fresh
+                .resources
+                .tools
+                .contains("code_symbols")
+        );
+        assert!(
+            fresh
+                .resources
+                .tools
+                .contains("load_skill")
+        );
     }
 
     #[tokio::test]
@@ -578,10 +669,14 @@ mod tests {
             TestConfig::new().provider(TestProvider::new("test").models([TestModel::new("mock")]));
         configuration.config.max_turns = 12;
         configuration.config.max_tool_calls = 99;
-        configuration.config.disabled_capabilities = vec![Capability::Web, Capability::Mcp];
+        configuration
+            .config
+            .disabled_capabilities = vec![Capability::Web, Capability::Mcp];
         configuration.config.disabled_tools =
             vec!["read_file".into(), "spawn_agent".into(), "task_list".into()];
-        configuration.write(root.join("config.toml")).unwrap();
+        configuration
+            .write(root.join("config.toml"))
+            .unwrap();
         let options = WorkspaceOptions {
             model: Some("test::mock".into()),
             initial_directory: root.into(),
@@ -606,11 +701,21 @@ mod tests {
         .unwrap();
         assert!(setup.resources.policy.read_only);
         for capability in [Capability::Web, Capability::Mcp, Capability::Skills] {
-            assert!(setup.resources.policy.disabled(capability));
+            assert!(
+                setup
+                    .resources
+                    .policy
+                    .disabled(capability)
+            );
         }
         assert_eq!(setup.resources.budget.max_turns, 12);
         assert_eq!(setup.resources.budget.max_tool_calls, 99);
-        assert!(setup.resources.tools.contains("search_text"));
+        assert!(
+            setup
+                .resources
+                .tools
+                .contains("search_text")
+        );
         for name in [
             "web_fetch",
             "load_skill",
@@ -625,13 +730,26 @@ mod tests {
             );
         }
         drop(setup);
-        configuration.config.disabled_capabilities = vec![Capability::All];
-        configuration.config.disabled_tools.clear();
-        configuration.write(root.join("config.toml")).unwrap();
+        configuration
+            .config
+            .disabled_capabilities = vec![Capability::All];
+        configuration
+            .config
+            .disabled_tools
+            .clear();
+        configuration
+            .write(root.join("config.toml"))
+            .unwrap();
         let setup = prepare_service_with_policy(&options, None, SessionPolicy::default())
             .await
             .unwrap();
-        assert!(setup.resources.tools.definitions().is_empty());
+        assert!(
+            setup
+                .resources
+                .tools
+                .definitions()
+                .is_empty()
+        );
         assert!(!setup.resources.policy.read_only);
     }
 
@@ -699,7 +817,13 @@ mod tests {
         )
         .await
         .unwrap();
-        assert!(setup.resources.tools.definitions().is_empty());
+        assert!(
+            setup
+                .resources
+                .tools
+                .definitions()
+                .is_empty()
+        );
     }
 }
 
@@ -735,11 +859,25 @@ mod selection_tests {
             instruction_dir: None,
             editor_command: "vi".into(),
         };
-        assert!(prepare_service(&options, None).await.is_err());
+        assert!(
+            prepare_service(&options, None)
+                .await
+                .is_err()
+        );
         assert!(!options.database.exists());
         options.model = Some("test::chosen".into());
-        let mut setup = prepare_service(&options, None).await.unwrap();
-        assert!(setup.session.store.list().await.unwrap().is_empty());
+        let mut setup = prepare_service(&options, None)
+            .await
+            .unwrap();
+        assert!(
+            setup
+                .session
+                .store
+                .list()
+                .await
+                .unwrap()
+                .is_empty()
+        );
         assert_eq!(setup.resources.model_name, "test::chosen");
         setup
             .session
@@ -760,7 +898,9 @@ mod selection_tests {
         let id = setup.session.id().to_owned();
         drop(setup);
         options.model = Some("test::first".into());
-        let restored = prepare_service(&options, Some(id.clone())).await.unwrap();
+        let restored = prepare_service(&options, Some(id.clone()))
+            .await
+            .unwrap();
         assert_eq!(restored.resources.model_name, "test::chosen");
         drop(restored);
 
@@ -778,14 +918,24 @@ mod selection_tests {
         )
         .unwrap();
         options.model = Some("test::preferred".into());
-        let restored = prepare_service(&options, Some(id.clone())).await.unwrap();
+        let restored = prepare_service(&options, Some(id.clone()))
+            .await
+            .unwrap();
         assert_eq!(restored.resources.model_name, "test::preferred");
         assert_eq!(restored.session.id(), id);
         assert_eq!(restored.session.saved_model_profile().0, "test::preferred");
-        assert!(!restored.session.snapshot.history.is_empty());
+        assert!(
+            !restored
+                .session
+                .snapshot
+                .history
+                .is_empty()
+        );
         drop(restored);
         options.model = Some("test::first".into());
-        let restored = prepare_service(&options, Some(id)).await.unwrap();
+        let restored = prepare_service(&options, Some(id))
+            .await
+            .unwrap();
         assert_eq!(
             restored.resources.model_name, "test::preferred",
             "the repaired choice must persist"

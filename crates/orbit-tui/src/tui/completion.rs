@@ -35,7 +35,10 @@ pub(super) fn cached_directories(
     entries.sort_by(|left, right| left.display.cmp(&right.display));
     Some(
         super::search::ranked(entries, |entry| {
-            let name = entry.display.as_deref()?.trim_end_matches('/');
+            let name = entry
+                .display
+                .as_deref()?
+                .trim_end_matches('/');
             if name.starts_with('.') && name != ".." && !partial.starts_with('.') {
                 return None;
             }
@@ -93,7 +96,10 @@ fn directories(input: &str, workspace: &Path, home: Option<&Path>) -> Vec<Candid
         }];
     }
 
-    let quote = typed.chars().next().filter(|ch| matches!(ch, '\'' | '"'));
+    let quote = typed
+        .chars()
+        .next()
+        .filter(|ch| matches!(ch, '\'' | '"'));
     let typed = if let Some(quote) = quote {
         typed.trim_matches(quote)
     } else {

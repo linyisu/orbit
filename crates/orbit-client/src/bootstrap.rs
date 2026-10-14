@@ -138,7 +138,8 @@ async fn prepare(
     };
     ensure!(
         machine == expected,
-        "target architecture differs from this binary; provide a matching Linux binary with --upload-server or an installed target executable with --server"
+        "target architecture differs from this binary; provide a matching Linux binary with \
+            --upload-server or an installed target executable with --server"
     );
     let directory = format!("{home}/.cache/orbit/servers/{digest}");
     let executable = format!("{directory}/orbit");
@@ -172,10 +173,13 @@ async fn prepare(
         .stderr(Stdio::piped())
         .kill_on_drop(true);
     let mut child = command.spawn()?;
-    let mut input = child.stdin.take().context("missing server upload pipe")?;
+    let mut input = child
+        .stdin
+        .take()
+        .context("missing server upload pipe")?;
     let (mut file, size) = binary.reader().await?;
     let upload = async {
-        let mut buffer = [0; 64 * 1024];
+        let mut buffer = [0; 64 * 1_024];
         let mut sent = 0;
         let mut last_percent = 0;
         loop {
@@ -183,7 +187,9 @@ async fn prepare(
             if count == 0 {
                 break;
             }
-            input.write_all(&buffer[..count]).await?;
+            input
+                .write_all(&buffer[..count])
+                .await?;
             sent += count as u64;
             let percent = sent.saturating_mul(100) / size.max(1);
             if percent >= last_percent + 10 {
@@ -277,7 +283,8 @@ pub(super) async fn verify(
 
 pub(super) fn runtime_error(diagnostics: &str) -> String {
     if diagnostics.contains("GLIBC_") && diagnostics.contains("not found") {
-        "指定的服务程序依赖目标系统未提供的 glibc 版本。请移除 --server / --upload-server，使用客户端内置的静态服务，或指定兼容目标系统的程序。".into()
+        "指定的服务程序依赖目标系统未提供的 glibc 版本。请移除 --server / --upload-server，使用客户端内置的静态服务，或指定兼容目标系统的程序。"
+            .into()
     } else if diagnostics.contains("error while loading shared libraries") {
         "指定的服务程序依赖目标系统未提供的动态库。请移除 --server / --upload-server，使用客户端内置的静态服务，或指定兼容目标系统的程序。".into()
     } else {
@@ -291,7 +298,10 @@ fn quote(value: &str) -> String {
 
 fn upload_script(directory: &str, digest: &str) -> String {
     format!(
-        "set -eu; umask 077; directory={}; mkdir -p -- \"$directory\"; temporary=$(mktemp \"$directory/.orbit.XXXXXX\"); trap 'rm -f -- \"$temporary\"' EXIT HUP INT TERM; cat > \"$temporary\"; printf '%s  %s\\n' {} \"$temporary\" | sha256sum -c - >/dev/null; chmod 700 \"$temporary\"; mv -f -- \"$temporary\" \"$directory/orbit\"",
+        "set -eu; umask 077; directory={}; mkdir -p -- \"$directory\"; temporary=$(mktemp \
+            \"$directory/.orbit.XXXXXX\"); trap 'rm -f -- \"$temporary\"' EXIT HUP INT TERM; cat \
+            > \"$temporary\"; printf '%s  %s\\n' {} \"$temporary\" | sha256sum -c - >/dev/null; \
+            chmod 700 \"$temporary\"; mv -f -- \"$temporary\" \"$directory/orbit\"",
         quote(directory),
         quote(digest)
     )
@@ -335,7 +345,7 @@ fn binary_identity(mut file: impl Read) -> Result<(u16, String)> {
     let machine = u16::from_le_bytes([header[18], header[19]]);
     let mut digest = Sha256::new();
     digest.update(header);
-    let mut bytes = [0; 65536];
+    let mut bytes = [0; 65_536];
     loop {
         let count = file.read(&mut bytes)?;
         if count == 0 {
@@ -364,7 +374,10 @@ mod tests {
         std::fs::write(&current, b"not a portable executable").unwrap();
         let selected =
             select_binary(None, &current, std::env::consts::ARCH, b"bundled service").unwrap();
-        assert!(matches!(selected, ServerBinary::Embedded(bytes) if bytes == b"bundled service"));
+        assert!(matches!(
+            selected,
+            ServerBinary::Embedded(bytes) if bytes == b"bundled service"
+        ));
         if !cfg!(all(target_env = "musl", target_feature = "crt-static")) {
             assert!(select_binary(None, &current, std::env::consts::ARCH, &[]).is_err());
         }
@@ -402,7 +415,11 @@ mod tests {
         .await
         .unwrap_err();
         assert!(error.to_string().contains("glibc"));
-        assert!(!error.to_string().contains("unexpected end of file"));
+        assert!(
+            !error
+                .to_string()
+                .contains("unexpected end of file")
+        );
         assert!(
             updates
                 .logs
@@ -416,7 +433,9 @@ mod tests {
     #[tokio::test]
     async fn deployment_checks_checksum_and_atomically_installs_in_quoted_paths() {
         let root = tempfile::tempdir().unwrap();
-        let directory = root.path().join("path with 'quotes' $(touch bad)");
+        let directory = root
+            .path()
+            .join("path with 'quotes' $(touch bad)");
         let bytes = b"sample binary";
         let digest: String = Sha256::digest(bytes)
             .iter()
@@ -430,10 +449,21 @@ mod tests {
                 .stderr(Stdio::null())
                 .spawn()
                 .unwrap();
-            child.stdin.take().unwrap().write_all(bytes).await.unwrap();
+            child
+                .stdin
+                .take()
+                .unwrap()
+                .write_all(bytes)
+                .await
+                .unwrap();
             assert_eq!(child.wait().await.unwrap().success(), success);
             assert_eq!(std::fs::read(directory.join("orbit")).unwrap(), bytes);
-            assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 1);
+            assert_eq!(
+                std::fs::read_dir(&directory)
+                    .unwrap()
+                    .count(),
+                1
+            );
         }
     }
 }

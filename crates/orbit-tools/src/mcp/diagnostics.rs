@@ -13,14 +13,14 @@ impl Stderr {
         let tail = Arc::new(Mutex::new(Vec::new()));
         let buffer = tail.clone();
         let task = AbortOnDropHandle::new(tokio::spawn(async move {
-            let mut chunk = [0; 4096];
+            let mut chunk = [0; 4_096];
             while let Ok(count) = stderr.read(&mut chunk).await {
                 if count == 0 {
                     break;
                 }
                 let mut bytes = buffer.lock().unwrap();
                 bytes.extend_from_slice(&chunk[..count]);
-                let excess = bytes.len().saturating_sub(8192);
+                let excess = bytes.len().saturating_sub(8_192);
                 bytes.drain(..excess);
             }
         }));

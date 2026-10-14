@@ -56,6 +56,7 @@ impl Navigation {
             _subscription: subscription,
         }
     }
+
     pub(super) fn append(&mut self, row: usize, prompt: &str, cx: &mut Context<Self>) {
         let mut chars = prompt
             .split_whitespace()
@@ -70,22 +71,33 @@ impl Navigation {
         let preview = if chars.is_empty() {
             "图片提问".into()
         } else {
-            chars.into_iter().collect::<String>().into()
+            chars
+                .into_iter()
+                .collect::<String>()
+                .into()
         };
-        self.anchors.push(Anchor { row, preview });
-        if self.messages.read(cx).is_following_tail() {
+        self.anchors
+            .push(Anchor { row, preview });
+        if self
+            .messages
+            .read(cx)
+            .is_following_tail()
+        {
             self.set_active(self.anchors.len() - 1, cx);
         }
         cx.notify();
     }
+
     fn set_active(&mut self, active: usize, cx: &mut Context<Self>) {
         if self.active == active {
             return;
         }
         self.active = active;
-        self.dots.scroll_to_item(active, ScrollStrategy::Center);
+        self.dots
+            .scroll_to_item(active, ScrollStrategy::Center);
         cx.notify();
     }
+
     pub(super) fn reveal_active(&self, cx: &mut Context<Self>) {
         if !self.anchors.is_empty() {
             self.dots
@@ -93,11 +105,16 @@ impl Navigation {
             cx.notify();
         }
     }
+
     pub(super) fn visible_row(&mut self, row: usize, cx: &mut Context<Self>) {
         if self.anchors.is_empty() {
             return;
         }
-        let active = if self.messages.read(cx).is_following_tail() {
+        let active = if self
+            .messages
+            .read(cx)
+            .is_following_tail()
+        {
             self.anchors.len() - 1
         } else {
             self.anchors
@@ -106,6 +123,7 @@ impl Navigation {
         };
         self.set_active(active, cx);
     }
+
     fn jump(&mut self, index: usize, cx: &mut Context<Self>) {
         let Some(anchor) = self.anchors.get(index) else {
             return;
@@ -116,11 +134,13 @@ impl Navigation {
         });
         self.set_active(index, cx);
     }
+
     fn latest(&mut self, cx: &mut Context<Self>) {
         self.messages
             .update(cx, |scroll, cx| scroll.scroll_to_end(cx));
         self.set_active(self.anchors.len().saturating_sub(1), cx);
     }
+
     fn dot(&self, index: usize, cx: &mut Context<Self>) -> AnyElement {
         let active = index == self.active;
         let label = format!(
@@ -178,6 +198,7 @@ impl Navigation {
             .into_any_element()
     }
 }
+
 impl Render for Navigation {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if self.anchors.is_empty() {
@@ -261,6 +282,7 @@ pub(crate) struct Controls {
     navigation: Entity<Navigation>,
     _subscription: Subscription,
 }
+
 impl Controls {
     pub(super) fn new(navigation: Entity<Navigation>, cx: &mut Context<Self>) -> Self {
         let subscription = cx.observe(&navigation, |_, _, cx| cx.notify());
@@ -270,6 +292,7 @@ impl Controls {
         }
     }
 }
+
 impl Render for Controls {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let navigation = self.navigation.read(cx);
@@ -278,7 +301,10 @@ impl Render for Controls {
         }
         let active = navigation.active;
         let count = navigation.anchors.len();
-        let scrolled_up = navigation.messages.read(cx).is_scrolled_up();
+        let scrolled_up = navigation
+            .messages
+            .read(cx)
+            .is_scrolled_up();
         v_flex()
             .w(rems(crate::theme::NAVIGATION_WIDTH_REM))
             .items_center()
@@ -295,11 +321,12 @@ impl Render for Controls {
                         count
                     ))
                     .on_click(cx.listener(|view, _, window, cx| {
-                        view.navigation.update(cx, |navigation, cx| {
-                            window.focus(&navigation.focus, cx);
-                            navigation.reveal_active(cx);
-                            navigation.jump(navigation.active, cx);
-                        });
+                        view.navigation
+                            .update(cx, |navigation, cx| {
+                                window.focus(&navigation.focus, cx);
+                                navigation.reveal_active(cx);
+                                navigation.jump(navigation.active, cx);
+                            });
                     })),
             )
             .child(
@@ -312,10 +339,11 @@ impl Render for Controls {
                     .accessibility_label("回到最新消息")
                     .disabled(!scrolled_up)
                     .on_click(cx.listener(|view, _, window, cx| {
-                        view.navigation.update(cx, |navigation, cx| {
-                            window.focus(&navigation.focus, cx);
-                            navigation.latest(cx);
-                        });
+                        view.navigation
+                            .update(cx, |navigation, cx| {
+                                window.focus(&navigation.focus, cx);
+                                navigation.latest(cx);
+                            });
                     })),
             )
             .into_any_element()
@@ -328,7 +356,10 @@ pub(super) fn current_row(rows: &[(usize, Bounds<Pixels>)], top: Pixels) -> Opti
     rows.iter()
         .filter(|(_, bounds)| bounds.top() <= top)
         .max_by_key(|(index, _)| *index)
-        .or_else(|| rows.iter().min_by_key(|(index, _)| *index))
+        .or_else(|| {
+            rows.iter()
+                .min_by_key(|(index, _)| *index)
+        })
         .map(|(index, _)| *index)
 }
 

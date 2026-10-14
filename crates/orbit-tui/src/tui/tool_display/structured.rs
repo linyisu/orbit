@@ -58,7 +58,8 @@ impl View {
         self.hidden |= total_w > usize::from(available);
 
         if available == 0 {
-            self.lines.push(Line::from(vec![Span::raw(prefix)]));
+            self.lines
+                .push(Line::from(vec![Span::raw(prefix)]));
             return;
         }
 
@@ -138,7 +139,8 @@ impl View {
 
     fn finish(mut self) -> Vec<Line<'static>> {
         if self.expanded || self.hidden {
-            self.lines.push(toggle_line(self.expanded, self.width));
+            self.lines
+                .push(toggle_line(self.expanded, self.width));
         }
 
         self.lines
@@ -166,7 +168,9 @@ pub(super) fn files(row: &ToolRow, expanded: bool, width: u16) -> Option<Vec<Lin
 
     for entry in entries.iter().take(limit) {
         let path = entry["path"].as_str()?;
-        let path = path.strip_prefix(&prefix).unwrap_or(path);
+        let path = path
+            .strip_prefix(&prefix)
+            .unwrap_or(path);
 
         if entry["kind"] == "directory" {
             view.push(&format!("{path}/"), crate::tui::theme::THEME.md_h4_plus);
@@ -184,7 +188,10 @@ pub(super) fn files(row: &ToolRow, expanded: bool, width: u16) -> Option<Vec<Lin
 
 pub(super) fn summary(arguments: &str) -> String {
     let value: Value = serde_json::from_str(arguments).unwrap_or_default();
-    let label = match value["view"].as_str().unwrap_or("status") {
+    let label = match value["view"]
+        .as_str()
+        .unwrap_or("status")
+    {
         "history" => "提交历史",
         "diff" if value["staged"] == true => "暂存区差异",
         "diff" => "工作区差异",
@@ -219,14 +226,19 @@ pub(super) fn git(row: &ToolRow, expanded: bool, width: u16) -> Option<Vec<Line<
             let short = commit["short_id"].as_str()?;
 
             if !matches!(id.len(), 40 | 64)
-                || !id.bytes().all(|b| b.is_ascii_hexdigit())
+                || !id
+                    .bytes()
+                    .all(|b| b.is_ascii_hexdigit())
                 || short.len() < 4
                 || !id.starts_with(short)
             {
                 view.push("历史记录字段异常，请重新查询提交历史", REMOVED);
 
                 if expanded {
-                    for line in serde_json::to_string_pretty(commit).ok()?.lines() {
+                    for line in serde_json::to_string_pretty(commit)
+                        .ok()?
+                        .lines()
+                    {
                         view.note(line);
                     }
                 }
@@ -264,7 +276,9 @@ pub(super) fn git(row: &ToolRow, expanded: bool, width: u16) -> Option<Vec<Line<
         view.omitted(commits.len().saturating_sub(limit), "条提交");
     } else if let Some(entries) = value["entries"].as_array() {
         let branch = &value["branch"];
-        let head = branch["head"].as_str().unwrap_or("未知分支");
+        let head = branch["head"]
+            .as_str()
+            .unwrap_or("未知分支");
         view.push(head, ACCENT);
 
         if let Some(upstream) = branch["upstream"].as_str() {
@@ -340,11 +354,11 @@ pub(super) fn git(row: &ToolRow, expanded: bool, width: u16) -> Option<Vec<Line<
 }
 
 pub(super) fn format_bytes(bytes: u64) -> String {
-    if bytes >= 1024 * 1024 * 1024 {
+    if bytes >= 1_024 * 1_024 * 1_024 {
         format!("{:.1} GB", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
-    } else if bytes >= 1024 * 1024 {
+    } else if bytes >= 1_024 * 1_024 {
         format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
-    } else if bytes >= 1024 {
+    } else if bytes >= 1_024 {
         format!("{:.1} KB", bytes as f64 / 1024.0)
     } else {
         format!("{bytes} B")
@@ -358,11 +372,19 @@ pub(super) fn command_output(
 ) -> Option<Vec<Line<'static>>> {
     let value: Value = serde_json::from_str(&row.output).ok()?;
     let content = value["content"].as_str()?;
-    let stream = value["stream"].as_str().unwrap_or("stdout");
+    let stream = value["stream"]
+        .as_str()
+        .unwrap_or("stdout");
     let offset = value["offset"].as_u64().unwrap_or(0);
-    let next_offset = value["next_offset"].as_u64().unwrap_or(0);
-    let total = value["total_retained_bytes"].as_u64().unwrap_or(0);
-    let truncated = value["truncated"].as_bool().unwrap_or(false);
+    let next_offset = value["next_offset"]
+        .as_u64()
+        .unwrap_or(0);
+    let total = value["total_retained_bytes"]
+        .as_u64()
+        .unwrap_or(0);
+    let truncated = value["truncated"]
+        .as_bool()
+        .unwrap_or(false);
 
     let theme = &crate::tui::theme::THEME;
     let mut view = View::new(expanded, width);
@@ -436,7 +458,9 @@ pub(super) fn command_output(
 pub(super) fn web_search(row: &ToolRow, expanded: bool, width: u16) -> Option<Vec<Line<'static>>> {
     let value: Value = serde_json::from_str(&row.output).ok()?;
     let results = value["results"].as_array()?;
-    let provider = value["provider"].as_str().unwrap_or("Web");
+    let provider = value["provider"]
+        .as_str()
+        .unwrap_or("Web");
     let theme = &crate::tui::theme::THEME;
     let mut view = View::new(expanded, width);
 
@@ -461,7 +485,10 @@ pub(super) fn web_search(row: &ToolRow, expanded: bool, width: u16) -> Option<Ve
 
     if expanded {
         if let Some(warnings) = value["warnings"].as_array() {
-            for warning in warnings.iter().filter_map(Value::as_str) {
+            for warning in warnings
+                .iter()
+                .filter_map(Value::as_str)
+            {
                 view.push_spans(vec![Span::styled(
                     format!("注意: {warning}"),
                     Style::default().fg(theme.tool_running),
@@ -481,7 +508,9 @@ pub(super) fn web_search(row: &ToolRow, expanded: bool, width: u16) -> Option<Ve
     } else {
         let limit = if expanded { results.len() } else { 3 };
         for (i, item) in results.iter().take(limit).enumerate() {
-            let title = item["title"].as_str().unwrap_or("(无标题)");
+            let title = item["title"]
+                .as_str()
+                .unwrap_or("(无标题)");
             let url = item["url"].as_str().unwrap_or("");
             let snippet = item["snippet"].as_str().unwrap_or("");
 
@@ -556,12 +585,22 @@ pub(super) fn document_with_links(
     width: u16,
 ) -> Option<Vec<LinkedLine>> {
     let value: Value = serde_json::from_str(&row.output).ok()?;
-    let path = value["path"].as_str().unwrap_or_default();
-    let format = value["format"].as_str().unwrap_or("doc");
+    let path = value["path"]
+        .as_str()
+        .unwrap_or_default();
+    let format = value["format"]
+        .as_str()
+        .unwrap_or("doc");
     let content = value["content"].as_str()?;
-    let start_char = value["start_char"].as_u64().unwrap_or(0);
-    let total_chars = value["total_chars"].as_u64().unwrap_or(0);
-    let truncated = value["truncated"].as_bool().unwrap_or(false);
+    let start_char = value["start_char"]
+        .as_u64()
+        .unwrap_or(0);
+    let total_chars = value["total_chars"]
+        .as_u64()
+        .unwrap_or(0);
+    let truncated = value["truncated"]
+        .as_bool()
+        .unwrap_or(false);
     let next_start = value["next_start_char"].as_u64();
 
     let theme = &crate::tui::theme::THEME;
@@ -641,7 +680,11 @@ pub(super) fn document_with_links(
     {
         view.note(&format!("此范围内有 {} 页需结合页面图片读取", pages.len()));
     }
-    let mut out: Vec<_> = view.lines.drain(..).map(LinkedLine::plain).collect();
+    let mut out: Vec<_> = view
+        .lines
+        .drain(..)
+        .map(LinkedLine::plain)
+        .collect();
     let lines = markdown_preview(content, width);
     let total_lines = lines.len();
     let limit = if expanded { lines.len() } else { 6 };
@@ -663,13 +706,19 @@ pub(super) fn document_with_links(
         view.note(&format!("后续内容从第 {next} 页继续读取"));
     }
 
-    out.extend(view.finish().into_iter().map(LinkedLine::plain));
+    out.extend(
+        view.finish()
+            .into_iter()
+            .map(LinkedLine::plain),
+    );
     Some(out)
 }
 
 pub(super) fn capability(row: &ToolRow, _expanded: bool, width: u16) -> Option<Vec<Line<'static>>> {
     let value: Value = serde_json::from_str(&row.output).ok()?;
-    let status = value["status"].as_str().unwrap_or("unknown");
+    let status = value["status"]
+        .as_str()
+        .unwrap_or("unknown");
     let theme = &crate::tui::theme::THEME;
     let mut view = View::new(true, width);
 
@@ -709,7 +758,9 @@ pub(super) fn capability(row: &ToolRow, _expanded: bool, width: u16) -> Option<V
 
 pub(super) fn read_image(row: &ToolRow, _expanded: bool, width: u16) -> Option<Vec<Line<'static>>> {
     let value: Value = serde_json::from_str(&row.output).ok()?;
-    let path = value["path"].as_str().unwrap_or_default();
+    let path = value["path"]
+        .as_str()
+        .unwrap_or_default();
     let theme = &crate::tui::theme::THEME;
     let mut view = View::new(true, width);
 

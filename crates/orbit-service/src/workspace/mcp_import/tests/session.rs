@@ -60,12 +60,34 @@ async fn imports_while_awaiting_an_answer_without_blocking_the_session() {
     ]];
     setup.resources.mcp_import = Some(scan);
     let tools = setup.resources.tools.clone();
-    let handle = Arc::new(Handle::spawn(setup, None).await.unwrap());
-    handle.command(Command::EnableUserInput).await.unwrap();
+    let handle = Arc::new(
+        Handle::spawn(setup, None)
+            .await
+            .unwrap(),
+    );
+    handle
+        .command(Command::EnableUserInput)
+        .await
+        .unwrap();
     let asking = tokio::spawn(async move {
-        tools.execute(orbit_model::types::ToolCall::function("ask", "ask_user",
-            serde_json::json!({"questions":[{"id":"q","title":"说明","prompt":"需要什么？","kind":"text"}]})),
-            tokio_util::sync::CancellationToken::new()).await.unwrap()
+        tools
+            .execute(
+                orbit_model::types::ToolCall::function(
+                    "ask",
+                    "ask_user",
+                    serde_json::json!({
+                        "questions": [{
+                            "id": "q",
+                            "title": "说明",
+                            "prompt": "需要什么？",
+                            "kind": "text"
+                        }]
+                    }),
+                ),
+                tokio_util::sync::CancellationToken::new(),
+            )
+            .await
+            .unwrap()
     });
     let record = tokio::time::timeout(Duration::from_secs(3), async {
         loop {
@@ -122,7 +144,11 @@ async fn imports_while_awaiting_an_answer_without_blocking_the_session() {
         Snapshot::McpInstalled { .. }
     ));
     // Importing did not hot-swap the session's tools.
-    let Snapshot::Mcp(servers) = handle.resources(Action::Mcp, None).await.unwrap() else {
+    let Snapshot::Mcp(servers) = handle
+        .resources(Action::Mcp, None)
+        .await
+        .unwrap()
+    else {
         panic!()
     };
     assert!(servers.is_empty());
@@ -152,6 +178,15 @@ async fn imports_while_awaiting_an_answer_without_blocking_the_session() {
     .await
     .unwrap()
     .unwrap();
-    assert!(asking.await.unwrap().content.contains("继续"));
-    handle.command(Command::Close).await.unwrap();
+    assert!(
+        asking
+            .await
+            .unwrap()
+            .content
+            .contains("继续")
+    );
+    handle
+        .command(Command::Close)
+        .await
+        .unwrap();
 }

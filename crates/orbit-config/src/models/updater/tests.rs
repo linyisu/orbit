@@ -5,7 +5,9 @@ use std::time::Duration;
 #[tokio::test]
 async fn cached_read_never_waits_for_network_or_the_refresh_gate() {
     let root = tempfile::tempdir().unwrap();
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .unwrap();
     let mut config = TestConfig::new()
         .auth(root.path())
         .provider(

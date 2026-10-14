@@ -10,11 +10,12 @@ use syntect::highlighting::{
     Color, FontStyle as SyntaxFontStyle, StyleModifier, ThemeItem, ThemeSettings,
 };
 
+/// Component replaces Base defaults whenever it synchronizes its theme. Reinstall after that
+/// transaction, never during render: the callback's identity stays stable across frames so Base can
+/// retain parsed highlights.
 pub(super) fn install(cx: &mut App) {
-    // Component replaces Base defaults whenever it synchronizes its theme.
-    // Reinstall after that transaction, never during render: the callback's
-    // identity stays stable across frames so Base can retain parsed highlights.
-    cx.observe_global::<Theme>(install_defaults).detach();
+    cx.observe_global::<Theme>(install_defaults)
+        .detach();
     // Startup loads the saved mode and fonts in the same app transaction,
     // before global observers become active. Use that final palette too.
     cx.defer(install_defaults);
@@ -35,7 +36,10 @@ fn syntax_theme(source: &HighlightTheme, foreground: Hsla) -> syntect::highlight
         name: Some(source.name.clone()),
         settings: ThemeSettings {
             foreground: Some(to_syntax_color(
-                source.style.editor_foreground.unwrap_or(foreground),
+                source
+                    .style
+                    .editor_foreground
+                    .unwrap_or(foreground),
             )),
             ..Default::default()
         },
@@ -98,7 +102,9 @@ fn syntax_theme(source: &HighlightTheme, foreground: Hsla) -> syntect::highlight
                 font_style |= SyntaxFontStyle::ITALIC;
             }
             Some(ThemeItem {
-                scope: scope.parse().expect("valid built-in syntax scope"),
+                scope: scope
+                    .parse()
+                    .expect("valid built-in syntax scope"),
                 style: StyleModifier {
                     foreground: style.color.map(to_syntax_color),
                     font_style: Some(font_style),

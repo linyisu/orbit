@@ -186,7 +186,11 @@ impl Shortcuts {
     }
 
     fn edit(&mut self, id: &'static str, window: &mut Window, cx: &mut Context<Self>) {
-        if self.pending.is_some() || self.editing.is_some_and(|editing| editing != id) {
+        if self.pending.is_some()
+            || self
+                .editing
+                .is_some_and(|editing| editing != id)
+        {
             return;
         }
         self.editing = Some(id);
@@ -300,7 +304,8 @@ impl Shortcuts {
         self.stop_recording(true, false, window, cx);
         self.editing = None;
         self.validation = Validation::default();
-        self.query.update(cx, |input, cx| input.focus(window, cx));
+        self.query
+            .update(cx, |input, cx| input.focus(window, cx));
         cx.notify();
     }
 
@@ -382,8 +387,9 @@ impl Shortcuts {
                     (&change, &error)
                 {
                     self.edit(id, window, cx);
-                    if let Some(command) =
-                        keymap::catalog().iter().find(|command| command.id() == *id)
+                    if let Some(command) = keymap::catalog()
+                        .iter()
+                        .find(|command| command.id() == *id)
                     {
                         self.draft.update(cx, |input, cx| {
                             input.set_value(command.default_binding(), window, cx)
@@ -482,13 +488,26 @@ impl Shortcuts {
                 .child(Button::new("shortcut-save").small().primary().label("保存")
                     .disabled(busy || recording || self.validation.normalized.is_none())
                     .on_click(cx.listener(|view, _, window, cx| view.save(false, window, cx))))
-                .child(Button::new("shortcut-cancel").small().ghost().label(if self.status.is_some() { "完成" } else { "取消" })
+                .child(Button::new("shortcut-cancel")
+                    .small()
+                    .ghost()
+                    .label(if self
+                    .status
+                    .is_some() {
+                    "完成"
+                } else {
+                    "取消"
+                })
                     .disabled(busy)
                     .on_click(cx.listener(|view, _, window, cx| view.cancel_edit(window, cx)))))
             .child(div().text_sm().text_color(cx.theme().muted_foreground)
                 .child("支持最多 3 击，以空格分隔，例如 ctrl-k ctrl-b。录制时 Tab 结束，Esc 取消录制。"))
             .when(recording, |view| view.child(
-                div().id("shortcut-recording").track_focus(&self.record_focus).key_context("ShortcutRecording")
+                div()
+                    .id("shortcut-recording")
+                    .track_focus(&self
+                    .record_focus)
+                    .key_context("ShortcutRecording")
                     .p_3().border_1().border_color(cx.theme().primary).rounded(cx.theme().radius)
                     .child("正在录制：按下快捷键，或按 Tab 结束、Esc 取消。")))
             .when_some(self.validation.error.clone(), |view, error| view.child(
@@ -498,9 +517,20 @@ impl Shortcuts {
                     .child(div().text_sm().child("此按键与以下命令冲突；替换会清除这些命令的当前键位："))
                     .children(self.validation.conflicts.iter().map(|command| div().text_sm()
                         .child(format!("{} · {}", command.label(), command.scope()))))
-                    .child(h_flex().child(Button::new("shortcut-replace").small().outline().label("替换冲突并保存")
+                    .child(h_flex()
+                        .child(Button::new("shortcut-replace")
+                        .small()
+                        .outline()
+                        .label("替换冲突并保存")
                         .disabled(busy || recording)
-                        .on_click(cx.listener(move |view, _, window, cx| view.replace(&confirmed_conflicts, window, cx)))))))
+                        .on_click(cx
+                            .listener(move |view,
+                            _,
+                            window,
+                            cx| view
+                            .replace(&confirmed_conflicts,
+                            window,
+                            cx)))))))
     }
 
     fn render_command(
@@ -515,7 +545,9 @@ impl Shortcuts {
         let editing = self.editing == Some(id);
         let disabled = self.pending.is_some()
             || self.recording.is_some()
-            || self.editing.is_some_and(|editing| editing != id);
+            || self
+                .editing
+                .is_some_and(|editing| editing != id);
         v_flex()
             .id(SharedString::from(format!("shortcut:{id}")))
             .w_full()
@@ -634,7 +666,13 @@ impl Shortcuts {
                             .min_w_0()
                             .flex_wrap()
                             .gap_2()
-                            .child(div().flex_1().flex_basis(rems(8.)).min_w_0().child(label))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .flex_basis(rems(8.))
+                                    .min_w_0()
+                                    .child(label),
+                            )
                             .child(
                                 Button::new(SharedString::from(format!(
                                     "shortcut-warning-edit:{id}"
@@ -644,11 +682,9 @@ impl Shortcuts {
                                 .label("编辑…")
                                 .disabled(disabled)
                                 .accessibility_label(format!("修复{label}快捷键"))
-                                .on_click(
-                                    cx.listener(move |view, _, window, cx| {
-                                        view.edit(id, window, cx)
-                                    }),
-                                ),
+                                .on_click(cx.listener(move |view, _, window, cx| {
+                                    view.edit(id, window, cx)
+                                })),
                             )
                             .child(
                                 Button::new(SharedString::from(format!(
@@ -659,11 +695,9 @@ impl Shortcuts {
                                 .label("恢复默认")
                                 .disabled(disabled)
                                 .accessibility_label(format!("恢复{label}默认快捷键"))
-                                .on_click(cx.listener(
-                                    move |view, _, window, cx| {
-                                        view.apply(Change::Reset(id), window, cx)
-                                    },
-                                )),
+                                .on_click(cx.listener(move |view, _, window, cx| {
+                                    view.apply(Change::Reset(id), window, cx)
+                                })),
                             ),
                     )
                     .child(
@@ -715,17 +749,35 @@ impl Render for Shortcuts {
         v_flex().w_full().min_w_0().gap_4()
             .child(h_flex().w_full().min_w_0().flex_wrap().gap_3()
                 .child(div().flex_1().flex_basis(rems(18.)).min_w_0()
-                    .child(Input::new(&self.query).prefix(Icon::new(IconName::Search)).cleanable(true)
+                    .child(Input::new(&self
+                        .query)
+                        .prefix(Icon::new(IconName::Search))
+                        .cleanable(true)
                         .disabled(busy || self.recording.is_some()).aria_label("搜索命令或快捷键")))
                 .child(Button::new("shortcut-reset-all").small().outline().label("全部恢复默认")
                     .disabled(busy || !customized || self.editing.is_some())
-                    .on_click(cx.listener(|view, _, window, cx| view.apply(Change::ResetAll, window, cx)))))
+                    .on_click(cx
+                        .listener(|view,
+                        _,
+                        window,
+                        cx| view
+                        .apply(Change::ResetAll,
+                        window,
+                        cx)))))
             .child(div().text_sm().text_color(cx.theme().muted_foreground)
                 .child("这些设置适用于所有工作区。应用命令与消息输入可自定义；文本编辑和文件页使用固定键位。"))
             .when(!warnings.is_empty(), |view| view.child(self.render_warnings(warnings, cx)))
             .when(busy, |view| view.child(div().text_sm().child("正在保存快捷键…")))
             .when_some(self.error.clone().or(persistence_error), |view, error| view.child(
-                v_flex().min_w_0().gap_2().child(div().text_sm().text_color(cx.theme().danger).child(error))
+                v_flex()
+                    .min_w_0()
+                    .gap_2()
+                    .child(div()
+                    .text_sm()
+                    .text_color(cx
+                    .theme()
+                    .danger)
+                    .child(error))
                     .when_some(failed, |view, failed| view.child(h_flex().child(
                         Button::new("shortcut-retry").small().outline().label("重试保存").disabled(busy)
                             .on_click(cx.listener(move |view, _, window, cx| {
@@ -733,11 +785,34 @@ impl Render for Shortcuts {
                                 // taken effect. A retry must reject any new
                                 // conflict rather than reuse old consent.
                                 let mut change = failed.clone();
-                                if let Change::Set { replace, .. } = &mut change { *replace = false; }
+                                if let Change::Set {
+                                    replace,
+                                    ..
+                                } = &mut change {
+                                    *replace = false;
+
+                                }
                                 view.apply(change, window, cx);
                             })))))))
-            .when_some(self.status.clone(), |view, status| view.child(div().text_sm().text_color(cx.theme().muted_foreground).child(status)))
-            .when(commands.is_empty(), |view| view.child(div().py_4().text_color(cx.theme().muted_foreground)
+            .when_some(self
+                .status
+                .clone(),
+                |view,
+                status| view
+                .child(div()
+                .text_sm()
+                .text_color(cx
+                .theme()
+                .muted_foreground)
+                .child(status)))
+            .when(commands
+                .is_empty(),
+                |view| view
+                .child(div()
+                .py_4()
+                .text_color(cx
+                .theme()
+                .muted_foreground)
                 .child("没有匹配的命令或按键，试试其他关键词。")))
             .children(commands.into_iter().map(|command| self.render_command(command, window, cx)))
     }
@@ -748,14 +823,14 @@ fn binding(value: Option<&str>, cx: &App) -> AnyElement {
         Some(value) => h_flex()
             .flex_wrap()
             .gap_1()
-            .children(
-                value
-                    .split_whitespace()
-                    .map(|stroke| match Keystroke::parse(stroke) {
-                        Ok(stroke) => Kbd::new(stroke).into_any_element(),
-                        Err(_) => div().child(stroke.to_owned()).into_any_element(),
-                    }),
-            )
+            .children(value.split_whitespace().map(|stroke| {
+                match Keystroke::parse(stroke) {
+                    Ok(stroke) => Kbd::new(stroke).into_any_element(),
+                    Err(_) => div()
+                        .child(stroke.to_owned())
+                        .into_any_element(),
+                }
+            }))
             .into_any_element(),
         None => div()
             .text_sm()

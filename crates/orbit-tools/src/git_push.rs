@@ -21,8 +21,10 @@ use crate::approval::{
 
 const DEFAULT_PUSH_TIMEOUT: Duration = Duration::from_secs(120);
 const CREDENTIAL_TIMEOUT: Duration = Duration::from_secs(30);
-const MAX_CREDENTIAL_BYTES: u64 = 64 * 1024;
-const REMOTE_URL_REQUIREMENT: &str = "remote_url must be an explicit HTTPS URL without embedded credentials, query or fragment; SSH/scp remotes are unsupported and SSH credentials cannot authenticate this HTTPS push";
+const MAX_CREDENTIAL_BYTES: u64 = 64 * 1_024;
+const REMOTE_URL_REQUIREMENT: &str = "remote_url must be an explicit HTTPS URL without embedded \
+    credentials, query or fragment; SSH/scp remotes are unsupported and SSH credentials cannot \
+    authenticate this HTTPS push";
 
 pub struct GitPush {
     workspace: Workspace,
@@ -117,8 +119,33 @@ impl Tool for GitPush {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition::function(
             "git_push",
-            "Push one local branch to one explicit HTTPS remote branch. Prerequisite: the user's host global Git credential helper must already provide noninteractive HTTPS credentials for that remote. This tool never reads origin or converts an SSH remote; SSH keys/agents cannot authenticate it. Requires explicit remote-write approval. Credentials are passed privately to the helper and omitted from tool results. Only ordinary fast-forward pushes are supported; no force, deletion, mirror or SSH. Obtain the exact HTTPS URL and branches before calling. If credentials are unavailable, report the prerequisite instead of retrying or inventing credentials.",
-            json!({"type":"object","properties":{"remote_url":{"type":"string","description":"Exact HTTPS repository URL; independent of origin and requires host HTTPS authentication"},"source_branch":{"type":"string"},"target_branch":{"type":"string"}},"required":["remote_url","source_branch","target_branch"],"additionalProperties":false}),
+            "Push one local branch to one explicit HTTPS remote branch. Prerequisite: the user's \
+                host global Git credential helper must already provide noninteractive HTTPS \
+                credentials for that remote. This tool never reads origin or converts an SSH \
+                remote; SSH keys/agents cannot authenticate it. Requires explicit remote-write \
+                approval. Credentials are passed privately to the helper and omitted from tool \
+                results. Only ordinary fast-forward pushes are supported; no force, deletion, \
+                mirror or SSH. Obtain the exact HTTPS URL and branches before calling. If \
+                credentials are unavailable, report the prerequisite instead of retrying or \
+                inventing credentials.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "remote_url": {
+                        "type": "string",
+                        "description": "Exact HTTPS repository URL; independent of origin and \
+                            requires host HTTPS authentication"
+                    },
+                    "source_branch": {
+                        "type": "string"
+                    },
+                    "target_branch": {
+                        "type": "string"
+                    }
+                },
+                "required": ["remote_url", "source_branch", "target_branch"],
+                "additionalProperties": false
+            }),
         )
     }
 
@@ -126,14 +153,22 @@ impl Tool for GitPush {
         Box::pin(async move {
             let args: Arguments = serde_json::from_str(&call.function.arguments).map_err(failed)?;
             let url = validate(&args)?;
-            if !self.workspace.policy().network_policy().is_allowed() {
+            if !self
+                .workspace
+                .policy()
+                .network_policy()
+                .is_allowed()
+            {
                 return Err(failed("network disabled by command policy"));
             }
             let repo = orbit_runtime::git::GitRepositoryInfo::discover(self.workspace.root())
                 .map_err(failed)?
                 .ok_or_else(|| failed("workspace is not a Git repository"))?;
             let (sender, receiver) = tokio::sync::oneshot::channel();
-            let effective = self.workspace.policy().effective_policy();
+            let effective = self
+                .workspace
+                .policy()
+                .effective_policy();
             let mut external_capabilities: Vec<_> = effective
                 .persistent_read
                 .iter()
@@ -169,7 +204,12 @@ impl Tool for GitPush {
             let approval = self.approvals.send(ApprovalRequest {
                 preview: ApprovalPreview::Command(CommandPreview {
                     command: description.clone(),
-                    cwd: Some(self.workspace.root().display().to_string()),
+                    cwd: Some(
+                        self.workspace
+                            .root()
+                            .display()
+                            .to_string(),
+                    ),
                     timeout_seconds: self.timeout.as_secs(),
                     workspace_access: CommandWorkspaceAccess::Read,
                     network_allowed: true,
@@ -191,7 +231,10 @@ impl Tool for GitPush {
                 _ = cancellation.cancelled() => return Err(ToolError::Cancelled),
                 sent = approval => sent.map_err(failed)?,
             }
-            let approved = tokio::select! { _ = cancellation.cancelled() => return Err(ToolError::Cancelled), answer = receiver => answer.map_err(failed)? };
+            let approved = tokio::select! {
+                _ = cancellation.cancelled() => return Err(ToolError::Cancelled),
+                answer = receiver => answer.map_err(failed)?,
+            };
             if !approved {
                 return Err(failed("push was not approved"));
             }
@@ -240,11 +283,20 @@ impl Tool for GitPush {
             }
             if result.exit_code != Some(0) {
                 return Err(failed(
-                    "HTTPS push failed or was rejected; check credentials, connectivity and branch protection",
+                    "HTTPS push failed or was rejected; check credentials, connectivity and branch \
+                        protection",
                 ));
             }
 
-            Ok(ToolOutput::text(json!({"remote_url":input.arguments.remote_url,"source_branch":input.arguments.source_branch,"target_branch":input.arguments.target_branch,"pushed":true}).to_string()))
+            Ok(ToolOutput::text(
+                json!({
+                    "remote_url": input.arguments.remote_url,
+                    "source_branch": input.arguments.source_branch,
+                    "target_branch": input.arguments.target_branch,
+                    "pushed": true
+                })
+                .to_string(),
+            ))
         })
     }
 }
@@ -284,7 +336,9 @@ async fn credential(
     let request = format!(
         "protocol=https\nhost={}{}\npath={}\n\n",
         url.host_str().unwrap(),
-        url.port().map(|p| format!(":{p}")).unwrap_or_default(),
+        url.port()
+            .map(|p| format!(":{p}"))
+            .unwrap_or_default(),
         url.path().trim_start_matches('/')
     );
 
@@ -295,7 +349,11 @@ async fn credential(
         .write_all(request.as_bytes())
         .await
         .map_err(failed)?;
-    let mut stdout = child.stdout.take().unwrap().take(MAX_CREDENTIAL_BYTES + 1);
+    let mut stdout = child
+        .stdout
+        .take()
+        .unwrap()
+        .take(MAX_CREDENTIAL_BYTES + 1);
     let fetch = async {
         let mut bytes = Vec::new();
         stdout
@@ -316,14 +374,20 @@ async fn credential(
     };
     let text = tokio::select! {
         _ = cancellation.cancelled() => return Err(ToolError::Cancelled),
-        result = tokio::time::timeout(CREDENTIAL_TIMEOUT, fetch) => result.map_err(|_| failed("credential helper timed out"))??,
+        result = tokio::time::timeout(CREDENTIAL_TIMEOUT,
+            fetch) => result
+            .map_err(|_| failed("credential helper timed out"))??,
     };
     parse_credentials(url, &text)
 }
 
 fn missing_credentials(url: &url::Url) -> ToolError {
     failed(format!(
-        "host global Git credential helper did not provide usable HTTPS credentials for {}. Configure noninteractive HTTPS authentication for this remote in the host global Git configuration before retrying. An SSH origin/key does not supply HTTPS credentials; repository-local helpers are not used. Credentials must not be supplied in tool arguments.",
+        "host global Git credential helper did not provide usable HTTPS credentials for {}. \
+            Configure noninteractive HTTPS authentication for this remote in the host global Git \
+            configuration before retrying. An SSH origin/key does not supply HTTPS credentials; \
+            repository-local helpers are not used. Credentials must not be supplied in tool \
+            arguments.",
         url.host_str().unwrap_or("the remote")
     ))
 }
@@ -388,7 +452,9 @@ pub fn push_worker(path: &Path) -> Result<(), String> {
 
     if !commit.status.success()
         || ![40, 64].contains(&oid.len())
-        || !oid.bytes().all(|b| b.is_ascii_hexdigit())
+        || !oid
+            .bytes()
+            .all(|b| b.is_ascii_hexdigit())
     {
         return Err("source branch does not resolve to a commit".into());
     }
@@ -410,7 +476,8 @@ pub fn push_worker(path: &Path) -> Result<(), String> {
         return Err("cannot initialize push repository".into());
     }
     std::fs::write(
-        bare.path().join("objects/info/alternates"),
+        bare.path()
+            .join("objects/info/alternates"),
         format!("{}\n", input.objects.display()),
     )
     .map_err(|_| "cannot reference repository objects")?;
@@ -463,7 +530,9 @@ mod tests {
                         "push",
                         "git_push",
                         json!({
-                            "remote_url": remote, "source_branch": "main", "target_branch": "main"
+                            "remote_url": remote,
+                            "source_branch": "main",
+                            "target_branch": "main"
                         }),
                     ),
                     CancellationToken::new(),
@@ -472,7 +541,11 @@ mod tests {
                 .unwrap_err();
 
             assert!(matches!(error, ToolError::InvalidArguments { .. }));
-            assert!(error.to_string().contains("explicit HTTPS URL"));
+            assert!(
+                error
+                    .to_string()
+                    .contains("explicit HTTPS URL")
+            );
             assert!(matches!(
                 receiver.try_recv(),
                 Err(tokio::sync::mpsc::error::TryRecvError::Empty)
@@ -490,7 +563,9 @@ mod tests {
             "username=demo\npassword=\n",
             "username=\npassword=fake-test-secret\n",
         ] {
-            let error = parse_credentials(&url, response).unwrap_err().to_string();
+            let error = parse_credentials(&url, response)
+                .unwrap_err()
+                .to_string();
             assert!(error.contains("host global Git credential helper"));
             assert!(error.contains("example.com"));
             assert!(error.contains("SSH origin/key does not supply HTTPS credentials"));

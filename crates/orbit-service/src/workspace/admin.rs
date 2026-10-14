@@ -19,13 +19,18 @@ pub(super) async fn execute(
                 format!(
                     "{}  {}",
                     project.id,
-                    project.path.as_deref().unwrap_or("（未关联目录）")
+                    project
+                        .path
+                        .as_deref()
+                        .unwrap_or("（未关联目录）")
                 )
             })
             .collect::<Vec<_>>()
             .join("\n"),
         Action::LinkProject { id } => {
-            let project = store.link_project(&id, directory).await?;
+            let project = store
+                .link_project(&id, directory)
+                .await?;
             format!(
                 "已关联项目 {} → {}。",
                 project.id,
@@ -36,7 +41,9 @@ pub(super) async fn execute(
         Action::SessionStorage => {
             let footprint = store.storage_footprint().await?;
             let mut lines = vec![format!(
-                "文件大小快照（B）：数据库 {} · WAL {} · 共享内存 {} · 附件 {} · 旧命令日志 {}\n当前用户临时命令日志 {} B（跨数据库，任务结束清理）\n会话 ID  数据库载荷 B  关联图片 B  标题\n载荷不包含索引及空闲页；共享图片会出现在各个引用会话中，不能直接相加。",
+                "文件大小快照（B）：数据库 {} · WAL {} · 共享内存 {} · 附件 {} · 旧命令日志 {}\n当前用户临时命令日志 {} \
+                    B（跨数据库，任务结束清理）\n会话 ID  数据库载荷 B  关联图片 B  \
+                    标题\n载荷不包含索引及空闲页；共享图片会出现在各个引用会话中，不能直接相加。",
                 footprint.database_bytes,
                 footprint.wal_bytes,
                 footprint.shared_memory_bytes,
@@ -55,7 +62,9 @@ pub(super) async fn execute(
                             usage.id,
                             usage.payload_bytes,
                             usage.attachment_bytes,
-                            usage.title.replace(['\n', '\r', '\t'], " ")
+                            usage
+                                .title
+                                .replace(['\n', '\r', '\t'], " ")
                         )
                     }),
             );
@@ -63,7 +72,11 @@ pub(super) async fn execute(
         }
         Action::RenameSession { id, title } => {
             ensure_title(&title)?;
-            store.acquire(&id).await?.set_title(title.clone()).await?;
+            store
+                .acquire(&id)
+                .await?
+                .set_title(title.clone())
+                .await?;
             title
         }
         Action::DeleteSession { id } => {

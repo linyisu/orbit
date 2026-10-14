@@ -108,7 +108,9 @@ impl Questions {
         // Read the main task's live checkpoint without acquiring a writer lease.
         // Untouched drafts have no database row and use their in-memory context.
         let mut history = if context.persisted {
-            self.store.live_context(&self.session).await?
+            self.store
+                .live_context(&self.session)
+                .await?
         } else {
             context.history.clone()
         };
@@ -139,7 +141,8 @@ impl Questions {
             follow_up,
         )?;
         state.viewers.insert(viewer);
-        self.revision.fetch_add(1, Ordering::Release);
+        self.revision
+            .fetch_add(1, Ordering::Release);
         Ok(index)
     }
 
@@ -177,8 +180,14 @@ impl Questions {
     }
 
     pub async fn release(&self, viewer: u64) {
-        if self.service.lock().await.release(viewer) {
-            self.revision.fetch_add(1, Ordering::Release);
+        if self
+            .service
+            .lock()
+            .await
+            .release(viewer)
+        {
+            self.revision
+                .fetch_add(1, Ordering::Release);
         }
     }
 
@@ -190,6 +199,10 @@ impl Questions {
     }
 
     pub async fn running(&self) -> bool {
-        self.service.lock().await.questions.running()
+        self.service
+            .lock()
+            .await
+            .questions
+            .running()
     }
 }

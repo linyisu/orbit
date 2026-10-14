@@ -11,14 +11,18 @@ pub(super) struct Inspected {
 
 pub(super) fn inspect(market: &Marketplace, plugin: &Plugin) -> Result<Inspected> {
     let source = plugin.source.as_deref().context(
-        "this marketplace entry does not declare a local package source; refresh the marketplace or inspect it outside Orbit",
+        "this marketplace entry does not declare a local package source; refresh the marketplace \
+            or inspect it outside Orbit",
     )?;
-    let market_root = market.directory.canonicalize().with_context(|| {
-        format!(
-            "cannot open marketplace directory {}",
-            market.directory.display()
-        )
-    })?;
+    let market_root = market
+        .directory
+        .canonicalize()
+        .with_context(|| {
+            format!(
+                "cannot open marketplace directory {}",
+                market.directory.display()
+            )
+        })?;
     let directory = resolve_package_path(&market_root, source)?;
     // Read the original entry instead of requiring a cache schema migration or
     // downloading the source again to recover inline component declarations.
@@ -157,7 +161,9 @@ pub(super) fn inspect(market: &Marketplace, plugin: &Plugin) -> Result<Inspected
         description,
         commands: declared_markdown_files(&directory.join("commands"), ".md")?,
         agents: declared_markdown_files(&directory.join("agents"), ".md")?,
-        declares_hooks: directory.join("hooks/hooks.json").is_file()
+        declares_hooks: directory
+            .join("hooks/hooks.json")
+            .is_file()
             || manifest.get("hooks").is_some()
             || entry.get("hooks").is_some(),
         declares_mcp: directory.join(".mcp.json").is_file()

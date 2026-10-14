@@ -33,7 +33,10 @@ fn source_url_targets_survive_wrapping_clipping_and_numbered_gutters() {
                     .iter()
                     .all(|line| line.line.width() <= usize::from(width))
             );
-            let links: Vec<_> = lines.iter().flat_map(|line| &line.links).collect();
+            let links: Vec<_> = lines
+                .iter()
+                .flat_map(|line| &line.links)
+                .collect();
             assert!(!links.is_empty(), "width {width}, clip {clip}");
             assert!(links.iter().all(|link| link.url == url));
             for line in lines {
@@ -61,7 +64,9 @@ fn style_at(line: &Line<'_>, token: &str) -> Style {
 }
 
 fn highlight(renderer: &mut Renderer, source: &str) -> Line<'static> {
-    let line = renderer.render(source, Options::default()).remove(0);
+    let line = renderer
+        .render(source, Options::default())
+        .remove(0);
     assert_eq!(line.to_string(), source);
     line
 }
@@ -95,7 +100,11 @@ fn shared_layout_preserves_unicode_colors_and_only_overlays_search_hits() {
                 ..Default::default()
             };
             let prepared = render_line(&plain, options);
-            assert!(prepared.iter().all(|row| row.width() <= usize::from(width)));
+            assert!(
+                prepared
+                    .iter()
+                    .all(|row| row.width() <= usize::from(width))
+            );
         }
     }
 
@@ -172,7 +181,11 @@ fn diff_gutters_align_context_and_continuations_without_repeating_the_marker() {
         assert!(rows.iter().all(|row| row.width() <= 23));
         assert_eq!(rows[0].spans[0].width(), rows[1].spans[0].width());
         assert_eq!(
-            rows[0].spans[0].content.chars().nth(2).unwrap(),
+            rows[0].spans[0]
+                .content
+                .chars()
+                .nth(2)
+                .unwrap(),
             change.map_or(' ', Change::marker)
         );
         assert_eq!(rows[1].spans[0].content, "        │ ");
@@ -183,7 +196,10 @@ fn diff_gutters_align_context_and_continuations_without_repeating_the_marker() {
             .collect();
 
         assert_eq!(text, source);
-        for span in rows.iter().flat_map(|row| &row.spans[1..]) {
+        for span in rows
+            .iter()
+            .flat_map(|row| &row.spans[1..])
+        {
             assert_eq!(span.style.bg, change.and_then(|change| change.style().bg));
         }
     }
@@ -253,14 +269,23 @@ fn markdown_source_keeps_symbols_and_composes_nested_effects_in_all_views() {
             let fenced = super::super::markdown::line(source, 1, &mut fence);
             assert_eq!(fenced.to_string(), format!("  │ {source}"));
             assert_eq!(&fenced.spans[1..], line.spans.as_slice());
-            assert!(fenced.spans[0].style.add_modifier.is_empty());
+            assert!(
+                fenced.spans[0]
+                    .style
+                    .add_modifier
+                    .is_empty()
+            );
         }
     }
 
     let nested = highlight(&mut Renderer::new("md"), "**外部*内部*恢复** 结束");
     assert_eq!(style_at(&nested, "内部").fg, Some(THEME.md_bold_italic));
     assert_eq!(style_at(&nested, "恢复").add_modifier, Modifier::BOLD);
-    assert!(style_at(&nested, "结束").add_modifier.is_empty());
+    assert!(
+        style_at(&nested, "结束")
+            .add_modifier
+            .is_empty()
+    );
     let strike = highlight(&mut Renderer::new("md"), "~~删除线~~");
     assert_eq!(style_at(&strike, "删除线").fg, Some(THEME.md_strikethrough));
 }
@@ -310,7 +335,11 @@ fn source_highlight_extension_reuses_inline_scopes_and_ends_at_its_delimiter() {
     );
     assert_eq!(style_at(&line, "*代码*").add_modifier, Modifier::UNDERLINED);
     assert_eq!(style_at(&line, " 与 ").fg, Some(THEME.md_mark));
-    assert!(style_at(&line, "普通").add_modifier.is_empty());
+    assert!(
+        style_at(&line, "普通")
+            .add_modifier
+            .is_empty()
+    );
     let line = highlight(&mut Renderer::new("md"), "==表达式 a = b==");
     assert_eq!(style_at(&line, "a = b").add_modifier, Modifier::UNDERLINED);
 }
@@ -353,14 +382,19 @@ fn source_effects_survive_wrapping_search_and_diff_overlays() {
             .add_modifier
             .contains(Modifier::BOLD | Modifier::ITALIC)
     );
-    assert!(
-        rows.iter()
-            .all(|row| row.spans[0].style.add_modifier.is_empty())
-    );
+    assert!(rows.iter().all(|row| {
+        row.spans[0]
+            .style
+            .add_modifier
+            .is_empty()
+    }));
     assert!(
         rows.iter()
             .flat_map(|row| &row.spans[1..])
-            .any(|span| span.style.add_modifier.contains(Modifier::CROSSED_OUT))
+            .any(|span| span
+                .style
+                .add_modifier
+                .contains(Modifier::CROSSED_OUT))
     );
 }
 

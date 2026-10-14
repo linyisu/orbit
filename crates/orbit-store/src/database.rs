@@ -32,12 +32,12 @@ impl Database {
         })
     }
 
+    /// OS leases disappear when their handle/process closes; the lock file itself is not ownership.
+    /// Serialize read-modify-write transactions across clients without blocking WAL readers.
     pub async fn write<T, F: Future<Output = Result<T>>>(
         &self,
         operation: impl FnOnce(DatabaseConnection) -> F,
     ) -> Result<T> {
-        // OS leases disappear when their handle/process closes; the lock file itself is not ownership.
-        // Serialize read-modify-write transactions across clients without blocking WAL readers.
         let _lease = write_lease(self.lock.clone()).await?;
         operation(self.writer.clone()).await
     }
@@ -108,8 +108,12 @@ pub(crate) fn new_id() -> Result<String> {
     let mut bytes = [0; 16];
     getrandom::fill(&mut bytes)
         .map_err(|error| anyhow::anyhow!("random ID generation failed: {error}"))?;
-    Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
+    Ok(bytes
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect())
 }
+
 pub(crate) fn now() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -187,7 +191,9 @@ mod tests {
     #[tokio::test]
     async fn reader_pool_enforces_read_only_and_writer_enforces_foreign_keys() {
         let dir = tempfile::tempdir().unwrap();
-        let database = Database::open(&dir.path().join("policy.db")).await.unwrap();
+        let database = Database::open(&dir.path().join("policy.db"))
+            .await
+            .unwrap();
         let error = database
             .read(|conn| async move {
                 projects::ActiveModel {
@@ -214,6 +220,11 @@ mod tests {
             })
             .await
             .unwrap_err();
-        assert!(error.to_string().contains("FOREIGN KEY"), "{error:#}");
+        assert!(
+            error
+                .to_string()
+                .contains("FOREIGN KEY"),
+            "{error:#}"
+        );
     }
 }

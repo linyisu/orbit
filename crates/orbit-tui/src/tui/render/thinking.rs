@@ -95,9 +95,13 @@ pub(in crate::tui) fn thinking_linked(mut linked: LinkedLine) -> LinkedLine {
     rendered.style = Style::default();
     for span in &mut rendered.spans {
         span.style = style.patch(span.style);
-        span.style = span.style.fg(desaturate_for_thinking(span.style.fg));
+        span.style = span
+            .style
+            .fg(desaturate_for_thinking(span.style.fg));
         if let Some(background) = span.style.bg {
-            span.style = span.style.bg(desaturate_for_thinking(Some(background)));
+            span.style = span
+                .style
+                .bg(desaturate_for_thinking(Some(background)));
         }
     }
 

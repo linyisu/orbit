@@ -1,10 +1,15 @@
 use serde::{Deserialize, Serialize};
 
-pub const MIB: usize = 1024 * 1024;
+/// Number of bytes in one mebibyte.
+pub const MIB: usize = 1_024 * 1_024;
+/// Sentinel disabling an optional OS resource limit.
 pub const UNLIMITED: u64 = 0;
+/// Default address-space budget; unlimited unless the host configures it.
 pub const DEFAULT_MAX_MEMORY_BYTES: u64 = UNLIMITED;
+/// Default output-file size budget; unlimited unless the host configures it.
 pub const DEFAULT_MAX_FILE_SIZE_BYTES: u64 = UNLIMITED;
-pub const DEFAULT_MAX_OPEN_FILES: u64 = 1024;
+/// Default per-process file-descriptor ceiling.
+pub const DEFAULT_MAX_OPEN_FILES: u64 = 1_024;
 
 /// OS process limits. Zero disables the corresponding limit.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -19,14 +24,14 @@ impl ProcessLimits {
     pub fn validate(&self) -> Result<(), &'static str> {
         if self.max_memory_bytes != UNLIMITED
             && self.max_memory_bytes != u64::MAX
-            && self.max_memory_bytes < 16 * 1024 * 1024
+            && self.max_memory_bytes < 16 * 1_024 * 1_024
         {
             return Err("process max_memory_bytes must be at least 16 MiB or 0 (unlimited)");
         }
 
         if self.max_file_size_bytes != UNLIMITED
             && self.max_file_size_bytes != u64::MAX
-            && self.max_file_size_bytes < 1024
+            && self.max_file_size_bytes < 1_024
         {
             return Err("process max_file_size_bytes must be at least 1 KiB or 0 (unlimited)");
         }
@@ -78,11 +83,15 @@ impl ResourceLimits {
 
     pub fn to_process_limits(&self) -> ProcessLimits {
         ProcessLimits {
-            max_memory_bytes: self.max_memory_bytes.unwrap_or(DEFAULT_MAX_MEMORY_BYTES),
+            max_memory_bytes: self
+                .max_memory_bytes
+                .unwrap_or(DEFAULT_MAX_MEMORY_BYTES),
             max_file_size_bytes: self
                 .max_file_size_bytes
                 .unwrap_or(DEFAULT_MAX_FILE_SIZE_BYTES),
-            max_open_files: self.max_open_files.unwrap_or(DEFAULT_MAX_OPEN_FILES),
+            max_open_files: self
+                .max_open_files
+                .unwrap_or(DEFAULT_MAX_OPEN_FILES),
         }
     }
 }
@@ -107,7 +116,8 @@ mod tests {
         assert!(valid.validate().is_ok());
 
         let mut invalid = valid.clone();
-        invalid.max_memory_bytes = 1024; // Less than 16 MiB
+        // Less than 16 MiB
+        invalid.max_memory_bytes = 1_024;
         assert!(invalid.validate().is_err());
     }
 
@@ -122,12 +132,12 @@ mod tests {
         assert_eq!(process_limits.max_file_size_bytes, UNLIMITED);
 
         let custom = ResourceLimits::default()
-            .with_memory_limit(1024 * 1024 * 1024)
-            .with_file_size_limit(100 * 1024 * 1024);
+            .with_memory_limit(1_024 * 1_024 * 1_024)
+            .with_file_size_limit(100 * 1_024 * 1_024);
 
         let converted = custom.to_process_limits();
-        assert_eq!(converted.max_memory_bytes, 1024 * 1024 * 1024);
-        assert_eq!(converted.max_file_size_bytes, 100 * 1024 * 1024);
+        assert_eq!(converted.max_memory_bytes, 1_024 * 1_024 * 1_024);
+        assert_eq!(converted.max_file_size_bytes, 100 * 1_024 * 1_024);
     }
 
     #[test]

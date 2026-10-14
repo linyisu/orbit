@@ -25,7 +25,13 @@ pub fn register(
 ) {
     tools.register(ClosureTool::new(
         "verification_status",
-        "Inspect this session's actual command evidence and compare input file fingerprints with the current filtered workspace. Call after final edits before reporting verification. A zero exit code is not proof of tests; input_unchanged means the current workspace matches the recorded input or post-command output fingerprint; it does not verify mutable system tools, caches, or external state. Also classifies per-path changes against the session baseline and Orbit receipts. Old sessions without evidence remain unknown. Does not execute commands or change files.",
+        "Inspect this session's actual command evidence and compare input file fingerprints with \
+            the current filtered workspace. Call after final edits before reporting verification. \
+            A zero exit code is not proof of tests; input_unchanged means the current workspace \
+            matches the recorded input or post-command output fingerprint; it does not verify \
+            mutable system tools, caches, or external state. Also classifies per-path changes \
+            against the session baseline and Orbit receipts. Old sessions without evidence remain \
+            unknown. Does not execute commands or change files.",
         json!({
             "type": "object",
             "properties": {},
@@ -76,15 +82,23 @@ pub async fn report(
             result.to_string(),
         )],
         &[],
-    ) > 6000
+    ) > 6_000
     {
-        let key = if result["changes"].as_array().is_some_and(|a| !a.is_empty()) {
+        let key = if result["changes"]
+            .as_array()
+            .is_some_and(|a| !a.is_empty())
+        {
             "changes"
         } else {
             "commands"
         };
 
-        if result[key].as_array_mut().unwrap().pop().is_none() {
+        if result[key]
+            .as_array_mut()
+            .unwrap()
+            .pop()
+            .is_none()
+        {
             break;
         }
 
@@ -123,14 +137,21 @@ fn compare(
                 }
             };
 
-            let snapshot_id = record
-                .evidence
-                .as_ref()
-                .map(|e| e.output.as_ref().unwrap_or(&e.input).digest.as_str());
+            let snapshot_id = record.evidence.as_ref().map(|e| {
+                e.output
+                    .as_ref()
+                    .unwrap_or(&e.input)
+                    .digest
+                    .as_str()
+            });
 
             json!({
                 "run": record.run_id,
-                "command": record.command.chars().take(512).collect::<String>(),
+                "command": record
+                    .command
+                    .chars()
+                    .take(512)
+                    .collect::<String>(),
                 "command_truncated": record.command.chars().count() > 512,
                 "exit_code": record.exit_code,
                 "timed_out": record.timed_out,
@@ -138,10 +159,12 @@ fn compare(
                 "elapsed_ms": record.elapsed_ms,
                 "input_state": input_state,
                 "snapshot_id": snapshot_id,
-                "environment": record.evidence.as_ref().map(|e| json!({
-                    "platform": e.platform,
-                    "isolation": e.isolation,
-                }))
+                "environment": record.evidence.as_ref().map(|e| json!(
+                    {
+                        "platform": e.platform,
+                        "isolation": e.isolation,
+                    }
+                ))
             })
         })
         .collect();
@@ -153,7 +176,11 @@ fn compare(
     }
 
     if let Some(baseline) = baseline {
-        for path in baseline.files.keys().chain(current.files.keys()) {
+        for path in baseline
+            .files
+            .keys()
+            .chain(current.files.keys())
+        {
             if baseline.files.get(path) != current.files.get(path) {
                 paths.insert(path.clone());
             }
@@ -165,17 +192,32 @@ fn compare(
         .into_iter()
         .take(100)
         .map(|path| {
-            let first = changes.iter().find(|c| c.change.path == path);
-            let last = changes.iter().rev().find(|c| c.change.path == path);
-            let current_hash = current.files.get(&path).map(|f| f.sha256.clone());
+            let first = changes
+                .iter()
+                .find(|c| c.change.path == path);
+            let last = changes
+                .iter()
+                .rev()
+                .find(|c| c.change.path == path);
+            let current_hash = current
+                .files
+                .get(&path)
+                .map(|f| f.sha256.clone());
             let baseline_hash = baseline
                 .and_then(|b| b.files.get(&path))
                 .map(|f| f.sha256.clone());
-            let first_before =
-                first.and_then(|c| c.change.before.as_ref().map(|s| content_hash(s.as_bytes())));
+            let first_before = first.and_then(|c| {
+                c.change
+                    .before
+                    .as_ref()
+                    .map(|s| content_hash(s.as_bytes()))
+            });
             let last_expected = last.and_then(|c| {
                 if c.undone {
-                    c.change.before.as_ref().map(|s| content_hash(s.as_bytes()))
+                    c.change
+                        .before
+                        .as_ref()
+                        .map(|s| content_hash(s.as_bytes()))
                 } else {
                     Some(content_hash(c.change.after.as_bytes()))
                 }
@@ -193,10 +235,14 @@ fn compare(
                 baseline.map(|b| b.files.get(&path) != current.files.get(&path));
             let executable_changed = baseline.map(|b| {
                 b.files.get(&path).map(|f| f.executable)
-                    != current.files.get(&path).map(|f| f.executable)
+                    != current
+                        .files
+                        .get(&path)
+                        .map(|f| f.executable)
             });
-            let external_before_first_orbit_write =
-                baseline.and(first).map(|_| baseline_hash != first_before);
+            let external_before_first_orbit_write = baseline
+                .and(first)
+                .map(|_| baseline_hash != first_before);
 
             json!({
                 "path": path,
@@ -221,7 +267,10 @@ fn compare(
         "commands_omitted": commands.len().saturating_sub(20),
         "changes": paths,
         "changes_omitted": total.saturating_sub(100),
-        "limitations": "Source fingerprints cover the same filtered workspace as run_command, not ignored runtime directories or external system state. Commands execute in the real workspace with the target user environment. Inspect the command and its output before claiming tests passed; stale or unknown evidence does not verify current edits."
+        "limitations": "Source fingerprints cover the same filtered workspace as run_command, not \
+            ignored runtime directories or external system state. Commands execute in the real \
+            workspace with the target user environment. Inspect the command and its output before \
+            claiming tests passed; stale or unknown evidence does not verify current edits."
     })
 }
 
@@ -287,7 +336,10 @@ pub async fn changes_text(session: &crate::session::SessionState) -> String {
             }
 
             for row in value["changes"].as_array().unwrap() {
-                let state = match row["origin"].as_str().unwrap_or_default() {
+                let state = match row["origin"]
+                    .as_str()
+                    .unwrap_or_default()
+                {
                     "content_matches_orbit_receipt" => "内容与 Orbit 检查点一致",
                     "content_modified_after_orbit" => "内容已偏离 Orbit 检查点",
                     _ => "会话开始后发生的外部变更",
@@ -308,7 +360,11 @@ pub async fn changes_text(session: &crate::session::SessionState) -> String {
                 );
             }
 
-            if value["changes_omitted"].as_u64().unwrap_or(0) > 0 {
+            if value["changes_omitted"]
+                .as_u64()
+                .unwrap_or(0)
+                > 0
+            {
                 text.push_str("部分路径未列出，请缩小检查范围。\n");
             }
 

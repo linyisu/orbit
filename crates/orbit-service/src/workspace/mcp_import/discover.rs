@@ -3,21 +3,28 @@ use orbit_protocol::resources::McpLaunch;
 use std::collections::BTreeMap;
 
 pub(super) fn candidate_directory(id: &str) -> Result<&str> {
-    let (directory, _) = id.split_once('|').context("入口身份无效")?;
+    let (directory, _) = id
+        .split_once('|')
+        .context("入口身份无效")?;
     ensure!(
-        Path::new(directory).components().all(|part| matches!(
-            part,
-            std::path::Component::Normal(_) | std::path::Component::CurDir
-        )),
+        Path::new(directory)
+            .components()
+            .all(|part| matches!(
+                part,
+                std::path::Component::Normal(_) | std::path::Component::CurDir
+            )),
         "入口目录无效"
     );
     Ok(directory)
 }
+
 pub(super) fn discover(root: &Path) -> Result<Vec<McpCandidate>> {
     let mut candidates = Vec::new();
     let mut pending = vec![(root.to_path_buf(), 0)];
     while let Some((directory, depth)) = pending.pop() {
-        let relative = directory.strip_prefix(root)?.to_string_lossy();
+        let relative = directory
+            .strip_prefix(root)?
+            .to_string_lossy();
         let relative = if relative.is_empty() { "." } else { &relative };
         let node = directory.join("package.json");
         let package: Option<serde_json::Value> = if node.is_file() {
@@ -29,7 +36,10 @@ pub(super) fn discover(root: &Path) -> Result<Vec<McpCandidate>> {
         if let Some(package) = &package {
             install.push(vec![
                 executable("npm"),
-                if directory.join("package-lock.json").is_file() {
+                if directory
+                    .join("package-lock.json")
+                    .is_file()
+                {
                     "ci"
                 } else {
                     "install"
@@ -52,7 +62,9 @@ pub(super) fn discover(root: &Path) -> Result<Vec<McpCandidate>> {
             if let Some(servers) = value["mcpServers"].as_object() {
                 for (name, server) in servers {
                     if server["url"].is_string()
-                        || server["type"].as_str().is_some_and(|kind| kind != "stdio")
+                        || server["type"]
+                            .as_str()
+                            .is_some_and(|kind| kind != "stdio")
                     {
                         continue;
                     }
@@ -91,11 +103,17 @@ pub(super) fn discover(root: &Path) -> Result<Vec<McpCandidate>> {
             }
         }
         if let Some(package) = package {
-            let package_name = package["name"].as_str().unwrap_or("mcp-server");
+            let package_name = package["name"]
+                .as_str()
+                .unwrap_or("mcp-server");
             let mcp_args = registry_args(&directory, package_name)?;
             let bins: BTreeMap<String, String> = if let Some(path) = package["bin"].as_str() {
                 BTreeMap::from([(
-                    package_name.rsplit('/').next().unwrap().to_owned(),
+                    package_name
+                        .rsplit('/')
+                        .next()
+                        .unwrap()
+                        .to_owned(),
                     path.to_owned(),
                 )])
             } else if package["bin"].is_object() {
@@ -105,7 +123,12 @@ pub(super) fn discover(root: &Path) -> Result<Vec<McpCandidate>> {
             };
             for (name, bin) in bins {
                 ensure_relative(&bin)?;
-                let mut args = vec![directory.join(bin).to_string_lossy().into_owned()];
+                let mut args = vec![
+                    directory
+                        .join(bin)
+                        .to_string_lossy()
+                        .into_owned(),
+                ];
                 if let Some(extra) = &mcp_args {
                     args.extend(extra.iter().cloned());
                 }
@@ -145,7 +168,11 @@ pub(super) fn discover(root: &Path) -> Result<Vec<McpCandidate>> {
                         id: format!("{relative}|python:{name}"),
                         name: name_for(name),
                         launch: McpLaunch {
-                            command: venv.join("bin").join(name).to_string_lossy().into_owned(),
+                            command: venv
+                                .join("bin")
+                                .join(name)
+                                .to_string_lossy()
+                                .into_owned(),
                             args: Vec::new(),
                             env: BTreeMap::new(),
                             tools: Vec::new(),
@@ -158,7 +185,9 @@ pub(super) fn discover(root: &Path) -> Result<Vec<McpCandidate>> {
                                 venv.to_string_lossy().into_owned(),
                             ],
                             vec![
-                                venv.join("bin/python").to_string_lossy().into_owned(),
+                                venv.join("bin/python")
+                                    .to_string_lossy()
+                                    .into_owned(),
                                 "-m".into(),
                                 "pip".into(),
                                 "install".into(),
@@ -235,6 +264,7 @@ fn registry_args(directory: &Path, package_name: &str) -> Result<Option<Vec<Stri
     }
     Ok(None)
 }
+
 fn name_for(value: &str) -> String {
     let value = value
         .chars()
@@ -253,34 +283,43 @@ fn name_for(value: &str) -> String {
         value
     }
 }
+
 fn ensure_relative(value: &str) -> Result<()> {
     ensure!(
         !value.is_empty()
             && !value.contains('\\')
-            && Path::new(value).components().all(|part| matches!(
-                part,
-                std::path::Component::Normal(_) | std::path::Component::CurDir
-            )),
+            && Path::new(value)
+                .components()
+                .all(|part| matches!(
+                    part,
+                    std::path::Component::Normal(_) | std::path::Component::CurDir
+                )),
         "启动入口必须位于仓库内"
     );
     Ok(())
 }
+
 fn resolve(value: &str, root: &Path) -> String {
     if value.starts_with("./") {
-        root.join(value).to_string_lossy().into_owned()
+        root.join(value)
+            .to_string_lossy()
+            .into_owned()
     } else if !value.contains('/') {
         executable(value)
     } else {
         value.into()
     }
 }
+
 fn resolve_arg(value: &str, root: &Path) -> String {
     let value = value
         .replace("${MCP_SOURCE}", &root.to_string_lossy())
         .replace("${workspaceFolder}", &root.to_string_lossy());
     if !Path::new(&value).is_absolute() && (root.join(&value).is_file() || value.starts_with("./"))
     {
-        root.join(value).to_string_lossy().into_owned()
+        root.join(value)
+            .to_string_lossy()
+            .into_owned()
     } else {
         value
     }

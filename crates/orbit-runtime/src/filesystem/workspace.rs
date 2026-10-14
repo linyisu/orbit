@@ -195,8 +195,14 @@ impl Workspace {
                         Err(error) => return Err(error.into()),
                     }
 
-                    missing.push(ancestor.file_name().ok_or(WorkspaceError::InvalidPath)?);
-                    ancestor = ancestor.parent().ok_or(WorkspaceError::InvalidPath)?;
+                    missing.push(
+                        ancestor
+                            .file_name()
+                            .ok_or(WorkspaceError::InvalidPath)?,
+                    );
+                    ancestor = ancestor
+                        .parent()
+                        .ok_or(WorkspaceError::InvalidPath)?;
                 }
 
                 Err(error) => return Err(error.into()),
@@ -254,7 +260,8 @@ impl Workspace {
     ) -> Result<(), WorkspaceError> {
         let resolved = self.resolve_and_validate_protected_path(path.as_ref())?;
         self.protected.push(resolved.clone());
-        self.opaque_runtime_roots.push(resolved.clone());
+        self.opaque_runtime_roots
+            .push(resolved.clone());
         self.policy.add_protected_path(resolved);
         Ok(())
     }
@@ -273,9 +280,17 @@ impl Workspace {
                             .effective_policy()
                             .read_templates
                             .iter()
-                            .chain(self.policy.effective_policy().write_templates.iter())
+                            .chain(
+                                self.policy
+                                    .effective_policy()
+                                    .write_templates
+                                    .iter(),
+                            )
                             .any(|p| {
-                                p == &self.path.join(parts.iter().collect::<PathBuf>()).join(name)
+                                p == &self
+                                    .path
+                                    .join(parts.iter().collect::<PathBuf>())
+                                    .join(name)
                             })
                     {
                         return Err(WorkspaceError::ProtectedPath);
@@ -295,11 +310,11 @@ impl Workspace {
 
         let relative = parts.iter().collect::<PathBuf>();
 
-        if self
-            .protected
-            .iter()
-            .any(|protected| self.path.join(&relative).starts_with(protected))
-        {
+        if self.protected.iter().any(|protected| {
+            self.path
+                .join(&relative)
+                .starts_with(protected)
+        }) {
             return Err(WorkspaceError::ProtectedPath);
         }
 
@@ -320,8 +335,10 @@ impl Workspace {
         use std::collections::VecDeque;
         use std::os::unix::ffi::OsStringExt;
         let relative = self.checked_relative(path)?;
-        let mut pending: VecDeque<std::ffi::OsString> =
-            relative.iter().map(|n| n.to_owned()).collect();
+        let mut pending: VecDeque<std::ffi::OsString> = relative
+            .iter()
+            .map(|n| n.to_owned())
+            .collect();
         let mut stack = vec![self.root.try_clone()?];
         let mut resolved = PathBuf::new();
         let mut links = 0;
@@ -343,8 +360,12 @@ impl Workspace {
             let effective = self.policy.effective_policy();
             let absolute = self.path.join(&candidate);
             if write
-                && effective.read_templates.contains(&absolute)
-                && !effective.write_templates.contains(&absolute)
+                && effective
+                    .read_templates
+                    .contains(&absolute)
+                && !effective
+                    .write_templates
+                    .contains(&absolute)
             {
                 return Err(WorkspaceError::ProtectedPath);
             }
@@ -473,8 +494,14 @@ impl Workspace {
                 &self.path,
                 (metadata.dev(), metadata.ino()),
                 metadata.nlink(),
-                &self.policy.effective_policy().read_templates,
-                &self.policy.effective_policy().write_templates,
+                &self
+                    .policy
+                    .effective_policy()
+                    .read_templates,
+                &self
+                    .policy
+                    .effective_policy()
+                    .write_templates,
             )
             .map_err(|error| WorkspaceError::PermissionDenied(error.to_string()))?
         {
@@ -524,7 +551,8 @@ impl Workspace {
                     crate::policy::PolicyDecision::Granted => {}
                     crate::policy::PolicyDecision::NeedsApproval(_) => {
                         return Err(WorkspaceError::PermissionDenied(format!(
-                            "write permission denied: '{}' is outside the workspace. Call request_capability to request access.",
+                            "write permission denied: '{}' is outside the workspace. Call \
+                                request_capability to request access.",
                             path.display()
                         )));
                     }
@@ -534,7 +562,9 @@ impl Workspace {
                     }
                 }
 
-                let parent_path = canonical.parent().ok_or(WorkspaceError::InvalidPath)?;
+                let parent_path = canonical
+                    .parent()
+                    .ok_or(WorkspaceError::InvalidPath)?;
                 let file_name = canonical
                     .file_name()
                     .ok_or(WorkspaceError::InvalidPath)?
@@ -592,7 +622,8 @@ impl Workspace {
                     crate::policy::PolicyDecision::Granted => {}
                     crate::policy::PolicyDecision::NeedsApproval(_) => {
                         return Err(WorkspaceError::PermissionDenied(format!(
-                            "directory read permission denied: '{}' is outside the workspace. Call request_capability to request access.",
+                            "directory read permission denied: '{}' is outside the workspace. Call \
+                                request_capability to request access.",
                             path.display()
                         )));
                     }
@@ -722,7 +753,8 @@ impl Workspace {
                     crate::policy::PolicyDecision::Granted => {}
                     crate::policy::PolicyDecision::NeedsApproval(_) => {
                         return Err(WorkspaceError::PermissionDenied(format!(
-                            "read permission denied: '{}' is outside the workspace. Call request_capability to request access.",
+                            "read permission denied: '{}' is outside the workspace. Call \
+                                request_capability to request access.",
                             path.display()
                         )));
                     }
@@ -732,8 +764,12 @@ impl Workspace {
                     }
                 }
 
-                let parent_path = canonical.parent().ok_or(WorkspaceError::InvalidPath)?;
-                let file_name = canonical.file_name().ok_or(WorkspaceError::InvalidPath)?;
+                let parent_path = canonical
+                    .parent()
+                    .ok_or(WorkspaceError::InvalidPath)?;
+                let file_name = canonical
+                    .file_name()
+                    .ok_or(WorkspaceError::InvalidPath)?;
 
                 let parent_file = open_canonical_parent_stepwise(parent_path)?;
                 let parent_meta = parent_file.metadata()?;
@@ -798,7 +834,10 @@ mod tests {
             .protect(Path::new("alias/config/orbit/auth"))
             .unwrap();
         workspace
-            .protect_opaque_runtime_root(root.path().join("missing/runtime/archive"))
+            .protect_opaque_runtime_root(
+                root.path()
+                    .join("missing/runtime/archive"),
+            )
             .unwrap();
 
         assert!(
@@ -806,8 +845,16 @@ mod tests {
                 .protected()
                 .contains(&storage.path().join("config/orbit/auth"))
         );
-        assert!(workspace.protect(Path::new("dangling/auth")).is_err());
-        assert!(workspace.protect(Path::new("file/auth")).is_err());
+        assert!(
+            workspace
+                .protect(Path::new("dangling/auth"))
+                .is_err()
+        );
+        assert!(
+            workspace
+                .protect(Path::new("file/auth"))
+                .is_err()
+        );
         assert!(!root.path().join("missing").exists());
     }
 
@@ -822,7 +869,9 @@ mod tests {
         std::fs::hard_link(&private_file, ws_dir.path().join("alias.txt")).unwrap();
 
         let mut workspace = Workspace::new(ws_dir.path()).unwrap();
-        workspace.protect_opaque_runtime_root(&opaque).unwrap();
+        workspace
+            .protect_opaque_runtime_root(&opaque)
+            .unwrap();
 
         assert!(matches!(
             workspace.open_read(Path::new("alias.txt")),
@@ -879,10 +928,14 @@ mod tests {
             read_write: Vec::new(),
         };
 
-        ws2.configure_policy(perms2, NetworkPolicy::Allow).unwrap();
+        ws2.configure_policy(perms2, NetworkPolicy::Allow)
+            .unwrap();
 
         let sub_secret = other_outside.path().join("secret.db");
-        let err2 = ws2.protect(&sub_secret).unwrap_err().to_string();
+        let err2 = ws2
+            .protect(&sub_secret)
+            .unwrap_err()
+            .to_string();
 
         assert!(err2.contains("conflicts with persistent permission"));
     }
@@ -910,7 +963,10 @@ mod tests {
         let valid_canonical = valid_dir.path().canonicalize().unwrap();
 
         assert_eq!(
-            ws.policy().effective_policy().persistent_read[0].canonical(),
+            ws.policy()
+                .effective_policy()
+                .persistent_read[0]
+                .canonical(),
             valid_canonical
         );
 
@@ -924,7 +980,10 @@ mod tests {
             .configure_policy(bad_perms, NetworkPolicy::Allow)
             .unwrap_err();
 
-        assert!(err.to_string().contains("conflicts with protected path"));
+        assert!(
+            err.to_string()
+                .contains("conflicts with protected path")
+        );
 
         let current_policy = ws.policy().effective_policy();
 

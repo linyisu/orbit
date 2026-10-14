@@ -49,21 +49,31 @@ impl HistoryState {
         // records. Never derive it from the records or accept another page.
         if page.before != request.before
             || page.next.is_some_and(|next| {
-                page.records.is_empty() || request.before.is_some_and(|before| next >= before)
+                page.records.is_empty()
+                    || request
+                        .before
+                        .is_some_and(|before| next >= before)
             })
         {
             self.error = Some("历史分页响应不匹配，请重试。".into());
             return false;
         }
         for record in page.records {
-            if let Some(existing) = self.records.iter_mut().find(|item| item.id == record.id) {
+            if let Some(existing) = self
+                .records
+                .iter_mut()
+                .find(|item| item.id == record.id)
+            {
                 *existing = record;
             } else {
                 self.records.push(record);
             }
         }
         if self.selected.is_none() {
-            self.selected = self.records.first().map(|record| record.id.clone());
+            self.selected = self
+                .records
+                .first()
+                .map(|record| record.id.clone());
         }
         self.next = page.next;
         self.loaded = true;
@@ -100,7 +110,10 @@ mod tests {
     fn page(before: Option<i64>, ids: &[&str], next: Option<i64>) -> Result<History, String> {
         Ok(History {
             before,
-            records: ids.iter().map(|id| record(id)).collect(),
+            records: ids
+                .iter()
+                .map(|id| record(id))
+                .collect(),
             next,
         })
     }

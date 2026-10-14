@@ -40,6 +40,7 @@ pub(crate) struct Workbench {
     restoring: bool,
     _storage_errors: Task<()>,
 }
+
 impl Workbench {
     pub(crate) fn new(
         options: Options,
@@ -89,7 +90,9 @@ impl Workbench {
                 }
             }),
         };
-        let active = saved.as_ref().map(|saved| saved.active.clone());
+        let active = saved
+            .as_ref()
+            .map(|saved| saved.active.clone());
         if let Some(saved) = saved {
             for task in saved.tasks {
                 workbench.create(task.options.clone(), Some(task), window, cx);
@@ -115,6 +118,7 @@ impl Workbench {
         });
         workbench
     }
+
     fn open(&mut self, options: Options, window: &mut Window, cx: &mut Context<Self>) {
         let existing = self
             .tasks
@@ -157,9 +161,9 @@ impl Workbench {
         self.create(options, None, window, cx);
     }
 
+    /// Opening a saved conversation fills the current placeholder. Ordinary tab navigation and
+    /// restoring a window must retain every saved tab.
     fn empty_task_to_replace(&self, options: &Options, cx: &App) -> Option<usize> {
-        // Opening a saved conversation fills the current placeholder. Ordinary
-        // tab navigation and restoring a window must retain every saved tab.
         if self.restoring || options.resume.is_none() {
             return None;
         }
@@ -170,14 +174,15 @@ impl Workbench {
         })
     }
 
+    /// Dismiss the placeholder's authentication before activating the target host. Dropping its
+    /// transport never cancels a server-side task.
     fn discard_empty_task(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
-        // Dismiss the placeholder's authentication before activating the target
-        // host. Dropping its transport never cancels a server-side task.
         self.tasks[index]
             .view
             .update(cx, |view, cx| view.set_visible(false, window, cx));
         let task = self.tasks.remove(index);
-        self.unread.remove(task.view.read(cx).key());
+        self.unread
+            .remove(task.view.read(cx).key());
     }
 
     fn create(
@@ -195,7 +200,12 @@ impl Workbench {
         let catalog = self
             .tasks
             .iter()
-            .find(|task| task.view.read(cx).options().same_host(&options))
+            .find(|task| {
+                task.view
+                    .read(cx)
+                    .options()
+                    .same_host(&options)
+            })
             .map(|task| task.view.read(cx).catalog().to_vec());
         let view = cx.new(|cx| Workspace::new(options, runtime, self.sidebar.clone(), window, cx));
         if let Some(saved) = saved {
@@ -235,7 +245,11 @@ impl Workbench {
                         .iter()
                         .any(|task| task.view.read(cx).key() == workbench.active)
                     {
-                        if let Some(task) = workbench.tasks.iter().find(|task| !task.closed) {
+                        if let Some(task) = workbench
+                            .tasks
+                            .iter()
+                            .find(|task| !task.closed)
+                        {
                             let key = task.view.read(cx).key().to_owned();
                             workbench.activate(&key, window, cx);
                         } else {
@@ -269,7 +283,12 @@ impl Workbench {
                 WorkspaceEvent::Catalog(catalog) => {
                     let options = source.read(cx).options().clone();
                     for task in &workbench.tasks {
-                        if task.view != *source && task.view.read(cx).options().same_host(&options)
+                        if task.view != *source
+                            && task
+                                .view
+                                .read(cx)
+                                .options()
+                                .same_host(&options)
                         {
                             task.view
                                 .update(cx, |view, cx| view.set_catalog(catalog.clone(), cx));
@@ -296,6 +315,7 @@ impl Workbench {
         }
         self.activate(&key, window, cx);
     }
+
     fn activate(&mut self, key: &str, window: &mut Window, cx: &mut Context<Self>) {
         if !self
             .tasks
@@ -341,6 +361,7 @@ impl Workbench {
         }
         self.publish(cx);
     }
+
     fn close(&mut self, key: &str, window: &mut Window, cx: &mut Context<Self>) {
         let Some(task) = self
             .tasks
@@ -350,7 +371,10 @@ impl Workbench {
             return;
         };
         let saving = task.view.read(cx).files_saving(cx);
-        let attention = task.view.read(cx).files_need_attention(cx);
+        let attention = task
+            .view
+            .read(cx)
+            .files_need_attention(cx);
         if saving || attention {
             self.confirm_file_close(key.to_owned(), saving, window, cx);
             return;
@@ -399,15 +423,31 @@ impl Workbench {
                                 .on_click(move |_, window, cx| {
                                     window.close_dialog(cx);
                                     let _ = discard_owner.update(cx, |workbench, cx| {
-                                        let Some(task) = workbench.tasks.iter().find(|task| task.view.read(cx).key() == discard_key) else {
+                                        let Some(task) = workbench
+                                            .tasks
+                                            .iter()
+                                            .find(|task| task
+                                            .view
+                                            .read(cx)
+                                            .key() == discard_key) else {
                                             return;
                                         };
                                         // A save can start after the confirmation
                                         // was shown. Its result must remain owned.
                                         if task.view.read(cx).files_saving(cx) {
-                                            workbench.confirm_file_close(discard_key.clone(), true, window, cx);
+                                            workbench
+                                                .confirm_file_close(discard_key
+                                                .clone(),
+                                                true,
+                                                window,
+                                                cx);
                                         } else {
-                                            task.view.update(cx, |view, cx| view.discard_file_edits(cx));
+                                            task
+                                                .view
+                                                .update(cx,
+                                                |view,
+                                                cx| view
+                                                .discard_file_edits(cx));
                                             workbench.close_task(&discard_key, window, cx);
                                         }
                                     });
@@ -425,9 +465,20 @@ impl Workbench {
         else {
             return;
         };
-        let busy = self.tasks[ix].view.read(cx).summary().busy;
-        let failed = self.tasks[ix].view.read(cx).connection_unestablished();
-        let mut options = self.tasks[ix].view.read(cx).options().clone();
+        let busy = self.tasks[ix]
+            .view
+            .read(cx)
+            .summary()
+            .busy;
+        let failed = self.tasks[ix]
+            .view
+            .read(cx)
+            .connection_unestablished();
+        let mut options = self.tasks[ix]
+            .view
+            .read(cx)
+            .options()
+            .clone();
         // A failed restored tab may still carry a removed model in its launch
         // options. Closing it must leave a usable blank task with the default.
         options.model = None;
@@ -435,8 +486,13 @@ impl Workbench {
         options.recover_draft = false;
         options.relink_on_resume = false;
         let was_active = self.active == key;
-        let adjacent = toolbar::close_neighbor(&self.tasks, ix, |task| task.closed)
-            .map(|ix| self.tasks[ix].view.read(cx).key().to_owned());
+        let adjacent = toolbar::close_neighbor(&self.tasks, ix, |task| task.closed).map(|ix| {
+            self.tasks[ix]
+                .view
+                .read(cx)
+                .key()
+                .to_owned()
+        });
         if busy {
             // Closing a tab is navigation. Keep its transport and event
             // subscription alive until the user explicitly stops the run.
@@ -451,7 +507,11 @@ impl Workbench {
             self.tasks.remove(ix);
         }
         self.unread.remove(key);
-        if self.tasks.iter().all(|task| task.closed) {
+        if self
+            .tasks
+            .iter()
+            .all(|task| task.closed)
+        {
             if failed {
                 options = self.origin.clone();
                 if options.ssh.is_some() || options.wsl.is_some() {
@@ -478,6 +538,7 @@ impl Workbench {
             self.publish(cx);
         }
     }
+
     fn publish(&mut self, cx: &mut Context<Self>) {
         let summaries: Vec<_> = self
             .tasks
@@ -495,7 +556,13 @@ impl Workbench {
             let navigation_tasks = self
                 .tasks
                 .iter()
-                .filter(|other| other.view.read(cx).options().same_host(options))
+                .filter(|other| {
+                    other
+                        .view
+                        .read(cx)
+                        .options()
+                        .same_host(options)
+                })
                 .map(|other| {
                     let mut summary = other.view.read(cx).summary();
                     summary.unread = self.unread.contains(&summary.key);
@@ -511,6 +578,7 @@ impl Workbench {
         cx.notify();
         self.persist(cx);
     }
+
     fn sync_sidebar(&self, cx: &mut Context<Self>) {
         if let Some(task) = self
             .tasks
@@ -521,20 +589,23 @@ impl Workbench {
                 .update(cx, |sidebar, cx| sidebar.bind(&task.view, cx));
         }
     }
+
     fn persist(&self, cx: &App) {
         if self.restoring {
             return;
         }
-        self.storage.save(storage::Snapshot::new(
-            self.origin.clone(),
-            self.active.clone(),
-            self.tasks
-                .iter()
-                .filter(|task| !task.closed || task.view.read(cx).has_draft(cx))
-                .map(|task| task.view.read(cx).saved(cx))
-                .collect(),
-        ));
+        self.storage
+            .save(storage::Snapshot::new(
+                self.origin.clone(),
+                self.active.clone(),
+                self.tasks
+                    .iter()
+                    .filter(|task| !task.closed || task.view.read(cx).has_draft(cx))
+                    .map(|task| task.view.read(cx).saved(cx))
+                    .collect(),
+            ));
     }
+
     fn show_workspace(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.settings.take().is_some() {
             window.close_all_dialogs(cx);
@@ -545,6 +616,7 @@ impl Workbench {
         }
     }
 }
+
 impl Render for Workbench {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         use gpui_kit::component::{
@@ -553,7 +625,10 @@ impl Render for Workbench {
             v_flex,
         };
         let body = if let Some(settings) = &self.settings {
-            div().size_full().child(settings.clone()).into_any_element()
+            div()
+                .size_full()
+                .child(settings.clone())
+                .into_any_element()
         } else {
             div()
                 .size_full()
@@ -607,7 +682,8 @@ impl Render for Workbench {
             )
             .on_action(
                 cx.listener(|view, _: &crate::workspace::ToggleSidebar, _, cx| {
-                    view.sidebar.update(cx, |sidebar, cx| sidebar.toggle(cx))
+                    view.sidebar
+                        .update(cx, |sidebar, cx| sidebar.toggle(cx))
                 }),
             )
             .on_action(

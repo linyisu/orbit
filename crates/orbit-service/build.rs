@@ -20,7 +20,9 @@ fn main() {
     ] {
         println!(
             "cargo:rerun-if-changed={}",
-            root.join("crates").join(package).display()
+            root.join("crates")
+                .join(package)
+                .display()
         );
     }
     // Release builders can supply a reproducible epoch. Local builds advance
@@ -30,7 +32,7 @@ fn main() {
             epoch
                 .parse::<u64>()
                 .expect("SOURCE_DATE_EPOCH must be seconds")
-                .checked_mul(1000)
+                .checked_mul(1_000)
                 .expect("SOURCE_DATE_EPOCH overflow")
         })
         .unwrap_or_else(|_| {

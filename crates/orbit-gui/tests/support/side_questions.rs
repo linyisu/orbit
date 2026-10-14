@@ -26,14 +26,19 @@ impl FixtureQuestions {
     pub(super) fn execute(&mut self, method: &str, request: &Value, model: &str) -> Value {
         match method {
             "ask" => {
-                let question = request["question"].as_str().unwrap_or_default().trim();
+                let question = request["question"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .trim();
                 if question.is_empty() || question.chars().count() > 32_768 {
                     return error("请输入有效的旁路问题");
                 }
                 if self.pending.is_some() {
                     return error("旁路问题仍在生成，请先结束当前请求。");
                 }
-                let follow_up = request["follow_up"].as_u64().map(|index| index as usize);
+                let follow_up = request["follow_up"]
+                    .as_u64()
+                    .map(|index| index as usize);
                 let thread_id = if let Some(index) = follow_up {
                     if !self.viewer {
                         return error("旁路提问已关闭。请重新提问。");
@@ -86,26 +91,33 @@ impl FixtureQuestions {
                 {
                     pending.cancelled = true;
                 }
-                json!({"type":"ok"})
+                json!({
+                    "type": "ok"
+                })
             }
             "close_questions" => {
                 self.viewer = false;
                 self.records.clear();
                 self.pending = None;
                 self.revision += 1;
-                json!({"type":"ok"})
+                json!({
+                    "type": "ok"
+                })
             }
             _ => unreachable!(),
         }
     }
 
     fn snapshot(&self, after: Option<u64>, selected: Option<usize>) -> Value {
-        json!({"type":"questions","value":Questions {
-            revision: self.revision,
-            selected,
-            running: self.pending.is_some(),
-            records: (after != Some(self.revision)).then(|| self.records.clone()),
-        }})
+        json!({
+            "type": "questions",
+            "value": Questions {
+                revision: self.revision,
+                selected,
+                running: self.pending.is_some(),
+                records: (after != Some(self.revision)).then(|| self.records.clone()),
+            }
+        })
     }
 
     fn poll(&mut self) {
@@ -141,5 +153,8 @@ impl FixtureQuestions {
 }
 
 fn error(message: &str) -> Value {
-    json!({"type":"error","value":message})
+    json!({
+        "type": "error",
+        "value": message
+    })
 }

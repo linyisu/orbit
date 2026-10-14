@@ -43,9 +43,9 @@ pub(crate) fn width(window: &Window) -> Pixels {
         .min(window.rem_size() * 60.)
 }
 
+/// Reserve the title, footer and gaps at the active UI scale. Large fonts in a compact window must
+/// not push the surface above its search offset.
 pub(crate) fn body_height(window: &Window) -> Pixels {
-    // Reserve the title, footer and gaps at the active UI scale. Large fonts
-    // in a compact window must not push the surface above its search offset.
     (window.viewport_size().height * 0.65)
         .min((window.viewport_size().height * 0.8 - window.rem_size() * 8.).max(px(0.)))
 }
