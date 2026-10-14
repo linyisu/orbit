@@ -1,6 +1,39 @@
 use super::*;
 
 #[tokio::test]
+async fn failed_start_reports_the_error_chain_and_stderr() {
+    let workspace = tempfile::tempdir().unwrap();
+    let config: McpServerConfig = serde_json::from_value(json!({
+        "command":"/bin/sh", "args":["-c", "printf 'missing MCP subcommand: use --mcp\\n' >&2; exit 7"],
+        "enabled":true, "timeout_seconds":1
+    })).unwrap();
+    let (approvals, _receiver) = crate::approval::channel();
+    let statuses = register(
+        &mut ToolRegistry::new(),
+        &McpConfig {
+            servers: BTreeMap::from([("broken".into(), config)]),
+        },
+        workspace.path(),
+        Some(approvals),
+        true,
+    )
+    .await;
+    assert!(!statuses[0].connected);
+    assert!(
+        statuses[0].detail.contains("MCP initialize failed"),
+        "{}",
+        statuses[0].detail
+    );
+    assert!(
+        statuses[0]
+            .detail
+            .contains("missing MCP subcommand: use --mcp"),
+        "{}",
+        statuses[0].detail
+    );
+}
+
+#[tokio::test]
 async fn rejects_an_unterminated_response_at_the_protocol_limit() {
     let bytes = vec![b'x'; MAX_MESSAGE_BYTES + 1];
     let mut reader = BufReader::new(std::io::Cursor::new(bytes));

@@ -987,6 +987,62 @@ fn settings_resources_round_trip_preserves_memory_category_and_workspace_scope()
         assert!(servers[0].connected);
         assert_eq!(servers[0].tools[0].name, "mcp__fixture__echo");
         assert_eq!(servers[0].tools[0].description, "Echo input");
+        let Snapshot::Mcp(reloaded) = resources(
+            &backend,
+            directory.path(),
+            Action::ReloadMcp {
+                config: serde_json::json!({"servers":{}}),
+                allow_start: true,
+            },
+        )
+        .await
+        .unwrap() else {
+            panic!("MCP reload expected")
+        };
+        assert!(reloaded[0].connected);
+        std::fs::write(directory.path().join(".fixture-hold-mcp-reload"), "hold").unwrap();
+        let (result, pending) = tokio::sync::oneshot::channel();
+        backend
+            .send(Command::Settings {
+                request: Request::Resources {
+                    session: "demo".into(),
+                    expected_workspace: Some(directory.path().display().to_string()),
+                    action: Action::ReloadMcp {
+                        config: serde_json::json!({"servers":{}}),
+                        allow_start: true,
+                    },
+                },
+                result,
+            })
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(3), async {
+            while !directory
+                .path()
+                .join(".fixture-mcp-reload-started")
+                .exists()
+            {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("reload must start on its own connection");
+        // A slow handshake must leave the main GUI connection available.
+        tokio::time::timeout(
+            Duration::from_secs(1),
+            resources(&backend, directory.path(), Action::Mcp),
+        )
+        .await
+        .expect("MCP reconnect blocked the main connection")
+        .unwrap();
+        std::fs::write(
+            directory.path().join(".fixture-release-mcp-reload"),
+            "ready",
+        )
+        .unwrap();
+        assert!(matches!(
+            pending.await.unwrap().unwrap(),
+            Response::Resources(Snapshot::Mcp(_))
+        ));
         assert!(
             resources(&backend, &directory.path().join("previous"), Action::Mcp)
                 .await

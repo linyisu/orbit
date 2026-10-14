@@ -21,6 +21,7 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 
 use crate::approval::{ApprovalPreview, ApprovalRequest, ApprovalSender, McpPreview};
+mod diagnostics;
 
 const MAX_MESSAGE_BYTES: usize = 4 * 1024 * 1024;
 const PROTOCOL_VERSION: &str = "2025-11-25";
@@ -212,7 +213,7 @@ pub async fn register(
 
             Err(error) => statuses.push(McpServerStatus {
                 name: name.clone(),
-                detail: error.to_string(),
+                detail: format!("{error:#}"),
                 tool_count: 0,
                 connected: false,
                 tools: Vec::new(),
@@ -311,6 +312,7 @@ struct StdioClient {
     next_id: u64,
     timeout: Duration,
     workspace: PathBuf,
+    diagnostics: diagnostics::Stderr,
 }
 
 impl StdioClient {
@@ -332,7 +334,7 @@ impl StdioClient {
             .env("ORBIT_PROJECT_DIR", workspace)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
             .kill_on_drop(true);
         command.envs(&config.env);
         let mut child = command
@@ -346,6 +348,12 @@ impl StdioClient {
             .stdout
             .take()
             .context("MCP server did not expose stdout")?;
+        let diagnostics = diagnostics::Stderr::capture(
+            child
+                .stderr
+                .take()
+                .context("MCP server did not expose stderr")?,
+        );
         let mut client = Self {
             _child: child,
             stdin,
@@ -355,8 +363,33 @@ impl StdioClient {
             next_id: 1,
             timeout: Duration::from_secs(config.timeout_seconds),
             workspace: workspace.to_path_buf(),
+            diagnostics,
         };
-        let initialized = client
+        let tools = match client.initialize().await {
+            Ok(tools) => tools,
+            Err(error) => {
+                let _ = client._child.start_kill();
+                let exit = time::timeout(Duration::from_millis(200), client._child.wait()).await;
+                let stderr = client.diagnostics.finish().await;
+                return Err(error.context(format!(
+                    "MCP server {name:?} failed{}{}",
+                    match exit {
+                        Ok(Ok(status)) => format!(" ({status})"),
+                        _ => String::new(),
+                    },
+                    if stderr.is_empty() {
+                        String::new()
+                    } else {
+                        format!("; stderr: {stderr}")
+                    },
+                )));
+            }
+        };
+        Ok((client, tools))
+    }
+
+    async fn initialize(&mut self) -> Result<Vec<RemoteTool>> {
+        let initialized = self
             .request(
                 "initialize",
                 json!({
@@ -375,10 +408,8 @@ impl StdioClient {
             bail!("MCP initialize response has no capabilities");
         }
 
-        client
-            .notify("notifications/initialized", json!({}))
-            .await?;
-        let listed = client
+        self.notify("notifications/initialized", json!({})).await?;
+        let listed = self
             .request("tools/list", json!({}), CancellationToken::new())
             .await
             .context("MCP tools/list failed")?;
@@ -390,7 +421,7 @@ impl StdioClient {
             .filter_map(parse_tool)
             .collect::<Vec<_>>();
 
-        Ok((client, tools))
+        Ok(tools)
     }
 
     async fn call_tool(

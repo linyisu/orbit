@@ -487,9 +487,14 @@ async fn run_connection(
                         events.send(Event::Tasks { session, result }).await?;
                     }
                     Command::Settings { request, result } => {
-                        if matches!(request, Request::Review { action: orbit_protocol::review::Action::Undo { .. } | orbit_protocol::review::Action::Stage { .. } | orbit_protocol::review::Action::Unstage { .. }, .. }) {
-                            // Undo may wait for a permission decision. Keep the
-                            // main connection polling approvals and accepting Cancel.
+                        if matches!(request,
+                            Request::Review { action: orbit_protocol::review::Action::Undo { .. } | orbit_protocol::review::Action::Stage { .. } | orbit_protocol::review::Action::Unstage { .. }, .. }
+                            | Request::Resources { action: orbit_protocol::resources::Action::ReloadMcp { .. }
+                                | orbit_protocol::resources::Action::ScanMcp { .. }
+                                | orbit_protocol::resources::Action::InstallMcp { .. }, .. }
+                        ) {
+                            // Long settings requests use a separate connection so
+                            // chat keeps polling events and accepting decisions.
                             let connection = connection.clone();
                             review_tasks.spawn(async move {
                                 let response = async {

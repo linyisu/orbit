@@ -1,6 +1,8 @@
 //! Settings operations execute on the owning session, including remote workspaces.
 mod import;
+mod mcp;
 pub(super) use import::Import;
+pub(super) use mcp::Reload;
 
 use crate::{PreparedWorkspace, skills::SkillSource};
 use anyhow::{Context, Result, ensure};
@@ -20,35 +22,7 @@ pub(super) async fn execute(
             !setup.resources.policy.disabled(Capability::Mcp),
             "MCP 工具已禁用"
         );
-        let visible = setup
-            .resources
-            .tools
-            .definitions()
-            .into_iter()
-            .map(|definition| definition.function.name)
-            .collect::<std::collections::HashSet<_>>();
-        return Ok(Snapshot::Mcp(
-            setup
-                .resources
-                .budget
-                .mcp_statuses
-                .iter()
-                .map(|server| McpServer {
-                    name: server.name.clone(),
-                    connected: server.connected,
-                    detail: server.detail.clone(),
-                    tools: server
-                        .tools
-                        .iter()
-                        .filter(|tool| visible.contains(&tool.name))
-                        .map(|tool| McpTool {
-                            name: tool.name.clone(),
-                            description: tool.description.clone(),
-                        })
-                        .collect(),
-                })
-                .collect(),
-        ));
+        return Ok(mcp::snapshot(setup));
     }
     if matches!(action, Action::Memories | Action::Memory(_)) {
         ensure!(

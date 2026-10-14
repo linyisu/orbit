@@ -38,6 +38,7 @@ pub(super) struct Mcp {
     busy: bool,
     error: Option<String>,
     saved: bool,
+    applied: bool,
     base_reloaded: bool,
     task: Task<()>,
     statuses: Option<Vec<McpServer>>,
@@ -105,6 +106,7 @@ impl Mcp {
             busy: false,
             error: None,
             saved: false,
+            applied: false,
             base_reloaded: false,
             task: Task::ready(()),
             statuses: None,
@@ -136,9 +138,35 @@ impl Mcp {
         self.expanded.clear();
         self.status_busy = false;
         self.status_error = None;
+        self.applied = false;
         self.refresh_status(cx);
     }
     fn refresh_status(&mut self, cx: &mut Context<Self>) {
+        self.request_status(Action::Mcp, cx);
+    }
+    fn apply_current(&mut self, cx: &mut Context<Self>) {
+        let Some(draft) = &self.draft else { return };
+        let config = orbit_tools::mcp::McpConfig {
+            servers: draft.servers().clone(),
+        };
+        let config = match serde_json::to_value(config) {
+            Ok(config) => config,
+            Err(error) => {
+                self.status_error = Some(error.to_string());
+                cx.notify();
+                return;
+            }
+        };
+        self.request_status(
+            Action::ReloadMcp {
+                config,
+                allow_start: self.startup_override
+                    || crate::preferences::Preferences::allows_mcp_start(&self.path, cx),
+            },
+            cx,
+        );
+    }
+    fn request_status(&mut self, action: Action, cx: &mut Context<Self>) {
         if self.status_busy {
             return;
         }
@@ -149,6 +177,7 @@ impl Mcp {
         };
         let workspace = self.workspace.clone();
         let workspace_owner = self.owner.clone();
+        let applying = matches!(action, Action::ReloadMcp { .. });
         self.status_busy = true;
         self.status_error = None;
         self.status_task = cx.spawn(async move |owner, cx| {
@@ -170,7 +199,7 @@ impl Mcp {
                             request: Request::Resources {
                                 session: session.clone(),
                                 expected_workspace: Some(workspace.clone()),
-                                action: Action::Mcp,
+                                action,
                             },
                             result,
                         })
@@ -191,7 +220,10 @@ impl Mcp {
                 view.status_busy = false;
                 match result {
                     Ok(Response::Resources(Snapshot::Mcp(servers))) => {
-                        view.statuses = Some(servers)
+                        view.statuses = Some(servers);
+                        if applying {
+                            view.applied = true;
+                        }
                     }
                     Ok(_) => {
                         view.status_error =
@@ -261,6 +293,7 @@ impl Mcp {
                         view.draft = Some(draft);
                         view.editing = false;
                         view.saved = saved;
+                        view.applied = false;
                     }
                     Ok(Err(e)) => view.error = Some(format!("{e:#}")),
                     Err(e) => view.error = Some(e.to_string()),
@@ -432,6 +465,7 @@ impl Mcp {
                         view.draft = Some(draft);
                         view.editing = false;
                         view.saved = true;
+                        view.applied = false;
                     }
                     Ok((draft, Err(e))) => {
                         view.draft = Some(draft);
@@ -510,7 +544,7 @@ impl Mcp {
                 .child(if self.startup_override {
                     "本次启动已通过 --allow-mcp-start 授权。服务器以目标机器上的当前用户身份运行。"
                 } else {
-                    "适用于使用此配置的所有项目。打开后，新会话可启动下方已启用的服务器；关闭不影响当前会话已运行的工具。"
+                    "适用于使用此配置的所有项目。打开后，可应用到当前会话或在新会话启动服务器；关闭开关不会中断正在运行的工具。"
                 }));
         if let Some(revision) = self.startup_revision {
             let status = Preferences::save_status(cx);
@@ -526,7 +560,7 @@ impl Mcp {
                         div()
                             .text_sm()
                             .text_color(cx.theme().muted_foreground)
-                            .child("启动设置已保存，新建会话生效。"),
+                            .child("启动设置已保存，可应用到当前会话。"),
                     ),
                     SaveStatus::Failed { message, .. } => view.child(
                         v_flex()
@@ -589,15 +623,17 @@ impl Render for Mcp {
             .child(self.startup_control(cx))
             .child(h_flex().gap_3()
                 .child(div().flex_1().min_w_0().whitespace_normal().text_sm().text_color(cx.theme().muted_foreground)
-                    .child("配置保存在本机，新建会话生效。支持 stdio 服务；SSH / WSL 会话在目标机器启动命令。参数、依赖和路径也须在目标机器可用。"))
+                    .child("配置保存在本机，可应用到当前会话，也用于新建会话。支持 stdio 服务；SSH / WSL 会话在目标机器启动命令。参数、依赖和路径也须在目标机器可用。"))
                 .child(Button::new("mcp-refresh").ghost().small().label("刷新")
                     .disabled(self.busy || self.status_busy || self.editing)
                     .on_click(cx.listener(|view, _, _, cx| {
                         view.load(cx);
                         view.refresh_status(cx);
                     }))))
-            .when(self.saved, |view| view.child(div().text_sm().text_color(cx.theme().muted_foreground)
-                .child("已保存。新建会话以应用 MCP 配置。")))
+            .when(self.saved && !self.applied, |view| view.child(div().text_sm().text_color(cx.theme().muted_foreground)
+                .child("已保存。点击“应用到当前会话”以重新连接。")))
+            .when(self.applied, |view| view.child(div().text_sm().text_color(cx.theme().muted_foreground)
+                .child("连接结果已更新，下一次发送将使用当前可用工具。")))
             .when(self.base_reloaded, |view| view.child(div().text_sm().text_color(cx.theme().muted_foreground)
                 .child("已重载最新配置，表单内容已保留。请检查后再次保存。")))
             .when_some(self.error.clone(), |view, error| view.child(div().text_sm().text_color(cx.theme().danger).child(error)))
@@ -654,7 +690,7 @@ impl Render for Mcp {
                     )
                     .child(
                         Checkbox::new("mcp-enabled")
-                            .label("在新会话启用服务器")
+                            .label("启用服务器")
                             .checked(self.enabled)
                             .disabled(self.busy)
                             .on_click(cx.listener(|v, value, _, cx| {
@@ -692,9 +728,31 @@ impl Render for Mcp {
             .border_t_1()
             .border_color(cx.theme().border)
             .child(
-                div()
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .child("当前会话的连接状态"),
+                h_flex()
+                    .gap_3()
+                    .child(
+                        div()
+                            .flex_1()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child("当前会话的连接状态"),
+                    )
+                    .child(
+                        Button::new("mcp-apply-current")
+                            .small()
+                            .label(if self.status_busy {
+                                "正在连接"
+                            } else {
+                                "应用到当前会话"
+                            })
+                            .disabled(
+                                self.busy
+                                    || self.status_busy
+                                    || self.editing
+                                    || self.draft.is_none()
+                                    || self.session.is_none(),
+                            )
+                            .on_click(cx.listener(|view, _, _, cx| view.apply_current(cx))),
+                    ),
             )
             .child(
                 div()
@@ -702,7 +760,7 @@ impl Render for Mcp {
                     .text_color(cx.theme().muted_foreground)
                     .whitespace_normal()
                     .child(format!(
-                        "{} · 会话启动时的连接结果与已注册工具。配置修改会在新会话应用。",
+                        "{} · 应用配置会重新连接服务器，正在执行的任务继续使用原有工具。",
                         self.workspace
                     )),
             )
@@ -725,9 +783,9 @@ impl Render for Mcp {
                     if self.startup_override
                         || crate::preferences::Preferences::allows_mcp_start(&self.path, cx)
                     {
-                        "本会话创建时未允许启动，请新建会话应用授权。".to_owned()
+                        "点击“应用到当前会话”以启动并连接。".to_owned()
                     } else {
-                        "尚未允许启动。打开上方开关后，新建会话连接。".to_owned()
+                        "尚未允许启动。打开上方开关后，应用到当前会话。".to_owned()
                     }
                 } else {
                     server.detail.clone()
@@ -750,6 +808,7 @@ impl Render for Mcp {
                                         .child(
                                             div()
                                                 .text_sm()
+                                                .whitespace_normal()
                                                 .text_color(cx.theme().muted_foreground)
                                                 .child(format!(
                                                     "{} · {} 个可用工具",
@@ -872,7 +931,7 @@ impl Render for Mcp {
                         )
                         .child(
                             Switch::new(SharedString::from(format!("enable-{name}")))
-                                .label("新会话启用")
+                                .label("启用")
                                 .checked(enabled)
                                 .disabled(self.busy)
                                 .on_click(cx.listener(move |v, value, _, cx| {

@@ -653,6 +653,21 @@ fn main() -> anyhow::Result<()> {
                     response
                 } else {
                     let action = &request["action"];
+                    if action.get("ReloadMcp").is_some()
+                        && std::path::Path::new(&workspace)
+                            .join(".fixture-hold-mcp-reload")
+                            .exists()
+                    {
+                        let root = std::path::Path::new(&workspace);
+                        std::fs::write(root.join(".fixture-mcp-reload-started"), "started")?;
+                        let deadline =
+                            std::time::Instant::now() + std::time::Duration::from_secs(5);
+                        while !root.join(".fixture-release-mcp-reload").exists()
+                            && std::time::Instant::now() < deadline
+                        {
+                            std::thread::sleep(std::time::Duration::from_millis(10));
+                        }
+                    }
                     if let Some(save) = action.get("SaveSkill") {
                         fixture_skills.insert(
                             save["name"].as_str().unwrap_or_default().into(),
@@ -680,7 +695,7 @@ fn main() -> anyhow::Result<()> {
                         json!({"Skill":{"name":name,"content":fixture_skills.get(name).cloned().unwrap_or_default(),"editable":true}})
                     } else if action == "Memories" || action.get("Memory").is_some() {
                         json!({"Memories":fixture_memories})
-                    } else if action == "Mcp" {
+                    } else if action == "Mcp" || action.get("ReloadMcp").is_some() {
                         json!(orbit_protocol::resources::Snapshot::Mcp(vec![
                             orbit_protocol::resources::McpServer {
                                 name: "fixture".into(),

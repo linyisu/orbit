@@ -92,6 +92,7 @@ pub(super) fn discover(root: &Path) -> Result<Vec<McpCandidate>> {
         }
         if let Some(package) = package {
             let package_name = package["name"].as_str().unwrap_or("mcp-server");
+            let mcp_args = registry_args(&directory, package_name)?;
             let bins: BTreeMap<String, String> = if let Some(path) = package["bin"].as_str() {
                 BTreeMap::from([(
                     package_name.rsplit('/').next().unwrap().to_owned(),
@@ -104,19 +105,25 @@ pub(super) fn discover(root: &Path) -> Result<Vec<McpCandidate>> {
             };
             for (name, bin) in bins {
                 ensure_relative(&bin)?;
+                let mut args = vec![directory.join(bin).to_string_lossy().into_owned()];
+                if let Some(extra) = &mcp_args {
+                    args.extend(extra.iter().cloned());
+                }
                 candidates.push(McpCandidate {
                     id: format!("{relative}|node:{name}"),
                     name: name_for(&name),
                     launch: McpLaunch {
                         command: executable("node"),
-                        args: vec![directory.join(bin).to_string_lossy().into_owned()],
+                        args,
                         env: BTreeMap::new(),
                         tools: Vec::new(),
                     },
                     install: install.clone(),
-                    description: format!(
-                        "{relative}/package.json 的 bin 入口；请核对是否为 MCP 服务"
-                    ),
+                    description: if mcp_args.is_some() {
+                        format!("{relative}/package.json 的 bin 入口，启动参数来自 server.json 的 stdio 配置")
+                    } else {
+                        format!("{relative}/package.json 的 bin 入口；请核对是否为 MCP 服务及所需启动参数")
+                    },
                 });
             }
         }
@@ -180,6 +187,53 @@ pub(super) fn discover(root: &Path) -> Result<Vec<McpCandidate>> {
     }
     candidates.sort_by(|a, b| a.id.cmp(&b.id));
     Ok(candidates)
+}
+
+// Registry metadata distinguishes a CLI executable from its MCP subcommand.
+// Read fixed arguments only; placeholders need explicit user configuration.
+fn registry_args(directory: &Path, package_name: &str) -> Result<Option<Vec<String>>> {
+    let path = directory.join("server.json");
+    if !path.is_file() {
+        return Ok(None);
+    }
+    let value: serde_json::Value = serde_json::from_str(&read_metadata(&path)?)?;
+    let Some(packages) = value["packages"].as_array() else {
+        return Ok(None);
+    };
+    for package in packages {
+        if package["registryType"] != "npm"
+            || package["identifier"] != package_name
+            || package["transport"]["type"] != "stdio"
+        {
+            continue;
+        }
+        let Some(arguments) = package
+            .get("packageArguments")
+            .and_then(serde_json::Value::as_array)
+        else {
+            return Ok(Some(Vec::new()));
+        };
+        let mut args = Vec::new();
+        for argument in arguments {
+            if let Some(name) = argument["name"]
+                .as_str()
+                .filter(|_| argument["type"] == "named")
+            {
+                args.push(name.to_owned());
+            } else if argument["type"] != "positional" {
+                return Ok(None);
+            }
+            let Some(value) = argument["value"].as_str() else {
+                return Ok(None);
+            };
+            if value.contains('{') || value.contains('}') {
+                return Ok(None);
+            }
+            args.push(value.to_owned());
+        }
+        return Ok(Some(args));
+    }
+    Ok(None)
 }
 fn name_for(value: &str) -> String {
     let value = value

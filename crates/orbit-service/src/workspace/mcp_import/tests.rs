@@ -1,6 +1,31 @@
 use super::*;
 mod session;
 
+#[test]
+fn node_cli_uses_registry_stdio_arguments_without_running_source() {
+    let (_root, _workspace, source) = fixture();
+    fs::write(
+        source.join("package.json"),
+        r#"{"name":"rea-agents","bin":{"rea":"scripts/rea.mjs","rea-agents":"scripts/rea.mjs"}}"#,
+    )
+    .unwrap();
+    fs::write(source.join("server.json"), r#"{"packages":[{"registryType":"npm","identifier":"other","transport":{"type":"stdio"},"packageArguments":[{"type":"positional","value":"wrong"}]},{"registryType":"npm","identifier":"rea-agents","transport":{"type":"stdio"},"packageArguments":[{"type":"positional","value":"mcp"}]}]}"#).unwrap();
+    let entries = discover::discover(&source).unwrap();
+    assert_eq!(entries.len(), 2);
+    for entry in entries {
+        assert!(entry.launch.args[0].ends_with("scripts/rea.mjs"));
+        assert_eq!(&entry.launch.args[1..], &["mcp"]);
+        assert!(entry.description.contains("server.json"));
+    }
+    fs::write(source.join("server.json"), r#"{"packages":[{"registryType":"npm","identifier":"rea-agents","transport":{"type":"streamable-http"},"packageArguments":[{"type":"positional","value":"mcp"}]}]}"#).unwrap();
+    assert!(
+        discover::discover(&source)
+            .unwrap()
+            .iter()
+            .all(|entry| entry.launch.args.len() == 1)
+    );
+}
+
 fn fixture() -> (tempfile::TempDir, PathBuf, PathBuf) {
     let root = tempfile::tempdir().unwrap();
     let workspace = root.path().join("workspace");

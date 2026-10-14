@@ -22,6 +22,12 @@ pub enum Action {
     Memories,
     Memory(super::project::MemoryAction),
     Mcp,
+    /// Validated by the service before any process is started. Configuration
+    /// travels from the client so remote sessions use the same saved settings.
+    ReloadMcp {
+        config: serde_json::Value,
+        allow_start: bool,
+    },
     ScanMcp {
         source: String,
     },

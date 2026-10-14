@@ -66,6 +66,7 @@ pub struct WorkspaceResources {
     pub tools: orbit_agent::tool::ToolRegistry,
     pub undo_writer: orbit_tools::write_file::WriteFile,
     pub approvals: orbit_tools::approval::ApprovalReceiver,
+    pub(super) mcp_approvals: Option<orbit_tools::approval::ApprovalSender>,
     pub user_input: crate::user_input::Questions,
     pub planning: crate::planning::Planning,
     pub budget: RequestBudget,
@@ -290,7 +291,7 @@ pub(super) async fn prepare_resources(
             options.auth_directory.clone(),
             instructions.clone(),
             file_config.subagents.clone(),
-            (!policy.read_only).then_some(approvals),
+            (!policy.read_only).then_some(approvals.clone()),
             Some(user_input.clone()),
         )
         .await?;
@@ -306,6 +307,7 @@ pub(super) async fn prepare_resources(
     // a later registration cannot accidentally reintroduce a hidden tool.
     filter_configured_tools(&mut tools, &policy, &file_config.disabled_tools);
 
+    let mcp_approvals = (!policy.read_only).then_some(approvals);
     Ok(WorkspaceResources {
         skill_import: None,
         mcp_import: None,
@@ -330,6 +332,7 @@ pub(super) async fn prepare_resources(
         tools,
         undo_writer,
         approvals: approval_receiver,
+        mcp_approvals,
         user_input,
         budget: RequestBudget {
             context_tokens,

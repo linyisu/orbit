@@ -48,6 +48,7 @@ struct Actor {
     running: Option<Running>,
     undo: Option<Undo>,
     import: Option<crate::workspace::resources::Import>,
+    mcp_reload: Option<crate::workspace::resources::Reload>,
     accepted: HashMap<String, String>,
     remembered: HashSet<String>,
     pending: HashMap<u64, ApprovalRequest>,
@@ -92,6 +93,7 @@ pub(super) async fn run(
         running: None,
         undo: None,
         import: None,
+        mcp_reload: None,
         accepted: HashMap::new(),
         remembered,
         pending: HashMap::new(),
@@ -112,7 +114,7 @@ pub(super) async fn run(
                 if let Command::RetireUnobserved { result } = envelope.command {
                     // Drafts have nothing to save. Persisted sessions can release
                     // their runtime only after execution and metadata work finish.
-                    let retire = actor.import.is_none() && (!actor.setup.session.is_persisted()
+                    let retire = actor.import.is_none() && actor.mcp_reload.is_none() && (!actor.setup.session.is_persisted()
                         || (!actor.active()
                             && !actor.questions.running().await
                             && !actor.setup.session.metadata_pending()));
@@ -126,7 +128,7 @@ pub(super) async fn run(
                     continue;
                 }
                 if matches!(&envelope.command, Command::Close) {
-                    if actor.active() || actor.questions.running().await || actor.import.is_some() {
+                    if actor.active() || actor.questions.running().await || actor.import.is_some() || actor.mcp_reload.is_some() {
                         let _ = envelope.reply.send(Err(anyhow::anyhow!("会话正在运行，无法删除")));
                         continue;
                     }
@@ -167,6 +169,10 @@ pub(super) async fn run(
                 import.finish(&mut actor.setup, output.unwrap_or_else(|error| Err(anyhow::anyhow!("MCP 导入任务中断：{error}"))));
             }
             Some(request) = actor.setup.resources.approvals.recv() => actor.approval(request).await,
+            output = async { (&mut actor.mcp_reload.as_mut().unwrap().task).await }, if actor.mcp_reload.is_some() => {
+                let reload = actor.mcp_reload.take().unwrap();
+                reload.finish(&mut actor.setup, output.unwrap_or_else(|error| Err(anyhow::anyhow!("MCP 重新加载中断：{error}"))));
+            }
             _ = outputs.tick(), if actor.running.is_some() && !actor.progress.is_empty() && actor.progress_task.is_none() => {
                 actor.progress_task = Some(actor.progress.start_snapshot(&actor.setup.resources.tools, &actor.setup.session.command_output));
             }
@@ -430,6 +436,20 @@ impl Actor {
                     self.import = Some(crate::workspace::resources::Import::start(
                         &mut self.setup,
                         action,
+                        result,
+                    )?);
+                    return Ok(());
+                }
+                if let orbit_protocol::resources::Action::ReloadMcp {
+                    config,
+                    allow_start,
+                } = action
+                {
+                    ensure!(self.mcp_reload.is_none(), "MCP 正在重新连接，请等待完成");
+                    self.mcp_reload = Some(crate::workspace::resources::Reload::start(
+                        &self.setup,
+                        config,
+                        allow_start,
                         result,
                     )?);
                     return Ok(());

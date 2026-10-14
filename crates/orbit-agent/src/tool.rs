@@ -229,6 +229,20 @@ impl ToolRegistry {
         removed
     }
 
+    /// Replace one namespaced catalog without disturbing unrelated tools or
+    /// existing registry snapshots held by in-flight runs.
+    pub fn replace_prefix(&mut self, prefix: &str, catalog: &Self) {
+        let tools = Arc::make_mut(&mut self.tools);
+        tools.retain(|name, _| !name.starts_with(prefix));
+        tools.extend(
+            catalog
+                .tools
+                .iter()
+                .filter(|(name, _)| name.starts_with(prefix))
+                .map(|(name, tool)| (name.clone(), tool.clone())),
+        );
+    }
+
     pub fn definitions(&self) -> Vec<ToolDefinition> {
         let mut definitions = self
             .tools
