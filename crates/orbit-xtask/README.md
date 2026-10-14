@@ -11,7 +11,7 @@ cargo xtask verify-bundle target/bundle
 cargo xtask archive target/bundle target/orbit-linux-x86_64.tar.gz
 ```
 
-`check` 检查依赖与职责边界；`bundle` 构建并收集 CLI/TUI，`bundle debug` 使用调试构建。`verify-bundle` 需要 Docker，在 Ubuntu 20.04 容器中验证部署、协议与缓存复用；`archive` 保留可执行权限。
+`check` 检查依赖与职责边界，包含 GUI/TUI 的开发及平台依赖和禁止前端构造领域服务的源码检查；`bundle` 构建并收集 CLI/TUI，`bundle debug` 使用调试构建。`verify-bundle` 需要 Docker，在 Ubuntu 20.04 容器中验证部署、协议与缓存复用；`archive` 保留可执行权限。
 
 ## 入口与验证
 

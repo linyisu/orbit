@@ -21,3 +21,19 @@
 GUI 提供原生字体、图片灯箱和编辑器；TUI 的字体与图片协议由终端决定，`/editor` 使用外部编辑器。GUI 自动恢复标签草稿，TUI 使用 `/restore`。
 
 构建与操作见 [TUI](crates/orbit-tui/README.md) 和 [GUI](crates/orbit-gui/README.md)。
+
+## 代码边界
+
+| 职责 | 所属模块 |
+| --- | --- |
+| 账号授权、连接准备与恢复 | `orbit-client::accounts`、`connect`、`transport` |
+| 会话轮询、后台请求分流与回执 | `orbit-client::pump` |
+| 附件识别、上传、下载与队列资产恢复 | `orbit-client::attachments`、`pump` |
+| 模型发现、预算与连接编辑校验 | `orbit-config::config::connections` |
+| Agent 设置与 MCP 表单解析 | `orbit-config::config::advanced`、`connections::mcp` |
+| 协议数据与输入约束 | `orbit-protocol`、`orbit-client::protocol` |
+| 语法识别 | `orbit-syntax` |
+
+前端保留渲染、事件路由、焦点、滚动、选区、编辑草稿、视图缓存及界面偏好。
+终端转义、原生文件选择器和 GPUI HTTP 适配只负责平台接口转换；认证、网络及文件边界由共享层处理。
+依赖检查覆盖普通、开发和目标平台声明，防止前端重新引入执行层。

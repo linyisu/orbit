@@ -71,11 +71,6 @@ const DEPENDENCIES: &[(&str, &[&str])] = &[
             "orbit-syntax",
             "orbit-build",
             "orbit-config",
-            "orbit-agent",
-            "orbit-auth",
-            "orbit-model",
-            "orbit-runtime",
-            "orbit-tools",
             "orbit-client",
             "orbit-protocol",
         ],
@@ -86,13 +81,8 @@ const DEPENDENCIES: &[(&str, &[&str])] = &[
             "orbit-syntax",
             "orbit-build",
             "orbit-client",
-            "orbit-auth",
             "orbit-config",
             "orbit-protocol",
-            "orbit-agent",
-            "orbit-model",
-            "orbit-tools",
-            "orbit-runtime",
         ],
     ),
     (
@@ -297,6 +287,26 @@ pub fn check(root: &Path) -> Result<Vec<String>> {
             )?;
         }
     }
+    let frontend_domain = Regex::new(
+        r"\b(?:orbit_(?:agent|auth|model|runtime|tools)::|FileConfig\b|ModelClient\b|AuthStore\b|OAuthLogin\b|CallbackListener\b|reqwest::)",
+    )?;
+    for package in ["orbit-gui", "orbit-tui"] {
+        for source in sources(
+            &root
+                .join("crates")
+                .join(package)
+                .join("src"),
+            "rs",
+        )? {
+            inspect(
+                root,
+                &source,
+                &frontend_domain,
+                "frontend domain operations belong to orbit-client, orbit-config or orbit-service",
+                &mut errors,
+            )?;
+        }
+    }
     let presentation = Regex::new(r"\b(?:orbit_tui|crate::tui)::")?;
     for source in sources(&root.join("crates/orbit-service/src"), "rs")? {
         inspect(
@@ -376,34 +386,73 @@ mod tests {
     }
 
     #[test]
-    fn tui_tests_cannot_bypass_service_ownership_with_target_or_renamed_dependencies() {
+    fn frontends_cannot_bypass_service_ownership_with_target_or_renamed_dependencies() {
         let dir = workspace();
-        let manifest = dir
-            .path()
-            .join("crates/orbit-tui/Cargo.toml");
-        for section in ["dev-dependencies", "target.'cfg(unix)'.dev-dependencies"] {
-            for dependency in [
-                "orbit-client",
-                "orbit-protocol",
-                "orbit-service",
-                "orbit-store",
-            ] {
-                fs::write(
-                    &manifest,
-                    format!(
-                        "[package]\nname = 'orbit-tui'\n[{section}]\nlocal = \
+        for package in ["orbit-tui", "orbit-gui"] {
+            let manifest = dir
+                .path()
+                .join("crates")
+                .join(package)
+                .join("Cargo.toml");
+            for section in ["dev-dependencies", "target.'cfg(unix)'.dev-dependencies"] {
+                for dependency in [
+                    "orbit-client",
+                    "orbit-protocol",
+                    "orbit-service",
+                    "orbit-store",
+                    "orbit-agent",
+                    "orbit-model",
+                    "orbit-tools",
+                    "orbit-runtime",
+                    "orbit-auth",
+                ] {
+                    fs::write(
+                        &manifest,
+                        format!(
+                            "[package]\nname = {package:?}\n[{section}]\nlocal = \
                     {{ package = {dependency:?}, version = '*' }}\n"
-                    ),
-                )
-                .unwrap();
-                let errors = check(dir.path()).unwrap();
-                if ["orbit-client", "orbit-protocol"].contains(&dependency) {
-                    assert!(errors.is_empty(), "{errors:?}");
-                } else {
-                    assert_eq!(errors.len(), 1);
-                    assert!(errors[0].contains(dependency));
+                        ),
+                    )
+                    .unwrap();
+                    let errors = check(dir.path()).unwrap();
+                    if ["orbit-client", "orbit-protocol"].contains(&dependency) {
+                        assert!(errors.is_empty(), "{errors:?}");
+                    } else {
+                        assert_eq!(errors.len(), 1);
+                        assert!(errors[0].contains(dependency));
+                    }
                 }
             }
+            fs::write(&manifest, format!("[package]\nname = {package:?}\n")).unwrap();
+        }
+    }
+
+    #[test]
+    fn presentation_sources_cannot_construct_domain_services_through_aliases() {
+        let dir = workspace();
+        for package in ["orbit-gui", "orbit-tui"] {
+            let path = dir
+                .path()
+                .join("crates")
+                .join(package)
+                .join("src");
+            fs::create_dir_all(&path).unwrap();
+            for source in [
+                "use orbit_auth::AuthStore as Credentials;",
+                "use orbit_config::config::FileConfig as Settings;",
+                "let config = FileConfig::load(path, auth)?;",
+                "let transport = reqwest::Client::new();",
+            ] {
+                fs::write(path.join("example.rs"), source).unwrap();
+                let errors = check(dir.path()).unwrap();
+                assert!(
+                    errors
+                        .iter()
+                        .any(|error| error.contains("frontend domain operations")),
+                    "{errors:?}"
+                );
+            }
+            fs::remove_file(path.join("example.rs")).unwrap();
         }
     }
 
