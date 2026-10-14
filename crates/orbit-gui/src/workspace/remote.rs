@@ -150,10 +150,13 @@ pub(super) fn open(
     options: Options,
     runtime: Arc<tokio::runtime::Runtime>,
     owner: WeakEntity<Workspace>,
+    preferred_wsl: Option<bool>,
     window: &mut Window,
     cx: &mut Context<Workspace>,
 ) {
-    let form = cx.new(|cx| RemoteConnection::new(options, runtime, owner.clone(), window, cx));
+    let form = cx.new(|cx| {
+        RemoteConnection::new(options, runtime, owner.clone(), preferred_wsl, window, cx)
+    });
     let first = std::cell::Cell::new(true);
     crate::dialog::open(window, cx, move |dialog, window, cx| {
         if first.replace(false) {
@@ -259,6 +262,7 @@ impl RemoteConnection {
         options: Options,
         runtime: Arc<tokio::runtime::Runtime>,
         owner: WeakEntity<Workspace>,
+        preferred_wsl: Option<bool>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -338,7 +342,7 @@ impl RemoteConnection {
             },
             "使用目标机器的默认数据库",
         );
-        let mode = if options.wsl.is_some() {
+        let mode = if preferred_wsl.unwrap_or(options.wsl.is_some()) {
             Mode::Wsl
         } else {
             Mode::Ssh
@@ -496,7 +500,7 @@ impl RemoteConnection {
             Ok(options) => {
                 if self
                     .owner
-                    .update(cx, |_, cx| cx.emit(WorkspaceEvent::Open(Box::new(options))))
+                    .update(cx, |view, cx| view.open_target(options, window, cx))
                     .is_ok()
                 {
                     self.submitted = true;

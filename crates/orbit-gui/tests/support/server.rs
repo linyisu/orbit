@@ -296,7 +296,21 @@ fn main() -> anyhow::Result<()> {
                 } else {
                     catalog_root.trim()
                 };
-                let response = if std::path::Path::new(&workspace)
+                let response = if let Ok(path) = std::fs::read_to_string(
+                    std::path::Path::new(&workspace).join(".fixture-directory-choice"),
+                ) {
+                    json!({
+                        "type": "sessions",
+                        "value": [{
+                            "id": "directory-history",
+                            "workspace": path.trim(),
+                            "project_id": "directory",
+                            "model": model,
+                            "title": "Synthetic directory",
+                            "updated_at": 1,
+                        }],
+                    })
+                } else if std::path::Path::new(&workspace)
                     .join(".fixture-attention")
                     .exists()
                 {

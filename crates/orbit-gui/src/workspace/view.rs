@@ -56,6 +56,9 @@ impl Workspace {
             }))
             .w_full()
             .gap_2()
+            .when(self.is_new_conversation(cx), |view| {
+                view.child(self.composer_target(cx))
+            })
             .child(
                 v_flex()
                     .w_full()
@@ -223,6 +226,125 @@ impl Workspace {
                     ),
             )
             .into_any_element()
+    }
+
+    fn composer_target(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let directory = std::path::Path::new(self.location.as_ref())
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("选择目录")
+            .to_owned();
+        let local = self.options.ssh.is_none() && self.options.wsl.is_none();
+        let wsl = self.options.wsl.is_some();
+        let owner = cx.weak_entity();
+        let directory_owner = cx.weak_entity();
+        let current_directory = self.location.to_string();
+        const MAX_RECENT_DIRECTORIES: usize = 12;
+        let mut seen = std::collections::HashSet::new();
+        let directories = std::iter::once(self.location.as_ref())
+            .chain(
+                self.sessions
+                    .iter()
+                    .map(|entry| entry.workspace.as_ref()),
+            )
+            .filter(|path| !path.is_empty() && seen.insert(*path))
+            .take(MAX_RECENT_DIRECTORIES)
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        h_flex()
+            .w_full()
+            .gap_1()
+            .child(
+                Button::new("draft-directory")
+                    .ghost()
+                    .small()
+                    .icon(IconName::Folder)
+                    .label(directory)
+                    .max_w(rems(18.))
+                    .tooltip(format!("选择工作目录：{}", self.location))
+                    .disabled(
+                        self.opening
+                            || self.choosing_project
+                            || self.picker_pending
+                            || self.pending.is_some(),
+                    )
+                    .dropdown_caret(true)
+                    .dropdown_menu_with_anchor(Anchor::TopLeft, move |mut menu, _, _| {
+                        for path in &directories {
+                            let owner = directory_owner.clone();
+                            let path = path.clone();
+                            menu = menu.item(
+                                PopupMenuItem::new(path.clone())
+                                    .checked(path == current_directory)
+                                    .on_click(move |_, window, cx| {
+                                        let _ = owner.update(cx, |view, cx| {
+                                            view.switch_project(
+                                                PathBuf::from(&path),
+                                                None,
+                                                false,
+                                                false,
+                                                window,
+                                                cx,
+                                            );
+                                        });
+                                    }),
+                            );
+                        }
+                        let owner = directory_owner.clone();
+                        menu.separator()
+                            .item(PopupMenuItem::new("选择其他目录…").on_click(
+                                move |_, window, cx| {
+                                    let _ =
+                                        owner.update(cx, |view, cx| view.open_project(window, cx));
+                                },
+                            ))
+                    }),
+            )
+            .child(
+                Button::new("draft-platform")
+                    .ghost()
+                    .small()
+                    .icon(if local {
+                        IconName::Laptop
+                    } else {
+                        IconName::Monitor
+                    })
+                    .label(self.environment())
+                    .max_w(rems(18.))
+                    .tooltip(self.environment())
+                    .dropdown_caret(true)
+                    .disabled(
+                        self.opening
+                            || self.choosing_project
+                            || self.picker_pending
+                            || self.pending.is_some(),
+                    )
+                    .dropdown_menu_with_anchor(Anchor::TopLeft, move |mut menu, _, _| {
+                        for (kind, label) in [(0, "本地"), (1, "SSH…"), (2, "WSL…")] {
+                            let owner = owner.clone();
+                            menu = menu.item(
+                                PopupMenuItem::new(label)
+                                    .checked(match kind {
+                                        0 => local,
+                                        1 => !local && !wsl,
+                                        _ => wsl,
+                                    })
+                                    .on_click(move |_, window, cx| {
+                                        let _ = owner.update(cx, |view, cx| {
+                                            if kind == 0 {
+                                                if !local {
+                                                    view.choose_project_directory(None, cx);
+                                                }
+                                            } else {
+                                                view.choose_platform(kind == 2, window, cx);
+                                            }
+                                        });
+                                    }),
+                            );
+                        }
+                        menu
+                    }),
+            )
     }
 
     fn composer_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {

@@ -338,6 +338,16 @@ impl Workspace {
         self.execution.phase().label()
     }
 
+    pub(super) fn is_new_conversation(&self, cx: &App) -> bool {
+        self.options.resume.is_none()
+            && self
+                .info
+                .as_ref()
+                .is_none_or(|info| !info.persisted)
+            && self.conversation.read(cx).is_empty()
+            && !self.busy
+    }
+
     pub(crate) fn is_empty_draft(&self, cx: &App) -> bool {
         self.options.resume.is_none()
             && self.info.as_ref().is_none_or(|info| !info.persisted)

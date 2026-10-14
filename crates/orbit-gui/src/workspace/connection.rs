@@ -247,11 +247,52 @@ impl Workspace {
         resume: Option<String>,
         local: bool,
         relink: bool,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let options = project_options(&self.options, path, resume, local, relink);
-        cx.emit(WorkspaceEvent::Open(Box::new(options)));
+        self.open_target(options, window, cx);
+    }
+
+    /// Retarget an unsent conversation in place so its text and local attachments survive.
+    pub(super) fn open_target(
+        &mut self,
+        options: Options,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if options.resume.is_none() && self.is_new_conversation(cx) && self.pending.is_none() {
+            self.location = options
+                .workspace
+                .as_ref()
+                .map(|path| path.to_string_lossy().into_owned())
+                .unwrap_or_default()
+                .into();
+            self.options = options;
+            self.info = None;
+            self.sessions.clear();
+            self.connect(window, cx);
+            cx.emit(WorkspaceEvent::Changed);
+        } else {
+            cx.emit(WorkspaceEvent::Open(Box::new(options)));
+        }
+    }
+
+    pub(super) fn choose_platform(
+        &mut self,
+        wsl: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.suspend_connection_challenge(window, cx);
+        remote::open(
+            self.options.clone(),
+            self.runtime.clone(),
+            cx.weak_entity(),
+            Some(wsl),
+            window,
+            cx,
+        );
     }
 
     pub(super) fn remote_connection_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -260,6 +301,7 @@ impl Workspace {
             self.options.clone(),
             self.runtime.clone(),
             cx.weak_entity(),
+            None,
             window,
             cx,
         );

@@ -1,13 +1,11 @@
 //! The tab viewport and window actions belong to the window, not a conversation.
 use super::*;
-use crate::workspace::WorkspaceCommand;
 use gpui_kit::{
     assets::IconName,
     component::{
         ActiveTheme, ElementExt, Icon, Sizable, TitleBar,
         button::{Button, ButtonVariants},
         h_flex,
-        menu::{DropdownMenu, PopupMenuItem},
         spinner::Spinner,
         tab::{Tab, TabBar},
         tooltip::Tooltip,
@@ -88,7 +86,7 @@ impl Workbench {
             .segmented()
             .track_scroll(&self.task_scroll)
             .max_width(window.rem_size() * 14.)
-            .menu(true)
+            .menu(false)
             .selected_index(active)
             .children(tasks.iter().map(|task| {
                 let key = task.key.clone();
@@ -187,53 +185,6 @@ impl Workbench {
                                     cx.notify();
                                 }
                             });
-                        }),
-                )
-                .child(
-                    Button::new("new-task-tab")
-                        .ghost()
-                        .small()
-                        .icon(IconName::Plus)
-                        .accessibility_label("新任务")
-                        .tooltip(crate::keymap::tooltip("新任务", "new_conversation", cx))
-                        .on_click(cx.listener(|view, _, window, cx| {
-                            view.with_active(window, cx, |view, _, cx| view.new_task(cx))
-                        })),
-                )
-                .child(
-                    Button::new("project-actions")
-                        .ghost()
-                        .small()
-                        .icon(IconName::Ellipsis)
-                        .accessibility_label("项目操作")
-                        .tooltip("项目操作")
-                        .dropdown_menu({
-                            let owner = cx.weak_entity();
-                            move |menu, _, _| {
-                                let mut menu = menu;
-                                for (command, label) in [
-                                    (WorkspaceCommand::OpenLocalProject, "打开本地项目…"),
-                                    (WorkspaceCommand::RemoteProject, "连接远程项目…"),
-                                    (WorkspaceCommand::File, "打开文件…"),
-                                    (WorkspaceCommand::Tasks, "项目任务"),
-                                    (WorkspaceCommand::History, "会话历史"),
-                                    (WorkspaceCommand::Export, "导出补丁"),
-                                    (WorkspaceCommand::Diagnostics, "诊断"),
-                                ] {
-                                    let owner = owner.clone();
-                                    menu = menu.item(PopupMenuItem::new(label).on_click(
-                                        move |_, window, cx| {
-                                            let _ = owner.update(cx, |view, cx| {
-                                                view.show_workspace(window, cx);
-                                                view.with_active(window, cx, |view, window, cx| {
-                                                    view.window_command(command, window, cx)
-                                                })
-                                            });
-                                        },
-                                    ));
-                                }
-                                menu
-                            }
                         }),
                 )
                 .child(
