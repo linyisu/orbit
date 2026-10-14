@@ -90,16 +90,7 @@ impl History {
     }
 }
 
-pub(super) fn is_image(path: &std::path::Path) -> bool {
-    path.extension()
-        .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| {
-            matches!(
-                extension.to_ascii_lowercase().as_str(),
-                "png" | "jpg" | "jpeg" | "webp" | "gif"
-            )
-        })
-}
+pub(super) use orbit_client::attachments::is_image_path as is_image;
 
 const PASTED_TEXT_THRESHOLD_BYTES: usize = 4_096;
 const PASTED_TEXT_THRESHOLD_LINES: usize = 32;

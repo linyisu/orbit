@@ -5,10 +5,8 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 use crossterm::event::{Event, EventStream, KeyCode, KeyEventKind, KeyModifiers, MouseEventKind};
 use futures_util::StreamExt;
-use orbit_auth::{
-    AuthStore, CallbackFlow, CallbackListener, LoginOutcome, OAuthLogin, OAuthProvider,
-};
-use orbit_model::client::ApiFormat;
+use orbit_client::accounts::{self, Login, LoginOutcome, OAuthProvider};
+use orbit_config::ApiFormat;
 use ratatui::{
     layout::Rect,
     style::Style,
@@ -24,7 +22,7 @@ enum ConnectionProvider {
     Custom,
     Manage,
     OAuth(OAuthProvider),
-    ApiKey(orbit_auth::ApiKeyProvider),
+    ApiKey(orbit_client::accounts::ApiKeyProvider),
 }
 
 impl ConnectionProvider {
@@ -55,12 +53,12 @@ const PROVIDERS: [(ConnectionProvider, &str, ApiFormat); 7] = [
         ApiFormat::ChatgptCodex,
     ),
     (
-        ConnectionProvider::ApiKey(orbit_auth::ApiKeyProvider::Deepseek),
+        ConnectionProvider::ApiKey(orbit_client::accounts::ApiKeyProvider::Deepseek),
         "DeepSeek API",
         ApiFormat::OpenaiChatCompletions,
     ),
     (
-        ConnectionProvider::ApiKey(orbit_auth::ApiKeyProvider::ZhipuCodingPlan),
+        ConnectionProvider::ApiKey(orbit_client::accounts::ApiKeyProvider::ZhipuCodingPlan),
         "智谱 Coding Plan",
         ApiFormat::OpenaiChatCompletions,
     ),
@@ -81,7 +79,7 @@ pub(super) async fn run(
     events: &mut EventStream,
     options: &crate::ConnectionSettings,
 ) -> Result<Option<Vec<ModelOption>>> {
-    let mut connected = AuthStore::new(options.auth_directory.clone())?.list()?;
+    let mut connected = accounts::credentials(&options.auth_directory)?;
     let mut clipboard = None;
     let mut copied_at = None;
     let mut pointer = None;
@@ -206,13 +204,14 @@ pub(super) async fn run(
             let result: Result<(LoginOutcome, Option<String>)> =
                 task.take().expect("login task").await?;
             match result {
-                Ok((LoginOutcome::Connected, _)) => match crate::connections::save_account(
+                Ok((LoginOutcome::Connected, _)) => match accounts::save_login(
                     &options.config,
                     &options.auth_directory,
                     match PROVIDERS[selected].0 {
                         ConnectionProvider::OAuth(provider) => provider,
                         _ => unreachable!(),
                     },
+                    None,
                 )
                 .await
                 {
@@ -227,8 +226,10 @@ pub(super) async fn run(
                 }
 
                 Err(error) => {
-                    if let Some(orbit_auth::AuthError::AntigravityVerification { reason, url }) =
-                        error.downcast_ref::<orbit_auth::AuthError>()
+                    if let Some(orbit_client::accounts::AuthError::AntigravityVerification {
+                        reason,
+                        url,
+                    }) = error.downcast_ref::<orbit_client::accounts::AuthError>()
                     {
                         verification_url = Some(url.clone());
                         message = format!("Google 要求完成账号验证：{reason}");
@@ -239,7 +240,7 @@ pub(super) async fn run(
             }
 
             url.clear();
-            connected = AuthStore::new(options.auth_directory.clone())?.list()?;
+            connected = accounts::credentials(&options.auth_directory)?;
         }
 
         let event = tokio::select! {
@@ -346,14 +347,11 @@ pub(super) async fn run(
                 continue;
             }
 
-            let store = AuthStore::new(options.auth_directory.clone())?;
+            let auth = options.auth_directory.clone();
             let project_id = project.trim().to_owned();
             message = "正在初始化 Google Cloud Code Assist 项目…".into();
             task = Some(AbortOnDropHandle::new(tokio::spawn(async move {
-                match pending
-                    .finish(&project_id, &store, "google")
-                    .await
-                {
+                match accounts::finish_project(&mut pending, &project_id, &auth).await {
                     Ok(()) => Ok((LoginOutcome::Connected, None)),
                     Err(error) => Ok((
                         LoginOutcome::GoogleProjectRequired(pending),
@@ -398,26 +396,19 @@ pub(super) async fn run(
                 continue;
             }
         };
-        let login = OAuthLogin::new(provider, None)?;
-        let listener = match CallbackListener::bind_at(login.redirect_uri().clone()).await {
-            Ok(listener) => listener,
+        let login = match Login::start(provider, None, &options.auth_directory, None).await {
+            Ok(login) => login,
             Err(error) => {
-                message = format!("无法监听登录回调：{error}");
+                message = format!("无法启动登录：{error}");
                 continue;
             }
         };
-        let store = AuthStore::new(options.auth_directory.clone())?;
-        url = login.authorization_url().to_string();
+        url = login.url().to_owned();
         message = "等待浏览器授权…".into();
         let browser_url = url.clone();
         task = Some(AbortOnDropHandle::new(tokio::spawn(async move {
             crate::platform::launch_browser(&browser_url).await;
-            let callback = listener
-                .wait(&login, Duration::from_secs(300))
-                .await?;
-            let outcome = login
-                .finish_interactive(&callback, &store, provider.name())
-                .await?;
+            let outcome = login.finish().await?;
             Ok((outcome, None))
         })));
     }

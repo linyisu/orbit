@@ -1,19 +1,16 @@
 //! GPUI image downloads use Orbit's existing Tokio runtime and HTTP stack.
 use gpui_kit::http_client::{AsyncBody, HttpClient, Request, Response, http};
-use std::{future::Future, pin::Pin, time::Duration};
+use std::{future::Future, pin::Pin};
 
 pub(crate) struct ImageHttpClient {
-    client: reqwest::Client,
+    client: orbit_client::attachments::ImageClient,
     runtime: tokio::runtime::Handle,
 }
 
 impl ImageHttpClient {
     pub fn new(runtime: tokio::runtime::Handle) -> anyhow::Result<Self> {
         Ok(Self {
-            client: reqwest::Client::builder()
-                .timeout(Duration::from_secs(20))
-                .redirect(reqwest::redirect::Policy::limited(5))
-                .build()?,
+            client: Default::default(),
             runtime,
         })
     }
@@ -35,25 +32,13 @@ impl HttpClient for ImageHttpClient {
         let client = self.client.clone();
         let task = self.runtime.spawn(async move {
             anyhow::ensure!(request.method() == http::Method::GET, "仅支持图片 GET 请求");
-            let url = url::Url::parse(&request.uri().to_string())?;
-            anyhow::ensure!(matches!(url.scheme(), "http" | "https"), "不支持的图片地址");
-            let mut response = client.get(url).send().await?;
-            let limit = orbit_model::types::Attachment::MAX_IMAGE_BYTES;
-            anyhow::ensure!(
-                response
-                    .content_length()
-                    .is_none_or(|size| size <= limit as u64),
-                "图片超过 20 MiB"
-            );
-            let mut result = Response::builder().status(response.status());
-            *result.headers_mut().unwrap() = response.headers().clone();
-            let mut bytes = Vec::new();
-            while let Some(chunk) = response.chunk().await? {
-                anyhow::ensure!(chunk.len() <= limit - bytes.len(), "图片超过 20 MiB");
-                bytes.extend_from_slice(&chunk);
-            }
-            result
-                .body(AsyncBody::from(bytes))
+            let resource = client
+                .fetch_image_resource(&request.uri().to_string())
+                .await?;
+            Response::builder()
+                .status(200)
+                .header(http::header::CONTENT_TYPE, resource.media_type)
+                .body(AsyncBody::from(resource.bytes))
                 .map_err(Into::into)
         });
         Box::pin(async move { task.await? })
@@ -84,7 +69,7 @@ mod tests {
                 } else {
                     socket
                         .write_all(
-                            b"HTTP/1.1 200 OK\r\nTransfer-Encoding: \
+                            b"HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nTransfer-Encoding: \
                         chunked\r\nConnection: close\r\n\r\n",
                         )
                         .unwrap();
@@ -103,7 +88,16 @@ mod tests {
             }
         });
         let runtime = tokio::runtime::Runtime::new().unwrap();
-        let client = ImageHttpClient::new(runtime.handle().clone()).unwrap();
+        let client = ImageHttpClient {
+            client: orbit_client::attachments::ImageClient::new(
+                &orbit_client::attachments::ImageNetwork {
+                    allowed_origins: vec![format!("http://{address}")],
+                    ..Default::default()
+                },
+            )
+            .unwrap(),
+            runtime: runtime.handle().clone(),
+        };
         runtime.block_on(async {
             let response = client
                 .send(

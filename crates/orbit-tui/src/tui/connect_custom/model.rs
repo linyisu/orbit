@@ -1,23 +1,13 @@
 //! Editable model drafts, committed only with the connection.
-use anyhow::{Result, ensure};
-use orbit_model::{client::ApiFormat, types::ReasoningEffort};
+use anyhow::Result;
+use orbit_client::protocol::model::ReasoningEffort;
+use orbit_config::ApiFormat;
 
 use super::form::Field;
-use crate::config::{ModelProfile, ReasoningProfile, reasoning_adapter as adapter};
+use crate::config::{ModelProfile, ReasoningProfile};
 
 pub(super) fn blank(id: &str) -> ModelProfile {
     ModelProfile::new(id)
-}
-
-fn number<T: std::str::FromStr>(field: &Field) -> Result<Option<T>> {
-    if field.value().is_empty() {
-        return Ok(None);
-    }
-    field
-        .value()
-        .parse()
-        .map(Some)
-        .map_err(|_| anyhow::anyhow!("{}必须为整数", field.label))
 }
 
 const EFFORTS: [&str; 7] = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
@@ -64,30 +54,15 @@ pub(super) fn read(
     default_output: u32,
     default_context: usize,
 ) -> Result<ModelProfile> {
-    let mut updated = model.clone();
     let id = fields[0].value();
-    ensure!(
-        !id.is_empty() && id.len() <= 256 && !id.chars().any(char::is_control),
-        "请填写有效的模型 ID"
-    );
+    orbit_config::config::connections::models::validate_id(id)?;
+    let mut updated = model.clone();
     updated.id = id.into();
-    updated.context_tokens = number(&fields[1])?;
-    updated.input_context_tokens = number(&fields[2])?;
-    updated.max_output_tokens = number(&fields[3])?;
-    let output = updated
-        .max_output_tokens
-        .unwrap_or(default_output);
-    ensure!(output > 0, "输出上限必须大于 0");
-    let input = updated
-        .input_context_tokens
-        .unwrap_or_else(|| {
-            updated
-                .context_tokens
-                .unwrap_or(default_context)
-                .saturating_sub(output as usize)
-        });
-
-    ensure!(input >= 8_192, "可用输入预算不能小于 8192 tokens");
+    updated = orbit_config::config::connections::models::limits(
+        &updated,
+        [fields[1].value(), fields[2].value(), fields[3].value()],
+        Some((default_context, default_output)),
+    )?;
     updated.supports_vision = match fields[4].value() {
         "支持" => Some(true),
         "不支持" => Some(false),
@@ -150,14 +125,6 @@ pub(super) fn read_reasoning(
         .map(|(_, effort)| serde_json::from_value::<ReasoningEffort>(serde_json::json!(effort)))
         .collect::<Result<Vec<_>, _>>()?;
     let default = serde_json::from_value(serde_json::json!(fields[8].value()))?;
-    ensure!(efforts.contains(&default), "默认强度必须在已启用的强度中");
-    Ok(Some(ReasoningProfile {
-        adapter: adapter(format),
-        efforts,
-        default,
-        extra: current
-            .as_ref()
-            .filter(|profile| profile.adapter == adapter(format))
-            .map_or_else(Default::default, |profile| profile.extra.clone()),
-    }))
+    orbit_config::config::connections::models::reasoning(current.as_ref(), format, efforts, default)
+        .map(Some)
 }

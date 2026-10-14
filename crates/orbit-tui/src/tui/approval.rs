@@ -130,9 +130,9 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
     draw_in(frame, state, frame.area());
 }
 
-pub(super) fn needed_height(preview: &orbit_tools::approval::ApprovalPreview) -> u16 {
+pub(super) fn needed_height(preview: &orbit_client::protocol::approval::ApprovalPreview) -> u16 {
     match preview {
-        orbit_tools::approval::ApprovalPreview::Command(p) => {
+        orbit_client::protocol::approval::ApprovalPreview::Command(p) => {
             let cmd_lines = p.command.lines().count().clamp(1, 6) as u16;
             let mut extra = 0;
             if p.cwd.is_some() {
@@ -140,11 +140,13 @@ pub(super) fn needed_height(preview: &orbit_tools::approval::ApprovalPreview) ->
             }
             if let Some(git) = &p.git {
                 match &git.kind {
-                    orbit_runtime::git::GitOperationKind::Dangerous { .. }
-                    | orbit_runtime::git::GitOperationKind::RemoteWrite { .. }
-                    | orbit_runtime::git::GitOperationKind::BranchSwitchOrRebase { .. }
-                    | orbit_runtime::git::GitOperationKind::LocalWrite { .. }
-                    | orbit_runtime::git::GitOperationKind::ConfigMutation { .. } => {
+                    orbit_client::protocol::git::GitOperationKind::Dangerous { .. }
+                    | orbit_client::protocol::git::GitOperationKind::RemoteWrite { .. }
+                    | orbit_client::protocol::git::GitOperationKind::BranchSwitchOrRebase {
+                        ..
+                    }
+                    | orbit_client::protocol::git::GitOperationKind::LocalWrite { .. }
+                    | orbit_client::protocol::git::GitOperationKind::ConfigMutation { .. } => {
                         extra += 1;
                     }
 
@@ -155,14 +157,14 @@ pub(super) fn needed_height(preview: &orbit_tools::approval::ApprovalPreview) ->
             4 + extra + cmd_lines
         }
 
-        orbit_tools::approval::ApprovalPreview::Write(_) => 10,
-        orbit_tools::approval::ApprovalPreview::Delete(p) => {
+        orbit_client::protocol::approval::ApprovalPreview::Write(_) => 10,
+        orbit_client::protocol::approval::ApprovalPreview::Delete(p) => {
             let lines = p.before.lines().count().clamp(1, 6) as u16;
             4 + lines
         }
 
-        orbit_tools::approval::ApprovalPreview::Capability(_) => 7,
-        orbit_tools::approval::ApprovalPreview::Mcp(p) => {
+        orbit_client::protocol::approval::ApprovalPreview::Capability(_) => 7,
+        orbit_client::protocol::approval::ApprovalPreview::Mcp(p) => {
             let arg_lines = p.arguments.lines().count().clamp(1, 4) as u16;
             4 + arg_lines
         }
@@ -189,7 +191,7 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
     let border_color = crate::tui::theme::THEME.accent;
 
     let (title, header_lines, body_lines) = match proposal {
-        orbit_tools::approval::ApprovalPreview::Write(preview) => {
+        orbit_client::protocol::approval::ApprovalPreview::Write(preview) => {
             let before = preview
                 .before
                 .as_deref()
@@ -280,7 +282,7 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
             (title, Vec::new(), diff_lines)
         }
 
-        orbit_tools::approval::ApprovalPreview::Delete(preview) => {
+        orbit_client::protocol::approval::ApprovalPreview::Delete(preview) => {
             let title = Line::from(vec![
                 Span::raw(" "),
                 Span::styled(
@@ -333,7 +335,7 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
             (title, Vec::new(), diff_lines)
         }
 
-        orbit_tools::approval::ApprovalPreview::Command(preview) => {
+        orbit_client::protocol::approval::ApprovalPreview::Command(preview) => {
             let mut title_spans = vec![
                 Span::raw(" "),
                 Span::styled(
@@ -363,7 +365,7 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
             let mut header_lines = Vec::new();
             if let Some(git) = &preview.git {
                 match &git.kind {
-                    orbit_runtime::git::GitOperationKind::RemoteWrite {
+                    orbit_client::protocol::git::GitOperationKind::RemoteWrite {
                         remote,
                         source_branch,
                         target_branch,
@@ -387,7 +389,10 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
                         ]));
                     }
 
-                    orbit_runtime::git::GitOperationKind::Dangerous { subcommand, reason } => {
+                    orbit_client::protocol::git::GitOperationKind::Dangerous {
+                        subcommand,
+                        reason,
+                    } => {
                         header_lines.push(Line::from(vec![
                             Span::raw("  "),
                             Span::styled(
@@ -403,7 +408,7 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
                         ]));
                     }
 
-                    orbit_runtime::git::GitOperationKind::BranchSwitchOrRebase {
+                    orbit_client::protocol::git::GitOperationKind::BranchSwitchOrRebase {
                         subcommand,
                         target,
                         risk_notice,
@@ -420,7 +425,7 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
                         ]));
                     }
 
-                    orbit_runtime::git::GitOperationKind::LocalWrite {
+                    orbit_client::protocol::git::GitOperationKind::LocalWrite {
                         subcommand,
                         description,
                     } => {
@@ -433,7 +438,9 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
                         ]));
                     }
 
-                    orbit_runtime::git::GitOperationKind::ConfigMutation { key, .. } => {
+                    orbit_client::protocol::git::GitOperationKind::ConfigMutation {
+                        key, ..
+                    } => {
                         let target_key = key
                             .as_deref()
                             .unwrap_or("仓库配置/Hooks");
@@ -483,7 +490,7 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
             (title, header_lines, body_lines)
         }
 
-        orbit_tools::approval::ApprovalPreview::Mcp(preview) => {
+        orbit_client::protocol::approval::ApprovalPreview::Mcp(preview) => {
             let title = Line::from(vec![
                 Span::raw(" "),
                 Span::styled(
@@ -519,7 +526,7 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
             (title, Vec::new(), body_lines)
         }
 
-        orbit_tools::approval::ApprovalPreview::Capability(preview) => {
+        orbit_client::protocol::approval::ApprovalPreview::Capability(preview) => {
             let access_desc = if preview.access.allows_write() {
                 "[外部读写]"
             } else {

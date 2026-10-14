@@ -152,10 +152,12 @@ impl Workspace {
                             .xsmall()
                             .label(format!(
                                 "上下文 {}%",
-                                self.info
-                                    .as_ref()
-                                    .map_or(0, |info| self.context_used.saturating_mul(100)
-                                        / info.context_tokens.max(1))
+                                self.info.as_ref().map_or(0, |info| {
+                                    orbit_client::usage::context_percent(
+                                        self.context_used,
+                                        info.input_context_tokens,
+                                    )
+                                })
                             ))
                             .on_click(cx.listener(|view, _, window, cx| {
                                 view.execute(super::actions::WorkspaceCommand::Context, window, cx)

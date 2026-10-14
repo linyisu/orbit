@@ -104,14 +104,11 @@ impl Advanced {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let (auth, error) = match orbit_auth::directory(
-            options.auth_dir.clone(),
-            std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from),
-            std::env::var_os("HOME").map(PathBuf::from),
-        ) {
-            Ok(path) => (path, None),
-            Err(error) => (PathBuf::new(), Some(error.to_string())),
-        };
+        let (auth, error) =
+            match orbit_client::configuration::auth_directory(options.auth_dir.clone()) {
+                Ok(path) => (path, None),
+                Err(error) => (PathBuf::new(), Some(error.to_string())),
+            };
         let fields: Vec<_> = FIELDS
             .iter()
             .map(|(_, _, placeholder)| {
@@ -212,7 +209,7 @@ impl Advanced {
     }
 
     fn values(&self, cx: &App) -> anyhow::Result<AgentSettings> {
-        let mut settings = self
+        let settings = self
             .draft
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("请先载入配置。"))?
@@ -223,17 +220,7 @@ impl Advanced {
             .iter()
             .map(|field| field.read(cx).value().to_string())
             .collect();
-        settings.max_turns = number(&values[0], FIELDS[0].0)?;
-        settings.max_tool_calls = number(&values[1], FIELDS[1].0)?;
-        settings.command.default_timeout_seconds = number(&values[2], FIELDS[2].0)?;
-        settings.command.max_timeout_seconds = number(&values[3], FIELDS[3].0)?;
-        settings.command.read_file_scan_bytes = number(&values[4], FIELDS[4].0)?;
-        settings.subagents.max_concurrent = number(&values[5], FIELDS[5].0)?;
-        settings.subagents.max_turns = number(&values[6], FIELDS[6].0)?;
-        settings.subagents.max_tool_calls = number(&values[7], FIELDS[7].0)?;
-        settings.subagents.timeout_seconds = number(&values[8], FIELDS[8].0)?;
-        settings.subagents.explore_model = optional(&values[9]);
-        settings.subagents.review_model = optional(&values[10]);
+        let mut settings = settings.with_limits(std::array::from_fn(|ix| values[ix].as_str()))?;
         settings.auto_compact = self.auto_compact;
         settings.set_network_allowed(self.network_allowed);
         settings.subagents.enabled = self.subagents_enabled;
@@ -247,19 +234,6 @@ impl Advanced {
             .filter(|line| !line.is_empty())
             .map(str::to_owned)
             .collect();
-        anyhow::ensure!(
-            (1..=128).contains(&settings.subagents.max_concurrent),
-            "并行子 Agent 上限必须在 1–128 之间。"
-        );
-        anyhow::ensure!(
-            settings.subagents.timeout_seconds <= 86_400,
-            "子 Agent 进度提醒间隔必须在 0–86400 秒之间。"
-        );
-        anyhow::ensure!(
-            settings.command.default_timeout_seconds > 0
-                && settings.command.default_timeout_seconds <= settings.command.max_timeout_seconds,
-            "默认命令超时必须大于 0，且不能超过最长命令超时。"
-        );
         Ok(settings)
     }
 
@@ -378,18 +352,6 @@ fn same_form_values(current: &AgentSettings, saved: &AgentSettings) -> bool {
                 .iter()
                 .collect::<BTreeSet<_>>()
         && current.disabled_tools == saved.disabled_tools
-}
-
-fn number<T: std::str::FromStr>(value: &str, label: &str) -> anyhow::Result<T> {
-    value
-        .trim()
-        .parse()
-        .map_err(|_| anyhow::anyhow!("{label}必须为非负整数。"))
-}
-
-fn optional(value: &str) -> Option<String> {
-    let value = value.trim();
-    (!value.is_empty()).then(|| value.to_owned())
 }
 
 impl Render for Advanced {

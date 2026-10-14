@@ -692,25 +692,25 @@ fn model_picker_filters_and_returns_a_qualified_model_name() {
             TestModel::new("deepseek-chat")
                 .context(64_000)
                 .reasoning(
-                    orbit_model::client::ApiFormat::OpenaiChatCompletions,
-                    &[orbit_model::types::ReasoningEffort::Low],
-                    orbit_model::types::ReasoningEffort::Low,
+                    orbit_config::ApiFormat::OpenaiChatCompletions,
+                    &[orbit_client::protocol::model::ReasoningEffort::Low],
+                    orbit_client::protocol::model::ReasoningEffort::Low,
                 )
                 .option("deepseek"),
             TestModel::new("gpt-6-astra")
                 .vision(true)
                 .reasoning(
-                    orbit_model::client::ApiFormat::OpenaiChatCompletions,
+                    orbit_config::ApiFormat::OpenaiChatCompletions,
                     &[
-                        orbit_model::types::ReasoningEffort::Medium,
-                        orbit_model::types::ReasoningEffort::High,
+                        orbit_client::protocol::model::ReasoningEffort::Medium,
+                        orbit_client::protocol::model::ReasoningEffort::High,
                     ],
-                    orbit_model::types::ReasoningEffort::Medium,
+                    orbit_client::protocol::model::ReasoningEffort::Medium,
                 )
                 .option("openai"),
         ],
         state.model.clone(),
-        Some(orbit_model::types::ReasoningEffort::Low),
+        Some(orbit_client::protocol::model::ReasoningEffort::Low),
     ));
     handle(&mut state, Event::Paste("astra".into()));
     handle(&mut state, key(KeyCode::Right));
@@ -720,7 +720,7 @@ fn model_picker_filters_and_returns_a_qualified_model_name() {
     assert_eq!(state.chosen_model.as_deref(), Some("openai::gpt-6-astra"));
     assert_eq!(
         state.chosen_effort,
-        Some(orbit_model::types::ReasoningEffort::Medium)
+        Some(orbit_client::protocol::model::ReasoningEffort::Medium)
     );
 }
 
@@ -732,25 +732,25 @@ fn model_picker_arrows_do_not_change_thinking_effort() {
             TestModel::new("deepseek-chat")
                 .context(64_000)
                 .reasoning(
-                    orbit_model::client::ApiFormat::OpenaiChatCompletions,
+                    orbit_config::ApiFormat::OpenaiChatCompletions,
                     &[
-                        orbit_model::types::ReasoningEffort::None,
-                        orbit_model::types::ReasoningEffort::Low,
+                        orbit_client::protocol::model::ReasoningEffort::None,
+                        orbit_client::protocol::model::ReasoningEffort::Low,
                     ],
-                    orbit_model::types::ReasoningEffort::None,
+                    orbit_client::protocol::model::ReasoningEffort::None,
                 )
                 .option("deepseek"),
             TestModel::new("strict-model")
                 .context(64_000)
                 .reasoning(
-                    orbit_model::client::ApiFormat::OpenaiChatCompletions,
-                    &[orbit_model::types::ReasoningEffort::Low],
-                    orbit_model::types::ReasoningEffort::Low,
+                    orbit_config::ApiFormat::OpenaiChatCompletions,
+                    &[orbit_client::protocol::model::ReasoningEffort::Low],
+                    orbit_client::protocol::model::ReasoningEffort::Low,
                 )
                 .option("deepseek"),
         ],
         state.model.clone(),
-        Some(orbit_model::types::ReasoningEffort::Low),
+        Some(orbit_client::protocol::model::ReasoningEffort::Low),
     ));
     handle(&mut state, key(KeyCode::Left));
     handle(&mut state, key(KeyCode::Enter));
@@ -759,7 +759,7 @@ fn model_picker_arrows_do_not_change_thinking_effort() {
     assert!(state.model_picker.is_none());
     assert_eq!(
         state.chosen_effort,
-        Some(orbit_model::types::ReasoningEffort::Low)
+        Some(orbit_client::protocol::model::ReasoningEffort::Low)
     );
 
     state.model = "deepseek::strict-model".into();
@@ -768,14 +768,14 @@ fn model_picker_arrows_do_not_change_thinking_effort() {
             TestModel::new("strict-model")
                 .context(64_000)
                 .reasoning(
-                    orbit_model::client::ApiFormat::OpenaiChatCompletions,
-                    &[orbit_model::types::ReasoningEffort::Low],
-                    orbit_model::types::ReasoningEffort::Low,
+                    orbit_config::ApiFormat::OpenaiChatCompletions,
+                    &[orbit_client::protocol::model::ReasoningEffort::Low],
+                    orbit_client::protocol::model::ReasoningEffort::Low,
                 )
                 .option("deepseek"),
         ],
         state.model.clone(),
-        Some(orbit_model::types::ReasoningEffort::Low),
+        Some(orbit_client::protocol::model::ReasoningEffort::Low),
     ));
     handle(&mut state, key(KeyCode::Left));
     handle(&mut state, key(KeyCode::Enter));
@@ -783,7 +783,7 @@ fn model_picker_arrows_do_not_change_thinking_effort() {
 
     assert_eq!(
         state.chosen_effort,
-        Some(orbit_model::types::ReasoningEffort::Low)
+        Some(orbit_client::protocol::model::ReasoningEffort::Low)
     );
 }
 

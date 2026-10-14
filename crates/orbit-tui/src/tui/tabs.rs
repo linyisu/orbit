@@ -31,7 +31,26 @@ pub(super) mod live {
                     .iter()
                     .find_map(|(id, tab)| {
                         (tab.id.as_ref() == Some(&saved.id)
-                            && tab.target_identity().as_ref() == Some(&saved.target))
+                            && tab
+                                .connection
+                                .as_ref()
+                                .is_some_and(|connection| {
+                                    let source = crate::workspace::transport::DataSource {
+                                        target: saved.target.clone(),
+                                        server: Some(&connection.executable),
+                                        config: &saved.config,
+                                        auth: Some(&saved.auth),
+                                        database: saved.database.as_deref(),
+                                        workspace: std::path::Path::new(&saved.workspace),
+                                    };
+                                    connection
+                                        .local_configuration
+                                        .as_ref()
+                                        .is_some_and(|local| local.auth == saved.auth)
+                                        && connection
+                                            .data_source()
+                                            .matches(&source)
+                                }))
                         .then(|| id.clone())
                     });
                 let restored = if let Some(id) = existing {
@@ -67,11 +86,11 @@ pub(super) mod live {
                             && tab
                                 .connection
                                 .as_ref()
-                                .map(|c| &c.target)
-                                == current
-                                    .connection
-                                    .as_ref()
-                                    .map(|c| &c.target)
+                                .zip(current.connection.as_ref())
+                                .is_some_and(|(left, right)| {
+                                    left.data_source()
+                                        .matches(&right.data_source())
+                                })
                     })
                     .map(|(id, _)| id.clone())
             });

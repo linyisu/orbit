@@ -18,7 +18,7 @@ pub(super) async fn run(
     terminal: &mut terminal::AppTerminal,
     events: &mut EventStream,
     options: &crate::ConnectionSettings,
-    provider: orbit_auth::ApiKeyProvider,
+    provider: orbit_client::accounts::ApiKeyProvider,
 ) -> Result<Option<Vec<ModelOption>>> {
     let mut key = InputState::default();
     let mut message = String::new();

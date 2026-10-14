@@ -195,6 +195,7 @@ pub(crate) struct Workspace {
     planning: orbit_protocol::plan::State,
     user_inputs: Vec<orbit_protocol::user_input::Record>,
     context_used: usize,
+    context_usage: orbit_client::usage::ContextUsage,
     replaying: bool,
     panel: Option<Entity<panel::Panel>>,
     subagent: Option<(String, Entity<Conversation>)>,
@@ -346,6 +347,7 @@ impl Workspace {
             planning: Default::default(),
             user_inputs: Vec::new(),
             context_used: 0,
+            context_usage: Default::default(),
             replaying: false,
             panel: None,
             subagent: None,
@@ -367,7 +369,7 @@ impl Workspace {
                     .update_in(cx, |view, window, cx| {
                         if view.connected
                             && !view.opening
-                            && view.quota_request.elapsed() >= Duration::from_secs(60)
+                            && view.quota_request.elapsed() >= orbit_client::usage::REFRESH_INTERVAL
                         {
                             view.refresh_usage(cx);
                         }
@@ -810,6 +812,7 @@ impl Workspace {
                 }
                 self.planning = Default::default();
                 self.context_used = 0;
+                self.context_usage = Default::default();
                 self.panel = None;
                 self.subagent = None;
                 self.usage = cx.new(crate::usage::Usage::new);
@@ -872,8 +875,9 @@ impl Workspace {
                             .map(|image| image.path.clone())
                             .collect::<Vec<_>>(),
                         Update::Agent(event) => match event.as_ref() {
-                            orbit_agent::events::AgentEvent::InputReceived {
-                                attachments, ..
+                            orbit_client::protocol::events::AgentEvent::InputReceived {
+                                attachments,
+                                ..
                             } => attachments
                                 .iter()
                                 .filter(|a| a.is_image())

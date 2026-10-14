@@ -3,12 +3,12 @@
 mod tests;
 mod view;
 
-use anyhow::{Result, ensure};
+use anyhow::Result;
 use crossterm::event::{
     Event, EventStream, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind,
 };
 use futures_util::StreamExt;
-use orbit_model::client::ApiFormat;
+use orbit_config::ApiFormat;
 use ratatui::layout::Position;
 use tokio_util::task::AbortOnDropHandle;
 
@@ -18,7 +18,7 @@ use super::{
     model, models,
 };
 use crate::{
-    config::{FileConfig, ModelProfile},
+    config::ModelProfile,
     connections::edit::{ConnectionDraft, KeyChange},
 };
 
@@ -71,12 +71,12 @@ struct Panel {
     offset: usize,
     pointer: Option<Position>,
     message: String,
-    config: FileConfig,
+    model_defaults: (usize, u32),
 }
 
 impl Panel {
     fn new(service: Vec<Field>, draft: &ConnectionDraft) -> Result<Self> {
-        let config: FileConfig = toml::from_str(&draft.source)?;
+        let model_defaults = draft.model_defaults()?;
         let mut panel = Self {
             saved_auth: draft.account()
                 || draft
@@ -93,7 +93,7 @@ impl Panel {
             offset: 0,
             pointer: None,
             message: String::new(),
-            config,
+            model_defaults,
         };
 
         for profile in &draft.models {
@@ -367,11 +367,7 @@ impl Panel {
     }
 
     fn key(&self) -> KeyChange<'_> {
-        if self.saved_auth && self.service[3].value().is_empty() {
-            KeyChange::Keep
-        } else {
-            KeyChange::Replace(self.service[3].value())
-        }
+        KeyChange::from_input(self.service[3].value(), self.saved_auth)
     }
 
     fn service_draft(&self, draft: &mut ConnectionDraft) -> Result<()> {
@@ -385,26 +381,7 @@ impl Panel {
             };
         }
 
-        ensure!(!draft.name.is_empty(), "请填写连接名称");
-        ensure!(
-            url::Url::parse(&draft.endpoint).is_ok(),
-            "请填写完整的服务地址"
-        );
-        ensure!(
-            !matches!(self.key(), KeyChange::Replace("")),
-            "请输入 API Key"
-        );
-        // A retained key must never be sent to an edited endpoint during discovery.
-        if matches!(self.key(), KeyChange::Keep)
-            && let Some(provider) = &draft.provider
-        {
-            ensure!(
-                provider.base_url == draft.endpoint,
-                "更改地址后请重新填写 API Key"
-            );
-        }
-
-        Ok(())
+        draft.validate_service(&self.key())
     }
 
     fn apply_models(&self, draft: &mut ConnectionDraft) -> Result<()> {
@@ -417,8 +394,8 @@ impl Panel {
             let mut profile = model::read(
                 &entry.fields,
                 &entry.entry.profile,
-                self.config.max_output_tokens,
-                self.config.context_tokens,
+                self.model_defaults.1,
+                self.model_defaults.0,
             )?;
 
             profile.reasoning = model::read_reasoning(
@@ -426,13 +403,6 @@ impl Panel {
                 &entry.entry.profile.reasoning,
                 draft.format,
             )?;
-            ensure!(
-                !profiles
-                    .iter()
-                    .any(|p: &ModelProfile| p.id == profile.id),
-                "模型 ID 重复：{}",
-                profile.id
-            );
             profiles.push(profile);
         }
 

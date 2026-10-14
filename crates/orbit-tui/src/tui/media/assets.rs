@@ -36,7 +36,9 @@ impl Assets {
         {
             return Ok(local.bytes.clone());
         }
-        let bytes = Arc::new(orbit_model::types::Attachment::read_image_bytes(path)?);
+        let bytes = Arc::new(orbit_client::protocol::model::Attachment::read_image_bytes(
+            path,
+        )?);
         self.local = modified.map(|modified| Local {
             path: path.to_owned(),
             length: metadata.len(),

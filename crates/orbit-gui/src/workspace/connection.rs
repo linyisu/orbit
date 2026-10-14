@@ -9,7 +9,6 @@ mod remote;
 pub(super) struct ConnectionLogs {
     environment: String,
     lines: Vec<String>,
-    secrets: Vec<String>,
     displayed: String,
     editor: Entity<EditorState>,
 }
@@ -19,7 +18,6 @@ impl ConnectionLogs {
         Self {
             environment: String::new(),
             lines: Vec::new(),
-            secrets: Vec::new(),
             displayed: String::new(),
             editor: cx.new(|cx| {
                 EditorState::new(window, cx)
@@ -37,15 +35,11 @@ impl ConnectionLogs {
         cx: &mut Context<Self>,
     ) {
         self.environment = environment;
-        self.secrets.clear();
         self.sync(Vec::new(), window, cx);
     }
 
     pub(super) fn sync(&mut self, lines: Vec<String>, window: &mut Window, cx: &mut Context<Self>) {
-        self.lines = lines
-            .into_iter()
-            .map(|line| filtered_log(&line, &self.secrets))
-            .collect();
+        self.lines = lines;
         let displayed = self.lines.join("\n");
         if displayed != self.displayed {
             self.editor.update(cx, |editor, cx| {
@@ -55,51 +49,6 @@ impl ConnectionLogs {
         }
         cx.notify();
     }
-
-    fn record_secret(&mut self, secret: &str, window: &mut Window, cx: &mut Context<Self>) {
-        if !secret.is_empty()
-            && !self
-                .secrets
-                .iter()
-                .any(|stored| stored == secret)
-        {
-            self.secrets.push(secret.to_owned());
-            self.sync(self.lines.clone(), window, cx);
-        }
-    }
-}
-
-fn filtered_log(line: &str, secrets: &[String]) -> String {
-    let lower = line.to_ascii_lowercase();
-    let compact: String = lower
-        .chars()
-        .filter(|character| !character.is_ascii_whitespace())
-        .collect();
-    if [
-        "password=",
-        "password:",
-        "passphrase=",
-        "passphrase:",
-        "token=",
-        "api_key=",
-        "api-key:",
-        "authorization:",
-        "secret=",
-    ]
-    .iter()
-    .any(|key| compact.contains(key))
-        || lower.contains("bearer ")
-    {
-        return "[含凭据的日志已隐藏]".into();
-    }
-    let mut filtered = line.to_owned();
-    for secret in secrets
-        .iter()
-        .filter(|secret| !secret.is_empty())
-    {
-        filtered = filtered.replace(secret, "[已隐藏凭据]");
-    }
-    filtered
 }
 
 impl Render for ConnectionLogs {
@@ -478,12 +427,6 @@ impl Workspace {
             return;
         }
         self.connection_challenges.pop_front();
-        if !challenge.confirm
-            && let Some(answer) = &answer
-        {
-            self.connection_logs
-                .update(cx, |logs, cx| logs.record_secret(answer, window, cx));
-        }
         challenge.answer(answer);
         self.auth_dialog_open = false;
         cx.emit(WorkspaceEvent::Changed);
@@ -633,7 +576,7 @@ impl Workspace {
 
 #[cfg(test)]
 mod tests {
-    use super::{ConnectionChallenge, Options, filtered_log, project_options};
+    use super::{ConnectionChallenge, Options, project_options};
     use clap::Parser;
     use orbit_client::interaction::Challenge;
     use tokio::sync::oneshot;
@@ -739,31 +682,5 @@ mod tests {
         assert_eq!(response.try_recv().unwrap(), None);
         assert!(!visible.pending());
         assert!(!visible.answer(Some("yes".into())));
-    }
-
-    #[test]
-    fn copied_diagnostics_hide_authentication_answers_and_credential_fields() {
-        let secrets = vec!["test-only-password".to_owned()];
-        assert_eq!(
-            filtered_log("echo test-only-password", &secrets),
-            "echo [已隐藏凭据]"
-        );
-        assert_eq!(
-            filtered_log("Authorization: Bearer test-value", &[]),
-            "[含凭据的日志已隐藏]"
-        );
-        assert_eq!(
-            filtered_log("PASSWORD=test-value", &[]),
-            "[含凭据的日志已隐藏]"
-        );
-        assert_eq!(
-            filtered_log("password = test-value", &[]),
-            "[含凭据的日志已隐藏]"
-        );
-        assert_eq!(
-            filtered_log("Permission denied (publickey,password).", &secrets),
-            "Permission denied (publickey,password)."
-        );
-        assert_eq!(filtered_log("已完成握手", &[String::new()]), "已完成握手");
     }
 }

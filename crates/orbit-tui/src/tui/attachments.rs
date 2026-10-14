@@ -5,95 +5,11 @@ use anyhow::Result;
 
 use super::app::UiState;
 
-pub(super) fn attachment_path(argument: &str) -> std::path::PathBuf {
-    let trimmed = argument.trim();
-    let trimmed = if trimmed.len() >= 2
-        && ((trimmed.starts_with('"') && trimmed.ends_with('"'))
-            || (trimmed.starts_with('\'') && trimmed.ends_with('\'')))
-    {
-        &trimmed[1..trimmed.len() - 1]
-    } else {
-        trimmed
-    };
-
-    if let Ok(url) = url::Url::parse(trimmed)
-        && url.scheme() == "file"
-        && let Ok(path) = url.to_file_path()
-    {
-        return path;
-    }
-
-    #[cfg(unix)]
-    let trimmed = {
-        let mut value = String::with_capacity(trimmed.len());
-        let mut chars = trimmed.chars();
-
-        while let Some(character) = chars.next() {
-            if character == '\\' {
-                value.push(chars.next().unwrap_or(character));
-            } else {
-                value.push(character);
-            }
-        }
-
-        value
-    };
-    #[cfg(not(unix))]
-    let trimmed = trimmed.to_owned();
-
-    if let Some(rest) = trimmed.strip_prefix("~/")
-        && let Some(home) = std::env::var_os("HOME")
-    {
-        return PathBuf::from(home).join(rest);
-    }
-    trimmed.into()
-}
-
-pub(super) fn is_image_path(path: &std::path::Path) -> bool {
-    path.extension()
-        .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| {
-            matches!(
-                extension.to_ascii_lowercase().as_str(),
-                "png" | "jpg" | "jpeg" | "gif" | "webp"
-            )
-        })
-}
-
-pub(super) fn resolved_image_path(value: &str, directory: &std::path::Path) -> Option<PathBuf> {
-    let path = attachment_path(value);
-    let path = if path.is_absolute() {
-        path
-    } else {
-        directory.join(path)
-    };
-
-    is_image_path(&path)
-        .then_some(path)
-        .filter(|path| path.is_file())
-}
-
-pub(super) fn pasted_image_paths(text: &str, directory: &std::path::Path) -> Option<Vec<PathBuf>> {
-    if let Some(path) = resolved_image_path(text, directory) {
-        return Some(vec![path]);
-    }
-
-    #[cfg(unix)]
-    {
-        let paths = shlex::split(text)?
-            .into_iter()
-            .map(|part| resolved_image_path(&part, directory))
-            .collect::<Option<Vec<_>>>()?;
-        (!paths.is_empty()).then_some(paths)
-    }
-
-    #[cfg(not(unix))]
-    None
-}
+pub(super) use orbit_client::attachments::{is_image_path, pasted_paths as pasted_image_paths};
 
 pub(super) fn queue_attachment(
     state: &mut UiState,
-    attachment: orbit_model::types::Attachment,
+    attachment: orbit_client::protocol::model::Attachment,
 ) -> bool {
     if !state.supports_vision {
         return false;

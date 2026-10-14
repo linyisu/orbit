@@ -60,6 +60,17 @@ fn mcp_start_permission_defaults_off_and_is_forwarded_to_each_target() {
 }
 
 #[test]
+fn local_database_paths_remain_target_workspace_relative() {
+    use clap::Parser;
+    let mut options = Options::parse_from(["orbit-gui", "--database", "state.db"]);
+    options.resolve_paths().unwrap();
+    assert_eq!(
+        options.database.as_deref(),
+        Some(std::path::Path::new("state.db"))
+    );
+}
+
+#[test]
 fn remote_options_preserve_target_paths_and_forward_authentication() {
     use clap::Parser;
     let mut options = Options::parse_from([
@@ -1118,8 +1129,8 @@ fn history_pages_drain_without_live_poll_delays_and_keep_cursor_order() {
             };
             assert!(matches!(
                 event.as_ref(),
-                orbit_agent::events::AgentEvent::Model(
-                    orbit_model::types::StreamEvent::TextDelta(text),
+                orbit_client::protocol::events::AgentEvent::Model(
+                    orbit_client::protocol::model::StreamEvent::TextDelta(text),
                 ) if text == &format!("{}\n", cursor - 1)
             ));
         }

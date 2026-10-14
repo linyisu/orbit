@@ -154,7 +154,7 @@ pub(super) struct Fragment {
 /// Policy identity belongs in both decoded and raw-byte cache keys: a resumed
 /// session may have different proxy settings while sharing terminal workers.
 #[derive(Clone, Debug, Default)]
-struct Network(Arc<orbit_tools::web_fetch::WebClient>);
+struct Network(Arc<orbit_client::attachments::ImageClient>);
 
 impl PartialEq for Network {
     fn eq(&self, other: &Self) -> bool {
@@ -240,7 +240,7 @@ pub(super) struct Context {
 
 impl Context {
     /// Called before EventStream exists; capability replies must have one reader.
-    pub fn detect(client: Arc<orbit_tools::web_fetch::WebClient>) -> Self {
+    pub fn detect(client: Arc<orbit_client::attachments::ImageClient>) -> Self {
         let mut context = Self::new(
             Picker::from_query_stdio_with_options(terminal_query_options())
                 .unwrap_or_else(|_| Picker::halfblocks()),
@@ -250,7 +250,7 @@ impl Context {
         context
     }
 
-    pub fn set_client(&mut self, client: Arc<orbit_tools::web_fetch::WebClient>) {
+    pub fn set_client(&mut self, client: Arc<orbit_client::attachments::ImageClient>) {
         if Arc::ptr_eq(&self.network.0, &client) {
             return;
         }

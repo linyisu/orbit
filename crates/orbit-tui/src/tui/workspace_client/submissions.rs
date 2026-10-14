@@ -27,15 +27,7 @@ impl Submission {
 
 impl Tab {
     fn request(&mut self, request: Request) -> Result<oneshot::Receiver<Result<Response>>> {
-        if matches!(
-            &request,
-            Request::Review {
-                action: orbit_protocol::review::Action::Undo { .. }
-                    | orbit_protocol::review::Action::Stage { .. }
-                    | orbit_protocol::review::Action::Unstage { .. },
-                ..
-            }
-        ) {
+        if workspace::pump::independent(&request) {
             let connection = self
                 .connection
                 .clone()

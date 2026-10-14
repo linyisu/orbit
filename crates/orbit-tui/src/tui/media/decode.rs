@@ -14,7 +14,7 @@ use resvg::{tiny_skia, usvg};
 
 use super::{Key, Network, Prepared, Source, View, view::Background};
 
-const MAX_SOURCE_BYTES: usize = orbit_model::types::Attachment::MAX_IMAGE_BYTES;
+const MAX_SOURCE_BYTES: usize = orbit_client::protocol::model::Attachment::MAX_IMAGE_BYTES;
 const MAX_REMOTE_CACHE_BYTES: usize = 2 * MAX_SOURCE_BYTES;
 const MAX_RENDER_EDGE_PIXELS: u32 = 2_048;
 const MAX_PREVIEW_PIXELS: u64 = super::MAX_CACHE_BYTES as u64 / 8;

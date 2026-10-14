@@ -7,11 +7,10 @@ use ratatui::{
     text::{Line, Span, Text},
     widgets::{Gauge, Widget},
 };
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use unicode_width::UnicodeWidthStr;
 
-const CACHE_AGE: Duration = Duration::from_secs(60);
-const REFRESH_INTERVAL: Duration = Duration::from_secs(5 * 60);
+use orbit_client::usage::{CACHE_AGE, REFRESH_INTERVAL};
 const BAR_WIDTH: usize = 20;
 const MAX_QUOTA_LABEL_WIDTH: usize = 24;
 
@@ -57,18 +56,11 @@ impl State {
                 .is_some_and(|time| time.elapsed() < CACHE_AGE)
     }
 
-    pub fn receive(&mut self, mut snapshot: Snapshot) {
-        if snapshot.account.error.is_some()
-            && let Some(old) = &self.snapshot
-            && old.account.identity == snapshot.account.identity
-            && (snapshot.account.provider.is_empty()
-                || old.account.provider == snapshot.account.provider)
-        {
-            let error = snapshot.account.error.take();
-            snapshot.account = old.account.clone();
-            snapshot.account.error = error;
-        }
-        self.snapshot = Some(snapshot);
+    pub fn receive(&mut self, snapshot: Snapshot) {
+        self.snapshot = Some(orbit_client::usage::retain_account(
+            snapshot,
+            self.snapshot.as_ref(),
+        ));
         self.refreshed = Some(Instant::now());
         self.requested = self.refreshed;
         self.loading = false;
@@ -438,24 +430,9 @@ fn now() -> u64 {
 }
 
 fn reset_countdown(reset: &str, current: u64) -> Option<String> {
-    let time = reset
-        .parse::<u64>()
-        .ok()
-        .map(|time| {
-            if time > 1_000_000_000_000 {
-                time / 1_000
-            } else {
-                time
-            }
-        })
-        .or_else(|| {
-            chrono::DateTime::parse_from_rfc3339(reset)
-                .ok()
-                .and_then(|time| time.timestamp().try_into().ok())
-        })?;
-    if time == 0 {
-        return None;
-    }
+    let time: u64 = orbit_client::usage::reset_timestamp(reset)?
+        .try_into()
+        .ok()?;
     let seconds = time.saturating_sub(current);
     if seconds == 0 {
         Some("等待刷新".into())

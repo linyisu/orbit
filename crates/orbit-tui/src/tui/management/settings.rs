@@ -5,14 +5,14 @@ use crate::{
     tui::{components, connect_custom::form, input::InputState, render::safe_output, theme::THEME},
     workspace::protocol::Response,
 };
-use anyhow::{Result, ensure};
+use anyhow::Result;
 use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind};
+use orbit_config::config::connections::mcp::McpServerConfig;
 use orbit_config::config::{
     advanced::{AdvancedDraft, AgentSettings},
     connections::mcp::{McpDraft, environment},
 };
 use orbit_protocol::Capability;
-use orbit_tools::mcp::McpServerConfig;
 use ratatui::{
     Frame,
     layout::{Position, Rect},
@@ -165,18 +165,11 @@ impl AgentForm {
     }
 
     fn settings(&self, base: &AgentSettings) -> Result<AgentSettings> {
-        let mut settings = base.clone();
-        settings.max_turns = number(&self.fields[0].text, LABELS[0])?;
-        settings.max_tool_calls = number(&self.fields[1].text, LABELS[1])?;
-        settings.command.default_timeout_seconds = number(&self.fields[2].text, LABELS[2])?;
-        settings.command.max_timeout_seconds = number(&self.fields[3].text, LABELS[3])?;
-        settings.command.read_file_scan_bytes = number(&self.fields[4].text, LABELS[4])?;
-        settings.subagents.max_concurrent = number(&self.fields[5].text, LABELS[5])?;
-        settings.subagents.max_turns = number(&self.fields[6].text, LABELS[6])?;
-        settings.subagents.max_tool_calls = number(&self.fields[7].text, LABELS[7])?;
-        settings.subagents.timeout_seconds = number(&self.fields[8].text, LABELS[8])?;
-        settings.subagents.explore_model = optional(&self.fields[9].text);
-        settings.subagents.review_model = optional(&self.fields[10].text);
+        let mut settings = base.with_limits(
+            self.fields
+                .each_ref()
+                .map(|field| field.text.as_str()),
+        )?;
         settings.auto_compact = self.compact;
         settings.set_network_allowed(self.network);
         settings.subagents.enabled = self.subagents;
@@ -239,26 +232,15 @@ impl McpForm {
 
     fn server(&self) -> Result<(String, McpServerConfig)> {
         let name = self.fields[0].text.trim().to_owned();
-        let env = environment::parse(&self.fields[3].text)?;
-        let server = McpServerConfig {
-            transport: "stdio".into(),
-            command: self.fields[1].text.trim().into(),
-            args: self.fields[2]
-                .text
-                .lines()
-                .map(str::to_owned)
-                .collect(),
-            env,
-            timeout_seconds: number(&self.fields[4].text, "MCP 超时")?,
-            tools: self.fields[5]
-                .text
-                .lines()
-                .map(str::trim)
-                .filter(|line| !line.is_empty())
-                .map(str::to_owned)
-                .collect(),
+        let server = orbit_config::config::connections::mcp::ServerInput {
+            command: &self.fields[1].text,
+            args: &self.fields[2].text,
+            env: &self.fields[3].text,
+            timeout_seconds: &self.fields[4].text,
+            tools: &self.fields[5].text,
             enabled: self.enabled,
-        };
+        }
+        .parse()?;
         Ok((name, server))
     }
 }
@@ -427,11 +409,11 @@ impl State {
                     .as_ref()
                     .ok_or_else(|| anyhow::anyhow!("请选择或新建服务器。"))?;
                 let (name, server) = form.server()?;
-                ensure!(
-                    form.existing.is_some() || !draft.servers().contains_key(&name),
-                    "服务器名称已存在，请使用其他名称。"
-                );
-                self.mcp = Some(draft.save(&self.path, &name, Some(server))?);
+                self.mcp = Some(if form.existing.is_none() {
+                    draft.create(&self.path, &name, server)?
+                } else {
+                    draft.save(&self.path, &name, Some(server))?
+                });
                 self.editing_mcp = false;
                 self.mcp_form = None;
                 Ok(())
@@ -1177,18 +1159,6 @@ fn input(value: String) -> InputState {
     let mut input = InputState::default();
     input.set(value);
     input
-}
-
-fn optional(value: &str) -> Option<String> {
-    let value = value.trim();
-    (!value.is_empty()).then(|| value.into())
-}
-
-fn number<T: std::str::FromStr>(value: &str, label: &str) -> Result<T> {
-    value
-        .trim()
-        .parse()
-        .map_err(|_| anyhow::anyhow!("{label} 应为非负整数。"))
 }
 
 fn check(checked: bool) -> &'static str {

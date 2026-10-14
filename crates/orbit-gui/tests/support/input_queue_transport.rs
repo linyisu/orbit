@@ -320,7 +320,7 @@ fn acknowledged_steers_are_visible_until_the_agent_consumes_or_the_user_removes_
                             orbit_protocol::Update::Agent(event)
                                 if matches!(
                                     event.as_ref(),
-                                    orbit_agent::events::AgentEvent::InputReceived {
+                                    orbit_client::protocol::events::AgentEvent::InputReceived {
                                         content,
                                         ..
                                     } if content == "暂时不要提交"

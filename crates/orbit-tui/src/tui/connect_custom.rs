@@ -6,7 +6,7 @@ mod panel;
 
 use anyhow::Result;
 use crossterm::event::EventStream;
-use orbit_model::client::ApiFormat;
+use orbit_config::ApiFormat;
 
 use self::form::Field;
 use super::{ModelOption, terminal};

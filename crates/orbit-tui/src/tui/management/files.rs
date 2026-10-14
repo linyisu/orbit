@@ -1,7 +1,6 @@
 //! Workspace files stay in the session transport, including SSH and WSL edits.
 use std::ops::Range;
 
-use base64::{Engine as _, engine::general_purpose::STANDARD};
 use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind};
 use orbit_protocol::files::{Action as FileAction, Entry, EntryKind, Snapshot};
 use ratatui::{Frame, layout::Rect, style::Style, text::Line, widgets::Paragraph};
@@ -473,8 +472,7 @@ impl State {
     }
 
     fn file_bytes(&mut self, encoded: String, pending: Pending) -> Action {
-        let raw = match STANDARD
-            .decode(encoded)
+        let raw = match orbit_client::protocol::file_bytes(encoded)
             .ok()
             .and_then(|bytes| String::from_utf8(bytes).ok())
         {
@@ -1249,6 +1247,7 @@ impl Panel for State {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
     use crossterm::event::KeyEvent;
     use ratatui::{Terminal, backend::TestBackend};
 

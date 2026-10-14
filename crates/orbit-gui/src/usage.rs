@@ -5,6 +5,7 @@ use orbit_protocol::usage::{Scope, Snapshot};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 pub(crate) struct Usage {
+    snapshot: Option<Snapshot>,
     account: SharedString,
     rows: Vec<Quota>,
     note: Option<SharedString>,
@@ -38,6 +39,7 @@ impl Usage {
             }
         });
         Self {
+            snapshot: None,
             account: "账号额度".into(),
             rows: Vec::new(),
             note: None,
@@ -48,6 +50,8 @@ impl Usage {
     }
 
     pub(crate) fn set(&mut self, snapshot: Snapshot, cx: &mut Context<Self>) {
+        let snapshot = orbit_client::usage::retain_account(snapshot, self.snapshot.as_ref());
+        self.snapshot = Some(snapshot.clone());
         self.rows = quota_rows(&snapshot);
         let account = snapshot.account;
         self.account = format!("{} · {}", account.provider, account.name).into();
@@ -291,13 +295,7 @@ fn now() -> i64 {
         .as_secs() as i64
 }
 
-fn reset_timestamp(value: &str) -> Option<i64> {
-    value.parse().ok().or_else(|| {
-        chrono::DateTime::parse_from_rfc3339(value)
-            .ok()
-            .map(|date| date.timestamp())
-    })
-}
+use orbit_client::usage::reset_timestamp;
 
 fn remaining(at: i64, now: i64) -> Option<String> {
     let seconds = at.checked_sub(now)?;

@@ -30,8 +30,8 @@ pub struct ModelChoice {
     provider: String,
     model: String,
     supports_vision: bool,
-    reasoning_effort: Option<orbit_model::types::ReasoningEffort>,
-    reasoning_efforts: Vec<orbit_model::types::ReasoningEffort>,
+    reasoning_effort: Option<orbit_client::protocol::model::ReasoningEffort>,
+    reasoning_efforts: Vec<orbit_client::protocol::model::ReasoningEffort>,
 }
 
 impl ModelChoice {
@@ -80,7 +80,7 @@ pub struct ModelPicker {
     query: String,
     selected: usize,
     current: String,
-    effort: Option<orbit_model::types::ReasoningEffort>,
+    effort: Option<orbit_client::protocol::model::ReasoningEffort>,
 }
 
 #[derive(Debug)]
@@ -381,7 +381,7 @@ impl ModelPicker {
     pub fn new(
         models: impl IntoIterator<Item = impl Into<ModelChoice>>,
         current: String,
-        effort: Option<orbit_model::types::ReasoningEffort>,
+        effort: Option<orbit_client::protocol::model::ReasoningEffort>,
     ) -> Self {
         let mut models: Vec<ModelChoice> = models
             .into_iter()
@@ -518,7 +518,7 @@ impl ModelPicker {
         self.normalize_effort();
     }
 
-    fn selected_efforts(&self) -> Vec<orbit_model::types::ReasoningEffort> {
+    fn selected_efforts(&self) -> Vec<orbit_client::protocol::model::ReasoningEffort> {
         let matches = self.matches();
         let Some(model) = matches.get(self.selected) else {
             return Vec::new();

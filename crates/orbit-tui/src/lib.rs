@@ -1,7 +1,6 @@
 //! Terminal presentation and interaction for Orbit application services.
 
 pub(crate) use orbit_config::config::{self, connections};
-pub(crate) use orbit_config::models::account_models;
 mod tui;
 pub use tui::{run_workspace, select_startup_model, setup_connection};
 

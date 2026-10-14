@@ -1,5 +1,5 @@
-use orbit_agent::events::AgentEvent;
-use orbit_model::types::StreamEvent;
+use orbit_client::protocol::events::AgentEvent;
+use orbit_client::protocol::model::StreamEvent;
 
 #[derive(Debug, Default)]
 pub(crate) struct Activity {

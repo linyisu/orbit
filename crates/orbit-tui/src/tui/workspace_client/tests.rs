@@ -436,8 +436,8 @@ fn remote_subagent_view_links_open_a_modal_and_keep_parent_input_isolated() {
                     presentation: Default::default(),
                     prompt: "child task".into(),
                 },
-                Update::agent(orbit_agent::events::AgentEvent::Model(
-                    orbit_model::types::StreamEvent::TextDelta("child answer".into()),
+                Update::agent(orbit_client::protocol::events::AgentEvent::Model(
+                    orbit_client::protocol::model::StreamEvent::TextDelta("child answer".into()),
                 )),
                 Update::Finished {
                     elapsed_ms: None,
@@ -506,11 +506,11 @@ fn page(updates: Vec<Update>, approvals: Vec<Approval>) -> Response {
 fn approval(id: u64) -> Approval {
     Approval {
         id,
-        preview: orbit_tools::approval::ApprovalPreview::Capability(
-            orbit_tools::approval::CapabilityPreview {
-                environment: orbit_runtime::capability::EnvironmentId::Local,
+        preview: orbit_client::protocol::approval::ApprovalPreview::Capability(
+            orbit_client::protocol::approval::CapabilityPreview {
+                environment: orbit_client::protocol::capability::EnvironmentId::Local,
                 path: "/external".into(),
-                access: orbit_runtime::capability::FilesystemAccess::Read,
+                access: orbit_client::protocol::capability::FilesystemAccess::Read,
                 reason: "test".into(),
             },
         ),
@@ -943,8 +943,8 @@ fn compaction_and_images_use_the_same_request_for_every_target() {
 
 #[test]
 fn steering_is_visible_before_receipt_and_is_reconciled_by_message_id() {
-    use orbit_agent::events::AgentEvent;
-    use orbit_model::types::StreamEvent;
+    use orbit_client::protocol::events::AgentEvent;
+    use orbit_client::protocol::model::StreamEvent;
     for receipt_first in [true, false] {
         let (mut tab, mut requests) = tab("local");
         tab.state
@@ -1268,6 +1268,13 @@ async fn restore_keeps_drafts_and_reuses_already_open_sessions() {
         assert_eq!(restored == source, !has_draft);
         let mut ready = connected_tab(Target::Local);
         ready.id = Some(saved.id.clone());
+        let connection = Arc::make_mut(ready.connection.as_mut().unwrap());
+        connection.config = saved.config.clone();
+        connection.local_configuration = Some(workspace::configuration::Local {
+            config: saved.config.clone(),
+            auth: saved.auth.clone(),
+            model: None,
+        });
         tabs.remote
             .insert(restored.clone(), ready);
         tabs.poll_remote().await;
@@ -1281,6 +1288,14 @@ async fn restore_keeps_drafts_and_reuses_already_open_sessions() {
     let mut tabs = crate::tui::tabs::live::Tabs::default();
     let mut restored = connected_tab(Target::Local);
     restored.id = Some("saved".into());
+    let saved = saved_local("saved");
+    let connection = Arc::make_mut(restored.connection.as_mut().unwrap());
+    connection.config = saved.config.clone();
+    connection.local_configuration = Some(workspace::configuration::Local {
+        config: saved.config.clone(),
+        auth: saved.auth.clone(),
+        model: None,
+    });
     let restored = tabs.add_remote(restored);
     let source = tabs.add_remote(connected_tab(Target::Local));
     tabs.restore_tabs(&source, &[&saved_local("saved")]);
@@ -1405,7 +1420,7 @@ async fn resume_preserves_nonempty_tabs_and_new_always_adds_a_tab() {
         |tab| {
             tab.state
                 .attachments
-                .push(orbit_model::types::Attachment::Image {
+                .push(orbit_client::protocol::model::Attachment::Image {
                     lease: None,
                     name: "draft.png".into(),
                     mime_type: "image/png".into(),
@@ -2067,7 +2082,7 @@ async fn switching_antigravity_models_replaces_the_footer_pool() {
 
 #[test]
 fn compact_run_presentation_sets_activity_before_any_model_event() {
-    use orbit_agent::events::AgentEvent;
+    use orbit_client::protocol::events::AgentEvent;
     for (prompt, compact) in [("/compact", false), ("", true)] {
         let (mut tab, _) = tab("本地");
         tab.apply(page(

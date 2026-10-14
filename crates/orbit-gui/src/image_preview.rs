@@ -111,13 +111,13 @@ fn close(window: &mut Window, cx: &mut App) {
 }
 
 fn load_image(path: PathBuf) -> Result<(Arc<Image>, (u32, u32)), SharedString> {
-    let bytes = orbit_model::types::Attachment::read_image_bytes(&path)
+    let bytes = orbit_client::protocol::model::Attachment::read_image_bytes(&path)
         .map_err(|error| SharedString::from(error.to_string()))?;
     decode_image(bytes)
 }
 
 pub(crate) fn decode_image(bytes: Vec<u8>) -> Result<(Arc<Image>, (u32, u32)), SharedString> {
-    if bytes.len() > orbit_model::types::Attachment::MAX_IMAGE_BYTES {
+    if bytes.len() > orbit_client::protocol::model::Attachment::MAX_IMAGE_BYTES {
         return Err("图片超过 20 MiB".into());
     }
     let Ok(format) = image::guess_format(&bytes) else {

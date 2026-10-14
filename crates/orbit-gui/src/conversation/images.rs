@@ -1,5 +1,4 @@
 //! Markdown images load through the owning workspace, including SSH/WSL paths.
-use base64::Engine as _;
 use gpui_kit::*;
 use orbit_client::protocol::Response;
 use std::{
@@ -109,8 +108,7 @@ impl ReplyImages {
                         let Response::File(encoded) = response? else {
                             return Err("图片响应格式无效".into());
                         };
-                        let bytes = base64::engine::general_purpose::STANDARD
-                            .decode(encoded)
+                        let bytes = orbit_client::protocol::file_bytes(encoded)
                             .map_err(|e| e.to_string())?;
                         crate::image_preview::decode_image(bytes)
                             .map(|(image, _)| image)

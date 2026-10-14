@@ -147,24 +147,10 @@ impl Spec {
     }
 
     pub fn target_identity(&self) -> crate::workspace::transport::Target {
-        use crate::workspace::transport::{SshOptions, Target};
-        if let Some(host) = &self.args.ssh {
-            Target::Ssh {
-                host: host.clone(),
-                options: SshOptions {
-                    user: self.args.ssh_user.clone(),
-                    port: self.args.ssh_port,
-                    identity: self.args.identity.clone(),
-                },
-            }
-        } else if let Some(distribution) = &self.args.wsl {
-            Target::Wsl {
-                distribution: distribution.clone(),
-                user: self.args.wsl_user.clone(),
-            }
-        } else {
-            Target::Local
-        }
+        self.args
+            .options()
+            .target()
+            .expect("connection target validated by clap or the connection form")
     }
 
     pub fn workspace(&self) -> &str {
@@ -244,22 +230,40 @@ impl Spec {
     }
 
     pub fn update(&mut self, values: &[String; 5]) -> Result<()> {
-        ensure!(!values[0].trim().is_empty(), "请输入主机或发行版");
-        let optional = |value: &String| (!value.trim().is_empty()).then(|| value.trim().to_owned());
-        if self.is_wsl() {
-            self.args.wsl = Some(values[0].trim().into());
-            self.args.wsl_user = optional(&values[1]);
-        } else {
-            self.args.ssh = Some(values[0].trim().into());
-            self.args.ssh_user = optional(&values[1]);
-            self.args.ssh_port = optional(&values[2])
-                .map(|port| port.parse())
-                .transpose()
-                .context("端口须为 1–65535")?;
-            ensure!(self.args.ssh_port != Some(0), "端口须为 1–65535");
-            self.args.identity = optional(&values[3]);
-        }
-        self.args.workspace = optional(&values[4]).unwrap_or_else(|| ".".into());
+        let draft = orbit_client::connect::RemoteDraft {
+            mode: if self.is_wsl() {
+                orbit_client::connect::RemoteKind::Wsl
+            } else {
+                orbit_client::connect::RemoteKind::Ssh
+            },
+            target: values[0].clone(),
+            user: values[1].clone(),
+            port: values[2].clone(),
+            identity: values[3].clone(),
+            workspace: if values[4].trim().is_empty() {
+                ".".into()
+            } else {
+                values[4].clone()
+            },
+            server: self
+                .args
+                .server
+                .clone()
+                .unwrap_or_default(),
+            database: self
+                .database
+                .as_ref()
+                .map(|path| path.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+        };
+        let (options, _) = draft.options()?;
+        self.args.ssh = options.ssh;
+        self.args.ssh_user = options.ssh_user;
+        self.args.ssh_port = options.ssh_port;
+        self.args.identity = options.identity;
+        self.args.wsl = options.wsl;
+        self.args.wsl_user = options.wsl_user;
+        self.args.workspace = options.workspace;
         Ok(())
     }
 

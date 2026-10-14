@@ -31,7 +31,7 @@ cargo run --release -p orbit-tui --locked
 
 ## 源码与验证
 
-[tui/workspace_client/](src/tui/workspace_client/) 处理连接与事件，[tui/render/](src/tui/render/) 绘制界面，[tui/markdown.rs](src/tui/markdown.rs) 和 [tui/media/](src/tui/media/) 负责正文与媒体。
+[tui/workspace_client/](src/tui/workspace_client/) 绑定客户端事件和交互状态，[tui/render/](src/tui/render/) 绘制界面，[tui/markdown.rs](src/tui/markdown.rs) 和 [tui/media/](src/tui/media/) 负责正文与媒体。
 
 ```sh
 cargo test -p orbit-tui --locked

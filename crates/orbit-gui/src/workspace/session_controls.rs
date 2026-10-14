@@ -181,8 +181,7 @@ impl SessionControls {
             .value()
             .trim()
             .to_owned();
-        if self.operation == Operation::Rename && (title.is_empty() || title.chars().count() > 120)
-        {
+        if self.operation == Operation::Rename && !orbit_protocol::admin::valid_title(&title) {
             self.error = Some("会话名称应为 1–120 个字符。".into());
             cx.notify();
             return;

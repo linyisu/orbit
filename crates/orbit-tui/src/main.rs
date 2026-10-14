@@ -41,11 +41,7 @@ fn main() -> Result<()> {
 #[tokio::main]
 async fn run() -> Result<()> {
     let cli = Cli::parse();
-    let auth = orbit_auth::directory(
-        cli.auth_dir,
-        std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from),
-        std::env::var_os("HOME").map(PathBuf::from),
-    )?;
+    let auth = orbit_client::configuration::auth_directory(cli.auth_dir)?;
     run_tui(cli.config, cli.database, cli.options, auth).await
 }
 

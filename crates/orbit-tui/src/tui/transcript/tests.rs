@@ -782,8 +782,8 @@ fn streamed_tables_match_fresh_layout_through_split_delimiters_and_resize() {
 #[test]
 fn batched_assistant_completion_matches_fresh_layout_after_trimming() {
     use super::super::app::UiState;
-    use orbit_agent::events::AgentEvent;
-    use orbit_model::types::{FunctionCall, StreamEvent, ToolCall};
+    use orbit_client::protocol::events::AgentEvent;
+    use orbit_client::protocol::model::{FunctionCall, StreamEvent, ToolCall};
 
     for tool_started in [true, false] {
         for (initial, delta) in [
@@ -858,8 +858,8 @@ fn batched_assistant_completion_matches_fresh_layout_after_trimming() {
 #[test]
 fn removed_empty_assistant_is_replaced_before_the_next_frame() {
     use super::super::app::UiState;
-    use orbit_agent::events::AgentEvent;
-    use orbit_model::types::StreamEvent;
+    use orbit_client::protocol::events::AgentEvent;
+    use orbit_client::protocol::model::StreamEvent;
 
     for event in [
         StreamEvent::TextDelta("好的，检查 Orbit。\n".into()),

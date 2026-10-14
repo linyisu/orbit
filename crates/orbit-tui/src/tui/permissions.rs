@@ -29,22 +29,12 @@ impl State {
 }
 
 pub trait ModeExt {
-    fn parse(text: &str) -> Option<Mode>;
     fn next(self) -> Mode;
     fn label(self) -> &'static str;
     fn description(self) -> &'static str;
 }
 
 impl ModeExt for Mode {
-    fn parse(text: &str) -> Option<Self> {
-        match text.to_ascii_lowercase().as_str() {
-            "ask" => Some(Self::Ask),
-            "auto" => Some(Self::Auto),
-            "yolo" => Some(Self::Yolo),
-            _ => None,
-        }
-    }
-
     fn next(self) -> Self {
         match self {
             Self::Ask => Self::Auto,
@@ -69,23 +59,5 @@ impl ModeExt for Mode {
             }
             Self::Yolo => "YOLO：全部操作自动确认通过（隔离方式由工作区配置决定）",
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn parses_supported_permission_modes() {
-        assert_eq!(Mode::default(), Mode::Auto);
-        for (text, mode) in [
-            ("ask", Mode::Ask),
-            ("auto", Mode::Auto),
-            ("yolo", Mode::Yolo),
-            ("YOLO", Mode::Yolo),
-        ] {
-            assert_eq!(Mode::parse(text), Some(mode));
-        }
-        assert_eq!(Mode::parse("unknown"), None);
     }
 }

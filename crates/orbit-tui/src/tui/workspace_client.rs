@@ -71,11 +71,11 @@ pub(super) struct Tab {
     incoming: Option<mpsc::Receiver<Result<Response>>>,
     busy: bool,
     starting: Option<String>,
-    starting_attachments: Vec<orbit_model::types::Attachment>,
+    starting_attachments: Vec<orbit_client::protocol::model::Attachment>,
     approval_id: Option<u64>,
     offline: bool,
     reconnect_at: Option<std::time::Instant>,
-    reconnect_attempts: u32,
+    recovery: workspace::connect::Recovery,
     subagent: Option<subagents::Remote>,
     question_revision: Option<u64>,
     question_closing: bool,
@@ -89,7 +89,8 @@ pub(super) struct Tab {
     usage_task: Option<AbortOnDropHandle<Result<orbit_protocol::usage::Snapshot>>>,
     model_watcher: Option<workspace::configuration::Watcher>,
     model_configuration: Option<orbit_protocol::Configuration>,
-    attachment_task: Option<AbortOnDropHandle<Result<Vec<orbit_model::types::Attachment>>>>,
+    attachment_task:
+        Option<AbortOnDropHandle<Result<Vec<orbit_client::protocol::model::Attachment>>>>,
 }
 
 impl Tab {
@@ -238,7 +239,7 @@ impl Tab {
             approval_id: None,
             offline: false,
             reconnect_at: None,
-            reconnect_attempts: 0,
+            recovery: Default::default(),
             subagent: None,
             question_revision: None,
             question_closing: false,
@@ -424,7 +425,6 @@ impl Tab {
         self.approval_id = None;
         self.offline = false;
         self.reconnect_at = None;
-        self.reconnect_attempts = 0;
     }
 
     fn profile(&mut self, info: &SessionInfo) {
@@ -785,6 +785,10 @@ impl Tab {
                 }
             }
             Response::Page(page) => {
+                if !page.more {
+                    self.recovery
+                        .restored(std::time::Instant::now());
+                }
                 self.state.planning.sync(page.planning);
                 if self
                     .state
@@ -952,7 +956,7 @@ impl Tab {
         self.approval_id = None;
         self.state.finish_clock();
         self.state.status = RunStatus::Failed;
-        let retrying = self.reconnect_attempts > 0;
+        let retrying = self.recovery.attempts() > 0;
         let automatic = retry && self.schedule_reconnection();
         if self.state.workspace_wizard.is_none() && !retrying {
             let recovery = if automatic {
@@ -968,7 +972,7 @@ impl Tab {
     }
 
     fn reconnect(&mut self) {
-        self.reconnect_attempts = 0;
+        self.recovery = Default::default();
         self.begin_reconnection(false);
     }
 
@@ -1024,7 +1028,7 @@ impl Tab {
         self.browsing = None;
         self.disconnect("连接已取消".into(), false);
         self.reconnect_at = None;
-        self.reconnect_attempts = 0;
+        self.recovery = Default::default();
         self.state
             .report_local(TranscriptItem::Notice(
                 "已停止重连；/reconnect 可接回原会话。".into(),

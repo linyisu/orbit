@@ -35,14 +35,7 @@ impl Tab {
         // A slow quota endpoint must not occupy the conversation's transport
         // queue. The separate connection attaches to the same running service.
         self.usage_task = Some(AbortOnDropHandle::new(tokio::spawn(async move {
-            let mut client = connection.connect().await?;
-            match client
-                .request(Request::Usage { session })
-                .await?
-            {
-                Response::Usage(snapshot) => Ok(snapshot),
-                _ => anyhow::bail!("工作区服务未返回用量信息"),
-            }
+            workspace::usage::fetch(&connection, session).await
         })));
     }
 

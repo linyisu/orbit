@@ -61,8 +61,8 @@ fn report_dialog_scrolls_through_real_input_even_under_a_notification() {
     assert_eq!(tab.state.scroll, chat_scroll);
 }
 
-fn image() -> orbit_model::types::Attachment {
-    orbit_model::types::Attachment::Image {
+fn image() -> orbit_client::protocol::model::Attachment {
+    orbit_client::protocol::model::Attachment::Image {
         lease: None,
         name: "draft.png".into(),
         mime_type: "image/png".into(),
@@ -325,15 +325,17 @@ fn interrupted_tool_is_no_longer_running_after_restore() {
                 presentation: Default::default(),
                 prompt: "old prompt".into(),
             },
-            Update::Agent(Box::new(orbit_agent::events::AgentEvent::ToolStarted {
-                call: orbit_model::types::ToolCall::function(
-                    "call",
-                    "run_command",
-                    serde_json::json!({
-                        "command": "sleep 1"
-                    }),
-                ),
-            })),
+            Update::Agent(Box::new(
+                orbit_client::protocol::events::AgentEvent::ToolStarted {
+                    call: orbit_client::protocol::model::ToolCall::function(
+                        "call",
+                        "run_command",
+                        serde_json::json!({
+                            "command": "sleep 1"
+                        }),
+                    ),
+                },
+            )),
             Update::Finished {
                 elapsed_ms: None,
                 status: "failed".into(),
@@ -358,7 +360,7 @@ fn model_changes_preserve_image_drafts_and_only_send_to_a_compatible_model() {
     image::RgbaImage::new(1, 1)
         .save(&path)
         .unwrap();
-    let attachment = orbit_model::types::Attachment::Image {
+    let attachment = orbit_client::protocol::model::Attachment::Image {
         lease: None,
         name: "draft.png".into(),
         mime_type: "image/png".into(),
@@ -444,7 +446,7 @@ fn queued_input_replay_has_one_user_message() {
                 },
                 prompt: "queued prompt".into(),
             },
-            Update::agent(orbit_agent::events::AgentEvent::InputReceived {
+            Update::agent(orbit_client::protocol::events::AgentEvent::InputReceived {
                 attachments: vec![],
                 message_id: 1,
                 content: "queued prompt".into(),
@@ -607,14 +609,17 @@ fn replay_preserves_reading_position_and_finalizes_only_replayed_background_tool
     );
     assert_eq!(tab.state.scroll, 12);
     assert!(!tab.state.follow_bottom);
-    let call =
-        orbit_model::types::ToolCall::function("background", "run_command", serde_json::json!({}));
+    let call = orbit_client::protocol::model::ToolCall::function(
+        "background",
+        "run_command",
+        serde_json::json!({}),
+    );
     apply_page(
         &mut tab,
         vec![
-            Update::Agent(Box::new(orbit_agent::events::AgentEvent::ToolStarted {
-                call,
-            })),
+            Update::Agent(Box::new(
+                orbit_client::protocol::events::AgentEvent::ToolStarted { call },
+            )),
             Update::Finished {
                 status: "completed".into(),
                 elapsed_ms: Some(100),
@@ -635,8 +640,11 @@ fn replay_preserves_reading_position_and_finalizes_only_replayed_background_tool
 #[test]
 fn running_command_card_updates_stdout_without_overwriting_a_finished_result() {
     let (mut tab, _rx) = tab("本地");
-    let call =
-        orbit_model::types::ToolCall::function("command", "run_command", serde_json::json!({}));
+    let call = orbit_client::protocol::model::ToolCall::function(
+        "command",
+        "run_command",
+        serde_json::json!({}),
+    );
     apply_page(
         &mut tab,
         vec![
@@ -644,9 +652,9 @@ fn running_command_card_updates_stdout_without_overwriting_a_finished_result() {
                 prompt: "run".into(),
                 presentation: Default::default(),
             },
-            Update::Agent(Box::new(orbit_agent::events::AgentEvent::ToolStarted {
-                call: call.clone(),
-            })),
+            Update::Agent(Box::new(
+                orbit_client::protocol::events::AgentEvent::ToolStarted { call: call.clone() },
+            )),
         ],
     );
     let Response::Page(mut frame) = super::page(vec![], vec![]) else {
@@ -673,7 +681,7 @@ fn running_command_card_updates_stdout_without_overwriting_a_finished_result() {
     apply_page(
         &mut tab,
         vec![Update::Agent(Box::new(
-            orbit_agent::events::AgentEvent::ToolFinished {
+            orbit_client::protocol::events::AgentEvent::ToolFinished {
                 call: call.clone(),
                 content: "final result".into(),
                 changes: vec![],
@@ -928,8 +936,8 @@ fn file_approval_scroll_and_editing_use_the_live_event_route() {
         vec![],
         vec![Approval {
             id: 42,
-            preview: orbit_tools::approval::ApprovalPreview::Write(
-                orbit_tools::approval::WritePreview {
+            preview: orbit_client::protocol::approval::ApprovalPreview::Write(
+                orbit_client::protocol::approval::WritePreview {
                     path: "src/main.rs".into(),
                     before: Some("old\n".repeat(100)),
                     after: "new\n".repeat(100),
@@ -1059,8 +1067,8 @@ fn tool_output_wheel_uses_the_live_route_and_copy_follows_visible_content() {
 
 #[test]
 fn replayed_reasoning_uses_saved_duration_and_live_reasoning_still_times_itself() {
-    use orbit_agent::events::AgentEvent;
-    use orbit_model::types::StreamEvent;
+    use orbit_client::protocol::events::AgentEvent;
+    use orbit_client::protocol::model::StreamEvent;
     let (mut tab, _requests) = tab("本地");
     for (replayed, saved) in [(true, Some(7_500)), (true, None), (false, None)] {
         let mut updates = vec![

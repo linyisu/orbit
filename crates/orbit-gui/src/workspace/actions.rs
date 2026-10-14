@@ -5,7 +5,7 @@ use gpui_kit::component::{
     input::{Input, InputState},
     notification::Notification,
 };
-use orbit_agent::events::AgentEvent;
+use orbit_client::protocol::events::AgentEvent;
 use orbit_protocol::{
     Inspection, SessionAction, plan,
     project::{MemoryAction, MemoryCategory, TaskAction},
@@ -707,17 +707,24 @@ impl Workspace {
                     self.execution_scroll = UniformListScrollHandle::new();
                 }
             }
-            Update::Agent(event) => match &**event {
-                AgentEvent::ContextUsage { estimated_input } => {
-                    self.context_used = *estimated_input
+            Update::Agent(event) => {
+                if let Some(used) = self.context_usage.observe(
+                    self.info
+                        .as_ref()
+                        .map_or("", |info| info.model.as_str()),
+                    event,
+                ) {
+                    self.context_used = used;
                 }
-                AgentEvent::Failed { error } | AgentEvent::CompactionFailed { error, .. }
-                    if !self.replaying =>
-                {
-                    self.report_error(error.clone(), cx);
+                match &**event {
+                    AgentEvent::Failed { error } | AgentEvent::CompactionFailed { error, .. }
+                        if !self.replaying =>
+                    {
+                        self.report_error(error.clone(), cx);
+                    }
+                    _ => {}
                 }
-                _ => {}
-            },
+            }
             _ => {}
         }
     }
@@ -771,7 +778,13 @@ impl Workspace {
                 }
                 "/model" if !arg.is_empty() => Request::SetModel {
                     session,
-                    model: arg.into(),
+                    model: match orbit_client::requested_model(arg, &info.model, &info.models) {
+                        Ok(model) => model,
+                        Err(error) => {
+                            self.report_error(error.to_string(), cx);
+                            return true;
+                        }
+                    },
                     effort: None,
                 },
                 "/reasoning" if !arg.is_empty() => Request::SetModel {
@@ -793,14 +806,9 @@ impl Workspace {
                     }
                 },
                 "/permissions" | "/mode" => {
-                    let mode = match arg.to_ascii_lowercase().as_str() {
-                        "ask" => orbit_protocol::Mode::Ask,
-                        "auto" => orbit_protocol::Mode::Auto,
-                        "yolo" => orbit_protocol::Mode::Yolo,
-                        _ => {
-                            self.report_error("审批模式：ask、auto、yolo", cx);
-                            return true;
-                        }
+                    let Some(mode) = orbit_protocol::Mode::parse(arg) else {
+                        self.report_error("审批模式：ask、auto、yolo", cx);
+                        return true;
                     };
                     Request::SetMode { session, mode }
                 }

@@ -352,7 +352,7 @@ fn details_use_the_existing_scrollable_dialog_above_other_surfaces() {
 
 #[test]
 fn model_and_compaction_failures_open_details_without_dumping_errors_in_history() {
-    use orbit_agent::events::AgentEvent;
+    use orbit_client::protocol::events::AgentEvent;
     let details = "model returned HTTP 429:\n{\n  \"error\": \"RESOURCE_EXHAUSTED\"\n}";
     for event in [
         AgentEvent::Failed {
@@ -398,7 +398,7 @@ fn model_and_compaction_failures_open_details_without_dumping_errors_in_history(
 
 #[test]
 fn replayed_failures_neither_fill_the_transcript_nor_reopen_old_notifications() {
-    use orbit_agent::events::AgentEvent;
+    use orbit_client::protocol::events::AgentEvent;
     let mut state = UiState::new("mock");
     state.start_remote(
         "old question".into(),

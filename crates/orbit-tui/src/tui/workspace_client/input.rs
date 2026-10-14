@@ -692,36 +692,25 @@ impl Tab {
             }
             text if text.starts_with("/model ") => {
                 let requested = text[7..].trim();
-                let qualified = if requested.contains("::") {
-                    requested.to_owned()
-                } else {
-                    self.state
-                        .model
-                        .split_once("::")
-                        .map_or_else(
-                            || requested.to_owned(),
-                            |(provider, _)| format!("{provider}::{requested}"),
-                        )
-                };
-                if self
-                    .state
-                    .model_completions
-                    .contains(&qualified)
-                {
-                    let model = qualified.as_str();
-                    self.submit_with_receipt(
-                        Request::SetModel {
-                            session: session.clone(),
-                            model: model.into(),
-                            effort: None,
-                        },
-                        submissions::Draft::Model(model.into()),
-                    );
-                } else {
-                    self.state
-                        .report_local(TranscriptItem::Error(
-                            "模型未配置；用 /model 查看目标环境的模型。".into(),
-                        ));
+                match workspace::requested_model(
+                    requested,
+                    &self.state.model,
+                    &self.state.model_completions,
+                ) {
+                    Ok(qualified) => {
+                        let model = qualified.as_str();
+                        self.submit_with_receipt(
+                            Request::SetModel {
+                                session: session.clone(),
+                                model: model.into(),
+                                effort: None,
+                            },
+                            submissions::Draft::Model(model.into()),
+                        );
+                    }
+                    Err(error) => self
+                        .state
+                        .report_local(TranscriptItem::Error(error.to_string())),
                 }
             }
             "/reasoning" => self

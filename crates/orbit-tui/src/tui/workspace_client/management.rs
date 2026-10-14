@@ -616,14 +616,16 @@ mod tests {
             .id
             .clone();
         tab.approval_id = Some(8);
-        tab.state.approval = Some(orbit_tools::approval::ApprovalPreview::Capability(
-            orbit_tools::approval::CapabilityPreview {
-                environment: orbit_runtime::capability::EnvironmentId::Local,
-                path: "/external".into(),
-                access: orbit_runtime::capability::FilesystemAccess::Read,
-                reason: "test".into(),
-            },
-        ));
+        tab.state.approval = Some(
+            orbit_client::protocol::approval::ApprovalPreview::Capability(
+                orbit_client::protocol::approval::CapabilityPreview {
+                    environment: orbit_client::protocol::capability::EnvironmentId::Local,
+                    path: "/external".into(),
+                    access: orbit_client::protocol::capability::FilesystemAccess::Read,
+                    reason: "test".into(),
+                },
+            ),
+        );
         overlay::sync(&mut tab.state);
         assert!(tab.state.management.active.is_none());
         tab.state.approval_shown = true;

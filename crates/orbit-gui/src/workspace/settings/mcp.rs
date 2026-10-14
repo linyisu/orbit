@@ -9,8 +9,8 @@ use gpui_kit::component::{
     switch::Switch,
 };
 use orbit_config::config::connections::mcp::{McpDraft, environment};
+use orbit_config::config::connections::mcp::{McpServerConfig, ServerInput};
 use orbit_protocol::resources::{Action, McpServer, Snapshot};
-use orbit_tools::mcp::McpServerConfig;
 
 pub(super) struct Mcp {
     importer: Option<Entity<import::Importer>>,
@@ -150,7 +150,7 @@ impl Mcp {
 
     fn apply_current(&mut self, cx: &mut Context<Self>) {
         let Some(draft) = &self.draft else { return };
-        let config = orbit_tools::mcp::McpConfig {
+        let config = orbit_config::config::connections::mcp::McpConfig {
             servers: draft.servers().clone(),
         };
         let config = match serde_json::to_value(config) {
@@ -397,66 +397,35 @@ impl Mcp {
             .value()
             .trim()
             .to_string();
-        if self.existing.is_none()
-            && self
-                .draft
-                .as_ref()
-                .is_some_and(|d| d.servers().contains_key(&name))
+        let fields = [
+            self.command
+                .read(cx)
+                .value()
+                .to_string(),
+            self.args.read(cx).value().to_string(),
+            self.env.read(cx).value().to_string(),
+            self.timeout
+                .read(cx)
+                .value()
+                .to_string(),
+            self.tools.read(cx).value().to_string(),
+        ];
+        let server = match (ServerInput {
+            command: &fields[0],
+            args: &fields[1],
+            env: &fields[2],
+            timeout_seconds: &fields[3],
+            tools: &fields[4],
+            enabled: self.enabled,
+        })
+        .parse()
         {
-            self.error = Some("名称已存在，请使用其他名称".into());
-            cx.notify();
-            return;
-        }
-        let values = match environment::parse(&self.env.read(cx).value()) {
-            Ok(values) => values,
+            Ok(server) => server,
             Err(error) => {
                 self.error = Some(format!("{error:#}"));
                 cx.notify();
                 return;
             }
-        };
-        let Ok(timeout_seconds) = self
-            .timeout
-            .read(cx)
-            .value()
-            .parse::<u64>()
-        else {
-            self.error = Some("超时应为正整数（秒）。".into());
-            cx.notify();
-            return;
-        };
-        if timeout_seconds == 0 {
-            self.error = Some("超时应为正整数（秒）。".into());
-            cx.notify();
-            return;
-        }
-        let server = McpServerConfig {
-            transport: "stdio".into(),
-            command: self
-                .command
-                .read(cx)
-                .value()
-                .trim()
-                .into(),
-            args: self
-                .args
-                .read(cx)
-                .value()
-                .lines()
-                .map(str::to_string)
-                .collect(),
-            env: values,
-            timeout_seconds,
-            tools: self
-                .tools
-                .read(cx)
-                .value()
-                .lines()
-                .map(str::trim)
-                .filter(|line| !line.is_empty())
-                .map(str::to_string)
-                .collect(),
-            enabled: self.enabled,
         };
         self.persist(name, Some(server), cx);
     }
@@ -473,8 +442,13 @@ impl Mcp {
         self.busy = true;
         self.error = None;
         self.base_reloaded = false;
+        let creating = self.existing.is_none() && self.editing;
         let job = self.runtime.spawn_blocking(move || {
-            let result = draft.save(&path, &name, server);
+            let result = if creating && let Some(server) = server {
+                draft.create(&path, &name, server)
+            } else {
+                draft.save(&path, &name, server)
+            };
             (draft, result)
         });
         self.task = cx.spawn(async move |owner, cx| {

@@ -44,7 +44,7 @@ fn command_is_available_during_a_main_run_and_does_not_steer_it() {
 fn a_side_dialog_stays_above_pending_approval_and_freezes_text_while_selected() {
     use super::super::app::UiState;
     use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
-    use orbit_tools::approval::{ApprovalPreview, WritePreview};
+    use orbit_client::protocol::approval::{ApprovalPreview, WritePreview};
 
     let mut state = UiState::new("orbit-fast");
     state.status = RunStatus::Running;

@@ -81,8 +81,8 @@ fn completed_thinking_drops_trailing_blank_rows_without_changing_content() {
 #[test]
 fn completed_reasoning_collapses_and_header_hover_and_click_reveal_it() {
     use crossterm::event::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
-    use orbit_agent::events::AgentEvent;
-    use orbit_model::types::StreamEvent;
+    use orbit_client::protocol::events::AgentEvent;
+    use orbit_client::protocol::model::StreamEvent;
 
     let mut state = UiState::new("model");
     state.apply(AgentEvent::Model(StreamEvent::ReasoningDelta(
@@ -392,7 +392,7 @@ fn home_centers_composer_and_conversation_exposes_new_session_button() {
 fn composer_metadata_is_below_input_without_a_background_or_sidebar() {
     for width in [30, 140] {
         let mut state = UiState::new("provider::test-model");
-        state.reasoning_effort = Some(orbit_model::types::ReasoningEffort::High);
+        state.reasoning_effort = Some(orbit_client::protocol::model::ReasoningEffort::High);
         state.input.set("draft".into());
         let mut terminal = Terminal::new(TestBackend::new(width, 24)).unwrap();
 
@@ -1080,8 +1080,8 @@ fn source_colors_and_multiline_state_match_across_code_previews() {
         .collect();
     let message = markdown::document(&format!("```rust\n{content}\n```"), 100);
     let mut approval = UiState::new("mock");
-    approval.approval = Some(orbit_tools::approval::ApprovalPreview::Write(
-        orbit_tools::approval::WritePreview {
+    approval.approval = Some(orbit_client::protocol::approval::ApprovalPreview::Write(
+        orbit_client::protocol::approval::WritePreview {
             path: "src/Orbit Code.RS".into(),
             before: None,
             after: content.into(),
@@ -1529,8 +1529,8 @@ fn reasoning_is_visible_and_expansion_only_affects_one_visible_collapsible() {
     use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 
     let mut state = UiState::new("model");
-    state.apply(orbit_agent::events::AgentEvent::Model(
-        orbit_model::types::StreamEvent::ReasoningDelta("reasoning visible now".into()),
+    state.apply(orbit_client::protocol::events::AgentEvent::Model(
+        orbit_client::protocol::model::StreamEvent::ReasoningDelta("reasoning visible now".into()),
     ));
 
     assert!(render(&mut state, 100, 30).contains("reasoning visible now"));
@@ -1989,7 +1989,7 @@ fn pending_images_render_as_chips_above_the_prompt() {
     let mut state = UiState::new("mock");
     state
         .attachments
-        .push(orbit_model::types::Attachment::Image {
+        .push(orbit_client::protocol::model::Attachment::Image {
             lease: None,
             name: "capture.png".into(),
             mime_type: "image/png".into(),
@@ -2238,8 +2238,8 @@ fn file_approval_keeps_conversation_and_draft_visible() {
             "Conversation remains visible".into(),
         ));
     state.input.insert("my draft");
-    state.approval = Some(orbit_tools::approval::ApprovalPreview::Write(
-        orbit_tools::approval::WritePreview {
+    state.approval = Some(orbit_client::protocol::approval::ApprovalPreview::Write(
+        orbit_client::protocol::approval::WritePreview {
             path: "price.c".into(),
             before: Some("return subtotal > 10000;\n".into()),
             after: "return subtotal >= 10000;\n".into(),
@@ -2356,8 +2356,8 @@ fn native_cursor_tracks_unicode_input_streaming_and_dialog_focus() {
         );
 
         // Streaming output must not leave the IME attached to the transcript.
-        state.apply(orbit_agent::events::AgentEvent::Model(
-            orbit_model::types::StreamEvent::TextDelta("输出中".into()),
+        state.apply(orbit_client::protocol::events::AgentEvent::Model(
+            orbit_client::protocol::model::StreamEvent::TextDelta("输出中".into()),
         ));
         terminal
             .draw(|frame| draw(frame, &mut state))
@@ -3099,9 +3099,9 @@ fn thinking_code_keeps_a_compound_thinking_and_code_rail() {
 
 #[test]
 fn scrolling_during_streaming_keeps_the_visible_anchor() {
-    use orbit_agent::events::AgentEvent;
+    use orbit_client::protocol::events::AgentEvent;
 
-    use orbit_model::types::StreamEvent;
+    use orbit_client::protocol::model::StreamEvent;
 
     let mut state = UiState::new("mock");
     state.apply(AgentEvent::Model(StreamEvent::TextDelta(
@@ -3199,7 +3199,7 @@ fn activity_stays_readable_and_in_place_while_colors_animate() {
     let second = footer(&state, 100);
     assert_eq!(first.to_string(), second.to_string());
     assert_ne!(first.spans, second.spans);
-    state.apply(orbit_agent::events::AgentEvent::CompactionStarted);
+    state.apply(orbit_client::protocol::events::AgentEvent::CompactionStarted);
     assert!(
         render(&mut state, 100, 24)
             .replace(' ', "")
@@ -3214,7 +3214,7 @@ fn activity_stays_readable_and_in_place_while_colors_animate() {
             .to_string()
             .contains("正在取消")
     );
-    state.apply(orbit_agent::events::AgentEvent::Cancelled);
+    state.apply(orbit_client::protocol::events::AgentEvent::Cancelled);
     assert!(
         !footer(&state, 100)
             .to_string()
@@ -3224,8 +3224,8 @@ fn activity_stays_readable_and_in_place_while_colors_animate() {
 
 #[test]
 fn activity_animates_only_in_footer_and_stops_when_completed() {
-    use orbit_agent::events::AgentEvent;
-    use orbit_model::types::{FunctionCall, StreamEvent, ToolCall};
+    use orbit_client::protocol::events::AgentEvent;
+    use orbit_client::protocol::model::{FunctionCall, StreamEvent, ToolCall};
 
     let mut state = UiState::new("mock");
     state.submit("work".into());
@@ -3315,7 +3315,7 @@ fn activity_animates_only_in_footer_and_stops_when_completed() {
 
 #[test]
 fn execution_footer_shows_stable_status_labels_for_commands_and_tasks() {
-    use orbit_agent::events::AgentEvent;
+    use orbit_client::protocol::events::AgentEvent;
 
     for connection in [None, Some("SSH 204".into())] {
         let mut state = UiState::new("mock");

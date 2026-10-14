@@ -5,7 +5,7 @@ edition.workspace = true
 default-run = "orbit-gui"
 
 [features]
-test-support = []
+test-support = ["orbit-client/test-support"]
 
 [[bin]]
 name = "orbit-gui-fixture"
@@ -26,13 +26,8 @@ image.workspace = true
 clap.workspace = true
 chrono.workspace = true
 orbit-client.workspace = true
-orbit-auth.workspace = true
 orbit-config.workspace = true
-orbit-agent.workspace = true
-orbit-model.workspace = true
 orbit-protocol.workspace = true
-orbit-tools.workspace = true
-orbit-runtime.workspace = true
 orbit-syntax.workspace = true
 syntect.workspace = true
 serde_json.workspace = true
@@ -43,7 +38,6 @@ ratex-parser.workspace = true
 ratex-svg.workspace = true
 ratex-types.workspace = true
 resvg.workspace = true
-reqwest.workspace = true
 pulldown-cmark.workspace = true
 tempfile.workspace = true
 tokio.workspace = true

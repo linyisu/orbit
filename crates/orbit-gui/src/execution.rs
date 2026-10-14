@@ -1,8 +1,8 @@
 //! A read-only projection of durable agent events. The service owns execution;
 //! views consume this projection without inferring success from a text message.
-use orbit_agent::events::AgentEvent;
 use orbit_client::protocol::Update;
-use orbit_model::types::{StreamEvent, ToolCall};
+use orbit_client::protocol::events::AgentEvent;
+use orbit_client::protocol::model::{StreamEvent, ToolCall};
 use std::{
     collections::BTreeSet,
     sync::atomic::{AtomicU64, Ordering},

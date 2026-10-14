@@ -9,112 +9,25 @@ use gpui_kit::component::{
     scroll::ScrollableElement,
 };
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Mode {
-    Ssh,
-    Wsl,
-}
+use orbit_client::connect::{RemoteDraft as Draft, RemoteKind as Mode};
 
-struct Draft {
-    mode: Mode,
-    target: String,
-    workspace: String,
-    user: String,
-    port: String,
-    identity: String,
-    server: String,
-    database: String,
-}
-
-impl Draft {
-    fn options(&self, base: &Options) -> anyhow::Result<Options> {
-        let target = self.target.trim();
-        anyhow::ensure!(
-            !target.is_empty(),
-            match self.mode {
-                Mode::Ssh => "填写 SSH 主机或配置别名",
-                Mode::Wsl => "填写 WSL 发行版名称",
-            }
-        );
-        anyhow::ensure!(
-            !target.starts_with('-') && !target.chars().any(char::is_control),
-            "连接目标不能以横线开头或包含控制字符"
-        );
-        if self.mode == Mode::Ssh {
-            anyhow::ensure!(
-                !target.chars().any(char::is_whitespace) && !target.contains("://"),
-                "SSH 主机使用 Host 别名或 user@hostname，不包含空格或 URL 前缀"
-            );
-        }
-        let path = self.workspace.trim();
-        anyhow::ensure!(!path.is_empty(), "填写目标机器上的工作区目录");
-        anyhow::ensure!(
-            !path.chars().any(char::is_control),
-            "工作区目录包含无效字符"
-        );
-        let user = optional(&self.user);
-        if let Some(user) = &user {
-            anyhow::ensure!(
-                !user.starts_with('-')
-                    && !user
-                        .chars()
-                        .any(|c| c.is_whitespace() || c.is_control()),
-                "用户名不能以横线开头或包含空格"
-            );
-        }
-        let port = if self.mode == Mode::Ssh {
-            optional(&self.port)
-                .map(|port| {
-                    port.parse::<u16>()
-                        .ok()
-                        .filter(|port| *port != 0)
-                        .ok_or_else(|| anyhow::anyhow!("SSH 端口必须为 1–65535"))
-                })
-                .transpose()?
-        } else {
-            None
-        };
-        for (name, value) in [
-            ("服务程序", &self.server),
-            ("数据库路径", &self.database),
-            ("密钥路径", &self.identity),
-        ] {
-            anyhow::ensure!(!value.chars().any(char::is_control), "{name}包含无效字符");
-        }
-        anyhow::ensure!(
-            !matches!(optional(&self.server).as_deref(), Some("~"))
-                && !self.server.trim().starts_with("~/"),
-            "服务程序使用目标机器上的绝对路径，或 PATH 中的命令名"
-        );
-        let mut options = base.clone();
-        options.ssh = (self.mode == Mode::Ssh).then(|| target.into());
-        options.ssh_user = (self.mode == Mode::Ssh)
-            .then_some(user.clone())
-            .flatten();
-        options.ssh_port = port;
-        options.identity = (self.mode == Mode::Ssh)
-            .then(|| optional(&self.identity))
-            .flatten();
-        options.wsl = (self.mode == Mode::Wsl).then(|| target.into());
-        options.wsl_user = (self.mode == Mode::Wsl)
-            .then_some(user)
-            .flatten();
-        options.workspace = Some(path.into());
-        options.server = optional(&self.server);
-        options.database = optional(&self.database).map(PathBuf::from);
-        options.resume = None;
-        options.recover_draft = false;
-        options.relink_on_resume = false;
-        // Config and identity are local inputs. Workspace and database remain
-        // target paths because the remote target is already set above.
-        options.resolve_paths()?;
-        Ok(options)
-    }
-}
-
-fn optional(value: &str) -> Option<String> {
-    let value = value.trim();
-    (!value.is_empty()).then(|| value.to_owned())
+fn remote_options(draft: &Draft, base: &Options) -> anyhow::Result<Options> {
+    let (connection, database) = draft.options()?;
+    let mut options = base.clone();
+    options.ssh = connection.ssh;
+    options.ssh_user = connection.ssh_user;
+    options.ssh_port = connection.ssh_port;
+    options.identity = connection.identity;
+    options.wsl = connection.wsl;
+    options.wsl_user = connection.wsl_user;
+    options.workspace = Some(connection.workspace.into());
+    options.server = connection.server;
+    options.database = database;
+    options.resume = None;
+    options.recover_draft = false;
+    options.relink_on_resume = false;
+    options.resolve_paths()?;
+    Ok(options)
 }
 
 struct RemoteConnection {
@@ -496,7 +409,7 @@ impl RemoteConnection {
         if self.submitted {
             return;
         }
-        match self.draft(cx).options(&self.options) {
+        match remote_options(&self.draft(cx), &self.options) {
             Ok(options) => {
                 if self
                     .owner
@@ -515,7 +428,7 @@ impl RemoteConnection {
     }
 
     fn browse(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        match self.draft(cx).options(&self.options) {
+        match remote_options(&self.draft(cx), &self.options) {
             Ok(options) => {
                 let browser = cx.new(|cx| {
                     browser::DirectoryBrowser::new(options, self.runtime.clone(), window, cx)
@@ -881,7 +794,7 @@ impl Render for RemoteConnection {
 
 #[cfg(test)]
 mod tests {
-    use super::{Draft, Mode, Options};
+    use super::{Draft, Mode, Options, remote_options};
     use clap::Parser;
 
     fn draft(mode: Mode) -> Draft {
@@ -903,9 +816,7 @@ mod tests {
         local.server = Some("/desktop/orbit".into());
         local.database = Some("/desktop/orbit.db".into());
         local.resume = Some("old-local-session".into());
-        let options = draft(Mode::Ssh)
-            .options(&local)
-            .unwrap();
+        let options = remote_options(&draft(Mode::Ssh), &local).unwrap();
         assert_eq!(options.ssh.as_deref(), Some("dev"));
         assert_eq!(
             options.workspace.as_deref(),
@@ -920,21 +831,21 @@ mod tests {
         let mut draft = draft(Mode::Ssh);
         for target in ["-oProxyCommand=bad", "ssh://dev", "dev host", "dev\nother"] {
             draft.target = target.into();
-            assert!(draft.options(&local).is_err());
+            assert!(remote_options(&draft, &local).is_err());
         }
         draft.target = "user@dev".into();
         for port in ["0", "65536", "ssh"] {
             draft.port = port.into();
-            assert!(draft.options(&local).is_err());
+            assert!(remote_options(&draft, &local).is_err());
         }
         draft.port = "2222".into();
         draft.identity = "~/.ssh/custom key".into();
-        let ssh = draft.options(&local).unwrap();
+        let ssh = remote_options(&draft, &local).unwrap();
         assert_eq!(ssh.ssh_port, Some(2_222));
         draft.mode = Mode::Wsl;
         draft.target = "Ubuntu 24.04".into();
         draft.user = "linux-user".into();
-        let wsl = draft.options(&ssh).unwrap();
+        let wsl = remote_options(&draft, &ssh).unwrap();
         assert!(wsl.ssh.is_none() && wsl.ssh_port.is_none() && wsl.identity.is_none());
         assert_eq!(wsl.wsl_user.as_deref(), Some("linux-user"));
     }
@@ -949,7 +860,7 @@ mod tests {
         draft.identity = "keys/dev key".into();
         draft.server = "/opt/orbit service/orbit".into();
         draft.database = "~/state/orbit.db".into();
-        let options = draft.options(&base).unwrap();
+        let options = remote_options(&draft, &base).unwrap();
         assert_eq!(options.ssh.as_deref(), Some("dev-alias"));
         assert_eq!(options.ssh_user.as_deref(), Some("builder"));
         assert_eq!(options.ssh_port, Some(2_222));
@@ -961,8 +872,7 @@ mod tests {
         );
         draft.server = "~/bin/orbit".into();
         assert!(
-            draft
-                .options(&base)
+            remote_options(&draft, &base)
                 .err()
                 .unwrap()
                 .to_string()
@@ -971,7 +881,7 @@ mod tests {
         draft.server.clear();
         for field in ["", " ", "\n"] {
             draft.workspace = field.into();
-            assert!(draft.options(&base).is_err());
+            assert!(remote_options(&draft, &base).is_err());
         }
     }
 }

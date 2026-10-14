@@ -78,10 +78,12 @@ fn remote_previews_use_session_proxy_and_isolate_cache_after_rebind() {
             let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
             listener.set_nonblocking(true).unwrap();
             let client = Arc::new(
-                orbit_tools::web_fetch::WebClient::new(&orbit_tools::web_fetch::WebConfig {
-                    proxy: Some(format!("http://{}", listener.local_addr().unwrap())),
-                    ..Default::default()
-                })
+                orbit_client::attachments::ImageClient::new(
+                    &orbit_client::attachments::ImageNetwork {
+                        proxy: Some(format!("http://{}", listener.local_addr().unwrap())),
+                        ..Default::default()
+                    },
+                )
                 .unwrap(),
             );
             let worker = std::thread::spawn(move || {
@@ -255,7 +257,7 @@ async fn new_tabs_share_terminal_media_and_keep_graphics_when_switching_back() {
 
 #[test]
 fn replayed_sessions_keep_media_capabilities_for_formula_output() {
-    use orbit_model::types::StreamEvent;
+    use orbit_client::protocol::model::StreamEvent;
     use orbit_protocol::{RunPresentation, Update};
     let media = context(ProtocolType::Kitty);
     let formula = "## 数学公式\n$$\n\\int_{-\\infty}^{\\infty}e^{-x^2}\\,dx=\\sqrt{\\pi}\n$$";
@@ -269,7 +271,7 @@ fn replayed_sessions_keep_media_capabilities_for_formula_output() {
                     ..Default::default()
                 },
             },
-            Update::Agent(Box::new(orbit_agent::events::AgentEvent::Model(
+            Update::Agent(Box::new(orbit_client::protocol::events::AgentEvent::Model(
                 StreamEvent::TextDelta(formula.into()),
             ))),
         ],
@@ -290,8 +292,8 @@ fn replayed_sessions_keep_media_capabilities_for_formula_output() {
 #[tokio::test]
 async fn restored_read_image_results_upload_complete_rgba_with_selection_and_row_clipping() {
     use base64::{Engine as _, engine::general_purpose::STANDARD};
-    use orbit_agent::events::AgentEvent;
-    use orbit_model::types::ToolCall;
+    use orbit_client::protocol::events::AgentEvent;
+    use orbit_client::protocol::model::ToolCall;
 
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("image.png");
@@ -2511,7 +2513,7 @@ fn composer_thumbnails_use_the_attachment_area_without_labels() {
     state.media = context(ProtocolType::Kitty);
     state
         .attachments
-        .push(orbit_model::types::Attachment::Image {
+        .push(orbit_client::protocol::model::Attachment::Image {
             lease: None,
             name: "private-filename.png".into(),
             mime_type: "image/png".into(),

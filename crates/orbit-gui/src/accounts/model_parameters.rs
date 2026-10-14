@@ -1,5 +1,5 @@
 //! Model limits are connection drafts until the containing form is saved.
-use anyhow::{Result, ensure};
+use anyhow::Result;
 use gpui_kit::component::{
     ActiveTheme,
     button::Button,
@@ -10,71 +10,7 @@ use gpui_kit::component::{
 };
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
-use orbit_config::config::{MIN_CONTEXT_TOKENS, ModelProfile};
-use std::collections::HashSet;
-
-pub(super) fn profiles(ids: &str, existing: &[ModelProfile]) -> Result<Vec<ModelProfile>> {
-    let mut seen = HashSet::new();
-    ids.split(',')
-        .map(str::trim)
-        .filter(|id| !id.is_empty())
-        .map(|id| {
-            ensure!(
-                id.len() <= 256 && !id.chars().any(char::is_control),
-                "模型 ID 无效"
-            );
-            ensure!(seen.insert(id), "模型 ID“{id}”重复");
-            Ok(existing
-                .iter()
-                .find(|profile| profile.id == id)
-                .cloned()
-                .unwrap_or_else(|| ModelProfile::new(id)))
-        })
-        .collect()
-}
-
-fn number<T: std::str::FromStr>(value: &str, label: &str) -> Result<Option<T>> {
-    if value.trim().is_empty() {
-        return Ok(None);
-    }
-    value
-        .trim()
-        .parse()
-        .map(Some)
-        .map_err(|_| anyhow::anyhow!("{label}应为正整数，或留空使用默认值。"))
-}
-
-fn limits(profile: &ModelProfile, values: [&str; 3]) -> Result<ModelProfile> {
-    let mut updated = profile.clone();
-    updated.context_tokens = number(values[0], "上下文容量")?;
-    updated.input_context_tokens = number(values[1], "独立输入窗口")?;
-    updated.max_output_tokens = number(values[2], "最大输出 Token")?;
-    ensure!(
-        updated
-            .context_tokens
-            .is_none_or(|tokens| tokens >= MIN_CONTEXT_TOKENS),
-        "上下文容量不能小于 {MIN_CONTEXT_TOKENS} Token。"
-    );
-    ensure!(
-        updated
-            .input_context_tokens
-            .is_none_or(|tokens| tokens >= MIN_CONTEXT_TOKENS),
-        "独立输入窗口不能小于 {MIN_CONTEXT_TOKENS} Token。"
-    );
-    ensure!(
-        updated.max_output_tokens != Some(0),
-        "最大输出 Token 必须大于 0。"
-    );
-    if updated.input_context_tokens.is_none()
-        && let (Some(context), Some(output)) = (updated.context_tokens, updated.max_output_tokens)
-    {
-        ensure!(
-            context.saturating_sub(output as usize) >= MIN_CONTEXT_TOKENS,
-            "预留输出后，可用输入预算不能小于 {MIN_CONTEXT_TOKENS} Token。"
-        );
-    }
-    Ok(updated)
-}
+use orbit_config::config::{ModelProfile, connections::models::limits};
 
 struct ModelFields {
     profile: ModelProfile,
@@ -83,6 +19,7 @@ struct ModelFields {
 
 pub(super) struct ModelParameters {
     models: Vec<ModelFields>,
+    defaults: (usize, u32),
     selected: usize,
     error: Option<String>,
 }
@@ -90,6 +27,7 @@ pub(super) struct ModelParameters {
 impl ModelParameters {
     pub(super) fn new(
         profiles: Vec<ModelProfile>,
+        defaults: (usize, u32),
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -121,6 +59,7 @@ impl ModelParameters {
             .collect();
         Self {
             models,
+            defaults,
             selected: 0,
             error: None,
         }
@@ -135,8 +74,12 @@ impl ModelParameters {
                     .limits
                     .each_ref()
                     .map(|field| field.read(cx).value().to_string());
-                limits(&model.profile, values.each_ref().map(String::as_str))
-                    .map_err(|error| anyhow::anyhow!("{}：{error}", model.profile.id))
+                limits(
+                    &model.profile,
+                    values.each_ref().map(String::as_str),
+                    Some(self.defaults),
+                )
+                .map_err(|error| anyhow::anyhow!("{}：{error}", model.profile.id))
             })
             .collect();
         match result {
@@ -248,66 +191,5 @@ impl Render for ModelParameters {
                         .child(error),
                 )
             })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[::core::prelude::v1::test]
-    fn editing_limits_preserves_other_model_settings_and_blank_restores_defaults() {
-        let mut profile = ModelProfile::new("model");
-        profile.supports_vision = Some(true);
-        profile.reasoning = Some(orbit_config::config::ReasoningProfile {
-            adapter: orbit_model::types::ReasoningAdapter::OpenaiResponses,
-            efforts: vec![orbit_model::types::ReasoningEffort::High],
-            default: orbit_model::types::ReasoningEffort::High,
-            extra: Default::default(),
-        });
-        profile.context_tokens = Some(65_536);
-        profile.input_context_tokens = Some(32_768);
-        profile.max_output_tokens = Some(4_096);
-        let updated = limits(&profile, ["131072", "", "8192"]).unwrap();
-        assert_eq!(updated.context_tokens, Some(131_072));
-        assert_eq!(updated.input_context_tokens, None);
-        assert_eq!(updated.max_output_tokens, Some(8_192));
-        assert_eq!(updated.supports_vision, Some(true));
-        assert_eq!(
-            serde_json::to_value(&updated.reasoning).unwrap(),
-            serde_json::to_value(&profile.reasoning).unwrap()
-        );
-        assert_eq!(updated.id, profile.id);
-        let defaults = limits(&updated, ["", "", ""]).unwrap();
-        assert!(defaults.context_tokens.is_none());
-        assert!(defaults.input_context_tokens.is_none());
-        assert!(defaults.max_output_tokens.is_none());
-        assert_eq!(defaults.supports_vision, Some(true));
-        assert_eq!(
-            serde_json::to_value(&defaults.reasoning).unwrap(),
-            serde_json::to_value(&profile.reasoning).unwrap()
-        );
-    }
-
-    #[::core::prelude::v1::test]
-    fn invalid_limits_and_duplicate_models_are_rejected_without_replacing_profiles() {
-        let profile = ModelProfile::new("known");
-        for values in [
-            ["-1", "", ""],
-            ["8000", "", ""],
-            ["", "8191", ""],
-            ["", "", "0"],
-            ["", "", "4294967296"],
-            ["16384", "", "16384"],
-        ] {
-            assert!(limits(&profile, values).is_err(), "{values:?}");
-        }
-        let mut configured = profile.clone();
-        configured.max_output_tokens = Some(8_192);
-        let profiles = profiles(" new, known ", &[configured]).unwrap();
-        assert_eq!(profiles[0].id, "new");
-        assert_eq!(profiles[1].max_output_tokens, Some(8_192));
-        assert!(super::profiles("known, known", &profiles).is_err());
-        assert!(profile.max_output_tokens.is_none());
     }
 }

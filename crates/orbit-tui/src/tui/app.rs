@@ -2,8 +2,8 @@ mod activity;
 
 use std::time::Instant;
 
-use orbit_agent::events::AgentEvent;
-use orbit_model::types::{Attachment, StreamEvent, ToolCall};
+use orbit_client::protocol::events::AgentEvent;
+use orbit_client::protocol::model::{Attachment, StreamEvent, ToolCall};
 
 use super::input::InputState;
 
@@ -96,7 +96,7 @@ pub struct UiState {
     pub(super) tab_hover_tick: u128,
     pub tab_areas: Vec<(ratatui::layout::Rect, String)>,
     pub(super) navigation: super::navigation::Navigation,
-    pub approval: Option<orbit_tools::approval::ApprovalPreview>,
+    pub approval: Option<orbit_client::protocol::approval::ApprovalPreview>,
     pub approval_area: ratatui::layout::Rect,
     pub approval_scroll: usize,
     pub approval_max_scroll: usize,
@@ -110,8 +110,7 @@ pub struct UiState {
     pub input_context_tokens: usize,
     /// Same approximate request-context count displayed by `/context`.
     pub context_used_tokens: usize,
-    pub calibrations:
-        std::collections::BTreeMap<String, orbit_agent::calibration::TokenCalibration>,
+    context_usage: orbit_client::usage::ContextUsage,
     /// Footer area that exposes the current context budget on hover.
     pub context_indicator_area: ratatui::layout::Rect,
     pub context_hovered: bool,
@@ -132,8 +131,8 @@ pub struct UiState {
     pending_compaction_archive: Option<String>,
     pub max_output_tokens: u32,
     pub model: String,
-    pub reasoning_efforts: Vec<orbit_model::types::ReasoningEffort>,
-    pub reasoning_effort: Option<orbit_model::types::ReasoningEffort>,
+    pub reasoning_efforts: Vec<orbit_client::protocol::model::ReasoningEffort>,
+    pub reasoning_effort: Option<orbit_client::protocol::model::ReasoningEffort>,
     pub supports_vision: bool,
     pub attachments: Vec<Attachment>,
     pub attachment_cursor: Option<usize>,
@@ -192,7 +191,7 @@ pub struct UiState {
     pub(super) pending_plugin_action: Option<orbit_protocol::plugins::Action>,
     pub pending_project_plugin_change: Option<super::dialogs::ProjectPluginChange>,
     pub chosen_model: Option<String>,
-    pub chosen_effort: Option<orbit_model::types::ReasoningEffort>,
+    pub chosen_effort: Option<orbit_client::protocol::model::ReasoningEffort>,
     pub model_completions: Vec<String>,
     pub completion_home: Option<std::path::PathBuf>,
     pub skill_completions: Vec<(String, String)>,
@@ -408,11 +407,9 @@ impl UiState {
         }
     }
 
-    pub fn calibration(&self) -> orbit_agent::calibration::TokenCalibration {
-        self.calibrations
-            .get(&self.model)
-            .cloned()
-            .unwrap_or_default()
+    pub fn calibration(&self) -> orbit_client::protocol::calibration::TokenCalibration {
+        self.context_usage
+            .calibration(&self.model)
     }
 
     pub fn new(model: impl Into<String>) -> Self {
@@ -441,7 +438,7 @@ impl UiState {
             context_tokens: 128_000,
             input_context_tokens: 96_000,
             context_used_tokens: 0,
-            calibrations: Default::default(),
+            context_usage: Default::default(),
             context_indicator_area: ratatui::layout::Rect::default(),
             context_hovered: false,
             context_details_visible: false,
@@ -582,6 +579,12 @@ impl UiState {
     }
 
     pub fn apply(&mut self, event: AgentEvent) {
+        if let Some(used) = self
+            .context_usage
+            .observe(&self.model, &event)
+        {
+            self.context_used_tokens = used;
+        }
         self.activity.apply(&event);
         match event {
             AgentEvent::TurnStarted { turn } => {
@@ -603,34 +606,10 @@ impl UiState {
                 self.ensure_assistant_item();
             }
 
-            AgentEvent::ContextUsage { estimated_input } => {
+            AgentEvent::ContextUsage { .. } => {
                 self.model_started_at = Some(Instant::now());
-                self.context_used_tokens = self
-                    .calibration()
-                    .estimate(estimated_input);
             }
-
-            AgentEvent::RequestMetrics {
-                profile,
-                estimated_input,
-                usage,
-                ..
-            } => {
-                let reported_input = usage
-                    .as_ref()
-                    .and_then(|usage| usage.prompt_tokens);
-                self.calibrations
-                    .entry(profile)
-                    .or_default()
-                    .observe(estimated_input, reported_input);
-                self.context_used_tokens = reported_input
-                    .and_then(|tokens| usize::try_from(tokens).ok())
-                    .filter(|tokens| *tokens > 0)
-                    .unwrap_or_else(|| {
-                        self.calibration()
-                            .estimate(estimated_input)
-                    });
-            }
+            AgentEvent::RequestMetrics { .. } => {}
 
             AgentEvent::CompactionRecorded { record } => {
                 self.pending_compaction_archive = record.archive;
@@ -645,11 +624,9 @@ impl UiState {
                 fallback,
                 ..
             } => {
-                self.context_used_tokens = self
-                    .calibration()
-                    .estimate(after_tokens);
                 let detail = if fallback
-                    && strategy != orbit_agent::memory::CompactionStrategy::ArchiveProjection
+                    && strategy
+                        != orbit_client::protocol::compaction::CompactionStrategy::ArchiveProjection
                 {
                     " · 保留最近工作内容"
                 } else {
@@ -657,28 +634,33 @@ impl UiState {
                 };
 
                 let action = match strategy {
-                    orbit_agent::memory::CompactionStrategy::ToolPruning => "旧工具输出已精简",
-                    orbit_agent::memory::CompactionStrategy::Summary => "上下文已整理",
-                    orbit_agent::memory::CompactionStrategy::ArchiveProjection => {
+                    orbit_client::protocol::compaction::CompactionStrategy::ToolPruning => {
+                        "旧工具输出已精简"
+                    }
+                    orbit_client::protocol::compaction::CompactionStrategy::Summary => {
+                        "上下文已整理"
+                    }
+                    orbit_client::protocol::compaction::CompactionStrategy::ArchiveProjection => {
                         "旧历史已归档，摘要未完成"
                     }
                 };
 
-                let archive_note =
-                    if strategy == orbit_agent::memory::CompactionStrategy::ArchiveProjection {
-                        self.pending_compaction_archive
-                            .take()
-                            .and_then(|reference| {
-                                reference
-                                    .strip_prefix("read_history archive_id=")
-                                    .and_then(|value| value.split(';').next())
-                                    .map(|id| format!(" · 归档 #{id} · 旧约束需按需回读"))
-                            })
-                            .unwrap_or_else(|| " · 旧约束需按需回读".into())
-                    } else {
-                        self.pending_compaction_archive = None;
-                        String::new()
-                    };
+                let archive_note = if strategy
+                    == orbit_client::protocol::compaction::CompactionStrategy::ArchiveProjection
+                {
+                    self.pending_compaction_archive
+                        .take()
+                        .and_then(|reference| {
+                            reference
+                                .strip_prefix("read_history archive_id=")
+                                .and_then(|value| value.split(';').next())
+                                .map(|id| format!(" · 归档 #{id} · 旧约束需按需回读"))
+                        })
+                        .unwrap_or_else(|| " · 旧约束需按需回读".into())
+                } else {
+                    self.pending_compaction_archive = None;
+                    String::new()
+                };
 
                 self.transcript
                     .push(TranscriptItem::Maintenance(format!(

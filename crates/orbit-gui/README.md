@@ -28,7 +28,7 @@ cargo run -p orbit-gui --locked -- --config config.toml
 
 ## 源码与外观
 
-[workspace/](src/workspace/) 管理会话视图与设置，[conversation/](src/conversation/) 渲染消息，[backend.rs](src/backend.rs) 处理连接与请求。
+[workspace/](src/workspace/) 管理会话视图与设置，[conversation/](src/conversation/) 渲染消息，[backend.rs](src/backend.rs) 将窗口事件接入共享客户端。认证、配置校验、会话轮询与附件传输由对应共享 crate 提供，前端只保留交互和视图状态。
 
 GPUI Kit 使用固定的 fork 提交，补丁来源见 [依赖补丁](../../patches/README.md)。
 

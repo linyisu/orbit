@@ -2,7 +2,6 @@
 mod state;
 
 use super::*;
-use base64::Engine as _;
 use gpui_kit::component::{
     Selectable,
     input::{Editor, EditorState, Input, InputState},
@@ -335,14 +334,13 @@ impl Files {
                             .update(cx, |tree, cx| tree.set_items(items, cx));
                     }
                     (Operation::Read { path }, Ok(Response::File(encoded))) => {
-                        match base64::engine::general_purpose::STANDARD.decode(encoded) {
+                        match orbit_client::protocol::file_bytes(encoded) {
                             Ok(bytes) => files.receive_file(path, bytes, window, cx),
                             Err(error) => files.error = Some(format!("无法解码文件：{error}")),
                         }
                     }
                     (Operation::Compare { path }, Ok(Response::File(encoded))) => {
-                        match base64::engine::general_purpose::STANDARD
-                            .decode(encoded)
+                        match orbit_client::protocol::file_bytes(encoded)
                             .map_err(|error| error.to_string())
                             .and_then(|bytes| text_content(bytes).map_err(str::to_owned))
                         {
@@ -1227,29 +1225,7 @@ fn text_content(bytes: Vec<u8>) -> Result<String, &'static str> {
     String::from_utf8(bytes).map_err(|_| "文件不是 UTF-8 文本，无法编辑")
 }
 
-fn language(path: &str) -> &'static str {
-    match std::path::Path::new(path)
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .unwrap_or("")
-    {
-        "rs" => "rust",
-        "toml" => "toml",
-        "js" | "mjs" | "cjs" => "javascript",
-        "ts" => "typescript",
-        "tsx" | "jsx" => "tsx",
-        "py" => "python",
-        "go" => "go",
-        "c" | "h" => "c",
-        "cc" | "cpp" | "hpp" => "cpp",
-        "css" => "css",
-        "html" | "htm" => "html",
-        "yaml" | "yml" => "yaml",
-        "lua" => "lua",
-        "sh" | "bash" => "bash",
-        _ => "text",
-    }
-}
+use orbit_syntax::label_for_path as language;
 
 #[cfg(test)]
 mod tests {

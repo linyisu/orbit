@@ -1125,7 +1125,7 @@ impl Context<'_> {
                 color,
             });
             let indent_str = " ".repeat(indent);
-            let label = if label.is_empty() { "text" } else { label };
+            let label = orbit_syntax::display_label(label);
             return Some(Line::from(vec![
                 Span::styled(format!("  {indent_str}╭─"), Style::default().fg(color)),
                 Span::styled(

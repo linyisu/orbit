@@ -1,4 +1,4 @@
-use orbit_tools::approval::WritePreview;
+use orbit_client::protocol::approval::WritePreview;
 use ratatui::{Terminal, backend::TestBackend};
 use unicode_width::UnicodeWidthStr;
 
@@ -7,7 +7,7 @@ use super::*;
 #[test]
 fn approval_keeps_old_and_new_syntax_states_independent() {
     let mut state = UiState::new("mock");
-    state.approval = Some(orbit_tools::approval::ApprovalPreview::Write(
+    state.approval = Some(orbit_client::protocol::approval::ApprovalPreview::Write(
         WritePreview {
             path: "src/Orbit Code.rs".into(),
             before: Some("/* Orbit block\nfn orbit() {}\n*/\n".into()),
@@ -35,7 +35,7 @@ fn approval_keeps_old_and_new_syntax_states_independent() {
 #[test]
 fn full_preview_scrolls_to_end_and_escapes_terminal_controls() {
     let mut state = UiState::new("mock");
-    state.approval = Some(orbit_tools::approval::ApprovalPreview::Write(
+    state.approval = Some(orbit_client::protocol::approval::ApprovalPreview::Write(
         WritePreview {
             path: "file".into(),
             before: Some("old".into()),
@@ -88,10 +88,10 @@ fn full_preview_scrolls_to_end_and_escapes_terminal_controls() {
 #[test]
 fn command_approval_card_renders_rounded_frame_and_buttons() {
     use crossterm::event::{MouseButton, MouseEvent};
-    use orbit_tools::approval::{CommandPreview, CommandWorkspaceAccess};
+    use orbit_client::protocol::approval::{CommandPreview, CommandWorkspaceAccess};
 
     let mut state = UiState::new("mock");
-    state.approval = Some(orbit_tools::approval::ApprovalPreview::Command(
+    state.approval = Some(orbit_client::protocol::approval::ApprovalPreview::Command(
         CommandPreview {
             command: "mkdir -p demo".into(),
             workspace_access: CommandWorkspaceAccess::ReadWrite,
@@ -156,10 +156,10 @@ fn command_approval_card_renders_rounded_frame_and_buttons() {
 
 #[test]
 fn git_dangerous_card_shows_risk_and_badges() {
-    use orbit_tools::approval::{CommandPreview, CommandWorkspaceAccess};
+    use orbit_client::protocol::approval::{CommandPreview, CommandWorkspaceAccess};
 
     let mut state = UiState::new("mock");
-    state.approval = Some(orbit_tools::approval::ApprovalPreview::Command(
+    state.approval = Some(orbit_client::protocol::approval::ApprovalPreview::Command(
         CommandPreview {
             command: "git reset --hard HEAD~1".into(),
             workspace_access: CommandWorkspaceAccess::ReadWrite,
@@ -168,7 +168,7 @@ fn git_dangerous_card_shows_risk_and_badges() {
             timeout_seconds: 30,
             external_capabilities: Vec::new(),
             external_write: false,
-            git: orbit_runtime::git::GitCommandAnalysis::parse("git reset --hard HEAD~1"),
+            git: orbit_client::protocol::git::GitCommandAnalysis::parse("git reset --hard HEAD~1"),
         },
     ));
 

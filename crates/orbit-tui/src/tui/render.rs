@@ -607,11 +607,7 @@ fn input_context_budget(state: &UiState) -> usize {
 }
 
 fn context_percent(state: &UiState) -> usize {
-    state
-        .context_used_tokens
-        .saturating_mul(100)
-        .checked_div(input_context_budget(state))
-        .unwrap_or(0)
+    orbit_client::usage::context_percent(state.context_used_tokens, state.input_context_tokens)
 }
 
 fn context_percent_label(state: &UiState) -> String {

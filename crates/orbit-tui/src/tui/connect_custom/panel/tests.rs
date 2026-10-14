@@ -109,9 +109,9 @@ fn scroll_recomputes_hover_and_keeps_footer_fixed() {
 #[test]
 fn unchanged_reasoning_preserves_provider_adapter_and_extra() {
     let profile = crate::config::ReasoningProfile {
-        adapter: orbit_model::types::ReasoningAdapter::AnthropicMessages,
-        efforts: vec![orbit_model::types::ReasoningEffort::High],
-        default: orbit_model::types::ReasoningEffort::High,
+        adapter: orbit_client::protocol::model::ReasoningAdapter::AnthropicMessages,
+        efforts: vec![orbit_client::protocol::model::ReasoningEffort::High],
+        default: orbit_client::protocol::model::ReasoningEffort::High,
         extra: toml::from_str("budget_tokens = 4096").unwrap(),
     };
     let fields = model::reasoning_fields(&Some(profile.clone()));
@@ -122,7 +122,7 @@ fn unchanged_reasoning_preserves_provider_adapter_and_extra() {
 
     assert_eq!(
         restored.adapter,
-        orbit_model::types::ReasoningAdapter::AnthropicMessages
+        orbit_client::protocol::model::ReasoningAdapter::AnthropicMessages
     );
     assert_eq!(restored.extra["budget_tokens"].as_integer(), Some(4_096));
 }
@@ -159,9 +159,12 @@ fn reasoning_buttons_share_a_row_and_keep_default_enabled() {
         .unwrap();
     assert_eq!(
         reasoning.efforts,
-        vec![orbit_model::types::ReasoningEffort::High]
+        vec![orbit_client::protocol::model::ReasoningEffort::High]
     );
-    assert_eq!(reasoning.default, orbit_model::types::ReasoningEffort::High);
+    assert_eq!(
+        reasoning.default,
+        orbit_client::protocol::model::ReasoningEffort::High
+    );
     let mut terminal = Terminal::new(TestBackend::new(110, 45)).unwrap();
     let mut layout = None;
     terminal
@@ -321,12 +324,12 @@ fn editing_saved_key_preserves_it_until_replacement_is_entered() {
     panel.service[3].input.clear();
     assert!(matches!(panel.key(), KeyChange::Keep));
     panel.saved_auth = false;
-    assert!(matches!(panel.key(), KeyChange::Replace("")));
+    assert!(matches!(panel.key(), KeyChange::None));
 }
 
 #[tokio::test]
 async fn changing_protocol_converts_reasoning_before_saving() {
-    use orbit_model::types::{ReasoningAdapter, ReasoningEffort};
+    use orbit_client::protocol::model::{ReasoningAdapter, ReasoningEffort};
 
     let (directory, mut draft, mut panel) = setup();
     let mut profile = model::blank("model");

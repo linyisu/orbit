@@ -1,8 +1,8 @@
 //! Project transport events into user turns, process records, and conclusions.
 //! Model request boundaries are internal to a turn; only user input starts one.
-use orbit_agent::events::AgentEvent;
 use orbit_client::protocol::Update;
-use orbit_model::types::StreamEvent;
+use orbit_client::protocol::events::AgentEvent;
+use orbit_client::protocol::model::StreamEvent;
 use std::collections::HashMap;
 
 #[derive(Clone, Copy, PartialEq, Eq)]

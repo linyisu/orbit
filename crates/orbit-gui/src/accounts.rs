@@ -15,25 +15,13 @@ use gpui_kit::component::{
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use model_parameters::ModelParameters;
-use orbit_auth::{
-    AuthStore, CallbackFlow, CallbackListener, CredentialKind, OAuthLogin, OAuthProvider,
-};
+use orbit_client::accounts::{Connection, Login, OAuthProvider, connections};
+use orbit_config::ApiFormat;
 use orbit_config::config::connections::edit::{self, ConnectionDraft, KeyChange};
-use orbit_model::client::ApiFormat;
-use std::{
-    path::{Path, PathBuf},
-    sync::Arc,
-    time::Duration,
-};
+use std::{path::PathBuf, sync::Arc};
 
 pub(crate) enum AccountsEvent {
     Changed,
-}
-
-struct Connection {
-    draft: ConnectionDraft,
-    account: Option<String>,
-    oauth: Option<OAuthProvider>,
 }
 
 pub(crate) struct Accounts {
@@ -64,36 +52,6 @@ enum AccountEvent {
     Removed(Result<Vec<Connection>, String>, Option<String>),
 }
 
-fn connections(config: &Path, auth: &Path) -> anyhow::Result<Vec<Connection>> {
-    let credentials = AuthStore::new(auth)?.list()?;
-    edit::saved_connections(config)?
-        .into_iter()
-        .map(|name| {
-            let draft = ConnectionDraft::load(config, Some(&name))?;
-            let credential = draft
-                .provider
-                .as_ref()
-                .and_then(|provider| {
-                    credentials
-                        .iter()
-                        .find(|entry| Some(&entry.name) == provider.credential.as_ref())
-                });
-            let oauth = credential.and_then(|entry| match entry.kind {
-                CredentialKind::ApiKey => None,
-                CredentialKind::AnthropicOAuth => Some(OAuthProvider::Anthropic),
-                CredentialKind::GoogleOAuth => Some(OAuthProvider::Google),
-                CredentialKind::AntigravityOAuth => Some(OAuthProvider::Antigravity),
-                CredentialKind::ChatgptOAuth => Some(OAuthProvider::Chatgpt),
-            });
-            Ok(Connection {
-                draft,
-                account: credential.and_then(|entry| entry.account.clone()),
-                oauth,
-            })
-        })
-        .collect()
-}
-
 impl Accounts {
     pub(crate) fn has_pending_work(&self) -> bool {
         self.busy || self.loading || self.logging_in || self.adding || self.draft.is_some()
@@ -105,11 +63,7 @@ impl Accounts {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let auth = orbit_auth::directory(
-            options.auth_dir.clone(),
-            std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from),
-            std::env::var_os("HOME").map(PathBuf::from),
-        );
+        let auth = orbit_client::configuration::auth_directory(options.auth_dir.clone());
         let (auth, error) = match auth {
             Ok(path) => (path, None),
             Err(error) => (PathBuf::new(), Some(error.to_string())),
@@ -320,42 +274,17 @@ impl Accounts {
         self.logging_in = true;
         self.operation = Some(self.runtime.spawn(async move {
             let result = async {
-                let store = AuthStore::new(&auth)?;
-                let login = OAuthLogin::new(provider, (!project.is_empty()).then_some(project))?;
-                let callback = CallbackListener::bind_at(login.redirect_uri().clone()).await?;
+                let login = Login::start(
+                    provider,
+                    (!project.is_empty()).then_some(project),
+                    &auth,
+                    credential,
+                )
+                .await?;
                 sender
-                    .send(AccountEvent::Browser(login.authorization_url().to_string()))
+                    .send(AccountEvent::Browser(login.url().to_owned()))
                     .await?;
-                let grant = callback
-                    .wait(&login, Duration::from_secs(300))
-                    .await?;
-                login
-                    .finish(
-                        &grant,
-                        &store,
-                        credential
-                            .as_deref()
-                            .unwrap_or(provider.name()),
-                    )
-                    .await?;
-                if credential.is_some() {
-                    let mut updated = orbit_config::config::FileConfig::load(&config, &auth)?;
-                    let diagnostics = orbit_config::models::updater::refresh(&mut updated, true)
-                        .await
-                        .diagnostics;
-                    anyhow::ensure!(diagnostics.is_empty(), "{}", diagnostics.join("\n"));
-                } else if provider == OAuthProvider::Anthropic {
-                    orbit_config::config::connections::append_profile(
-                        &config,
-                        &auth,
-                        provider.name(),
-                        ApiFormat::AnthropicMessages,
-                        "https://api.anthropic.com/",
-                    )?;
-                } else {
-                    orbit_config::config::connections::save_account(&config, &auth, provider)
-                        .await?;
-                }
+                login.finish_required(&config).await?;
                 connections(&config, &auth)
             }
             .await
@@ -384,23 +313,33 @@ impl Accounts {
         let Some(draft) = self.draft.as_ref() else {
             return;
         };
-        let profiles =
-            match model_parameters::profiles(&self.fields[3].read(cx).value(), &draft.models) {
-                Ok(profiles) if !profiles.is_empty() => profiles,
-                Ok(_) => {
-                    self.error = Some("先填写至少一个模型 ID，再编辑参数。".into());
-                    cx.notify();
-                    return;
-                }
-                Err(error) => {
-                    self.error = Some(error.to_string());
-                    cx.notify();
-                    return;
-                }
-            };
+        let profiles = match orbit_config::config::connections::models::profiles(
+            &self.fields[3].read(cx).value(),
+            &draft.models,
+        ) {
+            Ok(profiles) if !profiles.is_empty() => profiles,
+            Ok(_) => {
+                self.error = Some("先填写至少一个模型 ID，再编辑参数。".into());
+                cx.notify();
+                return;
+            }
+            Err(error) => {
+                self.error = Some(error.to_string());
+                cx.notify();
+                return;
+            }
+        };
         let source = draft.source.clone();
         let original_name = draft.original_name.clone();
-        let editor = cx.new(|cx| ModelParameters::new(profiles, window, cx));
+        let defaults = match draft.model_defaults() {
+            Ok(defaults) => defaults,
+            Err(error) => {
+                self.error = Some(error.to_string());
+                cx.notify();
+                return;
+            }
+        };
+        let editor = cx.new(|cx| ModelParameters::new(profiles, defaults, window, cx));
         let owner = cx.weak_entity();
         let apply: std::rc::Rc<dyn Fn(&mut App) -> bool> = {
             let editor = editor.clone();
@@ -494,28 +433,21 @@ impl Accounts {
         draft.name = values[0].clone();
         draft.endpoint = values[1].clone();
         draft.format = self.format;
-        draft.models = match model_parameters::profiles(&values[3], &draft.models) {
-            Ok(profiles) => profiles,
-            Err(error) => {
-                self.error = Some(error.to_string());
-                cx.notify();
-                return;
-            }
-        };
+        draft.models =
+            match orbit_config::config::connections::models::profiles(&values[3], &draft.models) {
+                Ok(profiles) => profiles,
+                Err(error) => {
+                    self.error = Some(error.to_string());
+                    cx.notify();
+                    return;
+                }
+            };
         let auth = self.auth.clone();
         let config = self.config.clone();
         let (sender, receiver) = tokio::sync::mpsc::channel(2);
         self.operation = Some(self.runtime.spawn(async move {
             let result = async {
-                let key = if values[2].is_empty() {
-                    if draft.original_name.is_some() {
-                        KeyChange::Keep
-                    } else {
-                        KeyChange::None
-                    }
-                } else {
-                    KeyChange::Replace(&values[2])
-                };
+                let key = KeyChange::from_input(&values[2], draft.original_name.is_some());
                 edit::save(&config, &auth, &draft, key).await?;
                 connections(&config, &auth)
             }

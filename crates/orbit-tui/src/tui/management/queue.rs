@@ -5,7 +5,9 @@ use crate::{
     workspace::protocol::{Request, Response},
 };
 use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind};
-use orbit_protocol::input_queue::{Action as QueueAction, Entry, Snapshot, State as QueueState};
+use orbit_protocol::input_queue::{
+    Action as QueueAction, Entry, Snapshot, State as QueueState, valid_entry, valid_page,
+};
 use ratatui::{Frame, layout::Rect, style::Style, widgets::Paragraph};
 
 #[derive(Debug)]
@@ -348,7 +350,11 @@ impl Panel for State {
             (
                 Some(Pending::List(after)),
                 Response::InputQueue(Snapshot::List { entries, next, run }),
-            ) => {
+            ) if valid_page(after, &entries, next)
+                && entries
+                    .iter()
+                    .all(|entry| valid_entry(entry, run)) =>
+            {
                 if after.is_none() {
                     self.entries.clear();
                     self.offset = 0;

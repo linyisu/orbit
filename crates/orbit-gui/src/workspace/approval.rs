@@ -5,7 +5,7 @@ use gpui_kit::component::{
     diff::{Diff, DiffFile, DiffMode, DiffState},
     input::{Editor, EditorState},
 };
-use orbit_tools::approval::{ApprovalPreview, CommandWorkspaceAccess};
+use orbit_client::protocol::approval::{ApprovalPreview, CommandWorkspaceAccess};
 use serde_json::Value;
 
 impl Workspace {

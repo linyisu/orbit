@@ -1,6 +1,6 @@
 use super::*;
 use clap::Parser;
-use orbit_agent::events::AgentEvent;
+use orbit_client::protocol::events::AgentEvent;
 
 #[test]
 fn command_stdout_snapshots_and_nonzero_exit_survive_native_transport() {

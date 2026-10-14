@@ -64,7 +64,7 @@ fn resuming_after_command_wait_starts_a_separate_assistant_message() {
 
 #[test]
 fn reasoning_completion_only_offers_current_model_capabilities() {
-    use orbit_model::types::ReasoningEffort;
+    use orbit_client::protocol::model::ReasoningEffort;
 
     let mut state = super::UiState::new("provider::model");
     state.reasoning_efforts = vec![ReasoningEffort::Low, ReasoningEffort::High];
@@ -80,7 +80,7 @@ fn reasoning_completion_only_offers_current_model_capabilities() {
     state.input.set("/reasoning hi".into());
     assert_eq!(state.menu()[0].name, "/reasoning high");
 }
-use orbit_model::types::FunctionCall;
+use orbit_client::protocol::model::FunctionCall;
 
 use super::*;
 
@@ -267,7 +267,9 @@ fn compaction_uses_one_quiet_maintenance_row() {
 
 #[test]
 fn archive_projection_explains_that_older_constraints_need_retrieval() {
-    use orbit_agent::memory::{CompactionMode, CompactionRecord, FileActivity, TaskSummary};
+    use orbit_client::protocol::compaction::{
+        CompactionMode, CompactionRecord, FileActivity, TaskSummary,
+    };
 
     let mut state = UiState::new("mock");
     state.apply(AgentEvent::CompactionRecorded {
@@ -279,7 +281,7 @@ fn archive_projection_explains_that_older_constraints_need_retrieval() {
             pinned_user: None,
             before_tokens: 200_000,
             after_tokens: 40_000,
-            strategy: orbit_agent::memory::CompactionStrategy::ArchiveProjection,
+            strategy: orbit_client::protocol::compaction::CompactionStrategy::ArchiveProjection,
             summary_requests: 1,
             summary_input_tokens: 2_048,
             archive: Some("read_history archive_id=12; search with query".into()),
@@ -298,7 +300,7 @@ fn archive_projection_explains_that_older_constraints_need_retrieval() {
         },
     });
     state.apply(AgentEvent::ContextCompacted {
-        strategy: orbit_agent::memory::CompactionStrategy::ArchiveProjection,
+        strategy: orbit_client::protocol::compaction::CompactionStrategy::ArchiveProjection,
         before_tokens: 200_000,
         after_tokens: 40_000,
         fallback: true,
@@ -332,7 +334,7 @@ fn context_indicator_tracks_each_model_request_during_a_run() {
         profile: "mock".into(),
         estimated_input: 12_000,
         retries: None,
-        usage: Some(orbit_model::types::Usage {
+        usage: Some(orbit_client::protocol::model::Usage {
             prompt_tokens: Some(13_000),
             completion_tokens: None,
             total_tokens: None,
