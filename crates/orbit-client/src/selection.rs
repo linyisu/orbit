@@ -16,6 +16,23 @@ struct Selection {
     model: String,
 }
 
+/// Resolve a picker or command choice against the catalog sampled from the active session.
+pub fn requested_model(requested: &str, current: &str, models: &[String]) -> Result<String> {
+    let qualified = if requested.contains("::") {
+        requested.to_owned()
+    } else {
+        current.split_once("::").map_or_else(
+            || requested.to_owned(),
+            |(provider, _)| format!("{provider}::{requested}"),
+        )
+    };
+    anyhow::ensure!(
+        models.contains(&qualified),
+        "模型未配置；请从当前会话的模型目录选择。"
+    );
+    Ok(qualified)
+}
+
 impl Local {
     pub async fn model_catalog(&self) -> Result<Vec<ModelOption>> {
         let mut config = FileConfig::load(&self.config, &self.auth)?;
@@ -98,6 +115,25 @@ impl Local {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn model_choices_use_current_connection_and_require_qualified_foreign_names() {
+        let models = vec![
+            "one::small".into(),
+            "two::small".into(),
+            "two::large".into(),
+        ];
+        assert_eq!(
+            requested_model("small", "one::old", &models).unwrap(),
+            "one::small"
+        );
+        assert_eq!(
+            requested_model("two::large", "one::old", &models).unwrap(),
+            "two::large"
+        );
+        assert!(requested_model("large", "one::old", &models).is_err());
+        assert!(requested_model("missing", "one::old", &models).is_err());
+    }
 
     #[tokio::test]
     async fn opening_model_selection_does_not_contact_providers() {

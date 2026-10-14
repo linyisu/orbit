@@ -111,6 +111,34 @@ impl Target {
     }
 }
 
+/// Identity of the host and data source in which a session ID is meaningful.
+pub struct DataSource<'a> {
+    pub target: Target,
+    pub server: Option<&'a str>,
+    pub config: &'a std::path::Path,
+    pub auth: Option<&'a std::path::Path>,
+    pub database: Option<&'a std::path::Path>,
+    pub workspace: &'a std::path::Path,
+}
+
+impl DataSource<'_> {
+    /// Relative databases belong to their workspace; home-relative stores span projects.
+    pub fn matches(&self, other: &Self) -> bool {
+        let workspace_scoped = self.database.is_some_and(|path| {
+            path.is_relative()
+                && !path
+                    .to_str()
+                    .is_some_and(|path| path == "~" || path.starts_with("~/"))
+        });
+        self.target == other.target
+            && self.server == other.server
+            && self.config == other.config
+            && self.auth == other.auth
+            && self.database == other.database
+            && (!workspace_scoped || self.workspace == other.workspace)
+    }
+}
+
 #[derive(Clone)]
 pub struct Connection {
     pub local_configuration: Option<super::configuration::Local>,
@@ -126,6 +154,24 @@ pub struct Connection {
 }
 
 impl Connection {
+    pub fn data_source(&self) -> DataSource<'_> {
+        DataSource {
+            target: self.target.clone(),
+            server: Some(&self.executable),
+            config: self
+                .local_configuration
+                .as_ref()
+                .map_or(self.config.as_path(), |local| local.config.as_path()),
+            auth: self
+                .local_configuration
+                .as_ref()
+                .map(|local| local.auth.as_path())
+                .or(self.auth_dir.as_deref()),
+            database: self.database.as_deref(),
+            workspace: std::path::Path::new(&self.workspace),
+        }
+    }
+
     pub async fn configuration(&self) -> Result<Option<super::configuration::Configuration>> {
         if matches!(self.target, Target::Local) {
             return Ok(None);
@@ -374,6 +420,45 @@ mod tests {
             unattended: false,
             interactive: None,
         }
+    }
+
+    #[test]
+    fn session_identity_separates_data_sources_and_workspace_relative_remote_stores() {
+        use std::path::Path;
+        let mut left = DataSource {
+            target: Target::Ssh {
+                host: "fixture-host".into(),
+                options: Default::default(),
+            },
+            server: Some("orbit"),
+            config: Path::new("settings.toml"),
+            auth: Some(Path::new("auth")),
+            database: Some(Path::new("state.db")),
+            workspace: Path::new("/sample/one"),
+        };
+        let mut right = DataSource {
+            target: left.target.clone(),
+            server: left.server,
+            config: left.config,
+            auth: left.auth,
+            database: left.database,
+            workspace: Path::new("/sample/two"),
+        };
+        assert!(!left.matches(&right));
+        left.target = Target::Local;
+        right.target = Target::Local;
+        assert!(!left.matches(&right));
+        left.database = Some(Path::new("~/state.db"));
+        right.database = left.database;
+        assert!(left.matches(&right));
+        right.database = Some(Path::new("~/different.db"));
+        assert!(!left.matches(&right));
+        right.database = left.database;
+        right.config = Path::new("another.toml");
+        assert!(!left.matches(&right));
+        right.config = left.config;
+        right.auth = Some(Path::new("other-auth"));
+        assert!(!left.matches(&right));
     }
 
     #[test]

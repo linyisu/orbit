@@ -1,9 +1,12 @@
 //! Local, SSH and WSL workspace transports and client-owned preferences.
 //! Protocol and service operations remain independent of the presentation layer.
 
+pub mod accounts;
 pub mod attachments;
 mod bootstrap;
 mod local_server;
+#[cfg(feature = "test-support")]
+pub mod test_support;
 pub use bootstrap::register_server_bundle;
 mod command;
 pub mod completion;
@@ -17,7 +20,9 @@ pub mod prompt;
 pub mod protocol;
 pub mod pump;
 mod selection;
+pub use selection::requested_model;
 pub mod transport;
+pub mod usage;
 pub mod windows;
 use std::{path::PathBuf, sync::Arc};
 
@@ -47,6 +52,26 @@ pub struct ConnectionOptions {
 }
 
 impl ConnectionOptions {
+    /// Resolve exactly one workspace transport, rejecting contradictory target options.
+    pub fn target(&self) -> Result<Target> {
+        Ok(match (self.ssh.clone(), self.wsl.clone()) {
+            (Some(host), None) => Target::Ssh {
+                host,
+                options: transport::SshOptions {
+                    user: self.ssh_user.clone(),
+                    port: self.ssh_port,
+                    identity: self.identity.clone(),
+                },
+            },
+            (None, Some(distribution)) => Target::Wsl {
+                distribution,
+                user: self.wsl_user.clone(),
+            },
+            (None, None) => Target::Local,
+            _ => bail!("choose one workspace target"),
+        })
+    }
+
     pub fn local(workspace: String) -> Self {
         Self {
             ssh: None,
@@ -70,22 +95,7 @@ pub async fn prepare_connection(
     auth_dir: Option<PathBuf>,
     progress: Option<interaction::Progress>,
 ) -> Result<Arc<Connection>> {
-    let target = match (args.ssh.clone(), args.wsl.clone()) {
-        (Some(host), None) => Target::Ssh {
-            host,
-            options: transport::SshOptions {
-                user: args.ssh_user.clone(),
-                port: args.ssh_port,
-                identity: args.identity.clone(),
-            },
-        },
-        (None, Some(distribution)) => Target::Wsl {
-            distribution,
-            user: args.wsl_user.clone(),
-        },
-        (None, None) => Target::Local,
-        _ => bail!("choose one workspace target"),
-    };
+    let target = args.target()?;
     let unattended = progress.is_some();
     let interactive = if matches!(target, Target::Ssh { .. }) {
         match &progress {

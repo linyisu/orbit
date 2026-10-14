@@ -7277,6 +7277,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
+ "chrono",
  "globset",
  "libc",
  "orbit-agent",
@@ -7284,6 +7285,7 @@ dependencies = [
  "orbit-config",
  "orbit-model",
  "orbit-protocol",
+ "orbit-runtime",
  "orbit-tools",
  "serde",
  "serde_json",

@@ -5,6 +5,10 @@ use orbit_protocol::{
     SessionAction,
     project::{MemoryAction, MemoryCategory, TaskAction, TaskStatus},
 };
+use std::{
+    cell::RefCell,
+    path::{Path, PathBuf},
+};
 
 pub fn project_action(command: &str, argument: &str) -> Result<SessionAction> {
     let (action, rest) = argument
@@ -207,6 +211,193 @@ fn options(_argument: &str, values: &[(&str, &str, bool)]) -> Vec<(String, Strin
         .iter()
         .map(|(value, description, more)| (value.to_string(), description.to_string(), *more))
         .collect()
+}
+
+pub fn cached_directories(
+    input: &str,
+    previous: &str,
+    entries: &[Candidate],
+) -> Option<Vec<Candidate>> {
+    fn query(input: &str) -> Option<(&str, &str)> {
+        let typed = input.strip_prefix("/cd ")?.trim_start();
+        let typed = match typed.chars().next() {
+            Some(quote @ ('\'' | '"')) => typed.trim_matches(quote),
+            _ => typed,
+        };
+        Some(
+            typed
+                .rsplit_once('/')
+                .map_or(("", typed), |(parent, partial)| {
+                    (&typed[..parent.len() + 1], partial)
+                }),
+        )
+    }
+
+    let (parent, partial) = query(input)?;
+    if parent != query(previous)?.0 {
+        return None;
+    }
+    let mut entries: Vec<_> = entries.iter().collect();
+    entries.sort_by(|left, right| left.display.cmp(&right.display));
+    Some(
+        orbit_protocol::search::ranked(entries, |entry| {
+            let name = entry
+                .display
+                .as_deref()?
+                .trim_end_matches('/');
+            if name.starts_with('.') && name != ".." && !partial.starts_with('.') {
+                return None;
+            }
+            orbit_protocol::search::rank(name, partial)
+        })
+        .into_iter()
+        .cloned()
+        .collect(),
+    )
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct DirectoryCache {
+    entries: RefCell<Option<DirectorySnapshot>>,
+}
+
+#[derive(Clone, Debug)]
+struct DirectorySnapshot {
+    input: String,
+    workspace: PathBuf,
+    home: Option<PathBuf>,
+    candidates: Vec<Candidate>,
+}
+
+impl DirectoryCache {
+    pub fn matching(&self, input: &str, workspace: &Path, home: Option<&Path>) -> Vec<Candidate> {
+        let mut cache = self.entries.borrow_mut();
+        if let Some(snapshot) = cache.as_ref()
+            && snapshot.input == input
+            && snapshot.workspace == workspace
+            && snapshot.home.as_deref() == home
+        {
+            return snapshot.candidates.clone();
+        }
+
+        let candidates = directories(input, workspace, home);
+        *cache = Some(DirectorySnapshot {
+            input: input.into(),
+            workspace: workspace.into(),
+            home: home.map(Path::to_path_buf),
+            candidates: candidates.clone(),
+        });
+        candidates
+    }
+}
+
+fn directories(input: &str, workspace: &Path, home: Option<&Path>) -> Vec<Candidate> {
+    let typed = input.trim_start();
+    if typed == "~" && home.is_some() {
+        return vec![Candidate {
+            name: "/cd ~/".into(),
+            display: Some("~/".into()),
+            description: String::new(),
+            continue_input: true,
+        }];
+    }
+
+    let quote = typed
+        .chars()
+        .next()
+        .filter(|ch| matches!(ch, '\'' | '"'));
+    let typed = if let Some(quote) = quote {
+        typed.trim_matches(quote)
+    } else {
+        typed
+    };
+    let (prefix, partial) = typed
+        .rsplit_once('/')
+        .map_or(("", typed), |(parent, partial)| {
+            (&typed[..parent.len() + 1], partial)
+        });
+    let directory = if prefix == "~/" || prefix.starts_with("~/") {
+        let Some(home) = home else {
+            return Vec::new();
+        };
+        home.join(&prefix[2..])
+    } else {
+        workspace.join(prefix)
+    };
+    let Ok(entries) = std::fs::read_dir(directory) else {
+        return Vec::new();
+    };
+    let mut names = entries
+        .filter_map(Result::ok)
+        .filter(|entry| entry.path().is_dir())
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .filter(|name| !name.starts_with('.') || partial.starts_with('.'))
+        .filter(|name| !name.chars().any(char::is_control))
+        .collect::<Vec<_>>();
+
+    names.sort();
+
+    if prefix.is_empty() && "..".starts_with(partial) {
+        names.insert(0, "..".into());
+    }
+
+    orbit_protocol::search::ranked(names, |name| orbit_protocol::search::rank(name, partial))
+        .into_iter()
+        .map(|name| {
+            let path = format!("{prefix}{name}/");
+            let path = if quote.is_some() || path.starts_with(['\'', '"']) {
+                shlex::try_quote(&path).map_or(path.clone(), |value| value.into_owned())
+            } else {
+                path
+            };
+            Candidate {
+                name: format!("/cd {path}"),
+                display: Some(format!("{name}/")),
+                description: String::new(),
+                continue_input: true,
+            }
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod directory_tests {
+    use super::*;
+    #[test]
+    fn directories_use_explicit_roots_and_preserve_spaces_and_quotes() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("project space")).unwrap();
+        std::fs::write(root.path().join("project file"), "text").unwrap();
+        std::fs::create_dir(root.path().join("project space/nested")).unwrap();
+        std::fs::create_dir(root.path().join(".hidden")).unwrap();
+
+        let candidates = directories("pro", root.path(), None);
+        assert_eq!(candidates.len(), 1);
+        assert!(candidates[0].description.is_empty());
+        assert!(!candidates[0].name.contains("nested"));
+        assert_eq!(candidates[0].name, "/cd project space/");
+        assert_eq!(candidates[0].display.as_deref(), Some("project space/"));
+        let quoted = directories("\"pro", root.path(), None);
+        assert_eq!(
+            crate::directories::resolve(&quoted[0].name[4..], root.path(), None).unwrap(),
+            root.path().join("project space")
+        );
+        assert_eq!(
+            directories("~/pro", Path::new("/"), Some(root.path()))[0].name,
+            "/cd ~/project space/"
+        );
+        assert!(
+            directories("", root.path(), None)
+                .iter()
+                .all(|entry| !entry.name.contains(".hidden"))
+        );
+        assert!(
+            directories(".", root.path(), None)
+                .iter()
+                .any(|entry| entry.name.contains(".hidden"))
+        );
+        assert!(directories("missing/", root.path(), None).is_empty());
+    }
 }
 
 #[cfg(test)]

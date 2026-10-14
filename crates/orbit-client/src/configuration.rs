@@ -6,6 +6,15 @@ use orbit_auth::AuthStore;
 pub use orbit_protocol::Configuration;
 use std::{collections::BTreeMap, path::PathBuf};
 
+/// Resolve the local credential directory consistently across every frontend.
+pub fn auth_directory(override_path: Option<PathBuf>) -> Result<PathBuf> {
+    orbit_auth::directory(
+        override_path,
+        std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from),
+        std::env::var_os("HOME").map(PathBuf::from),
+    )
+}
+
 #[derive(Clone, Debug)]
 pub struct Local {
     pub config: PathBuf,

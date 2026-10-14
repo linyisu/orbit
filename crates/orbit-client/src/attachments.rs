@@ -1,8 +1,24 @@
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use crate::{
+    protocol::{Request, Response},
+    transport::Client,
+};
+use anyhow::{Context, Result, bail};
 use orbit_model::types::Attachment;
 use orbit_tools::image_assets::ImageAssets;
+
+/// Recognize the image formats accepted by the attachment importer.
+pub fn is_image_path(path: &std::path::Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            matches!(
+                extension.to_ascii_lowercase().as_str(),
+                "png" | "jpg" | "jpeg" | "gif" | "webp"
+            )
+        })
+}
 
 fn temporary_assets() -> Result<ImageAssets> {
     ImageAssets::temporary()
@@ -134,19 +150,97 @@ fn pasted_path(value: &str, directory: &Path, images_only: bool) -> Option<PathB
     } else {
         directory.join(path)
     };
-    (!images_only
-        || path
-            .extension()
-            .and_then(|extension| extension.to_str())
-            .is_some_and(|extension| {
-                matches!(
-                    extension.to_ascii_lowercase().as_str(),
-                    "png" | "jpg" | "jpeg" | "gif" | "webp"
-                )
-            }))
-    .then_some(path)
-    .filter(|path| path.is_file())
+    (!images_only || is_image_path(&path))
+        .then_some(path)
+        .filter(|path| path.is_file())
 }
+
+/// Upload local assets and submit one message without retrying side effects.
+pub async fn send(
+    client: &mut Client,
+    session: String,
+    id: String,
+    prompt: String,
+    paths: Vec<(PathBuf, String)>,
+    steer: bool,
+) -> Result<()> {
+    let (images, files) = tokio::task::spawn_blocking(move || -> Result<_> {
+        let (images, files): (Vec<_>, Vec<_>) = paths
+            .into_iter()
+            .partition(|(path, _)| is_image_path(path));
+        let mut uploads = crate::attachments::uploads(&crate::attachments::paths(
+            images
+                .iter()
+                .map(|(path, _)| path.clone())
+                .collect(),
+        )?)?;
+        for (upload, (_, name)) in uploads.iter_mut().zip(images) {
+            upload.name = name;
+        }
+        let files = files
+            .iter()
+            .map(|(path, name)| {
+                let mut upload = crate::attachments::file_upload(path)?;
+                upload.name = name.clone();
+                Ok(upload)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok((uploads, files))
+    })
+    .await
+    .context("读取附件失败")??;
+    let request = if !files.is_empty() {
+        Request::SubmitAttachments {
+            session,
+            request_id: id,
+            prompt,
+            images,
+            files,
+            steer,
+        }
+    } else if steer {
+        if images.is_empty() {
+            Request::Steer {
+                session,
+                message: prompt,
+            }
+        } else {
+            Request::SteerImages {
+                session,
+                message: prompt,
+                images,
+            }
+        }
+    } else {
+        Request::Start {
+            session,
+            request_id: id,
+            prompt,
+            images,
+            compact: false,
+            model: None,
+        }
+    };
+    match client.request(request).await? {
+        Response::Ok | Response::InputQueued { .. } => Ok(()),
+        Response::Error(error) => bail!(error),
+        _ => bail!("服务未确认发送，请检查会话状态。"),
+    }
+}
+
+/// Resolve the client attachment cache beside isolated preferences or in the state directory.
+pub fn cache_database(preferences: Option<&std::path::Path>) -> Result<PathBuf> {
+    if let Some(path) = preferences {
+        return Ok(path.with_extension("queue-cache"));
+    }
+    Ok(std::env::var_os("XDG_STATE_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/state")))
+        .context("找不到附件缓存目录")?
+        .join("orbit/gui-queue-cache"))
+}
+/// Image resource requests use the same proxy, DNS, redirect and size policy as workspace tools.
+pub use orbit_tools::web_fetch::{WebClient as ImageClient, WebConfig as ImageNetwork};
 
 #[cfg(test)]
 mod tests {

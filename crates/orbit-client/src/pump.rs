@@ -1,3 +1,8 @@
+mod catalogue;
+mod queue_attachments;
+mod session;
+pub use session::{Command, Event, SessionOptions, observe};
+
 use super::{
     Call,
     protocol::{Request, Response},
@@ -7,6 +12,52 @@ use anyhow::Result;
 use std::time::Duration;
 use tokio::sync::mpsc;
 
+/// Track all non-transcript state so progress and attention changes are never suppressed.
+#[derive(Default)]
+struct PollState {
+    status: Option<String>,
+}
+
+impl PollState {
+    fn changed(&mut self, page: &crate::protocol::Page) -> Result<bool> {
+        let status = serde_json::to_string(&(
+            page.next,
+            page.more,
+            page.busy,
+            &page.model,
+            &page.approvals,
+            &page.planning,
+            &page.user_inputs,
+            &page.tool_progress,
+            &page.timing,
+        ))?;
+        let changed =
+            page.more || !page.updates.is_empty() || self.status.as_ref() != Some(&status);
+        self.status = Some(status);
+        Ok(changed)
+    }
+}
+
+/// Long or approval-bearing operations must not occupy the chat decision channel.
+pub fn independent(request: &Request) -> bool {
+    matches!(
+        request,
+        Request::ReadFile { .. }
+            | Request::Review {
+                action: orbit_protocol::review::Action::Undo { .. }
+                    | orbit_protocol::review::Action::Stage { .. }
+                    | orbit_protocol::review::Action::Unstage { .. },
+                ..
+            }
+            | Request::Resources {
+                action: orbit_protocol::resources::Action::ReloadMcp { .. }
+                    | orbit_protocol::resources::Action::ScanMcp { .. }
+                    | orbit_protocol::resources::Action::InstallMcp { .. },
+                ..
+            }
+    )
+}
+
 pub async fn pump(
     mut client: Client,
     mut session: String,
@@ -14,7 +65,7 @@ pub async fn pump(
     responses: mpsc::Sender<Result<Response>>,
 ) {
     let mut cursor = 0;
-    let mut last_status = None;
+    let mut state = PollState::default();
     let mut interval = tokio::time::interval(Duration::from_millis(75));
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
@@ -43,31 +94,19 @@ pub async fn pump(
                 if page.more {
                     interval.reset_immediately();
                 }
-                let status = (
-                    page.busy,
-                    page.model.clone(),
-                    page.planning.generation,
-                    page.user_inputs
-                        .iter()
-                        .map(|q| q.id.clone())
-                        .collect::<Vec<_>>(),
-                    page.approvals
-                        .iter()
-                        .map(|approval| approval.id)
-                        .collect::<Vec<_>>(),
-                );
-                if page.updates.is_empty()
-                    && page.timing.is_none()
-                    && last_status.as_ref() == Some(&status)
-                {
-                    continue;
+                match state.changed(page) {
+                    Ok(true) => {}
+                    Ok(false) => continue,
+                    Err(error) => {
+                        let _ = responses.send(Err(error)).await;
+                        break;
+                    }
                 }
-                last_status = Some(status);
             }
             Response::Opened(info) => {
                 session = info.id.clone();
                 cursor = 0;
-                last_status = None;
+                state = PollState::default();
                 interval.reset_immediately();
             }
             _ => {}
@@ -104,6 +143,67 @@ async fn next_call(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn polling_delivers_progress_and_attention_changes_without_new_transcript_events() {
+        let mut page = crate::protocol::Page {
+            planning: Default::default(),
+            tool_progress: Vec::new(),
+            timing: None,
+            next: 0,
+            more: false,
+            busy: true,
+            model: "fixture::model".into(),
+            updates: Vec::new(),
+            approvals: Vec::new(),
+            user_inputs: Vec::new(),
+        };
+        let mut state = PollState::default();
+        assert!(state.changed(&page).unwrap());
+        assert!(!state.changed(&page).unwrap());
+        page.tool_progress
+            .push(orbit_protocol::ToolProgress {
+                call_id: "operation".into(),
+                stdout: Some("partial".into()),
+                elapsed_ms: None,
+            });
+        assert!(state.changed(&page).unwrap());
+        assert!(!state.changed(&page).unwrap());
+        page.timing = Some(orbit_protocol::RunTiming {
+            elapsed_ms: 800,
+            paused: false,
+        });
+        assert!(state.changed(&page).unwrap());
+        page.approvals
+            .push(crate::protocol::Approval {
+                id: 1,
+                preview: orbit_tools::approval::ApprovalPreview::Write(
+                    orbit_tools::approval::WritePreview {
+                        path: "note.txt".into(),
+                        before: None,
+                        after: "first".into(),
+                    },
+                ),
+            });
+        assert!(state.changed(&page).unwrap());
+        if let orbit_tools::approval::ApprovalPreview::Write(preview) =
+            &mut page.approvals[0].preview
+        {
+            preview.after = "changed".into();
+        }
+        assert!(state.changed(&page).unwrap());
+        page.next += 1;
+        assert!(state.changed(&page).unwrap());
+        page.busy = false;
+        assert!(state.changed(&page).unwrap());
+        page.model = "fixture::other".into();
+        assert!(state.changed(&page).unwrap());
+        page.planning.generation += 1;
+        assert!(state.changed(&page).unwrap());
+        page.more = true;
+        assert!(state.changed(&page).unwrap());
+        assert!(state.changed(&page).unwrap());
+    }
 
     #[tokio::test]
     async fn queued_user_commands_precede_due_polling_without_reordering_or_repeating() {

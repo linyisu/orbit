@@ -1,6 +1,6 @@
 # orbit-client
 
-本地、SSH、WSL 工作区连接与服务部署，供 CLI、TUI 和 GUI 共用。
+本地、SSH、WSL 连接、账号流程、附件传输与会话观察，供 CLI、TUI 和 GUI 共用。前端保留平台交互和视图状态。
 
 ## 工作区服务
 
@@ -15,6 +15,7 @@ SSH 复用系统 OpenSSH 配置与认证；WSL 需要调用环境提供 `wsl.exe
 - [lib.rs](src/lib.rs)、[connect.rs](src/connect.rs)：准备连接与打开会话。
 - [transport.rs](src/transport.rs)、[bootstrap.rs](src/bootstrap.rs)：传输、部署与握手。
 - [pump.rs](src/pump.rs)、[prompt.rs](src/prompt.rs)：交互请求和单次任务事件流。
+- [accounts.rs](src/accounts.rs)：账号授权与连接元数据；浏览器及项目输入由前端呈现。
 - [configuration.rs](src/configuration.rs)：本机配置快照与凭据传递。
 - [attachments.rs](src/attachments.rs)：图片与普通文件的有界上传、粘贴路径识别；普通文件单个上限 20 MiB。
 

@@ -30,6 +30,7 @@ pub struct Progress {
     pub stage: watch::Sender<String>,
     pub logs: Arc<Mutex<std::collections::VecDeque<String>>>,
     waiting: Arc<AtomicUsize>,
+    secrets: Arc<Mutex<Vec<String>>>,
     prompts: mpsc::Sender<Challenge>,
 }
 
@@ -63,6 +64,7 @@ pub fn channel() -> (Progress, Updates) {
             prompts,
             logs: logs.clone(),
             waiting,
+            secrets: Default::default(),
         },
         Updates {
             stage: receiver,
@@ -72,16 +74,76 @@ pub fn channel() -> (Progress, Updates) {
     )
 }
 
+/// Remove credential-bearing fields and answers before diagnostics reach any frontend.
+pub fn filtered_log(line: &str, secrets: &[String]) -> String {
+    let lower = line.to_ascii_lowercase();
+    let compact: String = lower
+        .chars()
+        .filter(|character| !character.is_ascii_whitespace())
+        .collect();
+    if [
+        "password=",
+        "password:",
+        "passphrase=",
+        "passphrase:",
+        "token=",
+        "api_key=",
+        "api-key:",
+        "authorization:",
+        "secret=",
+    ]
+    .iter()
+    .any(|key| compact.contains(key))
+        || lower.contains("bearer ")
+    {
+        return "[含凭据的日志已隐藏]".into();
+    }
+    let mut filtered = line.to_owned();
+    for secret in secrets
+        .iter()
+        .filter(|secret| !secret.is_empty())
+    {
+        filtered = filtered.replace(secret, "[已隐藏凭据]");
+    }
+    filtered
+}
+
 impl Progress {
     pub fn log(&self, text: &str) {
+        let secrets = self
+            .secrets
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Ok(mut logs) = self.logs.lock() {
             for line in text.lines() {
+                let line = filtered_log(line, &secrets);
                 if !line.trim().is_empty() {
                     logs.push_back(line.chars().take(2_048).collect());
                 }
             }
             while logs.len() > 200 {
                 logs.pop_front();
+            }
+        }
+    }
+
+    fn record_secret(&self, secret: &str) {
+        if secret.is_empty() {
+            return;
+        }
+        let mut secrets = self
+            .secrets
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !secrets
+            .iter()
+            .any(|value| value == secret)
+        {
+            secrets.push(secret.to_owned());
+        }
+        if let Ok(mut logs) = self.logs.lock() {
+            for line in logs.iter_mut() {
+                *line = filtered_log(line, &secrets);
             }
         }
     }
@@ -184,6 +246,11 @@ impl Interaction {
                         })
                         .await?;
                     let answer = answer.await.unwrap_or(None);
+                    if !prompt.confirm
+                        && let Some(secret) = &answer
+                    {
+                        logs.record_secret(secret);
+                    }
                     protocol::write(&mut stream, &answer).await?;
                     Ok::<_, anyhow::Error>(())
                 };
@@ -315,6 +382,26 @@ mod tests {
         stream
     }
 
+    #[test]
+    fn diagnostics_are_filtered_before_delivery_and_late_answers_scrub_retained_lines() {
+        let (progress, updates) = channel();
+        progress.log("Authorization: Bearer fixture-key");
+        progress.log("child echoed sample-answer");
+        progress.record_secret("sample-answer");
+        progress.log("later echoed sample-answer");
+        let lines = updates
+            .logs
+            .lock()
+            .unwrap()
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(!lines.contains("fixture-key"));
+        assert!(!lines.contains("sample-answer"));
+        assert!(lines.contains("已隐藏凭据"));
+    }
+
     #[tokio::test]
     async fn authentication_channels_are_private_and_isolated_when_reusing_transport() {
         let (first, mut first_updates) = channel();
@@ -438,5 +525,30 @@ mod tests {
                 .unwrap(),
             "Touch your security key"
         );
+    }
+    #[test]
+    fn copied_diagnostics_hide_authentication_answers_and_credential_fields() {
+        let secrets = vec!["test-only-password".to_owned()];
+        assert_eq!(
+            filtered_log("echo test-only-password", &secrets),
+            "echo [已隐藏凭据]"
+        );
+        assert_eq!(
+            filtered_log("Authorization: Bearer test-value", &[]),
+            "[含凭据的日志已隐藏]"
+        );
+        assert_eq!(
+            filtered_log("PASSWORD=test-value", &[]),
+            "[含凭据的日志已隐藏]"
+        );
+        assert_eq!(
+            filtered_log("password = test-value", &[]),
+            "[含凭据的日志已隐藏]"
+        );
+        assert_eq!(
+            filtered_log("Permission denied (publickey,password).", &secrets),
+            "Permission denied (publickey,password)."
+        );
+        assert_eq!(filtered_log("已完成握手", &[String::new()]), "已完成握手");
     }
 }
