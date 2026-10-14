@@ -9,7 +9,7 @@ use anyhow::{Result, ensure};
 use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind};
 use orbit_config::config::{
     advanced::{AdvancedDraft, AgentSettings},
-    connections::mcp::McpDraft,
+    connections::mcp::{McpDraft, environment},
 };
 use orbit_protocol::Capability;
 use orbit_tools::mcp::McpServerConfig;
@@ -192,13 +192,7 @@ impl McpForm {
             name.unwrap_or_default().into(),
             server.map_or_else(String::new, |s| s.command.clone()),
             server.map_or_else(String::new, |s| s.args.join("\n")),
-            server.map_or_else(String::new, |s| {
-                s.env
-                    .iter()
-                    .map(|(key, value)| format!("{key}={value}"))
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            }),
+            server.map_or_else(String::new, |server| environment::format(&server.env)),
             server.map_or_else(|| "120".into(), |s| s.timeout_seconds.to_string()),
             server.map_or_else(String::new, |s| s.tools.join("\n")),
         ];
@@ -214,20 +208,7 @@ impl McpForm {
 
     fn server(&self) -> Result<(String, McpServerConfig)> {
         let name = self.fields[0].text.trim().to_owned();
-        let mut env = BTreeMap::new();
-        for line in self.fields[3]
-            .text
-            .lines()
-            .filter(|line| !line.trim().is_empty())
-        {
-            let (key, value) = line
-                .split_once('=')
-                .ok_or_else(|| anyhow::anyhow!("环境变量应为 KEY=value，每行一个。"))?;
-            ensure!(
-                !key.trim().is_empty() && env.insert(key.trim().into(), value.into()).is_none(),
-                "环境变量名称不能为空或重复。"
-            );
-        }
+        let env = environment::parse(&self.fields[3].text)?;
         let server = McpServerConfig {
             transport: "stdio".into(),
             command: self.fields[1].text.trim().into(),
@@ -1214,14 +1195,20 @@ mod tests {
         form.fields[0].set("demo".into());
         form.fields[1].set("server".into());
         form.fields[2].set("--path\npath with spaces".into());
-        form.fields[3].set("TOKEN=a=b\nMODE=readonly".into());
+        form.fields[3].set("TOKEN=a=b\nMODE=readonly\nGHIDRA_INSTALL_DIR= '/opt/ghidra'".into());
         state.save();
         assert!(state.error.is_none(), "{:?}", state.error);
         let server = &state.mcp.as_ref().unwrap().servers()["demo"];
         assert_eq!(server.args, ["--path", "path with spaces"]);
         assert_eq!(server.env["TOKEN"], "a=b");
+        assert_eq!(server.env["GHIDRA_INSTALL_DIR"], "/opt/ghidra");
         assert!(!server.enabled);
         state.edit_mcp(false);
+        assert!(
+            state.mcp_form.as_ref().unwrap().fields[3]
+                .text
+                .contains("GHIDRA_INSTALL_DIR=/opt/ghidra")
+        );
         state.mcp_form.as_mut().unwrap().fields[3].set("TOKEN=first\nTOKEN=second".into());
         state.save();
         assert!(state.error.is_some());

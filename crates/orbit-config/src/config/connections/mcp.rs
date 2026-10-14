@@ -1,4 +1,5 @@
 //! Edit only MCP configuration while preserving other settings and comments.
+pub mod environment;
 use anyhow::{Result, ensure};
 use orbit_tools::mcp::{McpConfig, McpServerConfig};
 use std::{collections::BTreeMap, path::Path};
@@ -60,6 +61,34 @@ impl McpDraft {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn environment_editor_saves_the_actual_path_and_reopens_without_adding_quotes() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("config.toml");
+        std::fs::write(&path, "# preserved\n[providers]\n").unwrap();
+        let mut server: McpServerConfig = toml::from_str("command='test'\nenabled=false").unwrap();
+        server.env = environment::parse("GHIDRA_INSTALL_DIR= '/opt/ghidra'").unwrap();
+        McpDraft::load(&path)
+            .unwrap()
+            .save(&path, "rea-agents", Some(server))
+            .unwrap();
+        let draft = McpDraft::load(&path).unwrap();
+        let env = &draft.servers()["rea-agents"].env;
+        assert_eq!(env["GHIDRA_INSTALL_DIR"], "/opt/ghidra");
+        assert_eq!(environment::format(env), "GHIDRA_INSTALL_DIR=/opt/ghidra");
+        assert_eq!(environment::parse(&environment::format(env)).unwrap(), *env);
+        #[cfg(unix)]
+        {
+            let output = std::process::Command::new("/bin/sh")
+                .args(["-c", "printf '%s' \"$GHIDRA_INSTALL_DIR\""])
+                .envs(env)
+                .output()
+                .unwrap();
+            assert!(output.status.success());
+            assert_eq!(output.stdout, b"/opt/ghidra");
+        }
+    }
+
     #[test]
     fn save_preserves_other_sections_and_rejects_stale_draft() {
         let dir = tempfile::tempdir().unwrap();

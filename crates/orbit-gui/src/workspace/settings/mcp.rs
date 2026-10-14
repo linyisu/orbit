@@ -8,7 +8,7 @@ use gpui_kit::component::{
     input::{Input, InputState, NumberInput},
     switch::Switch,
 };
-use orbit_config::config::connections::mcp::McpDraft;
+use orbit_config::config::connections::mcp::{McpDraft, environment};
 use orbit_protocol::resources::{Action, McpServer, Snapshot};
 use orbit_tools::mcp::McpServerConfig;
 
@@ -86,7 +86,7 @@ impl Mcp {
             env: cx.new(|cx| {
                 TextareaState::new(window, cx)
                     .auto_grow(3, 6)
-                    .placeholder("每行一个 KEY=value")
+                    .placeholder("每行 KEY=value，例如 GHIDRA_INSTALL_DIR=/opt/ghidra")
             }),
             timeout: cx.new(|cx| {
                 InputState::new(window, cx)
@@ -341,13 +341,7 @@ impl Mcp {
             input.set_value(
                 self.template
                     .as_ref()
-                    .map(|s| {
-                        s.env
-                            .iter()
-                            .map(|(k, v)| format!("{k}={v}"))
-                            .collect::<Vec<_>>()
-                            .join("\n")
-                    })
+                    .map(|server| environment::format(&server.env))
                     .unwrap_or_default(),
                 window,
                 cx,
@@ -387,24 +381,14 @@ impl Mcp {
             cx.notify();
             return;
         }
-        let env = self.env.read(cx).value();
-        let mut values = std::collections::BTreeMap::new();
-        for line in env.lines().filter(|l| !l.trim().is_empty()) {
-            let Some((key, value)) = line.split_once('=') else {
-                self.error = Some("环境变量格式应为 KEY=value".into());
-                cx.notify();
-                return;
-            };
-            if key.trim().is_empty()
-                || values
-                    .insert(key.trim().to_string(), value.to_string())
-                    .is_some()
-            {
-                self.error = Some("环境变量名称不能为空或重复".into());
+        let values = match environment::parse(&self.env.read(cx).value()) {
+            Ok(values) => values,
+            Err(error) => {
+                self.error = Some(format!("{error:#}"));
                 cx.notify();
                 return;
             }
-        }
+        };
         let Ok(timeout_seconds) = self.timeout.read(cx).value().parse::<u64>() else {
             self.error = Some("超时应为正整数（秒）。".into());
             cx.notify();
@@ -505,16 +489,7 @@ impl Mcp {
                                 input.set_value(launch.args.join("\n"), window, cx)
                             });
                             view.env.update(cx, |input, cx| {
-                                input.set_value(
-                                    launch
-                                        .env
-                                        .iter()
-                                        .map(|(key, value)| format!("{key}={value}"))
-                                        .collect::<Vec<_>>()
-                                        .join("\n"),
-                                    window,
-                                    cx,
-                                )
+                                input.set_value(environment::format(&launch.env), window, cx)
                             });
                             view.tools.update(cx, |input, cx| {
                                 input.set_value(launch.tools.join("\n"), window, cx)
@@ -664,7 +639,7 @@ impl Render for Mcp {
                             .aria_label("启动参数，每行一个")
                             .disabled(self.busy),
                     )
-                    .child("环境变量 · KEY=value")
+                    .child("环境变量 · 每行 KEY=value，可加成对引号")
                     .child(
                         Textarea::new(&self.env)
                             .aria_label("环境变量，每行一个 KEY=value")
