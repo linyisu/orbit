@@ -19,7 +19,7 @@ struct Selection {
 impl Local {
     pub async fn model_catalog(&self) -> Result<Vec<ModelOption>> {
         let mut config = FileConfig::load(&self.config, &self.auth)?;
-        let _ = orbit_config::models::updater::refresh(&mut config, false).await;
+        let _ = orbit_config::models::updater::load_cached(&mut config).await;
         config.model_options()
     }
 
@@ -94,6 +94,40 @@ impl Local {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn opening_model_selection_does_not_contact_providers() {
+        let root = tempfile::tempdir().unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let config = root.path().join("config.toml");
+        TestConfig::new()
+            .provider(
+                TestProvider::new("slow")
+                    .endpoint(format!("http://{}/v1", listener.local_addr().unwrap()))
+                    .models(["local-model"])
+                    .refresh(true),
+            )
+            .write(&config)
+            .unwrap();
+        let local = Local {
+            config,
+            auth: root.path().join("auth"),
+            model: Some("slow::local-model".into()),
+        };
+        let selected = tokio::time::timeout(
+            std::time::Duration::from_millis(250),
+            local.selected_model(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(selected.as_deref(), Some("slow::local-model"));
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(30), listener.accept())
+                .await
+                .is_err()
+        );
+    }
 
     fn local(root: &std::path::Path, name: &str) -> Local {
         let config = root.join(name);

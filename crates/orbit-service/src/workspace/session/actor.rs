@@ -49,6 +49,8 @@ struct Actor {
     undo: Option<Undo>,
     import: Option<crate::workspace::resources::Import>,
     mcp_reload: Option<crate::workspace::resources::Reload>,
+    starting: Option<Envelope>,
+    models_refreshed: bool,
     accepted: HashMap<String, String>,
     remembered: HashSet<String>,
     pending: HashMap<u64, ApprovalRequest>,
@@ -94,6 +96,8 @@ pub(super) async fn run(
         undo: None,
         import: None,
         mcp_reload: None,
+        starting: None,
+        models_refreshed: false,
         accepted: HashMap::new(),
         remembered,
         pending: HashMap::new(),
@@ -111,10 +115,22 @@ pub(super) async fn run(
         tokio::select! {
             envelope = requests.recv() => {
                 let Some(envelope) = envelope else { break };
+                // Keep polling and accepting cancellation while optional tools
+                // initialize. The first run must see the complete tool catalog.
+                if actor.setup.resources.mcp_startup.is_some() && matches!(&envelope.command,
+                    Command::Start { .. } | Command::Plan { action: orbit_protocol::plan::Action::Approve { .. } | orbit_protocol::plan::Action::Feedback { .. } }
+                ) {
+                    if actor.starting.is_some() {
+                        let _ = envelope.reply.send(Err(anyhow::anyhow!("已有输入正在等待工具准备完成")));
+                    } else {
+                        actor.starting = Some(envelope);
+                    }
+                    continue;
+                }
                 if let Command::RetireUnobserved { result } = envelope.command {
                     // Drafts have nothing to save. Persisted sessions can release
                     // their runtime only after execution and metadata work finish.
-                    let retire = actor.import.is_none() && actor.mcp_reload.is_none() && (!actor.setup.session.is_persisted()
+                    let retire = actor.starting.is_none() && actor.import.is_none() && actor.mcp_reload.is_none() && (!actor.setup.session.is_persisted()
                         || (!actor.active()
                             && !actor.questions.running().await
                             && !actor.setup.session.metadata_pending()));
@@ -173,6 +189,17 @@ pub(super) async fn run(
                 let reload = actor.mcp_reload.take().unwrap();
                 reload.finish(&mut actor.setup, output.unwrap_or_else(|error| Err(anyhow::anyhow!("MCP 重新加载中断：{error}"))));
             }
+            output = async { (&mut actor.setup.resources.mcp_startup.as_mut().unwrap().task).await }, if actor.setup.resources.mcp_startup.is_some() => {
+                let startup = actor.setup.resources.mcp_startup.take().unwrap();
+                startup.finish(&mut actor.setup, output.map_err(anyhow::Error::from));
+            }
+            output = async { actor.setup.resources.model_refresh.as_mut().unwrap().await }, if actor.setup.resources.model_refresh.is_some() => {
+                actor.setup.resources.model_refresh = None;
+                if let Ok(report) = output {
+                    for diagnostic in report.diagnostics { eprintln!("{diagnostic}"); }
+                    actor.models_refreshed = true;
+                }
+            }
             _ = outputs.tick(), if actor.running.is_some() && !actor.progress.is_empty() && actor.progress_task.is_none() => {
                 actor.progress_task = Some(actor.progress.start_snapshot(&actor.setup.resources.tools, &actor.setup.session.command_output));
             }
@@ -188,9 +215,23 @@ pub(super) async fn run(
                     actor.cancel();
                 }
                 actor.sync_user_input().await;
+                if actor.models_refreshed && !actor.busy() {
+                    actor.models_refreshed = false;
+                    if let Err(error) = actor.command(Command::ConfigureModels { configuration: None }).await {
+                        eprintln!("后台模型目录更新未应用：{error:#}");
+                    }
+                }
                 actor.compact_if_needed().await;
                 if actor.setup.session.poll_title().await.unwrap_or(false) { actor.profile().await; }
             }
+        }
+        if actor.setup.resources.mcp_startup.is_none()
+            && actor.mcp_reload.is_none()
+            && let Some(envelope) = actor.starting.take()
+            && !envelope.reply.is_closed()
+        {
+            let result = actor.command(envelope.command).await;
+            let _ = envelope.reply.send(result);
         }
     }
     actor.cancel();
@@ -198,7 +239,7 @@ pub(super) async fn run(
 
 impl Actor {
     fn busy(&self) -> bool {
-        self.running.is_some() || self.undo.is_some()
+        self.running.is_some() || self.undo.is_some() || self.starting.is_some()
     }
 
     fn active(&self) -> bool {
@@ -358,6 +399,8 @@ impl Actor {
             }
             Command::ConfigureModels { configuration } => {
                 ensure!(!self.busy(), "请在当前任务结束后更新模型配置");
+                self.setup.resources.model_refresh = None;
+                self.models_refreshed = false;
                 let installed = match configuration {
                     Some(configuration) => Some(
                         crate::workspace::configuration::Installed::install(
@@ -373,7 +416,7 @@ impl Actor {
                     .map_or(&self.setup.resources.options, |value| &value.options);
                 let mut config =
                     crate::config::FileConfig::load(&options.config, &options.auth_directory)?;
-                let _ = orbit_config::models::updater::refresh(&mut config, false).await;
+                let _ = orbit_config::models::updater::load_cached(&mut config).await;
                 let models = config.model_options()?;
                 let previous_limit = self.setup.resources.budget.input_context_tokens;
                 let selected = self.setup.resources.model_name.clone();
@@ -452,6 +495,8 @@ impl Actor {
                         allow_start,
                         result,
                     )?);
+                    // An explicit reload supersedes the initial connection.
+                    self.setup.resources.mcp_startup = None;
                     return Ok(());
                 }
                 let busy = self.active() || self.questions.running().await;
@@ -648,6 +693,9 @@ impl Actor {
                     .await?;
             }
             Command::Cancel => {
+                if let Some(envelope) = self.starting.take() {
+                    let _ = envelope.reply.send(Err(anyhow::anyhow!("输入已取消")));
+                }
                 self.cancel();
                 self.pending.clear();
                 self.view.lock().await.approvals.clear();
@@ -788,7 +836,10 @@ impl Actor {
     }
 
     async fn compact_if_needed(&mut self) {
-        if self.busy() || !self.compact_after_model_switch {
+        if self.busy()
+            || self.setup.resources.mcp_startup.is_some()
+            || !self.compact_after_model_switch
+        {
             return;
         }
         self.compact_after_model_switch = false;

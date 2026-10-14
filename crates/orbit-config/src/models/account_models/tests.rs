@@ -1,6 +1,6 @@
 use super::*;
 async fn refresh(config: &mut FileConfig, force: bool) -> Vec<String> {
-    refresh_connections(config, force, force)
+    refresh_connections(config, force, force, true)
         .await
         .into_iter()
         .flat_map(|(_, errors)| errors)
@@ -32,6 +32,81 @@ async fn manual_update_is_reused_offline_when_automatic_refresh_is_disabled() {
     assert_eq!(
         reloaded.providers["manual"].models[0].context_tokens,
         Some(200000)
+    );
+}
+
+#[tokio::test]
+async fn cached_open_reuses_stale_account_catalog_and_manual_refresh_replaces_it() {
+    use crate::test_support::{TestConfig, TestProvider};
+    let root = tempfile::tempdir().unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}/v1", listener.local_addr().unwrap());
+    let mut config = TestConfig::new()
+        .auth(root.path())
+        .provider(
+            TestProvider::new("auto")
+                .endpoint(endpoint.clone())
+                .automatic()
+                .refresh(true),
+        )
+        .build()
+        .unwrap();
+    let first = tokio::spawn(serve_catalog(
+        listener,
+        json!({"data": [{"id":"old"},{"id":"kept"}]}),
+    ));
+    // Discover only the account catalog so this fixture never accesses public metadata.
+    assert!(refresh(&mut config, true).await.is_empty());
+    first.await.unwrap();
+    let cache = root
+        .path()
+        .join("model-catalog")
+        .join(format!("{}.json", fingerprint("auto")));
+    std::fs::File::open(&cache)
+        .unwrap()
+        .set_times(std::fs::FileTimes::new().set_modified(SystemTime::UNIX_EPOCH))
+        .unwrap();
+    let mut cached = TestConfig::new()
+        .auth(root.path())
+        .provider(
+            TestProvider::new("auto")
+                .endpoint(endpoint.clone())
+                .automatic()
+                .refresh(true),
+        )
+        .build()
+        .unwrap();
+    assert!(
+        crate::models::updater::load_cached(&mut cached)
+            .await
+            .diagnostics
+            .is_empty()
+    );
+    assert_eq!(
+        cached.providers["auto"]
+            .models
+            .iter()
+            .map(|m| m.id.as_str())
+            .collect::<Vec<_>>(),
+        ["old", "kept"]
+    );
+    let listener = tokio::net::TcpListener::bind(
+        endpoint
+            .trim_start_matches("http://")
+            .trim_end_matches("/v1"),
+    )
+    .await
+    .unwrap();
+    let second = tokio::spawn(serve_catalog(listener, json!({"data": [{"id":"kept"}]})));
+    assert!(refresh(&mut cached, true).await.is_empty());
+    second.await.unwrap();
+    assert_eq!(
+        cached.providers["auto"]
+            .models
+            .iter()
+            .map(|m| m.id.as_str())
+            .collect::<Vec<_>>(),
+        ["kept"]
     );
 }
 

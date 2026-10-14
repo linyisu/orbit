@@ -184,7 +184,7 @@ pub(crate) struct MetadataUpdate {
     pub status: String,
     pub error: Option<String>,
 }
-pub(crate) async fn update(config: &mut FileConfig, force: bool) -> MetadataUpdate {
+pub(crate) async fn update(config: &mut FileConfig, force: bool, network: bool) -> MetadataUpdate {
     if !config.providers.values().any(|p| api_format(p.api_format)) {
         return MetadataUpdate {
             status: "公共规格：此连接使用账号专属目录".into(),
@@ -204,10 +204,11 @@ pub(crate) async fn update(config: &mut FileConfig, force: bool) -> MetadataUpda
         .and_then(|m| m.modified().ok())
         .and_then(|stamp| stamp.elapsed().ok())
         .is_some_and(|age| age < CACHE_LIFETIME);
-    let refresh = config
-        .providers
-        .values()
-        .any(|provider| api_format(provider.api_format) && provider.auto_refresh_models);
+    let refresh = network
+        && config
+            .providers
+            .values()
+            .any(|provider| api_format(provider.api_format) && provider.auto_refresh_models);
     let attempted = force || (refresh && !(fresh && cache.is_some()));
     let previous = cache
         .as_ref()

@@ -52,6 +52,9 @@ impl PreparedWorkspace {
 pub struct WorkspaceResources {
     pub(super) skill_import: Option<super::skill_import::Scan>,
     pub(super) mcp_import: Option<super::mcp_import::Scan>,
+    pub(super) mcp_startup: Option<super::resources::Startup>,
+    pub(super) model_refresh:
+        Option<tokio_util::task::AbortOnDropHandle<orbit_config::models::updater::UpdateReport>>,
     pub options: WorkspaceOptions,
     pub mode: orbit_protocol::Mode,
     pub mode_revision: u64,
@@ -107,7 +110,9 @@ async fn prepare(
     policy: orbit_protocol::SessionPolicy,
 ) -> Result<PreparedWorkspace> {
     let mut config = FileConfig::load(&options.config, &options.auth_directory)?;
-    let _ = orbit_config::models::updater::refresh(&mut config, false).await;
+    let diagnostics = orbit_config::models::updater::load_cached(&mut config)
+        .await
+        .diagnostics;
     let model = if resume.is_some() {
         String::new()
     } else {
@@ -126,7 +131,16 @@ async fn prepare(
     } else {
         session::SessionState::open_in(options.database.clone(), resume, model, directory).await?
     };
-    let mut resources = prepare_resources(options, directory, &session, policy, &[]).await?;
+    let mut resources = prepare_resolved_resources(
+        options,
+        directory,
+        &session,
+        policy,
+        config,
+        !shared,
+        diagnostics,
+    )
+    .await?;
     if session.saved_model_profile().0 != resources.model_name {
         // Repair only the model profile after resources have been prepared;
         // opening history must not depend on a provider that was removed.
@@ -172,6 +186,35 @@ pub(super) async fn prepare_resources(
     policy: orbit_protocol::SessionPolicy,
     inherited_disabled_tools: &[String],
 ) -> Result<WorkspaceResources> {
+    let mut config = FileConfig::load(&options.config, &options.auth_directory)?;
+    config
+        .disabled_tools
+        .extend(inherited_disabled_tools.iter().cloned());
+    let diagnostics = orbit_config::models::updater::load_cached(&mut config)
+        .await
+        .diagnostics;
+    prepare_resolved_resources(
+        options,
+        directory,
+        session,
+        policy,
+        config,
+        false,
+        diagnostics,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn prepare_resolved_resources(
+    options: &WorkspaceOptions,
+    directory: &std::path::Path,
+    session: &session::SessionState,
+    policy: orbit_protocol::SessionPolicy,
+    mut file_config: FileConfig,
+    background: bool,
+    diagnostics: Vec<String>,
+) -> Result<WorkspaceResources> {
     use orbit_protocol::Capability;
     let config_path = &options.config;
     let instructions = instructions::load_for(
@@ -180,10 +223,6 @@ pub(super) async fn prepare_resources(
         instructions::MAX_INSTRUCTION_BYTES,
     );
     let (approvals, approval_receiver) = orbit_tools::approval::channel();
-    let mut file_config = FileConfig::load(config_path, &options.auth_directory)?;
-    file_config
-        .disabled_tools
-        .extend(inherited_disabled_tools.iter().cloned());
     file_config.disabled_tools.sort_unstable();
     file_config.disabled_tools.dedup();
     // Persisted ceilings only narrow the caller's policy; they never replace it.
@@ -193,9 +232,6 @@ pub(super) async fn prepare_resources(
         .extend(file_config.disabled_capabilities.iter().copied());
     policy.disabled.sort_unstable();
     policy.disabled.dedup();
-    let diagnostics = orbit_config::models::updater::refresh(&mut file_config, false)
-        .await
-        .diagnostics;
     let model_options = file_config.model_options()?;
     let selected_model = restored_model(
         &file_config,
@@ -237,6 +273,16 @@ pub(super) async fn prepare_resources(
         approvals.clone(),
         Some(file_config.permissions.clone()),
     )?;
+    let mcp_startup = background
+        .then(|| {
+            super::resources::Startup::start(
+                &mcp,
+                directory,
+                (!policy.read_only).then_some(approvals.clone()),
+                options.allow_mcp_start,
+            )
+        })
+        .flatten();
     let runtime = runtime::workspace_tools(
         directory,
         config_path,
@@ -245,7 +291,11 @@ pub(super) async fn prepare_resources(
         (!policy.read_only).then_some(approvals.clone()),
         command_limits,
         web,
-        mcp,
+        if mcp_startup.is_some() {
+            Default::default()
+        } else {
+            mcp
+        },
         options.allow_mcp_start,
         Some(session.command_output.clone()),
         Some(file_config.permissions.clone()),
@@ -308,9 +358,29 @@ pub(super) async fn prepare_resources(
     filter_configured_tools(&mut tools, &policy, &file_config.disabled_tools);
 
     let mcp_approvals = (!policy.read_only).then_some(approvals);
+    let disabled_tools = file_config.disabled_tools.clone();
+    let cursor_trail = file_config.tui.cursor_trail;
+    let compaction = file_config.compaction_runtime()?;
+    let mcp_statuses = mcp_startup
+        .as_ref()
+        .map_or(runtime.mcp_statuses, |startup| startup.statuses.clone());
+    let model_refresh = if background
+        && file_config
+            .providers
+            .values()
+            .any(|p| p.auto_refresh_models)
+    {
+        Some(tokio_util::task::AbortOnDropHandle::new(tokio::spawn(
+            async move { orbit_config::models::updater::refresh(&mut file_config, false).await },
+        )))
+    } else {
+        None
+    };
     Ok(WorkspaceResources {
         skill_import: None,
         mcp_import: None,
+        mcp_startup,
+        model_refresh,
         mode_revision: 0,
         planning,
         mode: match session.store.tui_mode(session.id()).await?.as_str() {
@@ -320,10 +390,10 @@ pub(super) async fn prepare_resources(
         },
         options: options.clone(),
         policy,
-        disabled_tools: file_config.disabled_tools.clone(),
+        disabled_tools,
         diagnostics,
         web_client: runtime.web_client,
-        cursor_trail: file_config.tui.cursor_trail,
+        cursor_trail,
         moved: false,
         workspace: runtime.workspace,
         command_limits: runtime.command_limits,
@@ -341,12 +411,12 @@ pub(super) async fn prepare_resources(
             auto_compact: agent_config.auto_compact,
             max_turns: agent_config.max_turns,
             max_tool_calls: agent_config.max_tool_calls,
-            compaction: file_config.compaction_runtime()?,
+            compaction,
             instructions,
             model_options,
             skills,
             plugin_skill_diagnostics: plugin_skill_roots.diagnostics,
-            mcp_statuses: runtime.mcp_statuses,
+            mcp_statuses,
             memory_scope,
         },
     })

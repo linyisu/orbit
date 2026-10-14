@@ -22,6 +22,7 @@ pub(crate) async fn refresh_connections(
     config: &mut FileConfig,
     force: bool,
     bypass_cache: bool,
+    network: bool,
 ) -> Vec<(String, Vec<String>)> {
     let Some(directory) = config.auth_directory.as_ref() else {
         return Vec::new();
@@ -29,7 +30,7 @@ pub(crate) async fn refresh_connections(
     let mut jobs = Vec::new();
     for (name, provider) in &mut config.providers {
         if supported(provider.api_format, &provider.base_url) {
-            let allow_network = force || provider.auto_refresh_models;
+            let allow_network = network && (force || provider.auto_refresh_models);
             jobs.push(async move {
                 (
                     name.clone(),

@@ -7,8 +7,36 @@ use std::{
 use anyhow::{Context, Result, ensure};
 use sha2::{Digest, Sha256};
 
-pub(super) fn executable(bundle: Option<&[u8]>) -> Result<PathBuf> {
-    if let Some(bytes) = bundle {
+pub(super) struct Bundle {
+    bytes: &'static [u8],
+    digest: std::sync::OnceLock<String>,
+}
+
+impl Bundle {
+    pub fn new(bytes: &'static [u8]) -> Self {
+        Self {
+            bytes,
+            digest: Default::default(),
+        }
+    }
+
+    pub fn bytes(&self) -> &'static [u8] {
+        self.bytes
+    }
+
+    fn digest(&self) -> &str {
+        self.digest.get_or_init(|| {
+            Sha256::digest(self.bytes)
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect()
+        })
+    }
+}
+
+pub(super) fn executable(bundle: Option<&Bundle>) -> Result<PathBuf> {
+    if let Some(bundle) = bundle {
+        let bytes = bundle.bytes;
         let cache = std::env::var_os("XDG_CACHE_HOME")
             .filter(|value| !value.is_empty())
             .map(PathBuf::from)
@@ -27,10 +55,7 @@ pub(super) fn executable(bundle: Option<&[u8]>) -> Result<PathBuf> {
                 && metadata.mode() & 0o022 == 0,
             "local server cache must be owned by this user and not writable by others"
         );
-        let digest = Sha256::digest(bytes)
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>();
+        let digest = bundle.digest();
         let executable = directory.join(format!("orbit-server-{digest}"));
         if !executable.try_exists()? {
             let mut temporary = tempfile::NamedTempFile::new_in(&directory)?;

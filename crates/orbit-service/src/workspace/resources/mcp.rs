@@ -8,7 +8,75 @@ use tokio_util::task::AbortOnDropHandle;
 #[cfg(test)]
 mod tests;
 
-type Catalog = (ToolRegistry, Vec<McpServerStatus>);
+pub(in crate::workspace) type Catalog = (ToolRegistry, Vec<McpServerStatus>);
+
+/// Owned by the prepared workspace, so replacing or closing it cancels startup.
+pub(in crate::workspace) struct Startup {
+    pub task: AbortOnDropHandle<Catalog>,
+    pub statuses: Vec<McpServerStatus>,
+}
+
+impl Startup {
+    pub fn start(
+        config: &McpConfig,
+        directory: &Path,
+        approvals: Option<orbit_tools::approval::ApprovalSender>,
+        allow_start: bool,
+    ) -> Option<Self> {
+        if !allow_start || approvals.is_none() || !config.servers.values().any(|s| s.enabled) {
+            return None;
+        }
+        let statuses = config
+            .servers
+            .iter()
+            .map(|(name, server)| McpServerStatus {
+                name: name.clone(),
+                connected: false,
+                detail: if server.enabled {
+                    "正在连接"
+                } else {
+                    "已禁用"
+                }
+                .into(),
+                tool_count: 0,
+                tools: Vec::new(),
+            })
+            .collect();
+        let config = config.clone();
+        let directory = directory.to_owned();
+        let task = AbortOnDropHandle::new(tokio::spawn(async move {
+            let mut tools = ToolRegistry::new();
+            let statuses =
+                orbit_tools::mcp::register(&mut tools, &config, &directory, approvals, allow_start)
+                    .await;
+            (tools, statuses)
+        }));
+        Some(Self { task, statuses })
+    }
+
+    pub fn finish(self, setup: &mut PreparedWorkspace, output: Result<Catalog>) {
+        match output {
+            Ok(catalog) => apply(setup, catalog),
+            Err(error) => {
+                for status in &mut setup.resources.budget.mcp_statuses {
+                    if status.detail == "正在连接" {
+                        status.detail = format!("MCP 启动中断：{error:#}");
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn apply(setup: &mut PreparedWorkspace, (tools, statuses): Catalog) {
+    setup.resources.tools.replace_prefix("mcp__", &tools);
+    super::super::setup::filter_configured_tools(
+        &mut setup.resources.tools,
+        &setup.resources.policy,
+        &setup.resources.disabled_tools,
+    );
+    setup.resources.budget.mcp_statuses = statuses;
+}
 
 pub(in crate::workspace) struct Reload {
     pub task: AbortOnDropHandle<Result<Catalog>>,
@@ -65,13 +133,7 @@ impl Reload {
                     && !setup.resources.policy.disabled(Capability::Mcp),
                 "当前会话不允许 MCP 工具"
             );
-            setup.resources.tools.replace_prefix("mcp__", &tools);
-            super::super::setup::filter_configured_tools(
-                &mut setup.resources.tools,
-                &setup.resources.policy,
-                &setup.resources.disabled_tools,
-            );
-            setup.resources.budget.mcp_statuses = statuses;
+            apply(setup, (tools, statuses));
             Ok(snapshot(setup))
         });
         let _ = self.result.send(response);

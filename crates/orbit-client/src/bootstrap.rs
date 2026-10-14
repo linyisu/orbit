@@ -13,12 +13,12 @@ use super::transport::Target;
 
 const BOOTSTRAP_TIMEOUT: Duration = Duration::from_secs(180);
 
-static SERVER_BUNDLE: std::sync::OnceLock<&'static [u8]> = std::sync::OnceLock::new();
+static SERVER_BUNDLE: std::sync::OnceLock<super::local_server::Bundle> = std::sync::OnceLock::new();
 
 /// Install the executable's portable service asset before opening connections.
 pub fn register_server_bundle(bytes: &'static [u8]) -> Result<()> {
     SERVER_BUNDLE
-        .set(bytes)
+        .set(super::local_server::Bundle::new(bytes))
         .map_err(|_| anyhow::anyhow!("workspace server bundle already registered"))
 }
 
@@ -62,11 +62,9 @@ pub async fn executable(
             upload.is_none(),
             "--upload-server is only used with SSH or WSL"
         );
-        return Ok(
-            super::local_server::executable(SERVER_BUNDLE.get().copied())?
-                .to_string_lossy()
-                .into_owned(),
-        );
+        return Ok(super::local_server::executable(SERVER_BUNDLE.get())?
+            .to_string_lossy()
+            .into_owned());
     }
     super::interaction::timeout(
         BOOTSTRAP_TIMEOUT,
@@ -115,7 +113,10 @@ async fn prepare(
         upload,
         &std::env::current_exe()?,
         architecture,
-        SERVER_BUNDLE.get().copied().unwrap_or_default(),
+        SERVER_BUNDLE
+            .get()
+            .map(|bundle| bundle.bytes())
+            .unwrap_or_default(),
     )?;
     if let Some(progress) = progress {
         progress.report(match &binary {

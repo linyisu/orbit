@@ -17,6 +17,27 @@ type WeakGate = std::sync::Weak<tokio::sync::Mutex<Option<Instant>>>;
 static GATES: LazyLock<Mutex<BTreeMap<PathBuf, WeakGate>>> =
     LazyLock::new(|| Mutex::new(BTreeMap::new()));
 
+/// Resolve declarations and credential-bound caches without network access or
+/// waiting for an in-flight refresh. Opening a session must stay local.
+pub async fn load_cached(config: &mut FileConfig) -> UpdateReport {
+    for provider in config.providers.values_mut() {
+        provider.resolve();
+    }
+    let mut report = UpdateReport::default();
+    for (_, diagnostics) in
+        super::account_models::refresh_connections(config, false, false, false).await
+    {
+        report.diagnostics.extend(diagnostics);
+    }
+    report.diagnostics.extend(
+        super::model_metadata::update(config, false, false)
+            .await
+            .error,
+    );
+    report.diagnostics.sort();
+    report
+}
+
 pub async fn refresh(config: &mut FileConfig, force: bool) -> UpdateReport {
     let Some(directory) = config.auth_directory.clone() else {
         return UpdateReport::default();
@@ -42,7 +63,7 @@ pub async fn refresh(config: &mut FileConfig, force: bool) -> UpdateReport {
     }
     let mut report = UpdateReport::default();
     for (name, diagnostics) in
-        super::account_models::refresh_connections(config, force, force_download).await
+        super::account_models::refresh_connections(config, force, force_download, true).await
     {
         if force {
             report.notices.push(if diagnostics.is_empty() {
@@ -53,7 +74,7 @@ pub async fn refresh(config: &mut FileConfig, force: bool) -> UpdateReport {
         }
         report.diagnostics.extend(diagnostics);
     }
-    let metadata = super::model_metadata::update(config, force_download).await;
+    let metadata = super::model_metadata::update(config, force_download, true).await;
     if force {
         report.notices.push(metadata.status);
     }
@@ -65,3 +86,6 @@ pub async fn refresh(config: &mut FileConfig, force: bool) -> UpdateReport {
     report.diagnostics.sort();
     report
 }
+
+#[cfg(test)]
+mod tests;

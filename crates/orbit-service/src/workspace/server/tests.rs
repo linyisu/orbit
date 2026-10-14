@@ -6,6 +6,7 @@ mod permissions;
 mod review;
 mod session_controls;
 mod settings;
+mod startup;
 mod tasks;
 use orbit_protocol::{Mode, SessionInfo};
 

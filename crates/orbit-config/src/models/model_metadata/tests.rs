@@ -172,7 +172,7 @@ proxy = "http://invalid.invalid:1"
     .unwrap();
     let path = directory.path().join("model-metadata/catalog.json");
     save(&path, &fixture()).unwrap();
-    assert!(update(&mut config, false).await.error.is_none());
+    assert!(update(&mut config, false, true).await.error.is_none());
     assert_eq!(
         config.providers["test"].models[0].context_tokens,
         Some(200000)

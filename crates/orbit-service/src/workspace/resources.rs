@@ -2,7 +2,7 @@
 mod import;
 mod mcp;
 pub(super) use import::Import;
-pub(super) use mcp::Reload;
+pub(super) use mcp::{Reload, Startup};
 
 use crate::{PreparedWorkspace, skills::SkillSource};
 use anyhow::{Context, Result, ensure};
