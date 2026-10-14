@@ -95,11 +95,20 @@ fn resolve_family(
         .clone()
 }
 
-/// Columns share the available document width, capped by their measured content.
-/// Cells may shrink and wrap even in narrow panes; tables never scroll sideways.
-pub(crate) fn document_style() -> gpui_kit::component::text::TextViewStyle {
+/// Keep document headings close to body text and scale them with the interface zoom.
+/// Tables retain content-aware columns and may wrap in narrow panes.
+pub(crate) fn document_style(cx: &App) -> gpui_kit::component::text::TextViewStyle {
     use gpui_kit::{StyleRefinement, Styled, relative, rems};
+    let base_font_size = Theme::global(cx).font_size;
     gpui_kit::component::text::TextViewStyle::default()
+        .heading_font_size(move |level, _| {
+            base_font_size
+                * match level {
+                    1 => 1.25,
+                    2 => 1.125,
+                    _ => 1.,
+                }
+        })
         .code_block(
             StyleRefinement::default()
                 .text_size(rems(0.875))

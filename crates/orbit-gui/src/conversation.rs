@@ -893,7 +893,7 @@ impl Render for MessageRow {
                 let text = TextView::new(&self.text)
                     .when(!self.user, |view| view.w_full())
                     .min_w_0()
-                    .style(crate::theme::document_style())
+                    .style(crate::theme::document_style(cx))
                     .code_block_actions(|block, _, _| {
                         let code = block.code();
                         Button::new("copy-code")

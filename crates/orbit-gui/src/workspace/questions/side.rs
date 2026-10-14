@@ -662,7 +662,7 @@ impl Render for QuestionDetail {
                     TextView::new(&detail.text)
                         .w_full()
                         .selectable(true)
-                        .style(crate::theme::document_style())
+                        .style(crate::theme::document_style(cx))
                         .plugin(crate::math::MathPlugin::inline())
                         .plugin(crate::math::MathPlugin::display()),
                 )

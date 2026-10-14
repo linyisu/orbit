@@ -959,7 +959,7 @@ impl Render for ChildAgents {
                             TextView::new(&row.text)
                                 .w_full()
                                 .selectable(true)
-                                .style(crate::theme::document_style()),
+                                .style(crate::theme::document_style(cx)),
                         )
                         .when_some(row.error.clone(), |view, error| {
                             view.child(

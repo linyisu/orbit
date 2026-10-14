@@ -621,7 +621,7 @@ impl Workspace {
         // expected here; the service validates the generation and file state.
         let reviewable =
             self.planning.mode == plan::WorkMode::Plan && plan.status == plan::Status::Review;
-        crate::dialog::open(window, cx, move |dialog, window, _| {
+        crate::dialog::open(window, cx, move |dialog, window, cx| {
             let approve = owner.clone();
             let feedback = owner.clone();
             let close = owner.clone();
@@ -641,7 +641,7 @@ impl Workspace {
                         .overflow_y_scroll()
                         .child(
                             TextView::markdown("plan", markdown.clone())
-                                .style(crate::theme::document_style()),
+                                .style(crate::theme::document_style(cx)),
                         ),
                 )
                 .footer(

@@ -149,7 +149,7 @@ impl Render for Panel {
                     .child(
                         div().p_4().child(
                             TextView::new(&self.text)
-                                .style(crate::theme::document_style())
+                                .style(crate::theme::document_style(cx))
                                 .selectable(true),
                         ),
                     ),
