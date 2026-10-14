@@ -102,22 +102,31 @@ impl Store {
                         crate::session_log::decode(row.id, row.run_id, row.payload, row.sha256)
                     })
                     .transpose()?;
-                let image_assets: Vec<_> = match message.map(|record| record.message) {
+                let attachments = match message.map(|record| record.message) {
                     Some(orbit_model::types::ChatMessage::User {
                         content,
                         attachments,
-                    }) if content == row.prompt => attachments
-                        .into_iter()
-                        .map(|image| orbit_protocol::MessageImage {
-                            name: image.name().to_owned(),
-                            path: image
-                                .path()
-                                .to_string_lossy()
-                                .into_owned(),
-                        })
-                        .collect(),
+                    }) if content == row.prompt => attachments,
                     _ => Vec::new(),
                 };
+                let metadata =
+                    |attachment: &orbit_model::types::Attachment| orbit_protocol::MessageImage {
+                        name: attachment.name().into(),
+                        path: attachment
+                            .path()
+                            .to_string_lossy()
+                            .into_owned(),
+                    };
+                let files = attachments
+                    .iter()
+                    .filter(|a| !a.is_image())
+                    .map(metadata)
+                    .collect();
+                let image_assets = attachments
+                    .iter()
+                    .filter(|a| a.is_image())
+                    .map(metadata)
+                    .collect::<Vec<_>>();
                 let first = |tag: &'static str| {
                     events::Entity::find()
                         .filter(events::Column::RunId.eq(index.id))
@@ -134,6 +143,7 @@ impl Store {
                     input.is_some_and(|input| turn.is_none_or(|turn| input.id < turn.id));
                 updates.push(Update::Started {
                     presentation: RunPresentation {
+                        file_assets: files,
                         replayed: true,
                         compact: row.prompt == "/compact",
                         queued_input,

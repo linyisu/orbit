@@ -23,7 +23,10 @@ pub fn estimate_tokens(messages: &[ChatMessage], tools: &[ToolDefinition]) -> us
     let images = messages
         .iter()
         .map(|message| match message {
-            ChatMessage::User { attachments, .. } => attachments.len(),
+            ChatMessage::User { attachments, .. } => attachments
+                .iter()
+                .filter(|a| a.is_image())
+                .count(),
             _ => 0,
         })
         .sum::<usize>();

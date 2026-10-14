@@ -16,6 +16,11 @@ impl Workspace {
             .id("composer")
             .key_context("OrbitComposer")
             .capture_action(cx.listener(
+                |view, _: &gpui_kit::component::input::Paste, window, cx| {
+                    view.paste_file_list(window, cx)
+                },
+            ))
+            .capture_action(cx.listener(
                 |view, _: &gpui_kit::component::input::MoveUp, window, cx| {
                     view.history_arrow(true, window, cx)
                 },
@@ -77,63 +82,18 @@ impl Workspace {
                     .rounded(cx.theme().radius_lg)
                     .when(!self.paths.is_empty(), |view| {
                         view.child(
-                            h_flex()
-                                .gap_2()
-                                .flex_wrap()
-                                .children(self.paths.iter().map(|path| {
-                                    let remove = path.clone();
-                                    let preview = path.clone();
-                                    let preview_owner = cx.weak_entity();
-                                    Attachment::new()
-                                        .id(SharedString::from(path.to_string_lossy().into_owned()))
-                                        .axis(Axis::Vertical)
-                                        .w(rems(7.))
-                                        .h(rems(5.))
-                                        .media(
-                                            AttachmentMedia::new()
-                                                .aspect_ratio(7. / 5.)
-                                                .child(
-                                                    img(path.clone())
-                                                        .size_full()
-                                                        .object_fit(ObjectFit::Contain),
-                                                ),
-                                        )
-                                        .when(self.pending.is_none(), |attachment| {
-                                            attachment.on_remove(cx.listener(
-                                                move |view, _, _, cx| {
-                                                    // Keep this click out of the card preview.
-                                                    cx.stop_propagation();
-                                                    view.paths
-                                                        .retain(|path| path != &remove);
-                                                    cx.emit(WorkspaceEvent::DraftChanged);
-                                                    cx.notify();
-                                                },
-                                            ))
-                                        })
-                                        .on_click(move |_, window, cx| {
-                                            // A removed card can still have a queued click in this
-                                            // frame.
-                                            if preview_owner
-                                                .read_with(cx, |view, _| {
-                                                    view.paths.contains(&preview)
-                                                })
-                                                .unwrap_or(false)
-                                            {
-                                                crate::image_preview::open_path(
-                                                    preview.clone(),
-                                                    window,
-                                                    cx,
-                                                );
-                                            }
-                                        })
-                                })),
+                            h_flex().gap_2().flex_wrap().children(
+                                self.paths
+                                    .iter()
+                                    .map(|path| self.composer_attachment(path, cx)),
+                            ),
                         )
                     })
                     .child(
                         Textarea::new(&self.input)
                             .on_paste(move |item, window, cx| {
                                 paste_owner
-                                    .update(cx, |view, cx| view.paste_images(item, window, cx))
+                                    .update(cx, |view, cx| view.paste_attachments(item, window, cx))
                                     .unwrap_or(false)
                             })
                             .appearance(false)
@@ -228,6 +188,65 @@ impl Workspace {
             .into_any_element()
     }
 
+    fn composer_attachment(&self, path: &std::path::Path, cx: &mut Context<Self>) -> Attachment {
+        let remove = path.to_owned();
+        let image = composer::is_image(path);
+        let name = self
+            .attachment_names
+            .get(path)
+            .cloned()
+            .unwrap_or_else(|| {
+                path.file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into_owned()
+            });
+        let mut card = Attachment::new()
+            .id(SharedString::from(path.to_string_lossy().into_owned()))
+            .tooltip(name.clone());
+        if image {
+            let preview = path.to_owned();
+            let owner = cx.weak_entity();
+            card = card
+                .axis(Axis::Vertical)
+                .w(rems(7.))
+                .h(rems(5.))
+                .media(
+                    AttachmentMedia::new()
+                        .aspect_ratio(7. / 5.)
+                        .child(
+                            img(path.to_owned())
+                                .size_full()
+                                .object_fit(ObjectFit::Contain),
+                        ),
+                )
+                .on_click(move |_, window, cx| {
+                    if owner
+                        .read_with(cx, |view, _| view.paths.contains(&preview))
+                        .unwrap_or(false)
+                    {
+                        crate::image_preview::open_path(preview.clone(), window, cx);
+                    }
+                });
+        } else {
+            card = card
+                .small()
+                .media(AttachmentMedia::new().child(Icon::new(IconName::File)))
+                .content(AttachmentContent::new().title(AttachmentTitle::new(name)));
+        }
+        if self.pending.is_none() {
+            card = card.on_remove(cx.listener(move |view, _, _, cx| {
+                cx.stop_propagation();
+                view.paths
+                    .retain(|path| path != &remove);
+                view.prune_draft_attachments();
+                cx.emit(WorkspaceEvent::DraftChanged);
+                cx.notify();
+            }));
+        }
+        card
+    }
+
     fn composer_target(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let directory = std::path::Path::new(self.location.as_ref())
             .file_name()
@@ -266,6 +285,7 @@ impl Workspace {
                         self.opening
                             || self.choosing_project
                             || self.picker_pending
+                            || self.attachment_imports != 0
                             || self.pending.is_some(),
                     )
                     .dropdown_caret(true)
@@ -317,6 +337,7 @@ impl Workspace {
                         self.opening
                             || self.choosing_project
                             || self.picker_pending
+                            || self.attachment_imports != 0
                             || self.pending.is_some(),
                     )
                     .dropdown_menu_with_anchor(Anchor::TopLeft, move |mut menu, _, _| {
@@ -373,15 +394,13 @@ impl Workspace {
                     .ghost()
                     .small()
                     .icon(IconName::Plus)
-                    .accessibility_label("添加图片")
-                    .tooltip("添加图片")
+                    .accessibility_label("添加附件")
+                    .tooltip("添加附件")
                     .disabled(
                         self.pending.is_some()
                             || self.opening
-                            || !self
-                                .info
-                                .as_ref()
-                                .is_some_and(|info| info.supports_vision),
+                            || self.picker_pending
+                            || self.attachment_imports != 0,
                     )
                     .on_click(cx.listener(|view, _, _, cx| view.attach(cx))),
             )

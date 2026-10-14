@@ -53,6 +53,7 @@ pub(crate) fn encode(
                 content,
                 attachments,
             } => {
+                let content = crate::types::Attachment::project_files(content, &attachments);
                 let mut blocks = vec![json!({
                     "type": "input_text",
                     "text": if content.is_empty() {

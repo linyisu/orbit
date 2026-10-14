@@ -8,6 +8,8 @@ pub use orbit_protocol::Session;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Run {
     #[serde(default)]
+    pub files: Vec<orbit_protocol::MessageImage>,
+    #[serde(default)]
     pub images: Vec<orbit_protocol::MessageImage>,
     pub prompt: String,
     pub status: String,

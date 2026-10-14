@@ -45,6 +45,7 @@ pub(crate) fn encode(
                 content,
                 attachments,
             } => {
+                let content = crate::types::Attachment::project_files(content, &attachments);
                 if attachments.is_empty() {
                     messages.push(json!({
                         "role": "user",

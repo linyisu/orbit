@@ -71,6 +71,7 @@ struct MessageRow {
     muted: bool,
     user: bool,
     images: Vec<MessageImage>,
+    files: Vec<orbit_protocol::MessageImage>,
     expanded: bool,
 }
 struct MessageImage {
@@ -281,6 +282,7 @@ impl TurnView {
             self.user = Some(cx.new(|cx| {
                 let mut row = MessageRow::new(self.index - 1, prompt, false, true, cx);
                 row.viewport = Some(self.viewport_bounds.clone());
+                row.files = turn.files.clone();
                 row.images = turn
                     .images
                     .iter()
@@ -741,6 +743,7 @@ impl MessageRow {
             muted,
             user,
             images: vec![],
+            files: vec![],
             expanded: !muted,
         }
     }
@@ -799,6 +802,30 @@ impl Render for MessageRow {
                             }
                             cx.emit(Disclosure { index: view.index });
                             cx.notify();
+                        })),
+                )
+            })
+            .when(!self.files.is_empty(), |view| {
+                view.child(
+                    h_flex()
+                        .gap_2()
+                        .flex_wrap()
+                        .children(self.files.iter().map(|file| {
+                            gpui_kit::component::attachment::Attachment::new()
+                                .id(SharedString::from(file.path.clone()))
+                                .small()
+                                .media(
+                                    gpui_kit::component::attachment::AttachmentMedia::new()
+                                        .child(Icon::new(IconName::File)),
+                                )
+                                .content(
+                                    gpui_kit::component::attachment::AttachmentContent::new()
+                                        .title(
+                                            gpui_kit::component::attachment::AttachmentTitle::new(
+                                                file.name.clone(),
+                                            ),
+                                        ),
+                                )
                         })),
                 )
             })

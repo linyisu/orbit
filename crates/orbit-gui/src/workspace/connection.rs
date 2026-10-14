@@ -261,7 +261,11 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if options.resume.is_none() && self.is_new_conversation(cx) && self.pending.is_none() {
+        if options.resume.is_none()
+            && self.is_new_conversation(cx)
+            && self.pending.is_none()
+            && self.attachment_imports == 0
+        {
             self.location = options
                 .workspace
                 .as_ref()

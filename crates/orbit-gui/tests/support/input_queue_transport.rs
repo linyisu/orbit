@@ -379,7 +379,14 @@ fn image_only_steer_uploads_and_downloads_a_durable_local_preview() {
                 session: info.id.clone(),
                 id: "image-steer".into(),
                 prompt: String::new(),
-                paths: vec![image],
+                paths: vec![(
+                    image.clone(),
+                    image
+                        .file_name()
+                        .unwrap()
+                        .to_string_lossy()
+                        .into_owned(),
+                )],
                 steer: true,
             })
             .unwrap();
@@ -406,6 +413,97 @@ fn image_only_steer_uploads_and_downloads_a_durable_local_preview() {
         let preview = std::path::PathBuf::from(&entries[0].images[0].path);
         assert!(preview.is_file());
         assert_eq!(image::image_dimensions(&preview).unwrap(), (12, 8));
+        request(
+            &backend,
+            command(Action::Remove {
+                id: entries[0].id,
+                expected: String::new(),
+                run,
+            }),
+        )
+        .await
+        .unwrap();
+        preview
+    });
+    drop(backend);
+    drop(runtime);
+    assert!(preview.is_file(), "withdrawn draft must survive disconnect");
+}
+
+#[test]
+fn file_only_steer_preserves_content_and_original_name_in_the_local_queue() {
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::write(
+        directory
+            .path()
+            .join(".fixture-input-queue-live"),
+        "",
+    )
+    .unwrap();
+    let image = directory.path().join("input.txt");
+    std::fs::write(&image, b"  generated file payload\ntrailing whitespace  ").unwrap();
+    let mut options = Options::parse_from(["orbit-gui"]);
+    options.config = directory.path().join("unused.toml");
+    options.workspace = Some(directory.path().into());
+    options.preferences = Some(directory.path().join("gui.json"));
+    options.server = Some(env!("CARGO_BIN_EXE_orbit-gui-fixture").into());
+    options.database = Some(directory.path().join("unused.db"));
+    options.auth_dir = Some(directory.path().join("auth"));
+    options.model = Some("fixture::local".into());
+    options.resume = Some("demo".into());
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let (backend, mut events) = Backend::start(options, &runtime);
+    let preview = runtime.block_on(async {
+        let Event::Response(Response::Opened(info)) = until(&mut events, |event| {
+            matches!(event, Event::Response(Response::Opened(_)))
+        })
+        .await
+        else {
+            unreachable!()
+        };
+        backend
+            .send(Command::Send {
+                session: info.id.clone(),
+                id: "file-steer".into(),
+                prompt: String::new(),
+                paths: vec![(
+                    image.clone(),
+                    image
+                        .file_name()
+                        .unwrap()
+                        .to_string_lossy()
+                        .into_owned(),
+                )],
+                steer: true,
+            })
+            .unwrap();
+        until(
+            &mut events,
+            |event| matches!(event, Event::Sent { id } if id == "file-steer"),
+        )
+        .await;
+        let command = |action| Request::InputQueue {
+            session: info.id.clone(),
+            expected_workspace: info.workspace.clone(),
+            action,
+        };
+        let Response::InputQueue(Snapshot::List { entries, run, .. }) =
+            request(&backend, command(Action::List { after: None }))
+                .await
+                .unwrap()
+        else {
+            panic!("queue expected")
+        };
+        assert_eq!(entries.len(), 1);
+        assert!(entries[0].content.is_empty());
+        assert_eq!(entries[0].files.len(), 1);
+        let preview = std::path::PathBuf::from(&entries[0].files[0].path);
+        assert!(preview.is_file());
+        assert_eq!(
+            std::fs::read(&preview).unwrap(),
+            std::fs::read(&image).unwrap()
+        );
+        assert_eq!(entries[0].files[0].name, "input.txt");
         request(
             &backend,
             command(Action::Remove {

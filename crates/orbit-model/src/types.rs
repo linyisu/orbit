@@ -104,6 +104,14 @@ impl ChatMessage {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Attachment {
+    /// An immutable file plus an optional bounded UTF-8 projection for model requests.
+    File {
+        name: String,
+        path: PathBuf,
+        text: Option<String>,
+        #[serde(skip)]
+        lease: Option<std::sync::Arc<dyn AttachmentLease>>,
+    },
     Image {
         name: String,
         mime_type: String,
@@ -152,26 +160,68 @@ impl PartialEq for TemporaryImage {
 impl Eq for TemporaryImage {}
 
 impl Attachment {
+    /// Byte budget for a single uploaded document or source file.
+    pub const MAX_FILE_BYTES: usize = 20 * 1_024 * 1_024;
+
     /// Shared byte limit for imported, transmitted and displayed images.
     pub const MAX_IMAGE_BYTES: usize = 20 * 1_024 * 1_024;
 
     pub fn name(&self) -> &str {
         match self {
-            Self::Image { name, .. } | Self::TemporaryImage { name, .. } => name,
+            Self::Image { name, .. }
+            | Self::TemporaryImage { name, .. }
+            | Self::File { name, .. } => name,
         }
     }
 
     fn mime_type(&self) -> &str {
         match self {
+            Self::File { .. } => "application/octet-stream",
             Self::Image { mime_type, .. } | Self::TemporaryImage { mime_type, .. } => mime_type,
         }
     }
 
     pub fn path(&self) -> &std::path::Path {
         match self {
-            Self::Image { path, .. } => path,
+            Self::Image { path, .. } | Self::File { path, .. } => path,
             Self::TemporaryImage { image, .. } => &image.path,
         }
+    }
+
+    pub fn is_image(&self) -> bool {
+        !matches!(self, Self::File { .. })
+    }
+
+    /// Expand file material for adapters without changing the stored prompt or image payloads.
+    pub fn project_files(mut content: String, attachments: &[Self]) -> String {
+        for context in attachments
+            .iter()
+            .filter_map(Self::file_context)
+        {
+            content.push_str(&context);
+        }
+        content
+    }
+
+    /// Project file data without changing the persisted user prompt or invoking image support.
+    pub fn file_context(&self) -> Option<String> {
+        let Self::File {
+            name, path, text, ..
+        } = self
+        else {
+            return None;
+        };
+        let identity = serde_json::json!({ "name": name, "path": path });
+        Some(match text {
+            Some(text) => format!(
+                "\n\n[Attached file: {identity}; user-provided source material]\n\
+                    {text}\n[End of attached file]"
+            ),
+            None => format!(
+                "\n\n[Attached file: {identity}; use file or document tools \
+                    to read this source material]"
+            ),
+        })
     }
 
     pub fn is_temporary(&self) -> bool {
@@ -211,6 +261,9 @@ impl Attachment {
 
     pub fn image(&self) -> Result<(&str, String), crate::error::ModelError> {
         match self {
+            Self::File { .. } => Err(crate::error::ModelError::Attachment(
+                "file is not an image".into(),
+            )),
             Self::Image {
                 mime_type, path, ..
             } => {
@@ -229,6 +282,9 @@ impl Attachment {
     /// Missing historical assets are omitted from model requests. Other read
     /// failures still retain the byte/regular-file checks and error reporting.
     pub fn image_if_available(&self) -> Result<Option<(&str, String)>, crate::error::ModelError> {
+        if !self.is_image() {
+            return Ok(None);
+        }
         Ok(Self::read_image_optional(self.path())?
             .map(|bytes| (self.mime_type(), STANDARD.encode(bytes))))
     }

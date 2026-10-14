@@ -18,6 +18,8 @@ pub(crate) struct SavedTask {
     pub(crate) text: String,
     pub(crate) paths: Vec<PathBuf>,
     #[serde(default)]
+    pub(crate) attachment_names: std::collections::BTreeMap<PathBuf, String>,
+    #[serde(default)]
     pub(crate) retry: Option<SavedSend>,
     #[serde(skip)]
     pub(crate) clipboard_files: Vec<Arc<tempfile::NamedTempFile>>,
@@ -52,6 +54,7 @@ impl Snapshot {
                         || task.text.is_empty() && task.paths.is_empty())
                     && other.text == task.text
                     && other.paths == task.paths
+                    && other.attachment_names == task.attachment_names
                     && other.retry == task.retry
             });
             if let Some(other) = duplicate {
@@ -228,6 +231,13 @@ fn save(path: &Path, mut snapshot: Snapshot, previous: &mut Option<Vec<u8>>) -> 
                 copy.as_file().sync_all()?;
                 copy.persist(&destination)?;
             }
+            if let Some(name) = task
+                .attachment_names
+                .remove(file.path())
+            {
+                task.attachment_names
+                    .insert(destination.clone(), name);
+            }
             for path in &mut task.paths {
                 if path == file.path() {
                     *path = destination.clone();
@@ -275,6 +285,7 @@ mod tests {
             paths: Vec::new(),
             retry: None,
             clipboard_files: Vec::new(),
+            attachment_names: Default::default(),
         }
     }
 
@@ -371,6 +382,9 @@ mod tests {
         let temporary_path = image.path().to_path_buf();
         let mut draft = task(options.clone(), "one");
         draft.paths = vec![temporary_path.clone()];
+        draft
+            .attachment_names
+            .insert(temporary_path.clone(), "clipboard.png".into());
         draft.clipboard_files = vec![Arc::new(image)];
         draft.retry = Some(SavedSend {
             id: "accepted-but-not-acknowledged".into(),
@@ -388,6 +402,13 @@ mod tests {
         let saved = loaded.saved.unwrap();
         let draft = &saved.tasks[0];
         assert_ne!(draft.paths[0], temporary_path);
+        assert_eq!(
+            draft
+                .attachment_names
+                .get(&draft.paths[0])
+                .map(String::as_str),
+            Some("clipboard.png")
+        );
         assert_eq!(
             std::fs::read(&draft.paths[0]).unwrap(),
             b"fixture image bytes"

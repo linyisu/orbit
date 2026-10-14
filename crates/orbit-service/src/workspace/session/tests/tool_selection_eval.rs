@@ -140,6 +140,7 @@ async fn evaluate(settings: &Settings, case: Case, repetition: usize) -> Result<
         .await?;
     handle
         .command(Command::Start {
+            files: Vec::new(),
             request_id: orbit_protocol::request_id(),
             prompt: case.prompt(&settings.url, &settings.marker),
             images: Vec::new(),

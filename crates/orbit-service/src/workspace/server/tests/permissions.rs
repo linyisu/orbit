@@ -121,6 +121,7 @@ async fn failed_permission_persistence_never_publishes_or_confirms_the_change() 
     fixture
         .handle
         .command(session::Command::Start {
+            files: Vec::new(),
             request_id: "first".into(),
             prompt: "hello".into(),
             images: vec![],

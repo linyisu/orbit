@@ -400,6 +400,7 @@ async fn draft_preferences_stay_in_memory_until_first_message_and_survive_resume
         fixture
             .handle
             .command(session::Command::Start {
+                files: Vec::new(),
                 request_id: "empty".into(),
                 prompt: "  ".into(),
                 images: vec![],
@@ -413,6 +414,7 @@ async fn draft_preferences_stay_in_memory_until_first_message_and_survive_resume
     fixture
         .handle
         .command(session::Command::Start {
+            files: Vec::new(),
             request_id: "first".into(),
             prompt: "hello".into(),
             images: vec![],
@@ -547,6 +549,7 @@ async fn last_client_discards_drafts_but_retains_running_sessions_until_finish()
         .unwrap();
     handle
         .command(session::Command::Start {
+            files: Vec::new(),
             request_id: "first".into(),
             prompt: "hello".into(),
             images: vec![],

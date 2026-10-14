@@ -597,6 +597,7 @@ mod tests {
         state.initial();
         state.receive(Response::InputQueue(Snapshot::List {
             entries: vec![Entry {
+                files: Vec::new(),
                 images: vec![],
                 id: 4,
                 content: "  exact\ntext  ".into(),

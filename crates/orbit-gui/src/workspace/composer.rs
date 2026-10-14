@@ -101,17 +101,28 @@ pub(super) fn is_image(path: &std::path::Path) -> bool {
         })
 }
 
-fn references(paths: &[PathBuf]) -> (Vec<PathBuf>, String) {
-    let (images, files): (Vec<_>, Vec<_>) = paths
-        .iter()
-        .cloned()
-        .partition(|path| is_image(path));
-    let references = files
-        .iter()
-        .map(|path| format!("[文件：{}]", path.display()))
-        .collect::<Vec<_>>()
-        .join("\n");
-    (images, references)
+const PASTED_TEXT_THRESHOLD_BYTES: usize = 4_096;
+const PASTED_TEXT_THRESHOLD_LINES: usize = 32;
+
+pub(super) fn large_paste(text: &str) -> bool {
+    text.len() >= PASTED_TEXT_THRESHOLD_BYTES
+        || text
+            .lines()
+            .take(PASTED_TEXT_THRESHOLD_LINES + 1)
+            .count()
+            > PASTED_TEXT_THRESHOLD_LINES
+}
+
+/// Some URI-list readers retain the CRLF terminator. Preserve real filenames before trimming it.
+fn file_list_path(path: PathBuf) -> PathBuf {
+    if path.is_file() {
+        return path;
+    }
+    path.to_str()
+        .and_then(|value| value.strip_suffix('\r'))
+        .map(PathBuf::from)
+        .filter(|candidate| candidate.is_file())
+        .unwrap_or(path)
 }
 
 fn image_directory(workspace: &std::path::Path, remote: bool, desktop: PathBuf) -> PathBuf {
@@ -123,13 +134,72 @@ fn image_directory(workspace: &std::path::Path, remote: bool, desktop: PathBuf) 
 }
 
 impl Workspace {
+    /// Release client-owned temporary files only after the draft stops referring to them.
+    pub(super) fn prune_draft_attachments(&mut self) {
+        self.attachment_names
+            .retain(|path, _| self.paths.contains(path));
+        self.clipboard_files.retain(|file| {
+            self.paths
+                .iter()
+                .any(|path| path == file.path())
+        });
+    }
+
     pub(super) fn pasted_paths(&self, text: &str) -> Option<Vec<PathBuf>> {
         let directory = image_directory(
             std::path::Path::new(self.location.as_ref()),
             self.options.ssh.is_some() || self.options.wsl.is_some(),
             std::env::current_dir().ok()?,
         );
-        orbit_client::attachments::pasted_paths(text, &directory)
+        orbit_client::attachments::pasted_files(text, &directory)
+    }
+
+    /// Recover native file-list offers that GPUI's image/text clipboard reader omits.
+    pub(super) fn paste_file_list(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let focused = self
+            .input
+            .focus_handle(cx)
+            .contains_focused(window, cx);
+        let clipboard = cx.read_from_clipboard();
+        if self.pending.is_some() || self.picker_pending || !focused || clipboard.is_some() {
+            return;
+        }
+        cx.stop_propagation();
+        let session = self
+            .info
+            .as_ref()
+            .map(|info| info.id.clone());
+        self.attachment_imports += 1;
+        cx.notify();
+        let job = self.runtime.spawn_blocking(|| {
+            arboard::Clipboard::new()
+                .ok()?
+                .get()
+                .file_list()
+                .ok()
+                .map(|paths| {
+                    paths
+                        .into_iter()
+                        .map(file_list_path)
+                        .collect::<Vec<_>>()
+                })
+        });
+        let previous = std::mem::replace(&mut self.picker, Task::ready(()));
+        self.picker = cx.spawn(async move |owner, cx| {
+            previous.await;
+            let paths = job.await;
+            let _ = owner.update_in(cx, |view, window, cx| {
+                view.attachment_imports = view
+                    .attachment_imports
+                    .saturating_sub(1);
+                if view.info.as_ref().map(|info| &info.id) == session.as_ref()
+                    && let Ok(Some(paths)) = paths
+                {
+                    view.add_paths(&paths, window, cx);
+                }
+                cx.notify();
+            });
+        });
     }
 
     pub(super) fn history_arrow(
@@ -196,15 +266,34 @@ impl Workspace {
         if self.pending.is_some() {
             return;
         }
-        let (images, references) = references(paths);
-        if !references.is_empty() {
-            self.input
-                .update(cx, |input, cx| input.replace(references, window, cx));
-            let draft = self.input.read(cx).value();
-            self.history.changed(&draft);
-            self.update_completions(&draft, window, cx);
+        for path in paths {
+            if !path.is_file() {
+                continue;
+            }
+            if is_image(path)
+                && self
+                    .info
+                    .as_ref()
+                    .is_some_and(|info| !info.supports_vision)
+            {
+                self.report_error("当前模型不支持图片，请切换模型后添加。", cx);
+                continue;
+            }
+            if !self.paths.contains(path) {
+                self.paths.push(path.clone());
+            }
         }
-        self.add_images(&images, cx);
+        if self.visible
+            && self.page == MainPage::Conversation
+            && !window.has_active_dialog(cx)
+            && !window.has_active_sheet(cx)
+        {
+            self.input
+                .focus_handle(cx)
+                .focus(window, cx);
+        }
+        cx.emit(WorkspaceEvent::DraftChanged);
+        cx.notify();
     }
 
     pub(crate) fn stop_task(&mut self, cx: &mut Context<Self>) {
@@ -224,7 +313,7 @@ impl Workspace {
 
 #[cfg(test)]
 mod tests {
-    use super::{Draft, History, image_directory, references};
+    use super::{Draft, History, file_list_path, image_directory, large_paste};
     use std::{ops::Range, path::PathBuf};
 
     fn draft(text: &str, selection: Range<usize>) -> Draft {
@@ -296,24 +385,26 @@ mod tests {
     }
 
     #[test]
-    fn mixed_clipboard_paths_keep_regular_files_as_text_and_images_as_attachments() {
-        let (images, text) = references(&[
-            "/tmp/screen.PNG".into(),
-            "/tmp/design notes.md".into(),
-            "/tmp/项目/main.rs".into(),
-            "/tmp/diagram.webp".into(),
-        ]);
+    fn native_file_lists_accept_crlf_without_changing_an_existing_filename() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("sample.txt");
+        std::fs::write(&path, b"generated file").unwrap();
         assert_eq!(
-            images,
-            [
-                PathBuf::from("/tmp/screen.PNG"),
-                PathBuf::from("/tmp/diagram.webp")
-            ]
+            file_list_path(PathBuf::from(format!("{}\r", path.display()))),
+            path
         );
-        assert_eq!(
-            text,
-            "[文件：/tmp/design notes.md]\n[文件：/tmp/项目/main.rs]"
-        );
+        assert_eq!(file_list_path(path.clone()), path);
+        let special = root.path().join("literal\r");
+        std::fs::write(&special, b"literal filename").unwrap();
+        assert_eq!(file_list_path(special.clone()), special);
+    }
+
+    #[test]
+    fn long_pastes_become_files_without_consuming_short_multiline_input() {
+        assert!(!large_paste("alpha\nbeta\ngamma"));
+        assert!(large_paste(&"z".repeat(4_096)));
+        assert!(large_paste(&"line\n".repeat(33)));
+        assert!(!large_paste(&"z".repeat(4_095)));
     }
 
     #[test]

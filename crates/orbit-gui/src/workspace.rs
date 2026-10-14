@@ -34,7 +34,7 @@ use crate::{
 use gpui_kit::assets::IconName;
 use gpui_kit::component::{
     ActiveTheme, Disableable, Icon, Sizable, WindowExt,
-    attachment::{Attachment, AttachmentMedia},
+    attachment::{Attachment, AttachmentContent, AttachmentMedia, AttachmentTitle},
     button::{Button, ButtonVariants},
     h_flex,
     input::{InputEvent, Textarea, TextareaState},
@@ -164,6 +164,8 @@ pub(crate) struct Workspace {
     paths: Vec<PathBuf>,
     pending: Option<PendingSend>,
     clipboard_files: Vec<Arc<tempfile::NamedTempFile>>,
+    attachment_names: std::collections::BTreeMap<PathBuf, String>,
+    attachment_imports: usize,
     retry: Option<PendingSend>,
     error: Option<SharedString>,
     connected: bool,
@@ -312,6 +314,8 @@ impl Workspace {
             paths: Vec::new(),
             pending: None,
             clipboard_files: Vec::new(),
+            attachment_names: Default::default(),
+            attachment_imports: 0,
             retry: None,
             error: None,
             connected: false,
@@ -654,6 +658,7 @@ impl Workspace {
                     }
                     self.paths
                         .retain(|path| !pending.paths.contains(path));
+                    self.prune_draft_attachments();
                     self.busy = true;
                     self.refresh_input_queue(true, cx);
                 }
@@ -871,6 +876,7 @@ impl Workspace {
                                 attachments, ..
                             } => attachments
                                 .iter()
+                                .filter(|a| a.is_image())
                                 .map(|image| {
                                     image
                                         .path()
@@ -1021,7 +1027,24 @@ impl Workspace {
                 session,
                 id,
                 prompt: text.to_string(),
-                paths: self.paths.clone(),
+                paths: self
+                    .paths
+                    .iter()
+                    .map(|path| {
+                        (
+                            path.clone(),
+                            self.attachment_names
+                                .get(path)
+                                .cloned()
+                                .unwrap_or_else(|| {
+                                    path.file_name()
+                                        .unwrap_or_default()
+                                        .to_string_lossy()
+                                        .into_owned()
+                                }),
+                        )
+                    })
+                    .collect(),
                 steer,
             },
             cx,
@@ -1037,6 +1060,8 @@ impl Workspace {
         self.connected
             && !self.opening
             && self.pending.is_none()
+            && !self.picker_pending
+            && self.attachment_imports == 0
             && self.info.is_some()
             && draft_ready(&self.input.read(cx).value(), &self.paths, self.busy)
     }
@@ -1058,13 +1083,16 @@ impl Workspace {
     }
 
     fn attach(&mut self, cx: &mut Context<Self>) {
+        if self.pending.is_some() || self.picker_pending {
+            return;
+        }
         self.picker_pending = true;
         cx.notify();
         let prompt = cx.prompt_for_paths(PathPromptOptions {
             files: true,
             directories: false,
             multiple: true,
-            prompt: Some("添加图片".into()),
+            prompt: Some("添加附件".into()),
         });
         let session = self
             .info
@@ -1072,47 +1100,27 @@ impl Workspace {
             .map(|info| info.id.clone());
         self.picker = cx.spawn(async move |weak, cx| {
             let result = prompt.await;
-            let _ = weak.update(cx, |view, cx| {
+            let _ = weak.update_in(cx, |view, window, cx| {
                 view.picker_pending = false;
-                cx.notify();
-                if view.info.as_ref().map(|info| &info.id) != session.as_ref() {
-                    return;
-                }
-                match result {
-                    Ok(Ok(Some(paths))) => {
-                        for path in paths {
-                            let supported = path
-                                .extension()
-                                .and_then(|v| v.to_str())
-                                .is_some_and(|v| {
-                                    matches!(
-                                        v.to_ascii_lowercase().as_str(),
-                                        "png" | "jpg" | "jpeg" | "webp" | "gif"
-                                    )
-                                });
-                            if supported && !view.paths.contains(&path) {
-                                view.paths.push(path);
-                            } else if !supported {
-                                view.report_error("请选择 PNG、JPEG、WebP 或 GIF 图片。", cx);
-                            }
-                        }
+                if view.info.as_ref().map(|info| &info.id) == session.as_ref() {
+                    match result {
+                        Ok(Ok(Some(paths))) => view.add_paths(&paths, window, cx),
+                        Ok(Err(error)) => view.report_error(format!("无法选择附件：{error}"), cx),
+                        _ => {}
                     }
-                    Ok(Err(error)) => view.report_error(format!("无法选择图片：{error}"), cx),
-                    _ => {}
                 }
-                cx.emit(WorkspaceEvent::DraftChanged);
                 cx.notify();
             });
         });
     }
 
-    fn paste_images(
+    fn paste_attachments(
         &mut self,
         item: &ClipboardItem,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        if self.pending.is_some() {
+        if self.pending.is_some() || self.picker_pending {
             return false;
         }
         let images = item
@@ -1130,27 +1138,31 @@ impl Workspace {
                 handled = true;
             }
         }
-        if images.is_empty() {
-            if !handled
-                && let Some(text) = item.text()
-                && let Some(paths) = self.pasted_paths(&text)
-            {
-                self.add_images(&paths, cx);
-                return true;
-            }
+        if images.is_empty()
+            && !handled
+            && let Some(text) = item.text()
+            && let Some(paths) = self.pasted_paths(&text)
+        {
+            self.add_paths(&paths, window, cx);
+            return true;
+        }
+        let text = item
+            .text()
+            .filter(|text| images.is_empty() && !handled && composer::large_paste(text));
+        if images.is_empty() && text.is_none() {
             return handled;
         }
         let session = self
             .info
             .as_ref()
             .map(|info| info.id.clone());
-        self.picker_pending = true;
+        self.attachment_imports += 1;
         cx.notify();
         let job =
             self.runtime
                 .spawn_blocking(move || -> anyhow::Result<Vec<tempfile::NamedTempFile>> {
                     use std::io::Write;
-                    images
+                    let mut files: Vec<_> = images
                         .into_iter()
                         .map(|image| {
                             let mut file = tempfile::Builder::new()
@@ -1160,18 +1172,43 @@ impl Workspace {
                             file.write_all(image.bytes())?;
                             Ok(file)
                         })
-                        .collect()
+                        .collect::<anyhow::Result<_>>()?;
+                    if let Some(text) = text {
+                        let mut file = tempfile::Builder::new()
+                            .prefix("已粘贴的文本-")
+                            .suffix(".txt")
+                            .tempfile()?;
+                        file.write_all(text.as_bytes())?;
+                        files.push(file);
+                    }
+                    Ok(files)
                 });
+        let previous = std::mem::replace(&mut self.picker, Task::ready(()));
         self.picker = cx.spawn(async move |weak, cx| {
+            previous.await;
             let result = job.await;
             let _ = weak.update(cx, |view, cx| {
-                view.picker_pending = false;
+                view.attachment_imports = view
+                    .attachment_imports
+                    .saturating_sub(1);
                 cx.notify();
                 if view.info.as_ref().map(|info| &info.id) != session.as_ref() {
                     return;
                 }
                 match result {
                     Ok(Ok(files)) => {
+                        for file in &files {
+                            if file
+                                .path()
+                                .file_name()
+                                .unwrap_or_default()
+                                .to_string_lossy()
+                                .starts_with("已粘贴的文本-")
+                            {
+                                view.attachment_names
+                                    .insert(file.path().to_owned(), "已粘贴的文本.txt".into());
+                            }
+                        }
                         view.paths.extend(
                             files
                                 .iter()
@@ -1180,30 +1217,14 @@ impl Workspace {
                         view.clipboard_files
                             .extend(files.into_iter().map(Arc::new));
                     }
-                    Ok(Err(error)) => view.report_error(format!("粘贴图片失败：{error}"), cx),
-                    Err(error) => view.report_error(format!("粘贴图片失败：{error}"), cx),
+                    Ok(Err(error)) => view.report_error(format!("粘贴附件失败：{error}"), cx),
+                    Err(error) => view.report_error(format!("粘贴附件失败：{error}"), cx),
                 }
                 cx.emit(WorkspaceEvent::DraftChanged);
                 cx.notify();
             });
         });
         true
-    }
-
-    fn add_images(&mut self, paths: &[PathBuf], cx: &mut Context<Self>) {
-        if self.pending.is_some() {
-            return;
-        }
-        for path in paths {
-            let supported = composer::is_image(path);
-            if supported && !self.paths.contains(path) {
-                self.paths.push(path.clone());
-            } else if !supported {
-                self.report_error("请选择 PNG、JPEG、WebP 或 GIF 图片。", cx);
-            }
-        }
-        cx.emit(WorkspaceEvent::DraftChanged);
-        cx.notify();
     }
 
     fn show_usage(&self, window: &mut Window, cx: &mut Context<Self>) {

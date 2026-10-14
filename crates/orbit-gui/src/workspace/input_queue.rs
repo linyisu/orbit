@@ -14,6 +14,7 @@ enum Operation {
     },
     Restore {
         images: Vec<orbit_protocol::MessageImage>,
+        files: Vec<orbit_protocol::MessageImage>,
         id: i64,
         expected: String,
         content: String,
@@ -532,6 +533,7 @@ impl InputQueue {
                     id,
                     content,
                     images,
+                    files,
                     ..
                 },
                 Ok(Response::InputQueue(Snapshot::Removed { id: received })),
@@ -548,8 +550,14 @@ impl InputQueue {
                     workspace
                         .input
                         .update(cx, |input, cx| input.set_value(restored, window, cx));
+                    for file in files {
+                        workspace
+                            .attachment_names
+                            .insert(PathBuf::from(&file.path), file.name.clone());
+                    }
                     let paths = images
                         .iter()
+                        .chain(files.iter())
                         .map(|image| PathBuf::from(&image.path))
                         .collect::<Vec<_>>();
                     for path in paths {
@@ -759,13 +767,16 @@ impl InputQueue {
             return;
         }
         let content = row.draft.read(cx).value().to_string();
-        if (content.trim().is_empty() && row.entry.images.is_empty()) || content.len() > 1_048_576 {
+        if (content.trim().is_empty() && row.entry.images.is_empty() && row.entry.files.is_empty())
+            || content.len() > 1_048_576
+        {
             row.error = Some("输入内容需要 1–1048576 字节。".into());
             cx.notify();
             return;
         }
         let operation = Operation::Restore {
             images: row.entry.images.clone(),
+            files: row.entry.files.clone(),
             id,
             expected: row.entry.content.clone(),
             content,
@@ -1070,6 +1081,7 @@ mod tests {
     fn reconnect_requires_refresh_and_never_replays_an_unconfirmed_edit() {
         let mut requests = ready();
         let edit = Operation::Restore {
+            files: Vec::new(),
             images: vec![],
             id: 72,
             expected: "  original\n".into(),
@@ -1116,6 +1128,7 @@ mod tests {
     #[test]
     fn mutations_send_real_id_run_and_exact_untrimmed_compare_value() {
         let operation = Operation::Restore {
+            files: Vec::new(),
             images: vec![],
             id: 992,
             expected: "  stored\n\n".into(),
@@ -1135,6 +1148,7 @@ mod tests {
     #[test]
     fn pagination_rejects_nonadvancing_ids_and_cursor_mismatches() {
         let entry = |id| Entry {
+            files: Vec::new(),
             images: vec![],
             id,
             content: "input".into(),
@@ -1186,6 +1200,7 @@ mod tests {
     #[test]
     fn contradictory_mutable_state_and_run_cannot_enable_controls() {
         let entry = |state| Entry {
+            files: Vec::new(),
             images: vec![],
             id: 9,
             content: "input".into(),

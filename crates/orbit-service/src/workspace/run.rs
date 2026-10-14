@@ -9,12 +9,14 @@ pub(super) type Started = (
     CancellationToken,
     orbit_agent::inbox::AgentInbox,
     Vec<orbit_protocol::MessageImage>,
+    Vec<orbit_protocol::MessageImage>,
 );
 
 pub(super) async fn start(
     setup: &mut crate::PreparedWorkspace,
     prompt: String,
     uploads: Vec<orbit_protocol::ImageUpload>,
+    files: Vec<orbit_protocol::FileUpload>,
     compact: bool,
     model: Option<&str>,
 ) -> Result<Started> {
@@ -48,10 +50,10 @@ pub(super) async fn start(
         tools.remove("read_image");
     }
     anyhow::ensure!(
-        !compact || uploads.is_empty(),
+        !compact || (uploads.is_empty() && files.is_empty()),
         "compaction does not accept images"
     );
-    let attachments = import_images(
+    let mut attachments = import_images(
         session.store.path(),
         resources.model.supports_vision(),
         resources
@@ -60,8 +62,28 @@ pub(super) async fn start(
         uploads,
     )
     .await?;
+    attachments.extend(import_files(session.store.path(), files).await?);
+    grant_files(&resources.workspace, &attachments)?;
+    for message in &messages {
+        if let orbit_model::types::ChatMessage::User { attachments, .. } = message {
+            grant_files(&resources.workspace, attachments)?;
+        }
+    }
+    let metadata = |attachment: &orbit_model::types::Attachment| orbit_protocol::MessageImage {
+        name: attachment.name().to_owned(),
+        path: attachment
+            .path()
+            .to_string_lossy()
+            .into_owned(),
+    };
+    let file_assets = attachments
+        .iter()
+        .filter(|a| !a.is_image())
+        .map(metadata)
+        .collect();
     let image_assets = attachments
         .iter()
+        .filter(|a| a.is_image())
         .map(|attachment| orbit_protocol::MessageImage {
             name: attachment.name().to_owned(),
             path: attachment
@@ -99,6 +121,7 @@ pub(super) async fn start(
         started.cancellation,
         started.inbox,
         image_assets,
+        file_assets,
     ))
 }
 
@@ -192,4 +215,90 @@ pub(super) async fn import_images(
         .await??;
 
     Ok(attachments)
+}
+
+const MAX_FILE_UPLOADS: usize = 16;
+const MAX_FILE_NAME_BYTES: usize = 255;
+const MAX_INLINE_FILE_BYTES: usize = 256 * 1_024;
+
+/// Import immutable client files on the target host and retain their storage leases.
+pub(super) async fn import_files(
+    database: &std::path::Path,
+    uploads: Vec<orbit_protocol::FileUpload>,
+) -> Result<Vec<orbit_model::types::Attachment>> {
+    use base64::Engine;
+    anyhow::ensure!(
+        uploads.len() <= MAX_FILE_UPLOADS,
+        "单次最多添加 16 个文件附件"
+    );
+    let directory = orbit_runtime::assets::AssetDirectory::for_database(database);
+    tokio::task::spawn_blocking(move || {
+        uploads
+            .into_iter()
+            .map(|upload| {
+                use orbit_model::types::Attachment;
+                anyhow::ensure!(
+                    !upload.name.is_empty()
+                        && upload.name.len() <= MAX_FILE_NAME_BYTES
+                        && !upload
+                            .name
+                            .chars()
+                            .any(|c| c.is_control() || c == '/' || c == '\\'),
+                    "附件文件名无效"
+                );
+                anyhow::ensure!(
+                    upload.data.len() <= Attachment::MAX_FILE_BYTES.div_ceil(3) * 4,
+                    "附件超过 20 MiB"
+                );
+                let bytes = base64::engine::general_purpose::STANDARD.decode(upload.data)?;
+                anyhow::ensure!(bytes.len() <= Attachment::MAX_FILE_BYTES, "附件超过 20 MiB");
+                let extension = std::path::Path::new(&upload.name)
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .filter(|e| {
+                        !e.is_empty()
+                            && e.len() <= orbit_runtime::assets::AssetDirectory::MAX_EXTENSION_BYTES
+                            && e.bytes()
+                                .all(|b| b.is_ascii_alphanumeric())
+                    })
+                    .unwrap_or("bin")
+                    .to_ascii_lowercase();
+                let text = (bytes.len() <= MAX_INLINE_FILE_BYTES && !bytes.contains(&0))
+                    .then(|| {
+                        std::str::from_utf8(&bytes)
+                            .ok()
+                            .map(str::to_owned)
+                    })
+                    .flatten();
+                let (path, lease) = directory.import(&bytes, &extension)?;
+                Ok(Attachment::File {
+                    name: upload.name,
+                    path,
+                    text,
+                    lease: Some(lease),
+                })
+            })
+            .collect()
+    })
+    .await?
+}
+
+/// Attachment selection grants read access to those exact immutable files, never their parent.
+pub(super) fn grant_files(
+    workspace: &orbit_runtime::filesystem::Workspace,
+    attachments: &[orbit_model::types::Attachment],
+) -> Result<()> {
+    for attachment in attachments
+        .iter()
+        .filter(|a| !a.is_image() && a.path().is_file())
+    {
+        let path = orbit_runtime::filesystem::ResolvedPath::resolve(attachment.path(), None)?;
+        workspace
+            .policy()
+            .record_grant(orbit_runtime::policy::FilesystemGrant::read_only(
+                orbit_runtime::capability::EnvironmentId::local(),
+                path,
+            ));
+    }
+    Ok(())
 }

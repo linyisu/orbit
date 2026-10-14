@@ -484,6 +484,7 @@ impl Actor {
                         request_id: orbit_protocol::request_id(),
                         prompt,
                         images: vec![],
+                        files: Vec::new(),
                         compact: false,
                         model: None,
                     }))
@@ -869,18 +870,20 @@ impl Actor {
             Command::Steer {
                 message,
                 images,
+                files,
                 accepted,
             } => {
                 let message = message.trim().to_owned();
                 ensure!(
-                    (!message.is_empty() || !images.is_empty()) && message.len() <= 1_024 * 1_024,
+                    (!message.is_empty() || !images.is_empty() || !files.is_empty())
+                        && message.len() <= 1_024 * 1_024,
                     "invalid session input"
                 );
                 let run = self
                     .running
                     .as_ref()
                     .ok_or_else(|| anyhow::anyhow!("session is idle; submit a new message"))?;
-                let attachments = super::super::run::import_images(
+                let mut attachments = super::super::run::import_images(
                     self.setup.session.store.path(),
                     self.setup
                         .resources
@@ -893,6 +896,10 @@ impl Actor {
                     images,
                 )
                 .await?;
+                attachments.extend(
+                    super::super::run::import_files(self.setup.session.store.path(), files).await?,
+                );
+                super::super::run::grant_files(&self.setup.resources.workspace, &attachments)?;
                 run.inbox
                     .persist_and_push(|| async {
                         let id = self
@@ -983,6 +990,7 @@ impl Actor {
                 request_id,
                 prompt,
                 images,
+                files,
                 compact,
                 model,
             } => {
@@ -990,11 +998,11 @@ impl Actor {
                 ensure!(
                     !request_id.is_empty()
                         && request_id.len() <= 128
-                        && (!prompt.is_empty() || !images.is_empty())
+                        && (!prompt.is_empty() || !images.is_empty() || !files.is_empty())
                         && prompt.len() <= 1_024 * 1_024,
                     "invalid workspace request"
                 );
-                let identity = request_fingerprint(&prompt, &images, compact, &model);
+                let identity = request_fingerprint(&prompt, &images, &files, compact, &model);
                 if self.busy() {
                     ensure!(
                         self.accepted.get(&request_id) == Some(&identity),
@@ -1015,6 +1023,7 @@ impl Actor {
                     RequestClaim::Rejected(error) => anyhow::bail!("{error}"),
                 }
                 let mut presentation = orbit_protocol::RunPresentation {
+                    file_assets: Vec::new(),
                     images: images
                         .iter()
                         .map(|image| image.name.clone())
@@ -1028,11 +1037,12 @@ impl Actor {
                     &mut self.setup,
                     prompt.clone(),
                     images,
+                    files,
                     compact,
                     model.as_deref(),
                 )
                 .await;
-                let (events, task, cancellation, inbox, image_assets) = match started {
+                let (events, task, cancellation, inbox, image_assets, file_assets) = match started {
                     Ok(started) => started,
                     Err(error) => {
                         let _ = self
@@ -1049,6 +1059,7 @@ impl Actor {
                     }
                 };
                 presentation.image_assets = image_assets;
+                presentation.file_assets = file_assets;
                 self.running = Some(Running {
                     events,
                     task,
@@ -1096,6 +1107,7 @@ impl Actor {
                     request_id: orbit_protocol::request_id(),
                     prompt: "/compact".into(),
                     images: Vec::new(),
+                    files: Vec::new(),
                     compact: true,
                     model: None,
                 })

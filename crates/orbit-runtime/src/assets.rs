@@ -29,6 +29,9 @@ pub struct AssetDirectoryLock {
 }
 
 impl AssetDirectory {
+    /// Maximum ASCII extension length in content-addressed attachment filenames.
+    pub const MAX_EXTENSION_BYTES: usize = 16;
+
     pub fn for_database(database: &Path) -> Self {
         Self {
             root: database.with_extension("attachments"),
@@ -53,7 +56,7 @@ impl AssetDirectory {
             metadata.is_dir()
                 && !metadata.file_type().is_symlink()
                 && metadata.uid() == unsafe { libc::geteuid() },
-            "invalid image asset directory"
+            "invalid attachment asset directory"
         );
         std::fs::set_permissions(&self.root, std::fs::Permissions::from_mode(0o700))?;
         let file = open_private(&self.root.join(".lock"), true)?;
@@ -67,7 +70,8 @@ impl AssetDirectory {
                     std::thread::sleep(std::time::Duration::from_millis(5))
                 }
                 Err(error) => {
-                    return Err(anyhow::anyhow!(error)).context("image asset directory is busy");
+                    return Err(anyhow::anyhow!(error))
+                        .context("attachment asset directory is busy");
                 }
             }
         }
@@ -88,7 +92,7 @@ impl AssetDirectory {
     pub fn import(&self, bytes: &[u8], extension: &str) -> Result<(PathBuf, Arc<AssetLease>)> {
         let digest = hash(bytes);
         let name = format!("{digest}.{extension}");
-        ensure!(is_asset_name(&name), "invalid image asset extension");
+        ensure!(is_asset_name(&name), "invalid attachment asset extension");
         let lock = self.lock()?;
         lock.prune_pending()?;
         let path = self.root.join(&name);
@@ -103,7 +107,7 @@ impl AssetDirectory {
                 .sum();
             ensure!(
                 size.saturating_add(bytes.len() as u64) <= MAX_ASSET_DIRECTORY_BYTES,
-                "图片附件已达到 512 MiB 容量上限；请删除不需要的会话并清理附件后重试，已有会话图片不会被自动淘汰"
+                "附件已达到 512 MiB 容量上限；请删除不需要的会话并清理附件后重试，已有附件不会被自动淘汰"
             );
             let mut temporary = tempfile::Builder::new()
                 .prefix(".pending-")
@@ -121,11 +125,11 @@ impl AssetDirectory {
     pub fn read(&self, path: &Path, max_bytes: usize) -> Result<Vec<u8>> {
         let name = self
             .file_name(path)
-            .context("not an image asset")?;
+            .context("not an attachment asset")?;
         let metadata = self.root.symlink_metadata()?;
         ensure!(
             metadata.is_dir() && !metadata.file_type().is_symlink(),
-            "image asset directory is not a real directory"
+            "attachment asset directory is not a real directory"
         );
         let file = open_private(path, false)?;
         file.lock_shared()?;
@@ -139,7 +143,7 @@ impl AssetDirectory {
         ensure!(bytes.len() <= max_bytes, "image exceeds byte limit");
         ensure!(
             hash(&bytes) == name.split_once('.').unwrap().0,
-            "image asset failed integrity check"
+            "attachment asset failed integrity check"
         );
         Ok(bytes)
     }
@@ -234,7 +238,11 @@ pub fn is_asset_name(name: &str) -> bool {
                 && hash
                     .bytes()
                     .all(|b| b.is_ascii_hexdigit())
-                && matches!(extension, "png" | "jpg" | "gif" | "webp")
+                && !extension.is_empty()
+                && extension.len() <= AssetDirectory::MAX_EXTENSION_BYTES
+                && extension
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric())
         })
 }
 
@@ -250,7 +258,7 @@ fn open_private(path: &Path, create: bool) -> Result<File> {
     let metadata = file.metadata()?;
     ensure!(
         metadata.is_file() && metadata.nlink() == 1 && metadata.uid() == unsafe { libc::geteuid() },
-        "image asset is not a private regular file"
+        "attachment asset is not a private regular file"
     );
     Ok(file)
 }

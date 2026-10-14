@@ -702,6 +702,47 @@ impl Service {
                     .collect();
                 Ok(Response::Sessions(sessions))
             }
+            Request::SubmitAttachments {
+                session,
+                request_id,
+                prompt,
+                images,
+                files,
+                steer,
+            } => {
+                let _opening = self.opening.lock().await;
+                ensure!(
+                    !self.closing.load(Ordering::Acquire),
+                    "workspace service is shutting down"
+                );
+                let handle = self.session(&session).await?;
+                if steer {
+                    let (accepted, receipt) = tokio::sync::oneshot::channel();
+                    handle
+                        .command(session::Command::Steer {
+                            message: prompt,
+                            images,
+                            files,
+                            accepted,
+                        })
+                        .await?;
+                    Ok(Response::InputQueued {
+                        message_id: receipt.await?,
+                    })
+                } else {
+                    handle
+                        .command(session::Command::Start {
+                            request_id,
+                            prompt,
+                            images,
+                            files,
+                            compact: false,
+                            model: None,
+                        })
+                        .await?;
+                    Ok(Response::Ok)
+                }
+            }
             Request::Start {
                 session,
                 request_id,
@@ -721,6 +762,7 @@ impl Service {
                         request_id,
                         prompt,
                         images,
+                        files: Vec::new(),
                         compact,
                         model,
                     })
@@ -850,6 +892,7 @@ impl Service {
                     .command(session::Command::Steer {
                         message,
                         images,
+                        files: Vec::new(),
                         accepted,
                     })
                     .await?;
@@ -864,6 +907,7 @@ impl Service {
                     .command(session::Command::Steer {
                         message,
                         images: vec![],
+                        files: Vec::new(),
                         accepted,
                     })
                     .await?;

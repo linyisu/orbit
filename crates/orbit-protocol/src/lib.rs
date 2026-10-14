@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 /// Current request and event schema version advertised during the handshake.
-pub const VERSION: u32 = 26;
+pub const VERSION: u32 = 27;
 /// Oldest peer schema accepted by this implementation.
 pub const MIN_COMPATIBLE_VERSION: u32 = 15;
 
@@ -132,6 +132,15 @@ pub enum Request {
         session: String,
         expected_workspace: Option<String>,
         action: files::Action,
+    },
+    /// Submit client-owned files with the same durable start or queue semantics as images.
+    SubmitAttachments {
+        session: String,
+        request_id: String,
+        prompt: String,
+        images: Vec<ImageUpload>,
+        files: Vec<FileUpload>,
+        steer: bool,
     },
     Start {
         session: String,
@@ -305,6 +314,8 @@ pub struct MessageImage {
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct RunPresentation {
+    #[serde(default)]
+    pub file_assets: Vec<MessageImage>,
     #[serde(default)]
     pub image_assets: Vec<MessageImage>,
     #[serde(default)]
@@ -647,6 +658,12 @@ pub struct Capabilities {
     pub native_processes: bool,
     pub files: bool,
     pub features: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct FileUpload {
+    pub name: String,
+    pub data: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

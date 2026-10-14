@@ -10,7 +10,7 @@
 - [reasoning.rs](src/reasoning.rs)：思考参数适配。
 - [discovery.rs](src/discovery.rs)、[account_catalog.rs](src/account_catalog.rs)：模型目录与能力解析。
 
-配置、缓存和刷新调度属于 [orbit-config](../orbit-config/README.md)。图片读取共用 `Attachment` 的大小限制；视觉能力决定请求中的图片投影方式。
+配置、缓存和刷新调度属于 [orbit-config](../orbit-config/README.md)。附件共用 `Attachment` 的持久化契约；文件独立于视觉能力，文本内容投影到请求，二进制文件保留目标路径供工具读取。
 
 ## 验证
 

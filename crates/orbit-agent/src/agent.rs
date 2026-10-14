@@ -1018,9 +1018,22 @@ where
 /// Bound image payloads per request while preserving stored history.
 /// Text-only models receive attachment names instead of image bytes.
 pub fn model_messages(history: &[ChatMessage], supports_vision: bool) -> Vec<ChatMessage> {
+    let mut messages = history.to_vec();
+    for message in &mut messages {
+        if let ChatMessage::User {
+            content,
+            attachments,
+        } = message
+        {
+            for attachment in attachments.iter() {
+                if let Some(context) = attachment.file_context() {
+                    content.push_str(&context);
+                }
+            }
+            attachments.retain(|attachment| attachment.is_image());
+        }
+    }
     if !supports_vision {
-        let mut messages = history.to_vec();
-
         for message in &mut messages {
             let ChatMessage::User {
                 content,
@@ -1051,8 +1064,6 @@ pub fn model_messages(history: &[ChatMessage], supports_vision: bool) -> Vec<Cha
     const MAX_IMAGES: usize = 4;
 
     let mut remaining = MAX_IMAGES;
-    let mut messages = history.to_vec();
-
     for message in messages.iter_mut().rev() {
         let ChatMessage::User {
             content,

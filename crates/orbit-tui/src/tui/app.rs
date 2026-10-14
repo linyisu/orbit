@@ -297,6 +297,10 @@ impl UiState {
             }
             return;
         }
+        let mut prompt = prompt;
+        for file in &presentation.file_assets {
+            prompt.push_str(&format!("\n[附件：{}]", file.name));
+        }
         if !presentation.image_assets.is_empty() {
             self.submit_with_images(prompt, presentation.image_assets);
             if presentation.replayed {

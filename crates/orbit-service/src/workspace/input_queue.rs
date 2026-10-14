@@ -75,10 +75,25 @@ pub(super) async fn execute(
                 } else {
                     State::Idle
                 };
+                let metadata =
+                    |attachment: &orbit_model::types::Attachment| orbit_protocol::MessageImage {
+                        name: attachment.name().into(),
+                        path: attachment
+                            .path()
+                            .to_string_lossy()
+                            .into_owned(),
+                    };
                 let entry = Entry {
+                    files: message
+                        .attachments
+                        .iter()
+                        .filter(|a| !a.is_image())
+                        .map(metadata)
+                        .collect(),
                     images: message
                         .attachments
                         .iter()
+                        .filter(|a| a.is_image())
                         .map(|image| orbit_protocol::MessageImage {
                             name: image.name().into(),
                             path: image
@@ -144,32 +159,38 @@ pub(super) async fn execute(
                     .await?;
                 State::Idle
             };
+            let attachments = setup
+                .session
+                .store
+                .pending_agent_messages(setup.session.id())
+                .await?
+                .into_iter()
+                .find(|message| message.id == id)
+                .map(|message| message.attachments)
+                .unwrap_or_default();
+            let metadata =
+                |attachment: &orbit_model::types::Attachment| orbit_protocol::MessageImage {
+                    name: attachment.name().into(),
+                    path: attachment
+                        .path()
+                        .to_string_lossy()
+                        .into_owned(),
+                };
             Ok(Snapshot::Edited {
                 entry: Entry {
                     id,
                     content,
                     state,
-                    images: setup
-                        .session
-                        .store
-                        .pending_agent_messages(setup.session.id())
-                        .await?
-                        .into_iter()
-                        .find(|message| message.id == id)
-                        .map(|message| {
-                            message
-                                .attachments
-                                .iter()
-                                .map(|image| orbit_protocol::MessageImage {
-                                    name: image.name().into(),
-                                    path: image
-                                        .path()
-                                        .to_string_lossy()
-                                        .into_owned(),
-                                })
-                                .collect()
-                        })
-                        .unwrap_or_default(),
+                    images: attachments
+                        .iter()
+                        .filter(|a| a.is_image())
+                        .map(metadata)
+                        .collect(),
+                    files: attachments
+                        .iter()
+                        .filter(|a| !a.is_image())
+                        .map(metadata)
+                        .collect(),
                 },
             })
         }

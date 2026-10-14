@@ -33,6 +33,7 @@ pub(crate) fn encode(model: &str, request: ChatRequest) -> Result<(Value, Header
                 content,
                 attachments,
             } => {
+                let content = crate::types::Attachment::project_files(content, &attachments);
                 let mut parts = Vec::new();
                 if !content.is_empty() {
                     parts.push(json!({

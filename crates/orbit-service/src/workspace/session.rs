@@ -95,6 +95,7 @@ pub enum Command {
         request_id: String,
         prompt: String,
         images: Vec<orbit_protocol::ImageUpload>,
+        files: Vec<orbit_protocol::FileUpload>,
         compact: bool,
         model: Option<String>,
     },
@@ -104,6 +105,7 @@ pub enum Command {
     },
     Steer {
         images: Vec<orbit_protocol::ImageUpload>,
+        files: Vec<orbit_protocol::FileUpload>,
         message: String,
         accepted: oneshot::Sender<i64>,
     },
@@ -188,6 +190,7 @@ fn presentation(run: &orbit_store::types::Run) -> orbit_protocol::RunPresentatio
             .map(|image| image.name.clone())
             .collect(),
         image_assets: run.images.clone(),
+        file_assets: run.files.clone(),
         compact: run.prompt == "/compact",
         queued_input: run
             .events
@@ -210,6 +213,7 @@ impl View {
             self.images = presentation
                 .image_assets
                 .iter()
+                .chain(presentation.file_assets.iter())
                 .map(|image| image.path.clone())
                 .collect();
         }
@@ -626,10 +630,11 @@ fn approval_key(preview: &ApprovalPreview, workspace: &Path) -> Option<String> {
 fn request_fingerprint(
     prompt: &str,
     images: &[orbit_protocol::ImageUpload],
+    files: &[orbit_protocol::FileUpload],
     compact: bool,
     model: &Option<String>,
 ) -> String {
-    let bytes = serde_json::to_vec(&(prompt, images, compact, model))
+    let bytes = serde_json::to_vec(&(prompt, images, files, compact, model))
         .expect("serializable workspace request");
     Sha256::digest(bytes)
         .iter()

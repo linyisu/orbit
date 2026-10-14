@@ -309,6 +309,7 @@ async fn sent_images_are_readable_only_through_the_owning_session() {
     let bytes = png.into_inner();
     owner
         .command(session::Command::Start {
+            files: Vec::new(),
             request_id: "image".into(),
             prompt: "look".into(),
             images: vec![orbit_protocol::ImageUpload {

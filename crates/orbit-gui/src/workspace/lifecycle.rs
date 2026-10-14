@@ -147,6 +147,12 @@ impl Workspace {
             title: self.title.to_string(),
             text: self.input.read(cx).value().to_string(),
             paths: self.paths.clone(),
+            attachment_names: self
+                .attachment_names
+                .iter()
+                .filter(|(path, _)| self.paths.contains(path))
+                .map(|(p, n)| (p.clone(), n.clone()))
+                .collect(),
             retry: self
                 .pending
                 .as_ref()
@@ -180,6 +186,7 @@ impl Workspace {
         self.key = saved.key;
         self.title = saved.title.into();
         self.paths = saved.paths;
+        self.attachment_names = saved.attachment_names;
         self.input
             .update(cx, |input, cx| input.set_value(saved.text, window, cx));
         // A restored send is only an explicit retry candidate, never a queued
@@ -473,6 +480,7 @@ impl Workspace {
     pub(crate) fn has_draft(&self, cx: &App) -> bool {
         self.pending.is_some()
             || self.picker_pending
+            || self.attachment_imports != 0
             || self.retry.is_some()
             || !self.paths.is_empty()
             || !self.input.read(cx).value().is_empty()

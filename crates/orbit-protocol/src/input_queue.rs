@@ -38,6 +38,8 @@ pub enum State {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Entry {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub files: Vec<crate::MessageImage>,
     pub id: i64,
     pub content: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -76,6 +78,7 @@ mod tests {
         for state in [State::Claimed, State::Finishing, State::Unavailable] {
             assert!(
                 !Entry {
+                    files: Vec::new(),
                     images: vec![],
                     id: 1,
                     content: "retained".into(),
@@ -87,6 +90,7 @@ mod tests {
         for state in [State::Queued, State::Idle] {
             assert!(
                 Entry {
+                    files: Vec::new(),
                     images: vec![],
                     id: 1,
                     content: "editable".into(),

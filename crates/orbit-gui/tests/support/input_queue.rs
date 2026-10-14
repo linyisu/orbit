@@ -16,6 +16,7 @@ pub(super) fn enqueue(
     session: &str,
     content: &str,
     images: Vec<orbit_protocol::MessageImage>,
+    files: Vec<orbit_protocol::MessageImage>,
 ) -> anyhow::Result<i64> {
     let path = Path::new(workspace).join(".fixture-input-queue.json");
     let mut queue: Queue = match std::fs::read(&path) {
@@ -33,6 +34,7 @@ pub(super) fn enqueue(
         .last()
         .map_or(1, |entry| entry.id + 1);
     queue.entries.push(Entry {
+        files,
         images,
         id,
         content: content.into(),
@@ -77,6 +79,7 @@ fn execute_inner(workspace: &str, request: &Value) -> anyhow::Result<Snapshot> {
                 .exists()
             {
                 (1..=35).map(|index| Entry {
+files: Vec::new(),
                     images: vec![],
                     id: index * 7,
                     content: format!("第 {index} 条补充：先检查现有状态，再执行并验证。\n这段文本用于检查选择、修改和保留草稿。"),

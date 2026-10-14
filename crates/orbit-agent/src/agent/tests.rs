@@ -1625,3 +1625,36 @@ fn usage_events_combine_input_and_output_counts() {
         })
     );
 }
+
+#[test]
+fn file_material_survives_text_only_projection_without_requesting_vision() {
+    use orbit_model::types::Attachment;
+    let file = Attachment::File {
+        name: "sample.txt".into(),
+        path: "/workspace/sample.txt".into(),
+        text: Some("  generated material\nsecond line  ".into()),
+        lease: None,
+    };
+    let history = vec![ChatMessage::user_with_attachments(
+        "inspect",
+        vec![file.clone()],
+    )];
+    for vision in [false, true] {
+        let projected = super::model_messages(&history, vision);
+        let ChatMessage::User {
+            content,
+            attachments,
+        } = &projected[0]
+        else {
+            panic!("user expected")
+        };
+        assert!(content.contains("  generated material\nsecond line  "));
+        assert!(content.contains("sample.txt"));
+        assert!(!content.contains("Image omitted"));
+        assert!(attachments.is_empty());
+    }
+    assert_eq!(
+        history[0],
+        ChatMessage::user_with_attachments("inspect", vec![file])
+    );
+}

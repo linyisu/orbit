@@ -117,7 +117,37 @@ fn main() -> anyhow::Result<()> {
         );
         let mut bytes = vec![0; size];
         input.read_exact(&mut bytes)?;
-        let request: Value = serde_json::from_slice(&bytes)?;
+        let mut request: Value = serde_json::from_slice(&bytes)?;
+        let mut uploaded_files = Vec::new();
+        if request["method"] == "submit_attachments" {
+            for (index, file) in request["files"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .enumerate()
+            {
+                let name = file["name"]
+                    .as_str()
+                    .unwrap_or("upload.bin");
+                let path =
+                    std::path::Path::new(&workspace).join(format!("fixture-file-{index}-{name}"));
+                std::fs::write(
+                    &path,
+                    base64::engine::general_purpose::STANDARD
+                        .decode(file["data"].as_str().unwrap())?,
+                )?;
+                uploaded_files.push(orbit_protocol::MessageImage {
+                    name: name.into(),
+                    path: path.to_string_lossy().into_owned(),
+                });
+            }
+            if request["steer"] == true {
+                request["method"] = json!("steer_images");
+                request["message"] = request["prompt"].clone();
+            } else {
+                request["method"] = json!("start");
+            }
+        }
         if request["method"] == "hello"
             && let Some(path) = request["workspace"].as_str()
         {
@@ -905,7 +935,8 @@ fn main() -> anyhow::Result<()> {
                         .or_default()
                         .push(json!({
                             "Started": {
-                                "prompt": prompt
+                                "prompt": prompt,
+                                "presentation": { "file_assets": uploaded_files }
                             }
                         }));
                     pending = [
@@ -1247,6 +1278,7 @@ fn main() -> anyhow::Result<()> {
                             .as_str()
                             .unwrap_or_default(),
                         queued_images,
+                        uploaded_files.clone(),
                     )?
                 } else {
                     history

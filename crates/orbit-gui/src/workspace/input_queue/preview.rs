@@ -43,8 +43,10 @@ pub(super) fn preview(
             .chars()
             .take(240)
             .collect::<String>();
-        let title = if snippet.trim().is_empty() && !row.entry.images.is_empty() {
-            format!("{} 张图片", row.entry.images.len())
+        let title = if snippet.trim().is_empty()
+            && (!row.entry.images.is_empty() || !row.entry.files.is_empty())
+        {
+            format!("{} 个附件", row.entry.images.len() + row.entry.files.len())
         } else {
             snippet
                 .split_whitespace()
@@ -73,6 +75,24 @@ pub(super) fn preview(
                                 .h(rems(2.))
                                 .object_fit(ObjectFit::Contain)
                                 .rounded_sm()
+                        }),
+                )
+                .children(
+                    row.entry
+                        .files
+                        .iter()
+                        .take(2)
+                        .map(|file| {
+                            h_flex()
+                                .gap_1()
+                                .child(Icon::new(IconName::File).small())
+                                .child(
+                                    div()
+                                        .max_w(rems(10.))
+                                        .text_ellipsis()
+                                        .text_xs()
+                                        .child(file.name.clone()),
+                                )
                         }),
                 )
                 .child(

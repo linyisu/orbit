@@ -357,23 +357,33 @@ impl Store {
                         crate::session_log::decode(row.id, row.run_id, row.payload, row.sha256)
                     })
                     .transpose()?;
-                let images = match message.map(|record| record.message) {
+                let attachments = match message.map(|record| record.message) {
                     Some(orbit_model::types::ChatMessage::User {
                         content,
                         attachments,
-                    }) if content == prompt => attachments
-                        .into_iter()
-                        .map(|attachment| orbit_protocol::MessageImage {
-                            name: attachment.name().to_owned(),
-                            path: attachment
-                                .path()
-                                .to_string_lossy()
-                                .into_owned(),
-                        })
-                        .collect(),
+                    }) if content == prompt => attachments,
                     _ => Vec::new(),
                 };
+                let metadata =
+                    |attachment: &orbit_model::types::Attachment| orbit_protocol::MessageImage {
+                        name: attachment.name().into(),
+                        path: attachment
+                            .path()
+                            .to_string_lossy()
+                            .into_owned(),
+                    };
+                let files = attachments
+                    .iter()
+                    .filter(|a| !a.is_image())
+                    .map(metadata)
+                    .collect();
+                let images = attachments
+                    .iter()
+                    .filter(|a| a.is_image())
+                    .map(metadata)
+                    .collect::<Vec<_>>();
                 runs.push(Run {
+                    files,
                     images,
                     prompt,
                     status,

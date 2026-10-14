@@ -183,7 +183,7 @@ pub(crate) enum Command {
         session: String,
         id: String,
         prompt: String,
-        paths: Vec<PathBuf>,
+        paths: Vec<(PathBuf, String)>,
         steer: bool,
     },
 }
@@ -870,15 +870,53 @@ async fn send(
     session: String,
     id: String,
     prompt: String,
-    paths: Vec<PathBuf>,
+    paths: Vec<(PathBuf, String)>,
     steer: bool,
 ) -> Result<()> {
-    let images = tokio::task::spawn_blocking(move || {
-        orbit_client::attachments::uploads(&orbit_client::attachments::paths(paths)?)
+    let (images, files) = tokio::task::spawn_blocking(move || -> Result<_> {
+        let (images, files): (Vec<_>, Vec<_>) = paths
+            .into_iter()
+            .partition(|(path, _)| {
+                path.extension()
+                    .and_then(|e| e.to_str())
+                    .is_some_and(|e| {
+                        matches!(
+                            e.to_ascii_lowercase().as_str(),
+                            "png" | "jpg" | "jpeg" | "webp" | "gif"
+                        )
+                    })
+            });
+        let mut uploads = orbit_client::attachments::uploads(&orbit_client::attachments::paths(
+            images
+                .iter()
+                .map(|(path, _)| path.clone())
+                .collect(),
+        )?)?;
+        for (upload, (_, name)) in uploads.iter_mut().zip(images) {
+            upload.name = name;
+        }
+        let files = files
+            .iter()
+            .map(|(path, name)| {
+                let mut upload = orbit_client::attachments::file_upload(path)?;
+                upload.name = name.clone();
+                Ok(upload)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok((uploads, files))
     })
     .await
-    .context("读取图片失败")??;
-    let request = if steer {
+    .context("读取附件失败")??;
+    let request = if !files.is_empty() {
+        Request::SubmitAttachments {
+            session,
+            request_id: id,
+            prompt,
+            images,
+            files,
+            steer,
+        }
+    } else if steer {
         if images.is_empty() {
             Request::Steer {
                 session,

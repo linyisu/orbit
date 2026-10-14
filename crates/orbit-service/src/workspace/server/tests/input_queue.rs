@@ -290,3 +290,103 @@ async fn image_input_is_uploaded_queued_and_authorized_for_withdrawal() {
         .await
         .unwrap();
 }
+
+#[tokio::test]
+async fn file_input_is_queued_without_vision_and_can_be_withdrawn() {
+    use base64::Engine;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .unwrap();
+    let fixture = Fixture::with_vision(
+        &format!("http://{}/v1", listener.local_addr().unwrap()),
+        false,
+    )
+    .await;
+    let session = fixture.handle.info.id.clone();
+    fixture
+        .request(Request::Start {
+            session: session.clone(),
+            request_id: "image-queue".into(),
+            prompt: "wait".into(),
+            images: vec![],
+            compact: false,
+            model: None,
+        })
+        .await
+        .unwrap();
+    let (_socket, _) = tokio::time::timeout(Duration::from_secs(3), listener.accept())
+        .await
+        .unwrap()
+        .unwrap();
+    let bytes = b"generated queue material\n".to_vec();
+    let Response::InputQueued { message_id } = fixture
+        .request(Request::SubmitAttachments {
+            session: session.clone(),
+            request_id: "queued-file".into(),
+            prompt: String::new(),
+            steer: true,
+            images: vec![],
+            files: vec![orbit_protocol::FileUpload {
+                name: "queued.txt".into(),
+                data: base64::engine::general_purpose::STANDARD.encode(&bytes),
+            }],
+        })
+        .await
+        .unwrap()
+    else {
+        panic!("queue receipt expected")
+    };
+    let queue = |action| Request::InputQueue {
+        session: session.clone(),
+        expected_workspace: fixture.handle.info.workspace.clone(),
+        action,
+    };
+    let Response::InputQueue(Snapshot::List { entries, run, .. }) = fixture
+        .request(queue(Action::List { after: None }))
+        .await
+        .unwrap()
+    else {
+        panic!("queue expected")
+    };
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].id, message_id);
+    assert_eq!(entries[0].files.len(), 1);
+    assert!(entries[0].content.is_empty());
+    assert_eq!(entries[0].state, State::Queued);
+    let Response::File(data) = fixture
+        .request(Request::ReadFile {
+            session: session.clone(),
+            path: entries[0].files[0].path.clone(),
+        })
+        .await
+        .unwrap()
+    else {
+        panic!("file must be readable")
+    };
+    assert_eq!(
+        base64::engine::general_purpose::STANDARD
+            .decode(data)
+            .unwrap(),
+        bytes
+    );
+    fixture
+        .request(queue(Action::Remove {
+            id: message_id,
+            expected: String::new(),
+            run,
+        }))
+        .await
+        .unwrap();
+    let Response::InputQueue(Snapshot::List { entries, .. }) = fixture
+        .request(queue(Action::List { after: None }))
+        .await
+        .unwrap()
+    else {
+        panic!("queue expected")
+    };
+    assert!(entries.is_empty());
+    fixture
+        .request(Request::Cancel { session })
+        .await
+        .unwrap();
+}

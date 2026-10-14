@@ -268,6 +268,7 @@ async fn first_send_waits_for_mcp_tools_without_blocking_control_commands() {
         tokio::spawn(async move {
             handle
                 .command(session::Command::Start {
+                    files: Vec::new(),
                     request_id: id.into(),
                     prompt: "use the available tools".into(),
                     images: vec![],

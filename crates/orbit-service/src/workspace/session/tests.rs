@@ -8,6 +8,7 @@ mod tool_selection_eval;
 #[test]
 fn replay_preserves_compaction_and_queued_input_semantics() {
     let compact = orbit_store::types::Run {
+        files: Vec::new(),
         images: Vec::new(),
         prompt: "/compact".into(),
         status: "completed".into(),
@@ -16,6 +17,7 @@ fn replay_preserves_compaction_and_queued_input_semantics() {
     };
     assert!(presentation(&compact).compact);
     let queued = orbit_store::types::Run {
+        files: Vec::new(),
         images: Vec::new(),
         prompt: "queued".into(),
         events: vec![
@@ -187,6 +189,7 @@ async fn image_only_submission_reaches_the_service_and_its_attachment_is_present
         .unwrap();
     handle
         .command(Command::Start {
+            files: Vec::new(),
             request_id: "image-only".into(),
             prompt: String::new(),
             images: vec![orbit_protocol::ImageUpload {
@@ -739,6 +742,115 @@ async fn planning_tool_review_and_client_decisions_share_authoritative_session_s
     );
     handle
         .command(Command::Close)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn file_only_submission_is_persisted_and_presented_without_vision() {
+    use base64::Engine;
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    std::fs::write(
+        root.join("config.toml"),
+        TestConfig::new()
+            .provider(
+                TestProvider::new("test")
+                    .endpoint("http://127.0.0.1:1/v1")
+                    .key("test-only")
+                    .models([TestModel::new("test").vision(false)]),
+            )
+            .providers_toml()
+            .unwrap(),
+    )
+    .unwrap();
+    let options = crate::WorkspaceOptions {
+        model: Some("test::test".into()),
+        initial_directory: root.into(),
+        auth_directory: root.join("auth"),
+        config: root.join("config.toml"),
+        database: root.join("sessions.db"),
+        allow_mcp_start: false,
+        home: Some(root.into()),
+        config_home: None,
+        instruction_dir: None,
+        editor_command: "vi".into(),
+    };
+    let setup = crate::workspace::setup::prepare_workspace(&options, root, None)
+        .await
+        .unwrap();
+    let handle = Handle::spawn(setup, None)
+        .await
+        .unwrap();
+    let bytes = b"section = \"synthetic\"\ncount = 7\n";
+    handle
+        .command(Command::Start {
+            files: vec![orbit_protocol::FileUpload {
+                name: "report.toml".into(),
+                data: base64::engine::general_purpose::STANDARD.encode(bytes),
+            }],
+            request_id: "file-only".into(),
+            prompt: String::new(),
+            images: vec![],
+            compact: false,
+            model: None,
+        })
+        .await
+        .unwrap();
+    let page = handle
+        .view
+        .lock()
+        .await
+        .page(0)
+        .unwrap();
+    let images = page
+        .updates
+        .iter()
+        .find_map(|update| match update {
+            Update::Started {
+                prompt,
+                presentation,
+            } if prompt.is_empty() => Some(presentation.file_assets.clone()),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(images.len(), 1);
+    assert_eq!(images[0].name, "report.toml");
+    assert!(handle.has_image(&images[0].path).await);
+    assert!(
+        !handle
+            .has_image("/another/session/image.png")
+            .await
+    );
+    let assets = orbit_tools::image_assets::ImageAssets::for_database(&options.database);
+    assert!(
+        assets
+            .read(Path::new(&images[0].path))
+            .unwrap()
+            == bytes
+    );
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        loop {
+            let snapshot = handle
+                .store
+                .load(&handle.info.id)
+                .await
+                .unwrap();
+            if snapshot
+                .runs
+                .first()
+                .is_some_and(|run| run.files == images)
+            {
+                assert_eq!(super::presentation(&snapshot.runs[0]).file_assets, images);
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    handle
+        .command(Command::Cancel)
         .await
         .unwrap();
 }

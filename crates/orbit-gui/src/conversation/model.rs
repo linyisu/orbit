@@ -23,6 +23,7 @@ pub(super) struct Part {
 pub(super) struct Turn {
     pub(super) prompt: Option<String>,
     pub(super) images: Vec<String>,
+    pub(super) files: Vec<orbit_protocol::MessageImage>,
     pub(super) parts: Vec<Part>,
     pub(super) status: String,
     pub(super) completed: bool,
@@ -120,6 +121,7 @@ impl Transcript {
                         .map(|a| a.path)
                         .collect(),
                 );
+                self.turns[turn].files = presentation.file_assets;
                 Some(Change { turn, part: None })
             }
             Update::Agent(event) => self.agent(*event),
@@ -183,6 +185,7 @@ impl Transcript {
             } => {
                 let images = attachments
                     .iter()
+                    .filter(|a| a.is_image())
                     .map(|image| {
                         image
                             .path()
@@ -191,6 +194,14 @@ impl Transcript {
                     })
                     .collect();
                 let turn = self.begin(Some(content), images);
+                self.turns[turn].files = attachments
+                    .iter()
+                    .filter(|a| !a.is_image())
+                    .map(|a| orbit_protocol::MessageImage {
+                        name: a.name().into(),
+                        path: a.path().to_string_lossy().into_owned(),
+                    })
+                    .collect();
                 Some(Change { turn, part: None })
             }
             AgentEvent::TurnStarted { .. } => {

@@ -242,6 +242,7 @@ mod tests {
             .unwrap()
             .send(Ok(Response::InputQueue(Snapshot::List {
                 entries: vec![Entry {
+                    files: Vec::new(),
                     images: vec![],
                     id: 3,
                     content: "original".into(),
@@ -362,6 +363,7 @@ mod tests {
             .send(Ok(Response::InputQueue(Snapshot::List {
                 entries: (1..40)
                     .map(|id| Entry {
+                        files: Vec::new(),
                         images: vec![],
                         id,
                         content: format!("queued {id}"),

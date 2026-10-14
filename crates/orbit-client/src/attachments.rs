@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use orbit_model::types::Attachment;
 use orbit_tools::image_assets::ImageAssets;
 
@@ -37,11 +37,59 @@ pub fn uploads(attachments: &[Attachment]) -> Result<Vec<orbit_protocol::ImageUp
         .collect()
 }
 
+/// Read a bounded regular file before transporting it to the session host.
+pub fn file_upload(path: &Path) -> Result<orbit_protocol::FileUpload> {
+    use base64::Engine;
+    use std::io::Read;
+    let metadata = std::fs::metadata(path)?;
+    anyhow::ensure!(metadata.is_file(), "附件必须是普通文件：{}", path.display());
+    let file = std::fs::File::open(path)?;
+    let metadata = file.metadata()?;
+    anyhow::ensure!(
+        metadata.is_file() && metadata.len() <= Attachment::MAX_FILE_BYTES as u64,
+        "附件必须是 20 MiB 以内的普通文件：{}",
+        path.display()
+    );
+    let mut bytes = Vec::new();
+    file.take(Attachment::MAX_FILE_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)?;
+    anyhow::ensure!(
+        bytes.len() <= Attachment::MAX_FILE_BYTES,
+        "附件超过 20 MiB：{}",
+        path.display()
+    );
+    Ok(orbit_protocol::FileUpload {
+        name: path
+            .file_name()
+            .context("附件缺少文件名")?
+            .to_string_lossy()
+            .into_owned(),
+        data: base64::engine::general_purpose::STANDARD.encode(bytes),
+    })
+}
+
+/// Recognize only a complete list of existing local files, leaving prose untouched.
+pub fn pasted_files(text: &str, directory: &Path) -> Option<Vec<PathBuf>> {
+    let text = text
+        .strip_prefix("copy\n")
+        .or_else(|| text.strip_prefix("cut\n"))
+        .filter(|text| {
+            text.lines()
+                .all(|line| line.starts_with("file://"))
+        })
+        .unwrap_or(text);
+    parse_paths(text, directory, false)
+}
+
 /// Recognize a clipboard containing only existing local image paths. A whole
 /// path is tried first so filenames with spaces need not be quoted; shell-style
 /// quoting supports multiple paths on Unix. Prose or one missing file leaves
 /// the complete clipboard as text instead of consuming only part of it.
 pub fn pasted_paths(text: &str, directory: &Path) -> Option<Vec<PathBuf>> {
+    parse_paths(text, directory, true)
+}
+
+fn parse_paths(text: &str, directory: &Path, images_only: bool) -> Option<Vec<PathBuf>> {
     let trimmed = text.trim();
     if trimmed.is_empty() {
         return None;
@@ -54,7 +102,7 @@ pub fn pasted_paths(text: &str, directory: &Path) -> Option<Vec<PathBuf>> {
     } else {
         trimmed
     };
-    if let Some(path) = pasted_path(whole, directory) {
+    if let Some(path) = pasted_path(whole, directory, images_only) {
         return Some(vec![path]);
     }
 
@@ -62,7 +110,7 @@ pub fn pasted_paths(text: &str, directory: &Path) -> Option<Vec<PathBuf>> {
     {
         let paths = shlex::split(text)?
             .into_iter()
-            .map(|part| pasted_path(&part, directory))
+            .map(|part| pasted_path(&part, directory, images_only))
             .collect::<Option<Vec<_>>>()?;
         (!paths.is_empty()).then_some(paths)
     }
@@ -71,7 +119,7 @@ pub fn pasted_paths(text: &str, directory: &Path) -> Option<Vec<PathBuf>> {
     None
 }
 
-fn pasted_path(value: &str, directory: &Path) -> Option<PathBuf> {
+fn pasted_path(value: &str, directory: &Path, images_only: bool) -> Option<PathBuf> {
     let path = if let Ok(url) = url::Url::parse(value)
         && url.scheme() == "file"
     {
@@ -86,16 +134,18 @@ fn pasted_path(value: &str, directory: &Path) -> Option<PathBuf> {
     } else {
         directory.join(path)
     };
-    path.extension()
-        .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| {
-            matches!(
-                extension.to_ascii_lowercase().as_str(),
-                "png" | "jpg" | "jpeg" | "gif" | "webp"
-            )
-        })
-        .then_some(path)
-        .filter(|path| path.is_file())
+    (!images_only
+        || path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| {
+                matches!(
+                    extension.to_ascii_lowercase().as_str(),
+                    "png" | "jpg" | "jpeg" | "gif" | "webp"
+                )
+            }))
+    .then_some(path)
+    .filter(|path| path.is_file())
 }
 
 #[cfg(test)]
@@ -178,5 +228,33 @@ mod tests {
             pasted_paths(image.to_str().unwrap(), directory.path()),
             Some(vec![image])
         );
+    }
+    #[test]
+    fn clipboard_files_are_atomic_and_upload_actual_bytes_with_the_original_name() {
+        use base64::Engine;
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("sample notes.txt");
+        let content = b"  synthetic source\nlast line  ";
+        std::fs::write(&path, content).unwrap();
+        assert_eq!(
+            pasted_files("'sample notes.txt'", root.path()),
+            Some(vec![path.clone()])
+        );
+        let uri = url::Url::from_file_path(&path).unwrap();
+        assert_eq!(
+            pasted_files(&format!("copy\n{uri}"), root.path()),
+            Some(vec![path.clone()])
+        );
+        assert!(pasted_files("'sample notes.txt' missing.txt", root.path()).is_none());
+        assert!(pasted_files("please inspect 'sample notes.txt'", root.path()).is_none());
+        let upload = file_upload(&path).unwrap();
+        assert_eq!(upload.name, "sample notes.txt");
+        assert_eq!(
+            base64::engine::general_purpose::STANDARD
+                .decode(upload.data)
+                .unwrap(),
+            content
+        );
+        assert!(file_upload(root.path()).is_err());
     }
 }

@@ -9,7 +9,7 @@
 - [plan.rs](src/plan.rs)、[subagents.rs](src/subagents.rs)、[user_input.rs](src/user_input.rs)：计划、子 Agent 与问答。
 - [search.rs](src/search.rs)：选择器与补全的共用匹配规则。
 
-写操作携带会话及工作区身份，服务校验过期请求。更改协议时同步检查客户端、服务端及兼容回归。
+写操作携带会话及工作区身份，服务校验过期请求。更改协议时同步检查客户端、服务端及兼容回归。`SubmitAttachments` 统一提交或暂存文件与图片，回放和队列分别保留两类附件元数据。
 
 ```sh
 cargo test -p orbit-protocol

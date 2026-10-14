@@ -17,50 +17,68 @@ pub(super) async fn localize(
         _ => return Ok(()),
     };
     for entry in entries {
-        let mut images = Vec::new();
-        for image in &entry.images {
-            let key = (session.to_owned(), image.path.clone());
-            let path = if let Some(path) = cache.get(&key) {
-                path.clone()
-            } else {
-                let data = match client
-                    .request(Request::ReadFile {
-                        session: session.into(),
-                        path: image.path.clone(),
-                    })
-                    .await?
-                {
-                    Response::File(data) => data,
-                    // Missing historical files do not block the rest of a message.
-                    Response::Error(error)
-                        if error.contains("No such file") || error.contains("not found") =>
+        for (is_image, source) in [(true, &mut entry.images), (false, &mut entry.files)] {
+            let mut localized = Vec::new();
+            for attachment in source.iter() {
+                let key = (session.to_owned(), attachment.path.clone());
+                let path = if let Some(path) = cache.get(&key) {
+                    path.clone()
+                } else {
+                    let data = match client
+                        .request(Request::ReadFile {
+                            session: session.into(),
+                            path: attachment.path.clone(),
+                        })
+                        .await?
                     {
-                        continue;
-                    }
-                    Response::Error(error) => bail!(error),
-                    _ => bail!("服务未返回暂存图片"),
+                        Response::File(data) => data,
+                        // Missing historical files do not block the rest of a message.
+                        Response::Error(error)
+                            if error.contains("No such file") || error.contains("not found") =>
+                        {
+                            continue;
+                        }
+                        Response::Error(error) => bail!(error),
+                        _ => bail!("服务未返回暂存附件"),
+                    };
+                    let name = attachment.name.clone();
+                    let database = database.to_owned();
+                    let path = tokio::task::spawn_blocking(move || -> Result<String> {
+                        let bytes = base64::engine::general_purpose::STANDARD.decode(data)?;
+                        let path = if is_image {
+                            orbit_tools::image_assets::ImageAssets::for_database(&database)
+                                .import_bytes(name, bytes)?
+                                .path()
+                                .to_owned()
+                        } else {
+                            use orbit_runtime::assets::AssetDirectory;
+                            let directory = AssetDirectory::for_database(&database);
+                            let extension = std::path::Path::new(&name)
+                                .extension()
+                                .and_then(|e| e.to_str())
+                                .filter(|e| {
+                                    !e.is_empty()
+                                        && e.len() <= AssetDirectory::MAX_EXTENSION_BYTES
+                                        && e.bytes()
+                                            .all(|b| b.is_ascii_alphanumeric())
+                                })
+                                .unwrap_or("bin")
+                                .to_ascii_lowercase();
+                            directory.import(&bytes, &extension)?.0
+                        };
+                        Ok(path.to_string_lossy().into_owned())
+                    })
+                    .await??;
+                    cache.insert(key, path.clone());
+                    path
                 };
-                let name = image.name.clone();
-                let database = database.to_owned();
-                let path = tokio::task::spawn_blocking(move || -> Result<String> {
-                    let bytes = base64::engine::general_purpose::STANDARD.decode(data)?;
-                    let image = orbit_tools::image_assets::ImageAssets::for_database(&database)
-                        .import_bytes(name, bytes)?;
-                    Ok(image
-                        .path()
-                        .to_string_lossy()
-                        .into_owned())
-                })
-                .await??;
-                cache.insert(key, path.clone());
-                path
-            };
-            images.push(orbit_protocol::MessageImage {
-                name: image.name.clone(),
-                path,
-            });
+                localized.push(orbit_protocol::MessageImage {
+                    name: attachment.name.clone(),
+                    path,
+                });
+            }
+            *source = localized;
         }
-        entry.images = images;
     }
     Ok(())
 }
@@ -72,6 +90,6 @@ pub(super) fn cache_database(options: &Options) -> Result<PathBuf> {
     Ok(std::env::var_os("XDG_STATE_HOME")
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/state")))
-        .context("找不到图片缓存目录")?
+        .context("找不到附件缓存目录")?
         .join("orbit/gui-queue-cache"))
 }
