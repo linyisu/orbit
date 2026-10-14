@@ -256,6 +256,18 @@ pub enum Mode {
     Yolo,
 }
 
+impl Mode {
+    /// Parse the stable permission-mode names, independent of presentation labels.
+    pub fn parse(text: &str) -> Option<Self> {
+        match text.to_ascii_lowercase().as_str() {
+            "ask" => Some(Self::Ask),
+            "auto" => Some(Self::Auto),
+            "yolo" => Some(Self::Yolo),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SessionInfo {
     pub id: String,
@@ -778,4 +790,22 @@ pub struct Completion {
     pub display: Option<String>,
     pub description: String,
     pub continue_input: bool,
+}
+
+#[cfg(test)]
+mod mode_tests {
+    use super::Mode;
+    #[test]
+    fn parses_supported_permission_modes() {
+        assert_eq!(Mode::default(), Mode::Auto);
+        for (text, mode) in [
+            ("ask", Mode::Ask),
+            ("auto", Mode::Auto),
+            ("yolo", Mode::Yolo),
+            ("YOLO", Mode::Yolo),
+        ] {
+            assert_eq!(Mode::parse(text), Some(mode));
+        }
+        assert_eq!(Mode::parse("unknown"), None);
+    }
 }

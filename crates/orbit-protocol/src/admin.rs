@@ -19,3 +19,21 @@ pub enum SessionSection {
     Compactions,
     Diagnostics,
 }
+
+/// Maximum Unicode scalar count for an explicit session title.
+pub const MAX_SESSION_TITLE_CHARS: usize = 120;
+
+pub fn valid_title(title: &str) -> bool {
+    !title.trim().is_empty() && title.chars().count() <= MAX_SESSION_TITLE_CHARS
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn session_title_limit_counts_characters_and_rejects_blank_input() {
+        assert!(valid_title(&"界".repeat(MAX_SESSION_TITLE_CHARS)));
+        assert!(!valid_title(&"a".repeat(MAX_SESSION_TITLE_CHARS + 1)));
+        assert!(!valid_title(" \n\t"));
+    }
+}

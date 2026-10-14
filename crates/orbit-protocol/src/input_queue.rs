@@ -69,6 +69,29 @@ pub enum Snapshot {
     },
 }
 
+/// Verify ascending IDs and the continuation cursor of an inbox page.
+pub fn valid_page(after: Option<i64>, entries: &[Entry], next: Option<i64>) -> bool {
+    let mut previous = after.unwrap_or(0);
+    for entry in entries {
+        if entry.id <= previous {
+            return false;
+        }
+        previous = entry.id;
+    }
+    next.is_none() || (!entries.is_empty() && next == entries.last().map(|entry| entry.id))
+}
+
+/// Verify that an entry state agrees with the sampled active run.
+pub fn valid_entry(entry: &Entry, run: Option<i64>) -> bool {
+    entry.id > 0
+        && run.is_none_or(|run| run > 0)
+        && match entry.state {
+            State::Queued => run.is_some(),
+            State::Idle => run.is_none(),
+            State::Claimed | State::Finishing | State::Unavailable => true,
+        }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -128,5 +151,38 @@ mod tests {
         assert_eq!(id, 42);
         assert_eq!(expected, "  原文\n第二行  ");
         assert_eq!(run, Some(9));
+    }
+
+    #[test]
+    fn pagination_rejects_nonadvancing_ids_and_cursor_mismatches() {
+        let entry = |id| Entry {
+            files: Vec::new(),
+            images: vec![],
+            id,
+            content: "input".into(),
+            state: State::Queued,
+        };
+        assert!(valid_page(None, &[entry(4), entry(10)], Some(10)));
+        assert!(valid_page(Some(10), &[entry(12)], None));
+        assert!(!valid_page(Some(10), &[entry(10)], Some(10)));
+        assert!(!valid_page(None, &[entry(4), entry(4)], None));
+        assert!(!valid_page(None, &[], Some(4)));
+        assert!(!valid_page(None, &[entry(4)], Some(5)));
+    }
+
+    #[test]
+    fn contradictory_mutable_state_and_run_cannot_enable_controls() {
+        let entry = |state| Entry {
+            files: Vec::new(),
+            images: vec![],
+            id: 9,
+            content: "input".into(),
+            state,
+        };
+        assert!(valid_entry(&entry(State::Queued), Some(4)));
+        assert!(valid_entry(&entry(State::Idle), None));
+        assert!(!valid_entry(&entry(State::Queued), None));
+        assert!(!valid_entry(&entry(State::Idle), Some(4)));
+        assert!(!valid_entry(&entry(State::Queued), Some(0)));
     }
 }

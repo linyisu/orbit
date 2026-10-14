@@ -160,7 +160,7 @@ pub(super) async fn execute(
         SessionAction::Inspect { section } => inspection::inspect(setup, section).await,
         SessionAction::Rename { title } => {
             ensure!(
-                !title.trim().is_empty() && title.chars().count() <= 120,
+                orbit_protocol::admin::valid_title(&title),
                 "会话标题应为 1–120 个字符"
             );
             setup

@@ -139,6 +139,24 @@ pub fn syntax_for_label(info: &str) -> Option<&'static SyntaxReference> {
         })
 }
 
+/// Display an unspecified code language as plain text without changing source Markdown.
+pub fn display_label(info: &str) -> &str {
+    let label = info.trim();
+    if label.is_empty() { "text" } else { label }
+}
+
+/// Identify a file through the shared grammar catalog, using plain text when unsupported.
+pub fn label_for_path(path: &str) -> &'static str {
+    syntax_for_path(path)
+        .and_then(|syntax| {
+            REGISTRY
+                .languages
+                .iter()
+                .find(|language| language.syntect.as_deref() == Some(syntax.name.as_str()))
+        })
+        .map_or("text", |language| language.id.as_str())
+}
+
 /// Resolve a file path by its filename or extension without reading the file.
 pub fn syntax_for_path(path: &str) -> Option<&'static SyntaxReference> {
     let filename = path

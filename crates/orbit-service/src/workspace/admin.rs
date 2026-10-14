@@ -110,7 +110,7 @@ pub(super) async fn execute(
 
 pub(super) fn ensure_title(title: &str) -> Result<()> {
     anyhow::ensure!(
-        !title.trim().is_empty() && title.chars().count() <= 120,
+        orbit_protocol::admin::valid_title(title),
         "会话标题应为 1–120 个字符"
     );
     Ok(())
