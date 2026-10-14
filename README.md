@@ -1,5 +1,9 @@
 # Orbit
 
+<p align="center">
+  <img src="assets/branding/orbit.svg" width="160" height="160" alt="Orbit 图标">
+</p>
+
 Rust 编写的编码 Agent，提供终端界面、命令行和实验性桌面客户端。支持多供应商模型、文件编辑、命令执行、持久化会话和子 Agent，可连接本地、SSH 与 WSL 工作区。
 
 ## 快速开始
