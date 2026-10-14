@@ -85,6 +85,52 @@ impl ConnectionDraft {
         )
     }
 
+    /// Read provider-independent defaults from this reviewed snapshot, without network discovery.
+    pub fn model_defaults(&self) -> Result<(usize, u32)> {
+        let config: FileConfig = toml::from_str(&self.source)?;
+        Ok((config.context_tokens, config.max_output_tokens))
+    }
+
+    /// Validate connection identity and credential routing before discovery or persistence.
+    pub fn validate_service(&self, key: &KeyChange<'_>) -> Result<()> {
+        ensure!(super::valid_name(&self.name), "连接名称无效");
+        let endpoint = url::Url::parse(&self.endpoint).context("服务地址无效")?;
+        ensure!(
+            matches!(endpoint.scheme(), "http" | "https")
+                && endpoint.host_str().is_some()
+                && endpoint.username().is_empty()
+                && endpoint.password().is_none()
+                && endpoint.query().is_none()
+                && endpoint.fragment().is_none(),
+            "请输入不含账号、查询参数或片段的 HTTP(S) 服务地址"
+        );
+
+        if let Some(provider) = &self.provider {
+            if matches!(
+                provider.api_format,
+                ApiFormat::GoogleCodeAssist | ApiFormat::ChatgptCodex
+            ) {
+                ensure!(
+                    self.format == provider.api_format
+                        && self.endpoint == provider.base_url
+                        && matches!(key, KeyChange::Keep),
+                    "套餐账号的协议与地址由认证流程管理"
+                );
+            }
+
+            if matches!(key, KeyChange::Keep)
+                && (provider.credential.is_some() || !provider.api_key.is_empty())
+            {
+                ensure!(
+                    self.endpoint.trim_end_matches('/') == provider.base_url.trim_end_matches('/'),
+                    "修改服务地址后，请重新填写密钥或选择无需认证"
+                );
+            }
+        }
+
+        Ok(())
+    }
+
     fn preserves_automatic_selection(&self) -> bool {
         self.provider
             .as_ref()
@@ -108,63 +154,29 @@ pub enum KeyChange<'a> {
     None,
 }
 
+impl<'a> KeyChange<'a> {
+    /// A blank field retains existing authentication, or declares an unauthenticated new service.
+    pub fn from_input(secret: &'a str, retain: bool) -> Self {
+        match (secret.is_empty(), retain) {
+            (false, _) => Self::Replace(secret),
+            (true, true) => Self::Keep,
+            (true, false) => Self::None,
+        }
+    }
+}
+
 pub async fn save(
     path: &Path,
     auth: &Path,
     draft: &ConnectionDraft,
     key: KeyChange<'_>,
 ) -> Result<Vec<ModelOption>> {
-    ensure!(
-        !draft.name.trim().is_empty()
-            && draft.name.len() <= 128
-            && !draft.name.chars().any(char::is_control),
-        "连接名称无效"
-    );
+    draft.validate_service(&key)?;
     ensure!(
         !draft.models.is_empty() || draft.preserves_automatic_selection(),
         "请至少启用一个模型"
     );
-    ensure!(
-        draft
-            .models
-            .iter()
-            .all(|m| !m.id.trim().is_empty()
-                && m.id.len() <= 256
-                && !m.id.chars().any(char::is_control)),
-        "模型 ID 无效"
-    );
-    let endpoint = url::Url::parse(&draft.endpoint).context("服务地址无效")?;
-    ensure!(
-        matches!(endpoint.scheme(), "http" | "https")
-            && endpoint.host_str().is_some()
-            && endpoint.username().is_empty()
-            && endpoint.password().is_none()
-            && endpoint.query().is_none()
-            && endpoint.fragment().is_none(),
-        "请输入不含账号、查询参数或片段的 HTTP(S) 服务地址"
-    );
-
-    if let Some(provider) = &draft.provider {
-        if matches!(
-            provider.api_format,
-            ApiFormat::GoogleCodeAssist | ApiFormat::ChatgptCodex
-        ) {
-            ensure!(
-                draft.format == provider.api_format
-                    && draft.endpoint == provider.base_url
-                    && matches!(key, KeyChange::Keep),
-                "套餐账号的协议与地址由认证流程管理"
-            );
-        }
-
-        if matches!(key, KeyChange::Keep) && provider.credential.is_some() {
-            ensure!(
-                draft.endpoint.trim_end_matches('/') == provider.base_url.trim_end_matches('/'),
-                "修改服务地址后，请重新填写密钥或选择无需认证"
-            );
-        }
-    }
-
+    super::models::validate_profiles(&draft.models)?;
     let mut document = draft
         .source
         .parse::<toml_edit::DocumentMut>()?;

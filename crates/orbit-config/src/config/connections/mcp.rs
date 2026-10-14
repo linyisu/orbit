@@ -1,8 +1,49 @@
 //! Edit only MCP configuration while preserving other settings and comments.
 pub mod environment;
 use anyhow::{Result, ensure};
-use orbit_tools::mcp::{McpConfig, McpServerConfig};
+pub use orbit_tools::mcp::{McpConfig, McpServerConfig};
 use std::{collections::BTreeMap, path::Path};
+
+/// Editable stdio fields; argument lines are literal and environment values use dotenv quoting.
+pub struct ServerInput<'a> {
+    pub command: &'a str,
+    pub args: &'a str,
+    pub env: &'a str,
+    pub timeout_seconds: &'a str,
+    pub tools: &'a str,
+    pub enabled: bool,
+}
+
+impl ServerInput<'_> {
+    /// Parse the server fields without launching a process or changing configuration.
+    pub fn parse(&self) -> Result<McpServerConfig> {
+        let timeout_seconds = self
+            .timeout_seconds
+            .trim()
+            .parse::<u64>()
+            .map_err(|_| anyhow::anyhow!("超时应为正整数（秒）。"))?;
+        ensure!(timeout_seconds > 0, "超时应为正整数（秒）。");
+        Ok(McpServerConfig {
+            transport: "stdio".into(),
+            command: self.command.trim().into(),
+            args: self
+                .args
+                .lines()
+                .map(str::to_owned)
+                .collect(),
+            env: environment::parse(self.env)?,
+            timeout_seconds,
+            tools: self
+                .tools
+                .lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty())
+                .map(str::to_owned)
+                .collect(),
+            enabled: self.enabled,
+        })
+    }
+}
 
 pub struct McpDraft {
     source: String,
@@ -21,6 +62,15 @@ impl McpDraft {
 
     pub fn servers(&self) -> &BTreeMap<String, McpServerConfig> {
         &self.servers
+    }
+
+    /// Add a new server without replacing an existing declaration with the same name.
+    pub fn create(&self, path: &Path, name: &str, server: McpServerConfig) -> Result<Self> {
+        ensure!(
+            !self.servers.contains_key(name),
+            "服务器名称已存在，请使用其他名称。"
+        );
+        self.save(path, name, Some(server))
     }
 
     pub fn save(&self, path: &Path, name: &str, server: Option<McpServerConfig>) -> Result<Self> {

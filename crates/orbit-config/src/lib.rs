@@ -8,3 +8,5 @@ pub(crate) use models::account_models;
 
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
+
+pub use orbit_model::client::ApiFormat;

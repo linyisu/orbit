@@ -30,6 +30,32 @@ impl From<&FileConfig> for AgentSettings {
 }
 
 impl AgentSettings {
+    /// Apply textual limit overrides and validate them before any configuration write.
+    pub fn with_limits(&self, values: [&str; 11]) -> Result<Self> {
+        let mut settings = self.clone();
+        settings.max_turns = number(values[0], "会话轮数上限")?;
+        settings.max_tool_calls = number(values[1], "会话工具调用上限")?;
+        settings.command.default_timeout_seconds = number(values[2], "默认命令超时")?;
+        settings.command.max_timeout_seconds = number(values[3], "最长命令超时")?;
+        settings.command.read_file_scan_bytes = number(values[4], "文件扫描上限")?;
+        settings.subagents.max_concurrent = number(values[5], "并行子 Agent 上限")?;
+        settings.subagents.max_turns = number(values[6], "子 Agent 轮数上限")?;
+        settings.subagents.max_tool_calls = number(values[7], "子 Agent 工具调用上限")?;
+        settings.subagents.timeout_seconds = number(values[8], "子 Agent 进度提醒间隔")?;
+        let optional = |value: &str| {
+            let value = value.trim();
+            (!value.is_empty()).then(|| value.to_owned())
+        };
+        settings.subagents.explore_model = optional(values[9]);
+        settings.subagents.review_model = optional(values[10]);
+        settings.subagents.validate()?;
+        settings
+            .command
+            .validate()
+            .map_err(anyhow::Error::msg)?;
+        Ok(settings)
+    }
+
     pub fn set_network_allowed(&mut self, allowed: bool) {
         self.command.network = if allowed {
             orbit_runtime::capability::NetworkPolicy::Allow
@@ -37,6 +63,13 @@ impl AgentSettings {
             orbit_runtime::capability::NetworkPolicy::Deny
         };
     }
+}
+
+fn number<T: std::str::FromStr>(value: &str, label: &str) -> Result<T> {
+    value
+        .trim()
+        .parse()
+        .map_err(|_| anyhow::anyhow!("{label}必须为非负整数。"))
 }
 
 pub(super) fn validate_disabled(capabilities: &[Capability], tools: &[String]) -> Result<()> {

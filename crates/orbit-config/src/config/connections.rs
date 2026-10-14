@@ -1,6 +1,7 @@
 //! Shared connection persistence for official and custom providers.
 pub mod edit;
 pub mod mcp;
+pub mod models;
 use std::io::Write;
 
 use anyhow::{Context, Result, ensure};
@@ -11,6 +12,14 @@ use crate::{
     models::ModelOption,
 };
 pub mod document;
+
+const MAX_CONNECTION_NAME_BYTES: usize = 128;
+
+fn valid_name(name: &str) -> bool {
+    !name.trim().is_empty()
+        && name.len() <= MAX_CONNECTION_NAME_BYTES
+        && !name.chars().any(char::is_control)
+}
 
 pub fn append_profile(
     path: &std::path::Path,
@@ -85,10 +94,7 @@ pub fn prepare_provider(
     name: &str,
     provider: &ProviderSpec,
 ) -> Result<(String, String)> {
-    ensure!(
-        !name.trim().is_empty() && name.len() <= 128 && !name.chars().any(char::is_control),
-        "连接名称无效"
-    );
+    ensure!(valid_name(name), "连接名称无效");
     let original = read_config(path)?;
     let config: crate::config::FileConfig = toml::from_str(&original)?;
     ensure!(
@@ -159,10 +165,13 @@ pub async fn save_account(
         OAuthProvider::Antigravity => "https://daily-cloudcode-pa.googleapis.com/",
         OAuthProvider::Google => "https://cloudcode-pa.googleapis.com/",
         OAuthProvider::Chatgpt => "https://chatgpt.com/backend-api/codex/",
-        OAuthProvider::Anthropic => unreachable!(),
+        OAuthProvider::Anthropic => "https://api.anthropic.com/",
     };
 
-    append_profile(path, auth_directory, provider.name(), format, endpoint)?;
+    let models = append_profile(path, auth_directory, provider.name(), format, endpoint)?;
+    if provider == OAuthProvider::Anthropic {
+        return Ok(models);
+    }
     let mut config = crate::config::FileConfig::load(path, auth_directory)?;
     let diagnostics = crate::models::updater::refresh(&mut config, true)
         .await
