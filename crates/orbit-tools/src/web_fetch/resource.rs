@@ -11,6 +11,14 @@ pub async fn fetch_image(value: &str) -> Result<Vec<u8>, ToolError> {
 
 impl WebClient {
     pub async fn fetch_image(&self, value: &str) -> Result<Vec<u8>, ToolError> {
+        Ok(self
+            .fetch_image_resource(value)
+            .await?
+            .bytes)
+    }
+
+    /// Fetch a validated image and its media type using this client's network policy.
+    pub async fn fetch_image_resource(&self, value: &str) -> Result<ImageResource, ToolError> {
         tokio::time::timeout(RESOURCE_TIMEOUT, fetch(value, self, Resource::Image))
             .await
             .map_err(|_| failed("图片请求超时"))?
@@ -21,14 +29,20 @@ impl WebClient {
         value: &str,
         max_bytes: usize,
     ) -> Result<serde_json::Value, ToolError> {
-        let bytes = tokio::time::timeout(
+        let resource = tokio::time::timeout(
             RESOURCE_TIMEOUT,
             fetch(value, self, Resource::Json(max_bytes)),
         )
         .await
         .map_err(|_| failed("JSON 请求超时"))??;
-        serde_json::from_slice(&bytes).map_err(failed)
+        serde_json::from_slice(&resource.bytes).map_err(failed)
     }
+}
+
+/// An accepted image response, bounded before it reaches a renderer.
+pub struct ImageResource {
+    pub bytes: Vec<u8>,
+    pub media_type: String,
 }
 
 #[derive(Clone, Copy)]
@@ -37,7 +51,11 @@ enum Resource {
     Json(usize),
 }
 
-async fn fetch(value: &str, client: &WebClient, resource: Resource) -> Result<Vec<u8>, ToolError> {
+async fn fetch(
+    value: &str,
+    client: &WebClient,
+    resource: Resource,
+) -> Result<ImageResource, ToolError> {
     let mut url = client.checked_url(value)?;
     let mut clients = RequestClients::default();
     let mut visited = std::collections::HashSet::new();
@@ -134,7 +152,9 @@ async fn fetch(value: &str, client: &WebClient, resource: Resource) -> Result<Ve
             ),
             Resource::Json(limit) => (limit, "JSON 超过大小限制"),
         };
-        return read_body_limit(response, limit, message).await;
+        let media_type = media.to_owned();
+        let bytes = read_body_limit(response, limit, message).await?;
+        return Ok(ImageResource { bytes, media_type });
     }
 
     Err(failed("too many redirects"))

@@ -14,7 +14,7 @@ mod browser;
 mod dom;
 mod encoding;
 mod resource;
-pub use resource::fetch_image;
+pub use resource::{ImageResource, fetch_image};
 mod proxy;
 mod quality;
 pub use proxy::WebClient;
