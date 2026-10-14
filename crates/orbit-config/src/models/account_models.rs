@@ -16,6 +16,7 @@ use sha2::{Digest, Sha256};
 use crate::config::{
     FileConfig, MIN_CONTEXT_TOKENS, ModelProfile, ProviderConfig, ReasoningProfile,
 };
+mod antigravity;
 
 pub(crate) async fn refresh_connections(
     config: &mut FileConfig,
@@ -247,7 +248,7 @@ fn read_cache(path: &Path, binding: &Value) -> Option<Value> {
 
 pub fn normalize(format: ApiFormat, payload: &Value) -> Result<(Vec<ModelProfile>, Vec<String>)> {
     let mut models = Vec::new();
-    let mut unavailable = Vec::new();
+    let unavailable = Vec::new();
     if matches!(
         format,
         ApiFormat::OpenaiChatCompletions
@@ -357,52 +358,7 @@ pub fn normalize(format: ApiFormat, payload: &Value) -> Result<(Vec<ModelProfile
 
         ensure!(!models.is_empty(), "配额接口未返回模型 ID，保留现有目录");
     } else {
-        let entries = payload["models"]
-            .as_object()
-            .context("模型目录缺少 models 对象")?;
-        let bundled = orbit_model::account_catalog::antigravity_models();
-        for (wire, entry) in entries {
-            if entry["isInternal"] == true || matches!(wire.as_str(), "chat_20706" | "chat_23310") {
-                continue;
-            }
-            if payload["imageGenerationModelIds"]
-                .as_array()
-                .is_some_and(|ids| ids.contains(&json!(wire)))
-                || wire.contains("-image")
-                || wire.starts_with("tab_")
-            {
-                unavailable.push(wire.clone());
-                continue;
-            }
-            // OMP taxonomy/_collapse.kdl: tiered selectors are aliases;
-            // gemini-3.1-pro-high was retired in favor of gemini-pro-agent.
-            let alias = if wire == "gemini-3.1-pro-high" {
-                "gemini-3.1-pro"
-            } else {
-                wire.strip_suffix("-tiered").unwrap_or(wire)
-            };
-            let logical = bundled.iter().find(|(id, spec)| {
-                *id == alias
-                    || spec.request_model_id.as_ref() == Some(wire)
-                    || spec
-                        .thinking
-                        .as_ref()
-                        .and_then(|t| t["effortRouting"].as_object())
-                        .is_some_and(|routes| routes.values().any(|v| v == wire))
-            });
-            let id = logical.map_or(wire.as_str(), |(id, _)| id.as_str());
-            if models.iter().any(|model| model.id == id) {
-                continue;
-            }
-            let reasoning = logical.and_then(|(_, spec)| spec.thinking.as_ref()).map(|thinking|
-                json!({ "adapter": "google", "efforts": thinking["efforts"], "default": "high" }));
-            models.push(profile(
-                id,
-                entry["maxTokens"].as_u64().unwrap_or(200000) as usize,
-                entry["supportsImages"] == true,
-                reasoning,
-            )?);
-        }
+        return antigravity::normalize(payload);
     }
 
     Ok((models, unavailable))

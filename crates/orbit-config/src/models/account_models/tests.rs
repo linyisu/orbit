@@ -494,6 +494,162 @@ fn antigravity_keeps_unknown_models_and_collapses_known_routes() {
 }
 
 #[test]
+fn antigravity_refresh_uses_agent_selectors_instead_of_the_full_definition_table() {
+    let mut provider = crate::test_support::TestProvider::new("test")
+        .format(ApiFormat::GoogleCodeAssist)
+        .endpoint("https://daily-cloudcode-pa.googleapis.com")
+        .models([crate::test_support::TestModel::new("claude-sonnet-4-6").context(123456)])
+        .automatic()
+        .build();
+    let mut payload = json!({
+        "models": {
+            "gemini-3.7-flash-high": {"maxTokens": 1048576},
+            "gemini-3.8-flash-high": {"maxTokens": 1048576},
+            "gemini-3.8-flash-medium": {"maxTokens": 1048576},
+            "gemini-3.8-flash-low": {"maxTokens": 1048576},
+            "claude-sonnet-4-6": {"maxTokens": 250000},
+            "claude-opus-4-6-thinking": {"maxTokens": 250000},
+            "gpt-oss-120b-medium": {"maxTokens": 131072},
+            "gemini-4-argon-disabled": {"disabled": true},
+            "gemini-2.5-pro": {"maxTokens": 1048576}
+        },
+        "agentModelSorts": [{"groups": [{"modelIds": [
+            "gemini-3.7-flash-high", "gemini-3.8-flash-high",
+            "gemini-3.8-flash-medium", "gemini-3.8-flash-low",
+            "claude-sonnet-4-6", "claude-opus-4-6-thinking",
+            "gpt-oss-120b-medium", "gemini-4-argon-disabled"
+        ]}]}]
+    });
+    merge_discovered_models(
+        &mut provider,
+        normalize(ApiFormat::GoogleCodeAssist, &payload).unwrap().0,
+    );
+    assert_eq!(provider.models.len(), 5);
+    // Retired models remain defined for other workflows, but disappear from
+    // the account's Agent selectors. A successful refresh must remove them.
+    payload["agentModelSorts"][0]["groups"][0]["modelIds"]
+        .as_array_mut()
+        .unwrap()
+        .remove(0);
+    let models = normalize(ApiFormat::GoogleCodeAssist, &payload).unwrap().0;
+    merge_discovered_models(&mut provider, models);
+    let ids = provider
+        .models
+        .iter()
+        .map(|model| model.id.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        ids,
+        [
+            "claude-opus-4-6",
+            "claude-sonnet-4-6",
+            "gemini-3.8-flash",
+            "gpt-oss-120b"
+        ]
+        .into_iter()
+        .collect()
+    );
+    assert_eq!(
+        provider
+            .models
+            .iter()
+            .find(|model| model.id == "claude-sonnet-4-6")
+            .unwrap()
+            .context_tokens,
+        Some(123456)
+    );
+    provider.resolve();
+    assert_eq!(provider.models.len(), 4);
+}
+
+#[test]
+fn antigravity_empty_agent_selectors_clear_the_catalog_but_missing_selectors_remain_compatible() {
+    let mut payload = json!({"models":{"future-model":{},"disabled-model":{"disabled":true}},"agentModelSorts":[]});
+    assert!(
+        normalize(ApiFormat::GoogleCodeAssist, &payload)
+            .unwrap()
+            .0
+            .is_empty()
+    );
+    payload.as_object_mut().unwrap().remove("agentModelSorts");
+    let models = normalize(ApiFormat::GoogleCodeAssist, &payload).unwrap().0;
+    assert_eq!(models.len(), 1);
+    assert_eq!(models[0].id, "future-model");
+    payload["agentModelSorts"] = json!([{"groups":[{"modelIds":"malformed"}]}]);
+    assert!(normalize(ApiFormat::GoogleCodeAssist, &payload).is_err());
+}
+
+#[test]
+fn antigravity_uses_every_selector_group_and_excludes_deprecated_models() {
+    let payload = json!({
+        "models":{"a":{},"b":{},"retired":{},"defined-only":{}},
+        "deprecatedModelIds":{"retired":{"newModelId":"b"}},
+        "agentModelSorts":[
+            {"groups":[{"modelIds":["a","retired"]}]},
+            {"groups":[{"modelIds":["b"]},{"modelIds":["a"]}]}
+        ]
+    });
+    let models = normalize(ApiFormat::GoogleCodeAssist, &payload).unwrap().0;
+    assert_eq!(
+        models
+            .iter()
+            .map(|model| model.id.as_str())
+            .collect::<Vec<_>>(),
+        ["a", "b"]
+    );
+}
+
+#[tokio::test]
+async fn antigravity_cached_refresh_does_not_restore_unselectable_definitions() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut provider = crate::test_support::TestProvider::new("account")
+        .format(ApiFormat::GoogleCodeAssist)
+        .endpoint("https://daily-cloudcode-pa.googleapis.com")
+        .automatic()
+        .build();
+    let binding = json!({"version":2,"identity":{"key_fingerprint":fingerprint("")},
+        "format":ApiFormat::GoogleCodeAssist,"endpoint":provider.base_url});
+    let cache_dir = directory.path().join("model-catalog");
+    std::fs::create_dir(&cache_dir).unwrap();
+    let cache = cache_dir.join(format!("{}.json", fingerprint("account")));
+    let mut payload = json!({
+        "models":{"live-model":{},"retired-model":{},"disabled-model":{"disabled":true}},
+        "agentModelSorts":[{"groups":[{"modelIds":["live-model","disabled-model"]}]}]
+    });
+    let mut diagnostics = Vec::new();
+    for expected in [vec!["live-model"], vec![]] {
+        std::fs::write(
+            &cache,
+            serde_json::to_vec(&json!({"binding":binding,"payload":payload})).unwrap(),
+        )
+        .unwrap();
+        // Exercise the shared cache/resolve path without credentials or any
+        // network access, including an authoritative empty account catalogue.
+        refresh_provider(
+            "account",
+            &mut provider,
+            directory.path(),
+            false,
+            false,
+            &mut diagnostics,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            provider
+                .models
+                .iter()
+                .map(|model| model.id.as_str())
+                .collect::<Vec<_>>(),
+            expected
+        );
+        assert!(provider.spec.models.is_auto());
+        payload["agentModelSorts"] = json!([]);
+    }
+    assert!(diagnostics.is_empty());
+}
+
+#[test]
 fn deepseek_refresh_uses_advertised_models_without_inventing_capabilities() {
     let payload = json!({ "data": [{ "id": "future-model" }] });
 
