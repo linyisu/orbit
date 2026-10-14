@@ -531,7 +531,7 @@ index b184f0b7..6bc5cbf9 100644
                  && let Some(text_view_state) = GlobalState::global(cx).text_view_state()
              {
 diff --git a/crates/base/src/text/inline_flow.rs b/crates/base/src/text/inline_flow.rs
-index 7e06a421..99324b47 100644
+index 7e06a421..a52b18be 100644
 --- a/crates/base/src/text/inline_flow.rs
 +++ b/crates/base/src/text/inline_flow.rs
 @@ -10,8 +10,9 @@ use gpui::{
@@ -697,7 +697,156 @@ index 7e06a421..99324b47 100644
          fragments,
          size: size(max_width, y),
          wrap_width,
-@@ -1743,6 +1777,53 @@ mod tests {
+@@ -1144,6 +1178,104 @@ fn code_background(
+     })
+ }
+ 
++/// Unicode boundaries in the flow's byte space, with inline objects kept indivisible.
++struct LineBreaks {
++    allowed: Vec<usize>,
++    emergency: Vec<usize>,
++    graphemes: Vec<usize>,
++}
++
++impl LineBreaks {
++    fn new(items: &[MeasureItem]) -> Self {
++        use unicode_linebreak::{BreakClass, break_property};
++        let mut text = String::new();
++        let mut offsets = vec![(0, 0)];
++        let mut flow_offset = 0;
++        for item in items {
++            match item {
++                MeasureItem::Text { text: value, .. } => {
++                    for character in value.chars() {
++                        text.push(character);
++                        flow_offset += character.len_utf8();
++                        offsets.push((text.len(), flow_offset));
++                    }
++                }
++                _ => {
++                    text.push('\u{fffc}');
++                    flow_offset += IMAGE_LEN;
++                    offsets.push((text.len(), flow_offset));
++                }
++            }
++        }
++        let flow_index = |index| {
++            offsets[offsets
++                .binary_search_by_key(&index, |&(source, _)| source)
++                .unwrap()]
++            .1
++        };
++        let mut graphemes = Vec::new();
++        let mut emergency = Vec::new();
++        for (index, grapheme) in text.grapheme_indices(true) {
++            let end = index + grapheme.len();
++            let flow_end = flow_index(end);
++            graphemes.push(flow_end);
++            let before = grapheme
++                .chars()
++                .next_back()
++                .map(|c| break_property(c as u32));
++            let after = text[end..].chars().next().map(|c| break_property(c as u32));
++            if before != Some(BreakClass::OpenPunctuation)
++                && !matches!(
++                    after,
++                    Some(
++                        BreakClass::ClosePunctuation
++                            | BreakClass::CloseParenthesis
++                            | BreakClass::Exclamation
++                            | BreakClass::NonStarter
++                            | BreakClass::InfixSeparator
++                    )
++                )
++            {
++                emergency.push(flow_end);
++            }
++        }
++        let allowed = unicode_linebreak::linebreaks(&text)
++            .map(|(index, _)| flow_index(index))
++            .filter(|index| graphemes.binary_search(index).is_ok())
++            .collect();
++        Self {
++            allowed,
++            emergency,
++            graphemes,
++        }
++    }
++
++    /// Prefer a legal Unicode break without splitting a fitting inline-code atom.
++    fn before(&self, start: usize, end: usize, hard_end: usize, atoms: &[Range<usize>]) -> usize {
++        if end >= hard_end {
++            return hard_end;
++        }
++        let fitting = |index: &&usize| {
++            **index > start
++                && !atoms
++                    .iter()
++                    .any(|atom| atom.start < **index && **index < atom.end)
++        };
++        for candidates in [&self.allowed, &self.emergency] {
++            let count = candidates.partition_point(|&index| index <= end);
++            if let Some(&index) = candidates[..count].iter().rev().find(fitting) {
++                return index;
++            }
++        }
++        // An overwide grapheme or punctuation group still advances; no UTF-8 or emoji split.
++        self.graphemes
++            .iter()
++            .copied()
++            .find(|&index| index > start)
++            .unwrap_or(hard_end)
++    }
++}
++
+ fn line_ranges(
+     items: &[MeasureItem],
+     image_sizes: &[Option<Size<Pixels>>],
+@@ -1178,6 +1310,7 @@ fn line_ranges(
+         .text_system()
+         .line_wrapper(text_style.font(), font_size);
+     let mut ranges = Vec::new();
++    let breaks = std::cell::OnceCell::new();
+ 
+     for hard_line in hard_lines {
+         let mut item_start = 0;
+@@ -1224,6 +1357,20 @@ fn line_ranges(
+             item_start = item_end;
+         }
+ 
++        let mut offset = hard_line.start;
++        let atoms = wrap_fragments
++            .iter()
++            .filter_map(|fragment| {
++                let (len, atomic) = match fragment {
++                    WrapLineFragment::Text { text } => (text.len(), false),
++                    WrapLineFragment::Element { len_utf8, .. } => (*len_utf8, true),
++                };
++                let range = offset..offset + len;
++                offset += len;
++                atomic.then_some(range)
++            })
++            .collect::<Vec<_>>();
++
+         // The wrapper sums per-character widths, which can be narrower than the
+         // shaped run (CoreText sets an isolated full-width `，` at half width).
+         // Check each line against the shaped spans and re-wrap it tighter when
+@@ -1259,6 +1406,14 @@ fn line_ranges(
+             if end < hard_line.end && spans_width(&spans, start..hard_line.end) <= wrap_width {
+                 end = hard_line.end;
+             }
++            if end < hard_line.end {
++                end = breaks.get_or_init(|| LineBreaks::new(items)).before(
++                    start,
++                    end,
++                    hard_line.end,
++                    &atoms,
++                );
++            }
+             ranges.push(start..end);
+             start = end;
+         }
+@@ -1743,6 +1898,53 @@ mod tests {
          }
      }
  
@@ -751,8 +900,63 @@ index 7e06a421..99324b47 100644
      #[test]
      fn atomic_objects_wrap_and_share_a_baseline_at_multiple_font_sizes() {
          use super::super::inline::test_draw::in_prepaint;
+@@ -2145,4 +2347,54 @@ mod tests {
+             });
+         }
+     }
++
++    #[test]
++    fn unicode_wrap_keeps_closing_punctuation_with_text_and_code() {
++        use super::super::inline::test_fonts::{BODY, MONO, WideMonoTextSystem};
++        use gpui::{Empty, TestApp};
++        let mut app = TestApp::with_text_system(Arc::new(WideMonoTextSystem));
++        let mut window = app.open_window(|_, _| Empty);
++        window.update(|_, window, cx| {
++            for size in [12., 16., 20., 24.] {
++                let style = TextStyle {
++                    font_family: BODY.into(),
++                    font_size: px(size).into(),
++                    ..Default::default()
++                };
++                for (open, close) in [('(', ')'), ('（', '）'), ('[', ']'), ('「', '」')] {
++                    let text = format!("图纸{open}标记 tag_9 归档完成{close}");
++                    let code_start = text.find("tag_9").unwrap();
++                    for code in [false, true] {
++                        let items = vec![MeasureItem::Text {
++                            text: text.clone().into(),
++                            links: vec![],
++                            highlights: if code {
++                                vec![(code_start..code_start + 5, InlineHighlight {
++                                    font_family: Some(MONO.into()),
++                                    font_size_scale: Some(0.875),
++                                    ..Default::default()
++                                })]
++                            } else { vec![] },
++                        }];
++                        for width in (96..480).step_by(7) {
++                            let layout = layout_flow(&items, &[None], &style, Some(px(width as f32)), window, cx);
++                            let rows = layout.lines.iter().map(|(range, _)| {
++                                layout.fragments[range.clone()].iter().filter_map(|fragment| {
++                                    match fragment {
++                                        PositionedFragment::Text { text, .. } => Some(text.as_ref()),
++                                        _ => None,
++                                    }
++                                }).collect::<String>()
++                            }).collect::<Vec<_>>();
++                            assert_eq!(rows.concat(), text, "text must survive wrapping");
++                            for row in rows {
++                                assert!(!row.trim_start().starts_with(close), "orphan {close} at size={size}, width={width}, code={code}: {row:?}");
++                                assert!(!row.trim_end().ends_with(open), "orphan {open} at size={size}, width={width}, code={code}: {row:?}");
++                            }
++                        }
++                    }
++                }
++            }
++        });
++    }
+ }
 diff --git a/crates/base/src/text/node.rs b/crates/base/src/text/node.rs
-index 11147620..cf53d156 100644
+index 11147620..23bd091e 100644
 --- a/crates/base/src/text/node.rs
 +++ b/crates/base/src/text/node.rs
 @@ -2197,35 +2197,62 @@ impl CodeBlock {
@@ -890,7 +1094,49 @@ index 11147620..cf53d156 100644
      }
  
      pub(super) fn add_ref(&mut self, identifier: SharedString, link: LinkMark) {
-@@ -2945,12 +2959,14 @@ fn table_cell_padding_x(style: &TextViewStyle, rem_size: Pixels) -> f32 {
+@@ -2466,12 +2480,7 @@ impl Paragraph {
+         let backgrounds = node_cx.range_backgrounds(fade_key);
+ 
+         if self.should_render_inline_flow() {
+-            return InlineFlow::new(
+-                leaf_element_id(fade_key),
+-                self.inline_flow_items(fade_key, fades, backgrounds, node_cx, cx),
+-                node_cx.link_click_handler.clone(),
+-            )
+-            .into_any_element();
++            return self.render_flow(fade_key, node_cx, cx);
+         }
+ 
+         let has_image = children.iter().any(|child| child.image.is_some());
+@@ -2650,6 +2659,27 @@ impl Paragraph {
+             .into_any_element()
+     }
+ 
++    /// Table cells and mixed paragraphs share Unicode-aware inline wrapping and selection.
++    fn render_flow(
++        &self,
++        fade_key: Option<TextLeafKey>,
++        node_cx: &NodeContext,
++        cx: &mut App,
++    ) -> AnyElement {
++        InlineFlow::new(
++            leaf_element_id(fade_key),
++            self.inline_flow_items(
++                fade_key,
++                node_cx.stream_fades(fade_key),
++                node_cx.range_backgrounds(fade_key),
++                node_cx,
++                cx,
++            ),
++            node_cx.link_click_handler.clone(),
++        )
++        .into_any_element()
++    }
++
+     fn should_render_inline_flow(&self) -> bool {
+         let has_image = self.children.iter().any(|child| child.image.is_some());
+         let has_text = self.children.iter().any(|child| !child.text.is_empty());
+@@ -2945,12 +2975,14 @@ fn table_cell_padding_x(style: &TextViewStyle, rem_size: Pixels) -> f32 {
      let padding = &style.table_cell().padding;
      let side = |length: Option<DefiniteLength>| match length {
          Some(DefiniteLength::Absolute(length)) => f32::from(length.to_pixels(rem_size)),
@@ -907,7 +1153,7 @@ index 11147620..cf53d156 100644
  const CELL_MIN_PX: f32 = 48.0;
  const CELL_BORDER_PX: f32 = 1.0; // border_r_1 drawn by every column but the last
  
-@@ -3656,6 +3672,15 @@ impl BlockNode {
+@@ -3656,6 +3688,15 @@ impl BlockNode {
          div()
              .pb(block_gap(options, style))
              .w_full()
@@ -923,6 +1169,15 @@ index 11147620..cf53d156 100644
              .child(body)
              // Custom actions row (e.g. copy / download) rendered below the
              // table. The hook's element spans full width; alignment is up to
+@@ -3757,7 +3798,7 @@ impl BlockNode {
+                         .span
+                         .map(|span| TextLeafKey::table_cell(span.start, cell_ordinal));
+                     cell_ordinal += 1;
+-                    cell.children.render(fade_key, node_cx, window, cx)
++                    cell.children.render_flow(fade_key, node_cx, cx)
+                 });
+ 
+                 let grow = SLACK_GROW * column.max / total_w;
 diff --git a/crates/base/src/text/state.rs b/crates/base/src/text/state.rs
 index 81d8a9aa..7fc11403 100644
 --- a/crates/base/src/text/state.rs
