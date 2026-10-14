@@ -1,5 +1,7 @@
 //! A virtualized conversation of user turns, each with one execution disclosure.
+mod images;
 mod markdown;
+pub(crate) use images::ImageRequest;
 mod model;
 mod navigation;
 mod process;
@@ -24,6 +26,7 @@ use process_height::ProcessHeight;
 use std::{cell::Cell, rc::Rc, sync::Arc};
 
 pub(crate) struct Conversation {
+    _subscriptions: Vec<Subscription>,
     transcript: Transcript,
     rows: Vec<Entity<TurnView>>,
     scroll: Entity<MessageScrollerState>,
@@ -49,10 +52,15 @@ struct TurnView {
     viewport_bounds: Rc<Cell<Bounds<Pixels>>>,
     _subscriptions: Vec<Subscription>,
 }
+struct LayoutChanged {
+    index: usize,
+}
 struct Disclosure {
     index: usize,
 }
 struct MessageRow {
+    _reply_images: Option<Entity<images::ReplyImages>>,
+    _subscriptions: Vec<Subscription>,
     index: usize,
     title: SharedString,
     text: Entity<TextViewState>,
@@ -71,6 +79,10 @@ struct MessageImage {
     dimensions: Option<(u32, u32)>,
 }
 impl EventEmitter<Disclosure> for MessageRow {}
+impl EventEmitter<LayoutChanged> for MessageRow {}
+impl EventEmitter<ImageRequest> for MessageRow {}
+impl EventEmitter<ImageRequest> for TurnView {}
+impl EventEmitter<ImageRequest> for Conversation {}
 impl Conversation {
     pub(crate) fn new(cx: &mut Context<Self>) -> Self {
         let scroll = cx.new(|cx| MessageScrollerState::new(0, cx));
@@ -79,6 +91,7 @@ impl Conversation {
             cx.new(|cx| navigation::Navigation::new(scroll.clone(), viewport_height.clone(), cx));
         let navigation_controls = cx.new(|cx| navigation::Controls::new(navigation.clone(), cx));
         Self {
+            _subscriptions: vec![],
             navigation,
             navigation_controls,
             transcript: Transcript::default(),
@@ -115,7 +128,7 @@ impl Conversation {
         };
         while self.rows.len() < self.transcript.turns.len() {
             let index = self.rows.len();
-            self.rows.push(cx.new(|cx| {
+            let row = cx.new(|cx| {
                 TurnView::new(
                     index * 2 + 1,
                     self.scroll.clone(),
@@ -123,7 +136,12 @@ impl Conversation {
                     self.viewport_bounds.clone(),
                     cx,
                 )
-            }));
+            });
+            self._subscriptions
+                .push(cx.subscribe(&row, |_, _, request: &ImageRequest, cx| {
+                    cx.emit(request.clone());
+                }));
+            self.rows.push(row);
             // Keep the prompt and its response in separate virtual rows. A
             // disclosure can then reveal its header without scrolling back
             // through a potentially very long user message.
@@ -263,6 +281,23 @@ impl TurnView {
             let row = cx.new(|cx| {
                 MessageRow::new(index, &part.content, part.kind != Kind::Text, false, cx)
             });
+            self._subscriptions
+                .push(cx.subscribe(&row, |_, _, request: &ImageRequest, cx| {
+                    cx.emit(request.clone());
+                }));
+            self._subscriptions
+                .push(cx.subscribe(&row, |view, _, event: &LayoutChanged, cx| {
+                    view.process_height.refresh();
+                    if let Some(index) = view.process.iter().position(|part| *part == event.index) {
+                        view.process_scroll.update(cx, |scroll, cx| {
+                            scroll.remeasure_items(index..index + 1, cx);
+                        });
+                    }
+                    view.scroll.update(cx, |scroll, cx| {
+                        scroll.remeasure_items(view.index..view.index + 1, cx);
+                    });
+                    cx.notify();
+                }));
             self._subscriptions
                 .push(cx.subscribe(&row, |view, _, event: &Disclosure, cx| {
                     view.process_height.refresh();
@@ -620,18 +655,36 @@ impl Render for Conversation {
 
 impl MessageRow {
     fn new(index: usize, source: &str, muted: bool, user: bool, cx: &mut Context<Self>) -> Self {
+        let text = cx.new(|cx| {
+            if user {
+                // User input remains literal, including pasted code.
+                TextViewState::markdown("", cx)
+            } else {
+                TextViewState::markdown(&markdown::prose(if muted { "" } else { source }), cx)
+            }
+        });
+        let mut subscriptions = vec![];
+        let reply_images = (!user).then(|| {
+            let images = cx.new(images::ReplyImages::new);
+            let resolver = images::ReplyImages::resolver(&images, cx);
+            text.update(cx, |text, cx| text.set_image_source_override(resolver, cx));
+            subscriptions.push(cx.subscribe(&images, |_, _, request: &ImageRequest, cx| {
+                cx.emit(request.clone());
+            }));
+            subscriptions.push(cx.observe(&images, |row, _, cx| {
+                row.text
+                    .update(cx, |text, cx| text.invalidate_inline_layout(cx));
+                cx.emit(LayoutChanged { index: row.index });
+                cx.notify();
+            }));
+            images
+        });
         Self {
             index,
+            _reply_images: reply_images,
+            _subscriptions: subscriptions,
             title: "".into(),
-            text: cx.new(|cx| {
-                if user {
-                    // User messages are source text, never Markdown. In particular,
-                    // indentation and punctuation in pasted code must stay literal.
-                    TextViewState::markdown("", cx)
-                } else {
-                    TextViewState::markdown(&markdown::prose(if muted { "" } else { source }), cx)
-                }
-            }),
+            text,
             literal: user.then(|| source.to_owned().into()),
             viewport: None,
             source_len: source.len(),

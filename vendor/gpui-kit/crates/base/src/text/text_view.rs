@@ -94,7 +94,7 @@ impl TextViewDefaults {
 pub(crate) type TableActionsFn =
     dyn Fn(&TableData, &mut Window, &mut App) -> AnyElement + Send + Sync;
 
-pub(crate) type ImageSourceFn = dyn Fn(&gpui::SharedUri) -> gpui::ImageSource + Send + Sync;
+pub(crate) type ImageSourceFn = dyn Fn(&gpui::SharedUri) -> Option<gpui::ImageSource> + Send + Sync;
 
 pub(crate) type LinkClickHandlerFn =
     dyn Fn(&SharedString, &ClickEvent, &mut Window, &mut App) + Send + Sync;
@@ -266,7 +266,7 @@ impl TextView {
     where
         F: Fn(&gpui::SharedUri) -> gpui::ImageSource + Send + Sync + 'static,
     {
-        self.image_source = Some(Arc::new(resolver));
+        self.image_source = Some(Arc::new(move |uri| Some(resolver(uri))));
         self
     }
 
@@ -2761,10 +2761,12 @@ mod tests {
             text_view: Entity<TextViewState>,
             width: Pixels,
             style: TextViewStyle,
+            rem_size: Pixels,
         }
 
         impl Render for TableRoot {
-            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            fn render(&mut self, window: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                window.set_rem_size(self.rem_size);
                 div()
                     .w(self.width)
                     .child(TextView::new(&self.text_view).style(self.style.clone()))
@@ -2773,11 +2775,11 @@ mod tests {
 
         let short = "Operating revenue (USD)";
         let source = format!(
-            "| {short} | Note |\n| --- | --- |\n| {short} | x |\n| 1 | {} |",
+            "| {short} | Note |\n| --- | --- |\n| {short} | x |\n| 1 | {} |\n| 1 | x |",
             "word ".repeat(30)
         );
         // Heights of the first column's cells, top to bottom.
-        let first_column = |width: f32, style: TextViewStyle| {
+        let first_column = |width: f32, style: TextViewStyle, rem_size: f32| {
             let mut app = TestApp::with_text_system(Arc::new(WideMonoTextSystem));
             app.update(crate::init);
             let cell = style.table_cell().clone().bg(gpui::rgb(CELL_BACKGROUND));
@@ -2785,6 +2787,7 @@ mod tests {
             let mut window = app.open_window(|_, cx| TableRoot {
                 text_view: cx.new(|cx| TextViewState::markdown(&source, cx)),
                 width: px(width),
+                rem_size: px(rem_size),
                 style,
             });
             window.draw();
@@ -2817,24 +2820,34 @@ mod tests {
         };
 
         for (layout, style) in [("wrap", TextViewStyle::default()), ("scroll", scroll())] {
-            let fits = first_column(4000., style.clone());
-            let narrow = first_column(700., style);
-            assert_eq!(fits.len(), 3, "{layout}: three rows");
-            assert_eq!(fits[0], fits[2], "{layout}: the header fits on one line");
-            assert_eq!(narrow[..2], fits[..2], "{layout}: the short column wraps");
+            for rem_size in [12., 16., 20., 24.] {
+                let fits = first_column(4000., style.clone(), rem_size);
+                // Leave room for the short column plus the scrolling long-column floor.
+                let narrow = first_column(700_f32.max(rem_size * 40.), style.clone(), rem_size);
+                assert_eq!(fits.len(), 4, "{layout}, rem={rem_size}: four rows");
+                assert_eq!(
+                    fits[0], fits[3],
+                    "{layout}, rem={rem_size}: the header fits on one line"
+                );
+                assert_eq!(
+                    narrow[..2],
+                    fits[..2],
+                    "{layout}, rem={rem_size}: the short column wraps"
+                );
+            }
         }
 
-        let single_line = first_column(4000., TextViewStyle::default())[0];
+        let single_line = first_column(4000., TextViewStyle::default(), 16.)[0];
         let padded = TextViewStyle::default().with_table_cell(StyleRefinement::default().px_4());
         assert_eq!(
-            first_column(4000., padded)[0],
+            first_column(4000., padded, 16.)[0],
             single_line,
             "the cell padding refinement leaves the text its measured width"
         );
         let bold = TextViewStyle::default()
             .with_table(StyleRefinement::default().font_weight(gpui::FontWeight::BOLD));
         assert_eq!(
-            first_column(4000., bold)[0],
+            first_column(4000., bold, 16.)[0],
             single_line,
             "the table text refinement is measured"
         );

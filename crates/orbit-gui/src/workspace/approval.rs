@@ -514,7 +514,11 @@ impl ApprovalContent {
                         .border_color(cx.theme().border)
                         .rounded_md()
                         .overflow_hidden()
-                        .child(Diff::new(&self.diff).header_visible(false)),
+                        .child(
+                            Diff::new(&self.diff)
+                                .single_line_number(true)
+                                .header_visible(false),
+                        ),
                 );
         } else {
             body = body.child(div().text_sm().child(if deleted {

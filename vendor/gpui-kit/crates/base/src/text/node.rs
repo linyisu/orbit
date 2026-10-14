@@ -2358,10 +2358,10 @@ pub(crate) struct NodeContext {
 
 impl NodeContext {
     fn image_source(&self, image: &ImageNode) -> ImageSource {
-        match &self.image_source {
-            Some(resolve) => resolve(&image.url),
-            None => image.source(),
-        }
+        self.image_source
+            .as_ref()
+            .and_then(|resolve| resolve(&image.url))
+            .unwrap_or_else(|| image.source())
     }
 
     pub(super) fn add_ref(&mut self, identifier: SharedString, link: LinkMark) {
@@ -2959,12 +2959,14 @@ fn table_cell_padding_x(style: &TextViewStyle, rem_size: Pixels) -> f32 {
     let padding = &style.table_cell().padding;
     let side = |length: Option<DefiniteLength>| match length {
         Some(DefiniteLength::Absolute(length)) => f32::from(length.to_pixels(rem_size)),
-        _ => CELL_PAD_PX / 2.,
+        _ => f32::from(rems(0.75).to_pixels(rem_size)),
     };
     side(padding.left) + side(padding.right)
 }
 
-const CELL_PAD_PX: f32 = 24.0; // px_3 horizontal padding
+// Cached widths use the default padding at 16px rem; layout adds the
+// difference for the actual rem and any cell padding refinement.
+const CELL_PAD_PX: f32 = 24.0;
 const CELL_MIN_PX: f32 = 48.0;
 const CELL_BORDER_PX: f32 = 1.0; // border_r_1 drawn by every column but the last
 

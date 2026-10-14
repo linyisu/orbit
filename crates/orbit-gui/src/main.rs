@@ -4,6 +4,7 @@ mod assets;
 mod backend;
 mod conversation;
 mod execution;
+mod image_http;
 mod image_preview;
 mod keymap;
 mod math;
@@ -30,6 +31,9 @@ fn main() -> anyhow::Result<()> {
     let (loaded, _writer) = workbench::storage::Storage::load(&options)?;
     gpui_kit::application()
         .with_assets(assets::AppAssets)
+        .with_http_client(Arc::new(image_http::ImageHttpClient::new(
+            runtime.handle().clone(),
+        )?))
         .run(move |cx| {
             gpui_kit::init(cx);
             image_preview::init(cx);

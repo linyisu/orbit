@@ -3727,7 +3727,6 @@ dependencies = [
 [[package]]
 name = "gpui-component"
 version = "0.7.1"
-source = "git+https://github.com/longbridge/gpui-kit?rev=1ccf011620da24d633f7cd6d3c11ca2e97798dcf#1ccf011620da24d633f7cd6d3c11ca2e97798dcf"
 dependencies = [
  "anyhow",
  "chrono",
@@ -7344,6 +7343,7 @@ dependencies = [
  "ratex-parser",
  "ratex-svg",
  "ratex-types",
+ "reqwest",
  "resvg 0.46.0",
  "serde",
  "serde_json",
@@ -7351,6 +7351,7 @@ dependencies = [
  "syntect",
  "tempfile",
  "tokio",
+ "url",
 ]
 
 [[package]]

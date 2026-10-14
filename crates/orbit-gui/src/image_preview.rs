@@ -107,9 +107,18 @@ fn close(window: &mut Window, cx: &mut App) {
 }
 
 fn load_image(path: PathBuf) -> Result<(Arc<Image>, (u32, u32)), SharedString> {
-    let bytes = std::fs::read(path).map_err(|error| SharedString::from(error.to_string()))?;
-    let format = image::guess_format(&bytes)
-        .map_err(|error| SharedString::from(format!("无法识别图片：{error}")))?;
+    let bytes = orbit_model::types::Attachment::read_image_bytes(&path)
+        .map_err(|error| SharedString::from(error.to_string()))?;
+    decode_image(bytes)
+}
+
+pub(crate) fn decode_image(bytes: Vec<u8>) -> Result<(Arc<Image>, (u32, u32)), SharedString> {
+    if bytes.len() > orbit_model::types::Attachment::MAX_IMAGE_BYTES {
+        return Err("图片超过 20 MiB".into());
+    }
+    let Ok(format) = image::guess_format(&bytes) else {
+        return decode_svg(&bytes);
+    };
     let dimensions = image::ImageReader::with_format(std::io::Cursor::new(&bytes), format)
         .into_dimensions()
         .map_err(|error| SharedString::from(format!("无法读取图片：{error}")))?;
@@ -121,6 +130,42 @@ fn load_image(path: PathBuf) -> Result<(Arc<Image>, (u32, u32)), SharedString> {
         _ => return Err("不支持的图片格式".into()),
     };
     Ok((Arc::new(Image::from_bytes(format, bytes)), dimensions))
+}
+
+fn decode_svg(bytes: &[u8]) -> Result<(Arc<Image>, (u32, u32)), SharedString> {
+    // Document images cannot read sibling files or absolute hrefs on the desktop.
+    let mut options = resvg::usvg::Options::default();
+    options.image_href_resolver.resolve_string = Box::new(|_, _| None);
+    static FONTS: std::sync::LazyLock<Arc<resvg::usvg::fontdb::Database>> =
+        std::sync::LazyLock::new(|| {
+            let mut fonts = resvg::usvg::fontdb::Database::new();
+            fonts.load_system_fonts();
+            Arc::new(fonts)
+        });
+    options.fontdb = FONTS.clone();
+    let tree = resvg::usvg::Tree::from_data(bytes, &options)
+        .map_err(|error| SharedString::from(format!("无法识别图片：{error}")))?;
+    let size = tree.size();
+    let dimensions = (size.width().ceil() as u32, size.height().ceil() as u32);
+    // SVG dimensions are source pixels; bound raster work independently of UI zoom.
+    let scale = (4096. / size.width().max(size.height())).min(1.);
+    let mut pixels = resvg::tiny_skia::Pixmap::new(
+        (size.width() * scale).ceil().max(1.) as u32,
+        (size.height() * scale).ceil().max(1.) as u32,
+    )
+    .ok_or_else(|| SharedString::from("图片尺寸无效"))?;
+    resvg::render(
+        &tree,
+        resvg::tiny_skia::Transform::from_scale(scale, scale),
+        &mut pixels.as_mut(),
+    );
+    let png = pixels
+        .encode_png()
+        .map_err(|error| SharedString::from(error.to_string()))?;
+    Ok((
+        Arc::new(Image::from_bytes(ImageFormat::Png, png)),
+        dimensions,
+    ))
 }
 
 impl ImagePreview {
@@ -235,6 +280,28 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn vector_images_are_rasterized_and_cannot_load_desktop_files() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("private.png");
+        image::RgbaImage::from_pixel(12, 8, image::Rgba([255, 0, 0, 255]))
+            .save(&path)
+            .unwrap();
+        let source = format!(
+            r#"<svg xmlns="http://www.w3.org/2000/svg" width="12" height="8"><image href="{}" width="12" height="8"/></svg>"#,
+            path.display()
+        );
+        let (image, dimensions) = super::decode_image(source.into_bytes()).unwrap();
+        assert_eq!(dimensions, (12, 8));
+        let raster = image::load_from_memory(image.bytes()).unwrap().into_rgba8();
+        assert!(raster.pixels().all(|pixel| pixel[3] == 0));
+        let (image, dimensions) = super::decode_image(br##"<svg xmlns="http://www.w3.org/2000/svg" width="8192" height="2048"><rect width="8192" height="2048" fill="#123456"/></svg>"##.to_vec()).unwrap();
+        assert_eq!(dimensions, (8192, 2048));
+        let raster = image::load_from_memory(image.bytes()).unwrap().into_rgba8();
+        assert_eq!(raster.dimensions(), (4096, 1024));
+        assert_eq!(raster.get_pixel(0, 0).0, [0x12, 0x34, 0x56, 255]);
     }
 
     #[test]

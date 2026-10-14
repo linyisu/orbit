@@ -1,36 +1,19 @@
-# GPUI Kit text selection patch
+# Orbit GPUI Kit patches
 
-Source: https://github.com/longbridge/gpui-kit, revision
+Upstream: [longbridge/gpui-kit](https://github.com/longbridge/gpui-kit), revision
 `1ccf011620da24d633f7cd6d3c11ca2e97798dcf` (Apache-2.0).
+`gpui-base` and `gpui-component` are vendored; other Kit crates use the same pinned revision.
 
-Only `gpui-base` is vendored. The other Kit crates retain the same pinned
-revision. The workspace manifest is trimmed to build this crate independently.
+Local changes:
 
-Orbit changes: inline-flow selection uses the shared row height and includes
-inline code padding at selected span boundaries. This keeps mixed prose/code
-selection continuous without changing text typography, wrapping or copied text.
+- Inline selection shares row height and includes code padding, keeping copied text and wrapping unchanged.
+- Code block headers use normal flow; capped blocks retain pinned controls.
+- Inline alignment applies once per line to glyphs, backgrounds, formulas and hit testing; nowrap tables use measured widths.
+- `ScrollContainment` lets children scroll, then consumes remaining wheel input before ancestor lists.
+- Sheets restore escaped focus on pointer-down so the close button's Cancel action reaches the sheet.
+- TextView can override local image sources while keeping built-in HTTP and data URL handling.
 
-Code blocks measure the language/actions header in normal flow instead of
-reserving a fixed empty line above the code. Language labels and actions can
-coexist, scale with the font, and cannot overlap the first code line. Explicitly
-height-capped scrolling blocks keep their existing pinned controls.
+- Table column widths account for rem-scaled default cell padding, so larger UI fonts do not wrap text inside otherwise wide columns.
+- Diff offers a single line-number lane in unified mode, including matching width measurement and source selection.
 
-Remove this Cargo patch once an upstream revision contains the equivalent fix.
-
-Mixed inline flows honor the final cell's text alignment, including nowrap
-cells and short final lines. Each whole line receives one translation shared
-by glyphs, code backgrounds, formula objects, hit testing and selection; the
-individual fragments stay left-aligned internally. Scrolling nowrap tables
-stop at their measured natural width instead of spreading spare space across
-columns, and still scroll horizontally when the viewport is narrower.
-
-`ScrollContainment` wraps capture-based scrollers such as `MessageScroller`.
-Child masks consume movement first; a final capture handler consumes unused
-wheel input at either edge or when the content fits, before ancestor virtual
-lists handle it. Orbit uses this boundary for execution details so scrolling
-their thought/tool records cannot move the surrounding conversation.
-
-Sheets repair focus on pointer-down when it has escaped to a background
-control or an unrendered retained handle. This keeps the shared close button's
-Cancel action inside the sheet before its click handler runs, while preserving
-valid focus in the sheet's content and the existing close callback order.
+Remove each patch when the pinned upstream version includes its equivalent fix.

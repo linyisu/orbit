@@ -116,6 +116,7 @@ pub struct TextViewState {
     pub(super) code_block_highlighter: Option<std::sync::Arc<CodeBlockHighlighterFn>>,
     pub(super) table_actions: Option<std::sync::Arc<TableActionsFn>>,
     pub(super) image_source: Option<std::sync::Arc<super::text_view::ImageSourceFn>>,
+    image_source_override: Option<std::sync::Arc<super::text_view::ImageSourceFn>>,
     pub(super) link_click_handler: Option<std::sync::Arc<LinkClickHandlerFn>>,
     pub(super) markdown_extensions: Arc<MarkdownExtensions>,
 
@@ -223,6 +224,7 @@ impl TextViewState {
             table_actions: None,
             link_click_handler: None,
             image_source: None,
+            image_source_override: None,
             markdown_extensions: Arc::default(),
             is_selecting: false,
             preserve_inline_selection: false,
@@ -481,6 +483,17 @@ impl TextViewState {
         if count > 0 {
             self.list_state.remeasure_items(0..count);
         }
+    }
+
+    /// Install a persistent resource resolver on this document. Returning `None`
+    /// retains the built-in URI and data URL handling. Replacing the resolver
+    /// invalidates resource measurements without changing the text or selection.
+    pub fn set_image_source_override<F>(&mut self, resolver: F, cx: &mut Context<Self>)
+    where
+        F: Fn(&gpui::SharedUri) -> Option<gpui::ImageSource> + Send + Sync + 'static,
+    {
+        self.image_source_override = Some(Arc::new(resolver));
+        self.invalidate_inline_layout(cx);
     }
 
     /// Remeasure inline resources after their prepared content or metrics change.
@@ -1075,7 +1088,10 @@ impl Render for TextViewState {
             code_block_highlighter: self.code_block_highlighter.clone(),
             table_actions: self.table_actions.clone(),
             link_click_handler: self.link_click_handler.clone(),
-            image_source: self.image_source.clone(),
+            image_source: self
+                .image_source_override
+                .clone()
+                .or_else(|| self.image_source.clone()),
             markdown_extensions: self.markdown_extensions.clone(),
             stream_fade,
             range_highlights: self.range_highlights.clone(),

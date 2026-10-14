@@ -23,6 +23,7 @@ exclude = ["vendor/ratex-unicode-font", "vendor/gpui-kit", "vendor/gpui-pre-wgpu
 
 [patch."https://github.com/longbridge/gpui-kit"]
 gpui-base = { path = "vendor/gpui-kit/crates/base" }
+gpui-component = { path = "vendor/gpui-kit/crates/component" }
 
 [patch.crates-io]
 gpui-pre-wgpu = { path = "vendor/gpui-pre-wgpu" }

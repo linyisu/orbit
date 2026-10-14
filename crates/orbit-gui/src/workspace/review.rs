@@ -684,7 +684,7 @@ impl Render for Review {
                                     .border_color(cx.theme().border)
                                     .rounded_md()
                                     .overflow_hidden()
-                                    .child(Diff::new(&self.diff)),
+                                    .child(Diff::new(&self.diff).single_line_number(true)),
                             ),
                     ),
             )

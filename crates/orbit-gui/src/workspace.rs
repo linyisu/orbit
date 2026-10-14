@@ -202,6 +202,32 @@ pub(crate) struct Workspace {
 }
 
 impl Workspace {
+    fn new_conversation(cx: &mut Context<Self>) -> (Entity<Conversation>, Subscription) {
+        let conversation = cx.new(Conversation::new);
+        let subscription = cx.subscribe(
+            &conversation,
+            |view, _, request: &crate::conversation::ImageRequest, cx| {
+                if let Some(response) = request.take_response() {
+                    if let Some(info) = &view.info {
+                        view.command(
+                            Command::Settings {
+                                request: Request::ReadFile {
+                                    session: info.id.clone(),
+                                    path: request.path().to_owned(),
+                                },
+                                result: response,
+                            },
+                            cx,
+                        );
+                    } else {
+                        let _ = response.send(Err("会话尚未连接".into()));
+                    }
+                }
+            },
+        );
+        (conversation, subscription)
+    }
+
     pub(crate) fn new(
         options: Options,
         runtime: Arc<tokio::runtime::Runtime>,
@@ -233,7 +259,7 @@ impl Workspace {
         let focus_lost = cx.on_focus_lost(window, |view, window, cx| {
             view.repair_hidden_focus(window, cx);
         });
-        let conversation = cx.new(Conversation::new);
+        let (conversation, image_subscription) = Self::new_conversation(cx);
         let location = options
             .workspace
             .clone()
@@ -260,7 +286,14 @@ impl Workspace {
             timer: Task::ready(()),
             picker: Task::ready(()),
             picker_pending: false,
-            _subscriptions: vec![subscription, focused, blurred, bounds, focus_lost],
+            _subscriptions: vec![
+                subscription,
+                focused,
+                blurred,
+                bounds,
+                focus_lost,
+                image_subscription,
+            ],
             focus: cx.focus_handle(),
             input,
             history: Default::default(),
@@ -455,7 +488,8 @@ impl Workspace {
             }
             Event::Subagent { agent, page, reset } => {
                 if reset {
-                    let conversation = cx.new(Conversation::new);
+                    let (conversation, image_subscription) = Self::new_conversation(cx);
+                    self._subscriptions.push(image_subscription);
                     self.subagent = Some((agent.clone(), conversation.clone()));
                     let owner = cx.weak_entity();
                     let title = format!("子 Agent · {agent}");
@@ -743,7 +777,9 @@ impl Workspace {
                 self.panel = None;
                 self.subagent = None;
                 self.usage = cx.new(crate::usage::Usage::new);
-                self.conversation = cx.new(Conversation::new);
+                let (conversation, image_subscription) = Self::new_conversation(cx);
+                self.conversation = conversation;
+                self._subscriptions.push(image_subscription);
                 self.execution = Default::default();
                 self.refresh_usage(cx);
                 self.command(Command::Request(Request::AllSessions), cx);
@@ -859,7 +895,8 @@ impl Workspace {
             Response::Plugins(catalog) => self.show_plugins(catalog, window, cx),
             Response::UserInputs(_) => self.open_question_history(window, cx),
             Response::Subagent(page) => {
-                let conversation = cx.new(Conversation::new);
+                let (conversation, image_subscription) = Self::new_conversation(cx);
+                self._subscriptions.push(image_subscription);
                 conversation.update(cx, |view, cx| {
                     for update in page.updates {
                         view.apply(update, cx);

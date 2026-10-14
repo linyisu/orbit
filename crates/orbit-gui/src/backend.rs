@@ -488,7 +488,8 @@ async fn run_connection(
                     }
                     Command::Settings { request, result } => {
                         if matches!(request,
-                            Request::Review { action: orbit_protocol::review::Action::Undo { .. } | orbit_protocol::review::Action::Stage { .. } | orbit_protocol::review::Action::Unstage { .. }, .. }
+                            Request::ReadFile { .. }
+                            | Request::Review { action: orbit_protocol::review::Action::Undo { .. } | orbit_protocol::review::Action::Stage { .. } | orbit_protocol::review::Action::Unstage { .. }, .. }
                             | Request::Resources { action: orbit_protocol::resources::Action::ReloadMcp { .. }
                                 | orbit_protocol::resources::Action::ScanMcp { .. }
                                 | orbit_protocol::resources::Action::InstallMcp { .. }, .. }
