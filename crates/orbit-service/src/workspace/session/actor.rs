@@ -46,6 +46,7 @@ struct Actor {
     view: Arc<Mutex<View>>,
     questions: Questions,
     running: Option<Running>,
+    continue_after_cancel: bool,
     undo: Option<Undo>,
     import: Option<crate::workspace::resources::Import>,
     mcp_reload: Option<crate::workspace::resources::Reload>,
@@ -93,6 +94,7 @@ pub(super) async fn run(
         view,
         questions,
         running: None,
+        continue_after_cancel: false,
         undo: None,
         import: None,
         mcp_reload: None,
@@ -925,6 +927,7 @@ impl Actor {
                     .await?;
             }
             Command::Cancel => {
+                self.continue_after_cancel = self.running.is_some();
                 if let Some(envelope) = self.starting.take() {
                     let _ = envelope
                         .reply
@@ -1022,7 +1025,7 @@ impl Actor {
                     RequestClaim::Accepted => return Ok(()),
                     RequestClaim::Rejected(error) => anyhow::bail!("{error}"),
                 }
-                let mut presentation = orbit_protocol::RunPresentation {
+                let presentation = orbit_protocol::RunPresentation {
                     file_assets: Vec::new(),
                     images: images
                         .iter()
@@ -1035,7 +1038,7 @@ impl Actor {
                 };
                 let started = crate::workspace::run::start(
                     &mut self.setup,
-                    prompt.clone(),
+                    Some(prompt.clone()),
                     images,
                     files,
                     compact,
@@ -1058,27 +1061,15 @@ impl Actor {
                         return Err(error);
                     }
                 };
-                presentation.image_assets = image_assets;
-                presentation.file_assets = file_assets;
-                self.running = Some(Running {
-                    events,
-                    task,
-                    cancellation,
-                    inbox,
-                });
                 self.accepted.clear();
                 self.accepted
                     .insert(request_id.clone(), identity);
-                self.profile().await;
-                {
-                    let mut view = self.view.lock().await;
-                    view.busy = true;
-                    view.clock = Some(super::Clock::new());
-                    view.push(Update::Started {
-                        prompt,
-                        presentation,
-                    });
-                }
+                self.activate_run(
+                    (events, task, cancellation, inbox, image_assets, file_assets),
+                    prompt,
+                    presentation,
+                )
+                .await;
                 self.setup
                     .session
                     .store
@@ -1185,8 +1176,63 @@ impl Actor {
             .insert(self.approval_id, request);
     }
 
+    /// Publish a fresh execution boundary before its queued input events are delivered.
+    async fn activate_run(
+        &mut self,
+        started: super::super::run::Started,
+        prompt: String,
+        mut presentation: orbit_protocol::RunPresentation,
+    ) {
+        let (events, task, cancellation, inbox, image_assets, file_assets) = started;
+        presentation.image_assets = image_assets;
+        presentation.file_assets = file_assets;
+        self.running = Some(Running {
+            events,
+            task,
+            cancellation,
+            inbox,
+        });
+        self.profile().await;
+        let mut view = self.view.lock().await;
+        view.busy = true;
+        view.clock = Some(super::Clock::new());
+        view.push(Update::Started {
+            prompt,
+            presentation,
+        });
+    }
+
+    /// Continue only durable, unclaimed input after an explicit stop, with a fresh token.
+    async fn continue_queued(&mut self) -> Result<()> {
+        if self
+            .setup
+            .session
+            .store
+            .pending_agent_messages(self.setup.session.id())
+            .await?
+            .is_empty()
+        {
+            return Ok(());
+        }
+        let started =
+            super::super::run::start(&mut self.setup, None, Vec::new(), Vec::new(), false, None)
+                .await?;
+        self.accepted.clear();
+        self.activate_run(
+            started,
+            String::new(),
+            orbit_protocol::RunPresentation {
+                queued_input: true,
+                ..Default::default()
+            },
+        )
+        .await;
+        Ok(())
+    }
+
     async fn finish_run(&mut self) {
         let run = self.running.take().unwrap();
+        let continue_queued = std::mem::take(&mut self.continue_after_cancel);
         self.pending.clear();
         let (status, event, history) =
             crate::execution::outcome(run.task.await, Some(&run.cancellation));
@@ -1203,6 +1249,7 @@ impl Actor {
             *workspace = self.setup.resources.workspace.clone();
         }
         self.questions.update(&self.setup);
+        let continue_queued = continue_queued && saved.is_ok();
         let status = if saved.is_ok() { status } else { "failed" };
         let mut view = self.view.lock().await;
         if let Some(error) = error.or_else(|| {
@@ -1228,6 +1275,16 @@ impl Actor {
         });
         view.busy = false;
         view.approvals.clear();
+        drop(view);
+        if continue_queued && let Err(error) = self.continue_queued().await {
+            self.view
+                .lock()
+                .await
+                .push(Update::Report(orbit_protocol::Report {
+                    title: "暂存消息".into(),
+                    text: format!("未能启动暂存消息，消息已保留：{error:#}"),
+                }));
+        }
     }
 
     async fn undo(&mut self, path: Option<String>) -> Result<()> {

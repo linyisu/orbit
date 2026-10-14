@@ -255,6 +255,26 @@ async fn steering_receipt_confirms_persistence_while_the_model_is_still_waiting(
         .request(Request::Cancel { session })
         .await
         .unwrap();
+    fixture
+        .wait(|page| {
+            page.updates
+                .iter()
+                .any(|update| match update {
+                    protocol::Update::Agent(event) => matches!(
+                        event.as_ref(),
+                        orbit_agent::events::AgentEvent::InputReceived { message_id: id, .. }
+                            if *id == message_id
+                    ),
+                    _ => false,
+                })
+        })
+        .await;
+    fixture
+        .request(Request::Cancel {
+            session: fixture.handle.info.id.clone(),
+        })
+        .await
+        .unwrap();
     fixture.wait(|page| !page.busy).await;
 }
 

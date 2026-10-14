@@ -110,7 +110,7 @@ impl Transcript {
                 prompt,
                 presentation,
             } => {
-                if presentation.compact {
+                if presentation.compact || (presentation.queued_input && prompt.is_empty()) {
                     return None;
                 }
                 let turn = self.begin(
@@ -322,6 +322,38 @@ mod tests {
                 "arguments": "{}"
             }
         })
+    }
+
+    #[test]
+    fn queued_continuation_has_no_empty_or_duplicate_user_turn() {
+        let mut transcript = Transcript::default();
+        apply(
+            &mut transcript,
+            json!({ "Started": { "prompt": "generated request" } }),
+        );
+        apply(
+            &mut transcript,
+            json!({ "Finished": { "status": "cancelled" } }),
+        );
+        apply(
+            &mut transcript,
+            json!({
+                "Started": { "prompt": "", "presentation": { "queued_input": true } }
+            }),
+        );
+        apply(
+            &mut transcript,
+            json!({
+                "Agent": { "InputReceived": {
+                    "message_id": 73, "content": "generated follow-up", "attachments": []
+                } }
+            }),
+        );
+        assert_eq!(transcript.turns.len(), 2);
+        assert_eq!(
+            transcript.turns[1].prompt.as_deref(),
+            Some("generated follow-up")
+        );
     }
 
     #[test]

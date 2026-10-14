@@ -14,7 +14,7 @@ pub(super) type Started = (
 
 pub(super) async fn start(
     setup: &mut crate::PreparedWorkspace,
-    prompt: String,
+    prompt: Option<String>,
     uploads: Vec<orbit_protocol::ImageUpload>,
     files: Vec<orbit_protocol::FileUpload>,
     compact: bool,
@@ -34,6 +34,8 @@ pub(super) async fn start(
             .any(|choice| choice.qualified_name() == setup.resources.model_name),
         "当前模型已从配置中移除，请使用 /model 选择可用模型"
     );
+    let queued_input = prompt.is_none();
+    let prompt = prompt.unwrap_or_default();
     let messages = context_messages(setup).await?;
     let crate::PreparedWorkspace { session, resources } = setup;
     session
@@ -102,7 +104,8 @@ pub(super) async fn start(
         &tools,
         crate::execution::RunOptions {
             model_name: resources.model_name.clone(),
-            generate_title: !compact,
+            generate_title: !compact && !queued_input,
+            queued_input,
             max_output_tokens: resources.budget.max_output_tokens,
             config: orbit_agent::agent::AgentConfig {
                 context_tokens: resources.budget.context_tokens,

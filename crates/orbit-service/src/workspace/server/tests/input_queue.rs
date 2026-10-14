@@ -2,7 +2,8 @@ use super::*;
 use orbit_protocol::input_queue::{Action, Snapshot, State};
 
 #[tokio::test]
-async fn actual_dispatch_mutates_waiting_inputs_and_preserves_them_after_cancellation() {
+async fn actual_dispatch_mutates_waiting_inputs_and_delivers_them_after_cancellation() {
+    use orbit_agent::events::AgentEvent;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .unwrap();
@@ -126,52 +127,77 @@ async fn actual_dispatch_mutates_waiting_inputs_and_preserves_them_after_cancell
         })
         .await
         .unwrap();
-    fixture.wait(|page| !page.busy).await;
+    let page = fixture
+        .wait(|page| {
+            page.updates
+                .iter()
+                .any(|update| match update {
+                    protocol::Update::Agent(event) => matches!(
+                        event.as_ref(),
+                        AgentEvent::InputReceived { message_id, content, .. }
+                            if *message_id == ids[0] && content == "updated"
+                    ),
+                    _ => false,
+                })
+        })
+        .await;
+    assert!(page.busy);
     let Response::InputQueue(Snapshot::List {
         entries,
-        run: idle_run,
+        run: next_run,
         ..
     }) = fixture
         .request(queue(Action::List { after: None }))
         .await
         .unwrap()
     else {
-        panic!("idle queue list expected")
+        panic!("continued queue expected")
     };
-    assert_eq!(idle_run, None);
-    assert_eq!(entries.len(), 1);
-    assert_eq!(
-        (entries[0].id, entries[0].content.as_str(), entries[0].state),
-        (ids[0], "updated", State::Idle)
-    );
+    assert_ne!(next_run, run);
+    assert!(entries.is_empty());
     assert!(
         fixture
             .request(queue(Action::Remove {
                 id: ids[0],
                 expected: "updated".into(),
-                run
+                run,
             }))
             .await
-            .is_err(),
-        "a receipt sampled from the previous run must not mutate an idle queue"
+            .is_err()
     );
     fixture
-        .request(queue(Action::Remove {
-            id: ids[0],
-            expected: "updated".into(),
-            run: None,
-        }))
+        .request(Request::Cancel {
+            session: session.clone(),
+        })
         .await
         .unwrap();
+    fixture.wait(|page| !page.busy).await;
+    let snapshot = fixture
+        .handle
+        .store
+        .load(&session)
+        .await
+        .unwrap();
+    assert_eq!(snapshot.runs.len(), 2);
+    assert_eq!(
+        snapshot
+            .history
+            .iter()
+            .filter(|message| matches!(
+                message,
+                orbit_model::types::ChatMessage::User { content, .. } if content == "updated"
+            ))
+            .count(),
+        1
+    );
     assert!(
-        fixture
-            .handle
-            .store
-            .input_queue(&session)
-            .await
-            .unwrap()
-            .messages
-            .is_empty()
+        !snapshot
+            .history
+            .iter()
+            .any(|message| matches!(
+                message, orbit_model::types::ChatMessage::User { content, .. }
+                    if content == "original" || content == "remove me" || content.is_empty()
+            ))
     );
 }
 
@@ -389,4 +415,245 @@ async fn file_input_is_queued_without_vision_and_can_be_withdrawn() {
         .request(Request::Cancel { session })
         .await
         .unwrap();
+}
+
+async fn streaming_request(
+    listener: &tokio::net::TcpListener,
+) -> (tokio::net::TcpStream, serde_json::Value) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut header = Vec::new();
+            while !header.ends_with(b"\r\n\r\n") {
+                header.push(socket.read_u8().await.unwrap());
+            }
+            let length = String::from_utf8(header)
+                .unwrap()
+                .lines()
+                .find_map(|line| {
+                    line.to_ascii_lowercase()
+                        .strip_prefix("content-length:")
+                        .map(|value| value.trim().parse::<usize>().unwrap())
+                })
+                .unwrap();
+            let mut body = vec![0; length];
+            socket
+                .read_exact(&mut body)
+                .await
+                .unwrap();
+            let request: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            if request["stream"] == true {
+                return (socket, request);
+            }
+            let body = serde_json::json!({
+                "choices": [{
+                    "message": { "role": "assistant", "content": "Generated title" },
+                    "finish_reason": "stop",
+                }],
+            })
+            .to_string();
+            socket
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
+                    Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .unwrap();
+        }
+    })
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+async fn stopping_delivers_queued_files_and_messages_once_in_order() {
+    use base64::Engine;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .unwrap();
+    let fixture = Fixture::new(&format!("http://{}/v1", listener.local_addr().unwrap())).await;
+    let session = fixture.handle.info.id.clone();
+    fixture
+        .request(Request::Start {
+            session: session.clone(),
+            request_id: "generated-stop".into(),
+            prompt: "Generate a summary".into(),
+            images: vec![],
+            compact: false,
+            model: None,
+        })
+        .await
+        .unwrap();
+    let (_initial, _) = streaming_request(&listener).await;
+    let source = "synthetic measurement = 73\n";
+    fixture
+        .request(Request::SubmitAttachments {
+            session: session.clone(),
+            request_id: "generated-file".into(),
+            prompt: String::new(),
+            images: vec![],
+            files: vec![orbit_protocol::FileUpload {
+                name: "measurement.txt".into(),
+                data: base64::engine::general_purpose::STANDARD.encode(source),
+            }],
+            steer: true,
+        })
+        .await
+        .unwrap();
+    fixture
+        .request(Request::Steer {
+            session: session.clone(),
+            message: "Compare the measurements".into(),
+        })
+        .await
+        .unwrap();
+    fixture
+        .request(Request::Cancel {
+            session: session.clone(),
+        })
+        .await
+        .unwrap();
+    let (_continued, request) = streaming_request(&listener).await;
+    let users = request["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|message| message["role"] == "user")
+        .map(|message| message["content"].as_str().unwrap())
+        .filter(|content| {
+            *content == "Generate a summary"
+                || content.contains(source)
+                || *content == "Compare the measurements"
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(users.len(), 3);
+    assert_eq!(users[0], "Generate a summary");
+    assert!(users[1].contains(source));
+    assert!(users[1].contains("measurement.txt"));
+    assert_eq!(users[2], "Compare the measurements");
+    fixture
+        .request(Request::Cancel {
+            session: session.clone(),
+        })
+        .await
+        .unwrap();
+    fixture.wait(|page| !page.busy).await;
+    assert!(
+        fixture
+            .handle
+            .store
+            .pending_agent_messages(&session)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let snapshot = fixture
+        .handle
+        .store
+        .load(&session)
+        .await
+        .unwrap();
+    assert_eq!(snapshot.runs.len(), 2);
+    assert_eq!(snapshot.runs[1].status, "cancelled");
+    assert!(
+        fixture
+            .page(0)
+            .await
+            .updates
+            .iter()
+            .any(|update| matches!(
+                update, protocol::Update::Started { prompt, presentation }
+                    if prompt.is_empty() && presentation.queued_input
+            ))
+    );
+    assert_eq!(
+        snapshot
+            .history
+            .iter()
+            .filter(|message| matches!(message, orbit_model::types::ChatMessage::User { .. }))
+            .count(),
+        3
+    );
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), listener.accept())
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn model_failure_keeps_queued_input_without_automatically_retrying() {
+    use tokio::io::AsyncWriteExt;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .unwrap();
+    let fixture = Fixture::new(&format!("http://{}/v1", listener.local_addr().unwrap())).await;
+    let session = fixture.handle.info.id.clone();
+    fixture
+        .request(Request::Start {
+            session: session.clone(),
+            request_id: "generated-failure".into(),
+            prompt: "Inspect generated material".into(),
+            images: vec![],
+            compact: false,
+            model: None,
+        })
+        .await
+        .unwrap();
+    let (mut socket, _) = streaming_request(&listener).await;
+    fixture
+        .request(Request::Steer {
+            session: session.clone(),
+            message: "Pending synthetic instruction".into(),
+        })
+        .await
+        .unwrap();
+    let body = serde_json::json!({
+        "error": { "message": "Synthetic invalid request", "type": "invalid_request_error" }
+    })
+    .to_string();
+    socket
+        .write_all(
+            format!(
+                "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\n\
+            Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            )
+            .as_bytes(),
+        )
+        .await
+        .unwrap();
+    fixture.wait(|page| !page.busy).await;
+    fixture
+        .request(Request::Cancel {
+            session: session.clone(),
+        })
+        .await
+        .unwrap();
+    let queue = fixture
+        .handle
+        .store
+        .pending_agent_messages(&session)
+        .await
+        .unwrap();
+    assert_eq!(queue.len(), 1);
+    assert_eq!(queue[0].content, "Pending synthetic instruction");
+    let snapshot = fixture
+        .handle
+        .store
+        .load(&session)
+        .await
+        .unwrap();
+    assert_eq!(snapshot.runs.len(), 1);
+    assert_eq!(snapshot.runs[0].status, "failed");
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), listener.accept())
+            .await
+            .is_err()
+    );
 }

@@ -30,6 +30,7 @@ pub struct StartedRun {
 pub struct RunOptions {
     pub model_name: String,
     pub generate_title: bool,
+    pub queued_input: bool,
     pub max_output_tokens: u32,
     pub config: AgentConfig,
     pub calibration: orbit_agent::calibration::TokenCalibration,
@@ -62,7 +63,7 @@ pub async fn start(
             .begin(prompt.clone(), options.model_name.clone())
             .await?;
     }
-    if !compacting {
+    if !compacting && !options.queued_input {
         messages.push(ChatMessage::user_with_attachments(prompt, attachments));
     }
     let context_used_tokens = options
@@ -111,6 +112,7 @@ pub async fn start(
             ),
         ))
         .with_inbox(inbox.clone())
+        .with_initial_input_recording(!options.queued_input)
         .with_calibration(options.model_name.clone(), options.calibration)
         .with_compaction(options.compaction.clone())
         .with_file_activity(files.clone())
