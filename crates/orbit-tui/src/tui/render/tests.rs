@@ -2535,7 +2535,7 @@ fn wrapped_text_link_hints_stay_fixed_for_each_occurrence() {
 fn repository_url_in_a_table_has_hover_feedback_after_wrapping_and_resize() {
     use crossterm::event::{Event, KeyModifiers, MouseEvent, MouseEventKind};
     use ratatui::buffer::CellWidth;
-    let url = "https://github.com/linyisu/orbit";
+    let url = "https://github.com/example-org/sample-app";
     let mut state = UiState::new("model");
     state.transcript.push(TranscriptItem::Assistant(format!(
         "Orbit 示例项目\n\n| 项 | 值 |\n| --- | --- |\n| 项目 | Orbit |\n| 仓库 | {url} |\n| 提交署名 | Orbit 测试身份（虚构） |\n| Windows 用户名 | orbit（示例路径 C:\\Users\\orbit\\） |\n| 会话 ID | orbit-test-session |\n| 用途 | TUI 链接测试 |\n"

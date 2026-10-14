@@ -173,8 +173,8 @@ mod tests {
     use super::Formula;
     #[test]
     fn formulas_use_ink_bounds_and_keep_a_real_baseline() {
-        let plain = Formula::parse("WE=1", false).unwrap();
-        let padded = Formula::parse("WE=1\\quad", false).unwrap();
+        let plain = Formula::parse("q=7", false).unwrap();
+        let padded = Formula::parse("q=7\\quad", false).unwrap();
         assert!((plain.width - padded.width).abs() < 0.001);
         let fraction = Formula::parse("\\frac{a}{b}", true).unwrap();
         assert!(fraction.height > plain.height);
@@ -184,7 +184,7 @@ mod tests {
 
     #[test]
     fn inline_formula_viewport_matches_its_visible_ink() {
-        let formula = Formula::parse("EN_{in}=1", false).unwrap();
+        let formula = Formula::parse("R_{set}=4", false).unwrap();
         let tree = resvg::usvg::Tree::from_data(&formula.svg, &Default::default()).unwrap();
         let size = tree.size().to_int_size();
         let mut pixmap = resvg::tiny_skia::Pixmap::new(size.width(), size.height()).unwrap();

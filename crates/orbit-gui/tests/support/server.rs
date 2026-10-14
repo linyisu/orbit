@@ -1,10 +1,12 @@
 //! Offline protocol peer for integration and native-window checks.
 //! Enabled explicitly with `test-support`; never calls a model.
+mod attention;
 mod disclosures;
 mod files;
 mod input_queue;
 mod inspector;
 mod planning;
+mod reply_images;
 mod review;
 mod side_questions;
 mod skill_import;
@@ -199,6 +201,15 @@ fn main() -> anyhow::Result<()> {
                     catalog_root.trim()
                 };
                 let response = if std::path::Path::new(&workspace)
+                    .join(".fixture-attention")
+                    .exists()
+                {
+                    json!({"type":"sessions","value":[
+                        {"id":"attention","workspace":workspace,"project_id":"fixture","model":model,"title":"MCP 与命令审批","updated_at":3},
+                        {"id":"plan-review","workspace":workspace,"project_id":"fixture","model":model,"title":"计划待审","updated_at":2},
+                        {"id":"demo","workspace":workspace,"project_id":"fixture","model":model,"title":"普通会话","updated_at":1}
+                    ]})
+                } else if std::path::Path::new(&workspace)
                     .join(".fixture-sidebar")
                     .exists()
                 {
@@ -301,6 +312,30 @@ fn main() -> anyhow::Result<()> {
                         std::path::Path::new(&workspace).join(".fixture-quota-model"),
                         &model,
                     )?;
+                }
+                if session == "attention" {
+                    approvals = attention::approvals(&workspace);
+                    history.insert(
+                        session.clone(),
+                        vec![json!({"Started":{"prompt":"等待 MCP 和命令审批。"}})],
+                    );
+                }
+                if session == "table-layout" {
+                    history.insert(session.clone(), vec![
+                        json!({"Started":{"prompt":"检查表格在不同字号下的列宽和换行。"}}),
+                        json!({"Agent":{"Model":{"TextDelta":include_str!("table-layout.md")}}}),
+                        json!({"Finished":{"status":"completed"}}),
+                    ]);
+                }
+                if session == "single-gutter" {
+                    approvals = vec![attention::file_approval(&workspace)];
+                    history.insert(
+                        session.clone(),
+                        vec![json!({"Started":{"prompt":"检查审批差异中的单列行号。"}})],
+                    );
+                }
+                if session == "reply-images" {
+                    history.insert(session.clone(), reply_images::seed(&workspace)?);
                 }
                 if session == "tool-history" {
                     history.insert(session.clone(), tool_history());
@@ -447,11 +482,14 @@ fn main() -> anyhow::Result<()> {
                     .into_iter()
                     .map(|text| json!({"Agent":{"Model":{"TextDelta":text}}}))
                     .collect();
+                    if session == "reply-images" {
+                        pending = [reply_images::replace(&workspace)?].into();
+                    }
                     if prompt == "math" {
-                        pending = [json!({"Agent":{"Model":{"TextDelta":"行内公式（$WE=1\\quad$）与文字连续。\n\n$$\n\\frac{a+b}{c} = \\sqrt{x^2+y^2}\n$$\n\n公式后面的正文。"}}})].into();
+                        pending = [json!({"Agent":{"Model":{"TextDelta":"行内公式（$k=2\\quad$）与文字连续。\n\n$$\n\\frac{a+b}{c} = \\sqrt{x^2+y^2}\n$$\n\n公式后面的正文。"}}})].into();
                     }
                     if prompt == "rendering" {
-                        pending = [json!({"Agent":{"Model":{"TextDelta":"你目前遇到的**“高位无法复位”和“进位不正常”**，需要先检查输入。\n\n使能计数（$EN_{in}=1$），满模了，下一拍你该加一。\n\n**使能计数（$EN_{in}=1$）**，观察输出。\n\n行内公式 $\\frac{a+b}{c}$ 和 $x_i^2$ 应与正文自然对齐。\n\n`**原样保留**` 与 **正常加粗**。"}}})].into();
+                        pending = [json!({"Agent":{"Model":{"TextDelta":"合成的**“圆形样本”和“方形样本”**，使用不同的编号。\n\n样本编号（$n=3$），每组的数量增加二。\n\n**样本编号（$n=3$）**，附带普通文字。\n\n行内公式 $\\frac{a+b}{c}$ 和 $x_i^2$ 应与正文自然对齐。\n\n`**原样保留**` 与 **正常加粗**。"}}})].into();
                     }
                     if prompt == "code" {
                         pending =
@@ -465,7 +503,7 @@ fn main() -> anyhow::Result<()> {
                         pending = [json!({"Agent":{"Model":{"TextDelta":include_str!("font-fallback.md")}}})].into();
                     }
                     if prompt == "selection" {
-                        pending = [json!({"Agent":{"Model":{"TextDelta":"### 3. `bner0` 指令\n\n普通文字 `inline code` 与**加粗文字**连续选中。\n\n1. 混合 `code` 的列表项\n2. 下一项\n\n公式 $EN_{in}=1$ 和后面的文字。"}}})].into();
+                        pending = [json!({"Agent":{"Model":{"TextDelta":"### 3. `sample_tag` 字段\n\n普通文字 `inline code` 与**加粗文字**连续选中。\n\n1. 混合 `code` 的列表项\n2. 下一项\n\n公式 $n=3$ 和后面的文字。"}}})].into();
                     }
                     if prompt == "table" {
                         pending =
@@ -511,7 +549,17 @@ fn main() -> anyhow::Result<()> {
                 }
             }
             "approve" => {
-                approvals.clear();
+                approvals.retain(|approval| approval["id"] != request["approval"]);
+                if session == "attention" {
+                    use std::io::Write as _;
+                    writeln!(
+                        std::fs::OpenOptions::new()
+                            .create(true)
+                            .append(true)
+                            .open(std::path::Path::new(&workspace).join(".fixture-decisions"))?,
+                        "{request}"
+                    )?;
+                }
                 json!({"type":"ok"})
             }
             "cancel" => {
@@ -566,6 +614,26 @@ fn main() -> anyhow::Result<()> {
                 request["session"].as_str().unwrap_or_default(),
                 request["before"].as_i64(),
             ),
+            "read_file"
+                if std::path::Path::new(&workspace)
+                    .join(".fixture-track-images")
+                    .exists() =>
+            {
+                use std::io::Write as _;
+                let path = request["path"].as_str().unwrap_or_default();
+                writeln!(
+                    std::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(std::path::Path::new(&workspace).join(".fixture-image-reads"))?,
+                    "{path}"
+                )?;
+                if path == "missing.png" {
+                    json!({"type":"error","value":"图片不存在"})
+                } else {
+                    fixture_read_file(&workspace, path)
+                }
+            }
             "read_file" if request["path"] == "missing.png" => {
                 json!({"type":"error","value":"图片不存在"})
             }
@@ -768,9 +836,9 @@ fn tool_history() -> Vec<Value> {
 fn process_tail() -> Vec<Value> {
     let mut events =
         vec![json!({"Started":{"prompt":"检查执行块最后一条工具记录是否能完整显示。"}})];
-    let paragraph = "Inspect the terminal state and preserve the current cursor position. Verify that image rendering and command output remain readable after cancellation.\n\n";
+    let paragraph = "The fictional botanical archive groups specimen labels by color and season. Each synthetic record contains a catalog number and a short description.\n\n";
     let reasoning = format!(
-        "{}\n```text\nOutput:\n  syntax check passed\n```\n\n```text\nProgress: 1/182\nCurrent exercise: src/01_basics/add.v\n```\n\n```text\nh:hint / i:image / d:desc / s:submit / c:check\n```",
+        "{}\n```text\nCatalog summary:\n  amber collection indexed\n```\n\n```text\nIndexed records: 7/29\nSelected label: demo-records/specimen-07.json\n```\n\n```text\nViews: compact | detailed | archived\n```",
         paragraph.repeat(8)
     );
     events.push(json!({"Agent":{"Model":{"ReasoningDelta":reasoning}}}));

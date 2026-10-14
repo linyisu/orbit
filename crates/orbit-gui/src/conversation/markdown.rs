@@ -89,8 +89,8 @@ mod tests {
     #[test]
     fn quoted_cjk_emphasis_is_recovered_without_changing_literal_examples() {
         assert_eq!(
-            prose("遇到的**“高位无法复位”和“进位不正常”**。"),
-            "遇到的<strong>“高位无法复位”和“进位不正常”</strong>。"
+            prose("合成的**“紫色方片”和“青色圆片”**。"),
+            "合成的<strong>“紫色方片”和“青色圆片”</strong>。"
         );
         for source in [
             "**正常加粗**",
@@ -109,16 +109,16 @@ mod tests {
 
     #[test]
     fn streamed_closing_markers_repair_the_whole_emphasis_and_keep_nested_content() {
-        let source = "这是**“输入”与 $EN_{in}=1$**的解释。";
+        let source = "这是**“样本”与 $R_{set}=4$**的解释。";
         assert_eq!(
             prose(source),
-            "这是<strong>“输入”与 $EN_{in}=1$</strong>的解释。"
+            "这是<strong>“样本”与 $R_{set}=4$</strong>的解释。"
         );
-        let opening = "这是**“输入”";
+        let opening = "这是**“样本”";
         assert_eq!(prose(opening), opening);
         assert_eq!(
             prose(&format!("{opening}**。")),
-            "这是<strong>“输入”</strong>。"
+            "这是<strong>“样本”</strong>。"
         );
         let separate = "第一段**“开始”\n\n第二段“结束”**。";
         assert_eq!(prose(separate), separate);

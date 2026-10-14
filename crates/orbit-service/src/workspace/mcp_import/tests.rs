@@ -6,18 +6,18 @@ fn node_cli_uses_registry_stdio_arguments_without_running_source() {
     let (_root, _workspace, source) = fixture();
     fs::write(
         source.join("package.json"),
-        r#"{"name":"rea-agents","bin":{"rea":"scripts/rea.mjs","rea-agents":"scripts/rea.mjs"}}"#,
+        r#"{"name":"fixture-tools","bin":{"fixture":"scripts/fixture.mjs","fixture-tools":"scripts/fixture.mjs"}}"#,
     )
     .unwrap();
-    fs::write(source.join("server.json"), r#"{"packages":[{"registryType":"npm","identifier":"other","transport":{"type":"stdio"},"packageArguments":[{"type":"positional","value":"wrong"}]},{"registryType":"npm","identifier":"rea-agents","transport":{"type":"stdio"},"packageArguments":[{"type":"positional","value":"mcp"}]}]}"#).unwrap();
+    fs::write(source.join("server.json"), r#"{"packages":[{"registryType":"npm","identifier":"other","transport":{"type":"stdio"},"packageArguments":[{"type":"positional","value":"wrong"}]},{"registryType":"npm","identifier":"fixture-tools","transport":{"type":"stdio"},"packageArguments":[{"type":"positional","value":"mcp"}]}]}"#).unwrap();
     let entries = discover::discover(&source).unwrap();
     assert_eq!(entries.len(), 2);
     for entry in entries {
-        assert!(entry.launch.args[0].ends_with("scripts/rea.mjs"));
+        assert!(entry.launch.args[0].ends_with("scripts/fixture.mjs"));
         assert_eq!(&entry.launch.args[1..], &["mcp"]);
         assert!(entry.description.contains("server.json"));
     }
-    fs::write(source.join("server.json"), r#"{"packages":[{"registryType":"npm","identifier":"rea-agents","transport":{"type":"streamable-http"},"packageArguments":[{"type":"positional","value":"mcp"}]}]}"#).unwrap();
+    fs::write(source.join("server.json"), r#"{"packages":[{"registryType":"npm","identifier":"fixture-tools","transport":{"type":"streamable-http"},"packageArguments":[{"type":"positional","value":"mcp"}]}]}"#).unwrap();
     assert!(
         discover::discover(&source)
             .unwrap()

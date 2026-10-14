@@ -11,7 +11,7 @@ fn hdl_fences_keep_verilog_and_systemverilog_grammars_distinct() {
         "systemverilog",
         "language-systemverilog",
         "{.system-verilog}",
-        "systemverilog title=top_module",
+        "systemverilog title=fixture_channel",
         "module.sv",
     ] {
         assert_eq!(

@@ -1,11 +1,11 @@
 ## HDL 代码高亮
 
 ```verilog
-module top_module (input wire [99:0] in, output wire [99:0] out);
+module fixture_channel (input wire [11:0] in, output wire [11:0] out);
     genvar i; // 生成变量：中文注释应与关键字区分
     generate
-        for (i = 0; i < 100; i = i + 1) begin : gen_reverse
-            assign out[i] = in[99 - i];
+        for (i = 0; i < 12; i = i + 1) begin : gen_reverse
+            assign out[i] = in[11 - i];
         end
     endgenerate
     initial $display("位序反转：%b", out);
@@ -13,12 +13,12 @@ endmodule
 ```
 
 ```systemverilog
-module reverse_bits (input logic [99:0] in, output logic [99:0] out);
+module reverse_bits (input logic [11:0] in, output logic [11:0] out);
     /* 跨行注释：第一行
        第二行仍然属于注释。 */
     assign out = {<<{in}}; // 按 1 bit 反转
     initial begin
-        assert ($bits(out) == 100) else $error("宽度错误");
+        assert ($bits(out) == 12) else $error("宽度错误");
     end
 endmodule
 ```

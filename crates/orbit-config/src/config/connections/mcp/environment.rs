@@ -68,31 +68,31 @@ mod tests {
     #[test]
     fn quoted_paths_and_assignment_spacing_are_not_part_of_process_values() {
         for input in [
-            "GHIDRA_INSTALL_DIR=/opt/ghidra",
-            " GHIDRA_INSTALL_DIR = '/opt/ghidra' ",
-            "GHIDRA_INSTALL_DIR= \"/opt/ghidra\"",
+            "DEMO_TOOL_HOME=/opt/sample-tool",
+            " DEMO_TOOL_HOME = '/opt/sample-tool' ",
+            "DEMO_TOOL_HOME= \"/opt/sample-tool\"",
         ] {
-            assert_eq!(parse(input).unwrap()["GHIDRA_INSTALL_DIR"], "/opt/ghidra");
+            assert_eq!(parse(input).unwrap()["DEMO_TOOL_HOME"], "/opt/sample-tool");
         }
-        let values = parse("TOKEN=a=b=c\nEMPTY=\nLITERAL=$HOME/$(command)\nSPACES=' a b '\nWINDOWS=C:\\Tools\\Ghidra").unwrap();
+        let values = parse("TOKEN=a=b=c\nEMPTY=\nLITERAL=$HOME/$(command)\nSPACES=' a b '\nWINDOWS=C:\\Tools\\SampleTool").unwrap();
         assert_eq!(values["TOKEN"], "a=b=c");
         assert_eq!(values["EMPTY"], "");
         assert_eq!(values["LITERAL"], "$HOME/$(command)");
         assert_eq!(values["SPACES"], " a b ");
-        assert_eq!(values["WINDOWS"], "C:\\Tools\\Ghidra");
+        assert_eq!(values["WINDOWS"], "C:\\Tools\\SampleTool");
     }
 
     #[test]
     fn display_round_trips_literal_quotes_spaces_and_multiline_values() {
         let values: BTreeMap<_, _> = [
             ("EMPTY", ""),
-            ("PATH_VALUE", "/opt/ghidra"),
+            ("PATH_VALUE", "/opt/sample-tool"),
             ("SPACES", " spaced "),
             ("QUOTED", "'literal'"),
             ("DOUBLE", "\"literal\""),
             ("LINES", "first\nsecond\r\n"),
             ("TABS", "a\tb"),
-            ("BACKSLASH", "C:\\Tools\\Ghidra"),
+            ("BACKSLASH", "C:\\Tools\\SampleTool"),
         ]
         .into_iter()
         .map(|(k, v)| (k.into(), v.into()))
@@ -100,7 +100,7 @@ mod tests {
         let displayed = format(&values);
         assert_eq!(displayed.lines().count(), values.len());
         assert_eq!(parse(&displayed).unwrap(), values);
-        assert!(displayed.contains("PATH_VALUE=/opt/ghidra"));
+        assert!(displayed.contains("PATH_VALUE=/opt/sample-tool"));
     }
 
     #[test]

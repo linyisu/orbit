@@ -67,25 +67,25 @@ mod tests {
         let path = directory.path().join("config.toml");
         std::fs::write(&path, "# preserved\n[providers]\n").unwrap();
         let mut server: McpServerConfig = toml::from_str("command='test'\nenabled=false").unwrap();
-        server.env = environment::parse("GHIDRA_INSTALL_DIR= '/opt/ghidra'").unwrap();
+        server.env = environment::parse("DEMO_TOOL_HOME= '/opt/sample-tool'").unwrap();
         McpDraft::load(&path)
             .unwrap()
-            .save(&path, "rea-agents", Some(server))
+            .save(&path, "fixture-tools", Some(server))
             .unwrap();
         let draft = McpDraft::load(&path).unwrap();
-        let env = &draft.servers()["rea-agents"].env;
-        assert_eq!(env["GHIDRA_INSTALL_DIR"], "/opt/ghidra");
-        assert_eq!(environment::format(env), "GHIDRA_INSTALL_DIR=/opt/ghidra");
+        let env = &draft.servers()["fixture-tools"].env;
+        assert_eq!(env["DEMO_TOOL_HOME"], "/opt/sample-tool");
+        assert_eq!(environment::format(env), "DEMO_TOOL_HOME=/opt/sample-tool");
         assert_eq!(environment::parse(&environment::format(env)).unwrap(), *env);
         #[cfg(unix)]
         {
             let output = std::process::Command::new("/bin/sh")
-                .args(["-c", "printf '%s' \"$GHIDRA_INSTALL_DIR\""])
+                .args(["-c", "printf '%s' \"$DEMO_TOOL_HOME\""])
                 .envs(env)
                 .output()
                 .unwrap();
             assert!(output.status.success());
-            assert_eq!(output.stdout, b"/opt/ghidra");
+            assert_eq!(output.stdout, b"/opt/sample-tool");
         }
     }
 

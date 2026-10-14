@@ -1195,19 +1195,19 @@ mod tests {
         form.fields[0].set("demo".into());
         form.fields[1].set("server".into());
         form.fields[2].set("--path\npath with spaces".into());
-        form.fields[3].set("TOKEN=a=b\nMODE=readonly\nGHIDRA_INSTALL_DIR= '/opt/ghidra'".into());
+        form.fields[3].set("TOKEN=a=b\nMODE=readonly\nDEMO_TOOL_HOME= '/opt/sample-tool'".into());
         state.save();
         assert!(state.error.is_none(), "{:?}", state.error);
         let server = &state.mcp.as_ref().unwrap().servers()["demo"];
         assert_eq!(server.args, ["--path", "path with spaces"]);
         assert_eq!(server.env["TOKEN"], "a=b");
-        assert_eq!(server.env["GHIDRA_INSTALL_DIR"], "/opt/ghidra");
+        assert_eq!(server.env["DEMO_TOOL_HOME"], "/opt/sample-tool");
         assert!(!server.enabled);
         state.edit_mcp(false);
         assert!(
             state.mcp_form.as_ref().unwrap().fields[3]
                 .text
-                .contains("GHIDRA_INSTALL_DIR=/opt/ghidra")
+                .contains("DEMO_TOOL_HOME=/opt/sample-tool")
         );
         state.mcp_form.as_mut().unwrap().fields[3].set("TOKEN=first\nTOKEN=second".into());
         state.save();

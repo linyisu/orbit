@@ -86,7 +86,7 @@ impl Mcp {
             env: cx.new(|cx| {
                 TextareaState::new(window, cx)
                     .auto_grow(3, 6)
-                    .placeholder("每行 KEY=value，例如 GHIDRA_INSTALL_DIR=/opt/ghidra")
+                    .placeholder("每行 KEY=value，例如 DEMO_TOOL_HOME=/opt/sample-tool")
             }),
             timeout: cx.new(|cx| {
                 InputState::new(window, cx)
