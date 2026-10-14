@@ -956,10 +956,10 @@ index 7e06a421..a52b18be 100644
 +    }
  }
 diff --git a/crates/base/src/text/node.rs b/crates/base/src/text/node.rs
-index 11147620..23bd091e 100644
+index 11147620..83471bed 100644
 --- a/crates/base/src/text/node.rs
 +++ b/crates/base/src/text/node.rs
-@@ -2197,35 +2197,62 @@ impl CodeBlock {
+@@ -2197,35 +2197,63 @@ impl CodeBlock {
      ) -> AnyElement {
          let style = &node_cx.style;
          let leaf_key = self.span.map(|span| TextLeafKey::block(span.start));
@@ -972,23 +972,21 @@ index 11147620..23bd091e 100644
 +        // Normal blocks measure their header in flow. A fixed top inset leaves
 +        // a phantom line and lets actions overlap code at larger text scales.
 +        // Height-capped blocks retain their pinned corner controls.
-+        let mut lang_label = self
++        let lang = self
              .lang()
 -            .filter(|lang| !lang.is_empty() && node_cx.code_block_actions.is_none())
-+            .filter(|lang| !lang.is_empty() && (!scrolling || node_cx.code_block_actions.is_none()))
-             .map(|lang| {
-                 div()
--                    .absolute()
--                    .top(px(7.))
--                    .right_3()
-+                    .when(scrolling, |label| label.absolute().top(px(7.)).right_3())
-                     .font_family(cx.theme().tokens.typography.sans.clone())
-                     .text_size(cx.theme().tokens.typography.xs.size)
--                    .line_height(px(16.))
-+                    .line_height(relative(1.4))
-                     .text_color(style.muted_foreground())
-                     .child(lang)
-             });
+-            .map(|lang| {
++            .filter(|lang| !lang.trim().is_empty())
++            .unwrap_or_else(|| "text".into());
++        let mut lang_label = (!scrolling || node_cx.code_block_actions.is_none()).then(|| {
++            div()
++                .when(scrolling, |label| label.absolute().top(px(7.)).right_3())
++                .font_family(cx.theme().tokens.typography.sans.clone())
++                .text_size(cx.theme().tokens.typography.xs.size)
++                .line_height(relative(1.4))
++                .text_color(style.muted_foreground())
++                .child(lang)
++        });
 +        let mut actions = node_cx.code_block_actions.clone().map(|actions| {
 +            div()
 +                .id("actions")
@@ -1003,7 +1001,16 @@ index 11147620..23bd091e 100644
 +        });
 +        let header = if !scrolling && (lang_label.is_some() || actions.is_some()) {
 +            Some(
-+                div()
+                 div()
+-                    .absolute()
+-                    .top(px(7.))
+-                    .right_3()
+-                    .font_family(cx.theme().tokens.typography.sans.clone())
+-                    .text_size(cx.theme().tokens.typography.xs.size)
+-                    .line_height(px(16.))
+-                    .text_color(style.muted_foreground())
+-                    .child(lang)
+-            });
 +                    .flex()
 +                    .items_center()
 +                    .justify_between()
@@ -1036,7 +1043,7 @@ index 11147620..23bd091e 100644
              .bg(style.code_background())
              .border_1()
              .border_color(style.border())
-@@ -2234,6 +2261,7 @@ impl CodeBlock {
+@@ -2234,6 +2262,7 @@ impl CodeBlock {
              .line_height(relative(1.6))
              .relative()
              .refine_style(&style.code_block())
@@ -1044,7 +1051,7 @@ index 11147620..23bd091e 100644
              .child(
                  Inline::new(
                      self.state.clone(),
-@@ -2254,20 +2282,10 @@ impl CodeBlock {
+@@ -2254,20 +2283,10 @@ impl CodeBlock {
                  .range_backgrounds(node_cx.range_backgrounds(leaf_key).to_vec())
                  .reveal(node_cx.reveal_at(leaf_key, 0, self.code().len())),
              );
@@ -1066,7 +1073,7 @@ index 11147620..23bd091e 100644
              let scroll_handle = window
                  .use_keyed_state(
                      block_element_id("codeblock-scroll", self.span, options.ix),
-@@ -2299,11 +2317,7 @@ impl CodeBlock {
+@@ -2299,11 +2318,7 @@ impl CodeBlock {
                  .children(lang_label)
                  .into_any_element()
          } else {
@@ -1079,7 +1086,7 @@ index 11147620..23bd091e 100644
          };
  
          gapped(
-@@ -2344,10 +2358,10 @@ pub(crate) struct NodeContext {
+@@ -2344,10 +2359,10 @@ pub(crate) struct NodeContext {
  
  impl NodeContext {
      fn image_source(&self, image: &ImageNode) -> ImageSource {
@@ -1094,7 +1101,7 @@ index 11147620..23bd091e 100644
      }
  
      pub(super) fn add_ref(&mut self, identifier: SharedString, link: LinkMark) {
-@@ -2466,12 +2480,7 @@ impl Paragraph {
+@@ -2466,12 +2481,7 @@ impl Paragraph {
          let backgrounds = node_cx.range_backgrounds(fade_key);
  
          if self.should_render_inline_flow() {
@@ -1108,7 +1115,7 @@ index 11147620..23bd091e 100644
          }
  
          let has_image = children.iter().any(|child| child.image.is_some());
-@@ -2650,6 +2659,27 @@ impl Paragraph {
+@@ -2650,6 +2660,27 @@ impl Paragraph {
              .into_any_element()
      }
  
@@ -1136,12 +1143,27 @@ index 11147620..23bd091e 100644
      fn should_render_inline_flow(&self) -> bool {
          let has_image = self.children.iter().any(|child| child.image.is_some());
          let has_text = self.children.iter().any(|child| !child.text.is_empty());
-@@ -2945,12 +2975,14 @@ fn table_cell_padding_x(style: &TextViewStyle, rem_size: Pixels) -> f32 {
+@@ -2940,17 +2971,25 @@ struct TableColumn {
+ }
+ 
+ /// Horizontal padding of a table cell: `px_3` unless `style.table_cell`
+-/// sets it.
+-fn table_cell_padding_x(style: &TextViewStyle, rem_size: Pixels) -> f32 {
++/// sets it. Budget each edge rounded up to a device pixel: layout rounds
++/// the two edges independently before leaving space for the measured text.
++fn table_cell_padding_x(style: &TextViewStyle, window: &Window) -> f32 {
++    let rem_size = window.rem_size();
++    let scale_factor = window.scale_factor();
      let padding = &style.table_cell().padding;
-     let side = |length: Option<DefiniteLength>| match length {
-         Some(DefiniteLength::Absolute(length)) => f32::from(length.to_pixels(rem_size)),
+-    let side = |length: Option<DefiniteLength>| match length {
+-        Some(DefiniteLength::Absolute(length)) => f32::from(length.to_pixels(rem_size)),
 -        _ => CELL_PAD_PX / 2.,
-+        _ => f32::from(rems(0.75).to_pixels(rem_size)),
++    let side = |length: Option<DefiniteLength>| {
++        let width = match length {
++            Some(DefiniteLength::Absolute(length)) => length.to_pixels(rem_size),
++            _ => rems(0.75).to_pixels(rem_size),
++        };
++        (f32::from(width) * scale_factor).ceil() / scale_factor
      };
      side(padding.left) + side(padding.right)
  }
@@ -1153,7 +1175,16 @@ index 11147620..23bd091e 100644
  const CELL_MIN_PX: f32 = 48.0;
  const CELL_BORDER_PX: f32 = 1.0; // border_r_1 drawn by every column but the last
  
-@@ -3656,6 +3688,15 @@ impl BlockNode {
+@@ -3566,7 +3605,7 @@ impl BlockNode {
+         let rem_size = window.rem_size();
+         let wrap_min_px = f32::from(rems(4.).to_pixels(rem_size));
+         // Widths were measured with the default cell padding.
+-        let padding_delta = table_cell_padding_x(style, rem_size) - CELL_PAD_PX;
++        let padding_delta = table_cell_padding_x(style, window) - CELL_PAD_PX;
+         // Lengths are rounded to device pixels for layout. Round the content
+         // widths up, or a column can lose the fraction of a pixel that keeps
+         // its text on one line.
+@@ -3656,6 +3695,15 @@ impl BlockNode {
          div()
              .pb(block_gap(options, style))
              .w_full()
@@ -1169,7 +1200,7 @@ index 11147620..23bd091e 100644
              .child(body)
              // Custom actions row (e.g. copy / download) rendered below the
              // table. The hook's element spans full width; alignment is up to
-@@ -3757,7 +3798,7 @@ impl BlockNode {
+@@ -3757,7 +3805,7 @@ impl BlockNode {
                          .span
                          .map(|span| TextLeafKey::table_cell(span.start, cell_ordinal));
                      cell_ordinal += 1;
@@ -1229,7 +1260,7 @@ index 81d8a9aa..7fc11403 100644
              stream_fade,
              range_highlights: self.range_highlights.clone(),
 diff --git a/crates/base/src/text/text_view.rs b/crates/base/src/text/text_view.rs
-index f5a461e3..3b428b14 100644
+index f5a461e3..fdc946f6 100644
 --- a/crates/base/src/text/text_view.rs
 +++ b/crates/base/src/text/text_view.rs
 @@ -94,7 +94,7 @@ impl TextViewDefaults {
@@ -1250,7 +1281,7 @@ index f5a461e3..3b428b14 100644
          self
      }
  
-@@ -2761,10 +2761,12 @@ mod tests {
+@@ -2761,23 +2761,28 @@ mod tests {
              text_view: Entity<TextViewState>,
              width: Pixels,
              style: TextViewStyle,
@@ -1263,13 +1294,18 @@ index f5a461e3..3b428b14 100644
 +                window.set_rem_size(self.rem_size);
                  div()
                      .w(self.width)
++                    .text_size(gpui::rems(1.))
                      .child(TextView::new(&self.text_view).style(self.style.clone()))
-@@ -2773,11 +2775,11 @@ mod tests {
+             }
+         }
  
-         let short = "Operating revenue (USD)";
+-        let short = "Operating revenue (USD)";
++        let short = (0..7)
++            .map(|index| char::from_u32(0x4e10 + index).unwrap())
++            .collect::<String>();
          let source = format!(
 -            "| {short} | Note |\n| --- | --- |\n| {short} | x |\n| 1 | {} |",
-+            "| {short} | Note |\n| --- | --- |\n| {short} | x |\n| 1 | {} |\n| 1 | x |",
++            "| {short} | Note |\n| --- | --- |\n| **{short}** | x |\n| 1 | {} |\n| 1 | x |",
              "word ".repeat(30)
          );
          // Heights of the first column's cells, top to bottom.
@@ -1278,7 +1314,7 @@ index f5a461e3..3b428b14 100644
              let mut app = TestApp::with_text_system(Arc::new(WideMonoTextSystem));
              app.update(crate::init);
              let cell = style.table_cell().clone().bg(gpui::rgb(CELL_BACKGROUND));
-@@ -2785,6 +2787,7 @@ mod tests {
+@@ -2785,6 +2790,7 @@ mod tests {
              let mut window = app.open_window(|_, cx| TableRoot {
                  text_view: cx.new(|cx| TextViewState::markdown(&source, cx)),
                  width: px(width),
@@ -1286,7 +1322,7 @@ index f5a461e3..3b428b14 100644
                  style,
              });
              window.draw();
-@@ -2817,24 +2820,34 @@ mod tests {
+@@ -2817,24 +2823,41 @@ mod tests {
          };
  
          for (layout, style) in [("wrap", TextViewStyle::default()), ("scroll", scroll())] {
@@ -1295,7 +1331,10 @@ index f5a461e3..3b428b14 100644
 -            assert_eq!(fits.len(), 3, "{layout}: three rows");
 -            assert_eq!(fits[0], fits[2], "{layout}: the header fits on one line");
 -            assert_eq!(narrow[..2], fits[..2], "{layout}: the short column wraps");
-+            for rem_size in [12., 16., 20., 24.] {
++            for rem_size in [12., 16., 20., 24.]
++                .into_iter()
++                .chain((0..20).map(|step| 12.1 + step as f32 * 0.61))
++            {
 +                let fits = first_column(4000., style.clone(), rem_size);
 +                // Leave room for the short column plus the scrolling long-column floor.
 +                let narrow = first_column(700_f32.max(rem_size * 40.), style.clone(), rem_size);
@@ -1303,6 +1342,10 @@ index f5a461e3..3b428b14 100644
 +                assert_eq!(
 +                    fits[0], fits[3],
 +                    "{layout}, rem={rem_size}: the header fits on one line"
++                );
++                assert_eq!(
++                    fits[1], fits[3],
++                    "{layout}, rem={rem_size}: the styled short label wraps"
 +                );
 +                assert_eq!(
 +                    narrow[..2],
@@ -1674,3 +1717,29 @@ index 7a8ddf51..594120fb 100644
              soft_wrap,
          }
      }
+diff --git a/website/base/text-view.md b/website/base/text-view.md
+index e761b4b6..f1b510e8 100644
+--- a/website/base/text-view.md
++++ b/website/base/text-view.md
+@@ -109,7 +109,7 @@ and Component turns it on.
+ 
+ ## Syntax highlighting is opt-in
+ 
+-`gpui-base` does not enable syntax highlighting and has no tree-sitter language dependency. Fenced code blocks use the neutral code surface and plain foreground until the application supplies `code_block_highlighter`.
++`gpui-base` does not enable syntax highlighting and has no tree-sitter language dependency. Fenced code blocks use the neutral code surface and plain foreground until the application supplies `code_block_highlighter`. A missing or blank language is displayed as `text`; `CodeBlock::lang()` and copied Markdown retain the original language metadata.
+ 
+ The callback receives a `CodeBlock` and returns byte ranges paired with GPUI `HighlightStyle` values:
+ 
+diff --git a/website/zh-CN/base/text-view.md b/website/zh-CN/base/text-view.md
+index 4fda2653..5e2ac6b7 100644
+--- a/website/zh-CN/base/text-view.md
++++ b/website/zh-CN/base/text-view.md
+@@ -90,7 +90,7 @@ TextViewDefaults::new()
+ 
+ ## 语法高亮由使用者开启
+ 
+-`gpui-base` 默认不启用语法高亮，也不包含 tree-sitter 语言依赖。应用未提供 `code_block_highlighter` 时，围栏代码块只使用中性的代码背景和普通前景色。
++`gpui-base` 默认不启用语法高亮，也不包含 tree-sitter 语言依赖。应用未提供 `code_block_highlighter` 时，围栏代码块只使用中性的代码背景和普通前景色。 未指定语言或语言名为空时，标签显示 `text`；`CodeBlock::lang()` 和复制的 Markdown 保留原始语言信息。
+ 
+ 回调接收 `CodeBlock`，并返回 UTF-8 字节范围及对应的 GPUI `HighlightStyle`：
+ 
