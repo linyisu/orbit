@@ -1,184 +1,42 @@
 # orbit-tools
 
-[项目总览](../../README.md)
+Agent 的文件、命令、网络、文档与 MCP 工具。工具实现 `orbit-agent::Tool`，由服务按会话权限注册；参数及限制以各工具的 schema 和源码为准。
 
-`orbit-tools` 为 Agent 提供文件、命令、文档、网络及交互工具。命令直接在目标工作目录运行；内置文件工具通过受保护文件描述符访问。文档转换、Git worker 和浏览器回退使用独立进程及临时目录。
+## 工具目录
+
+| 类别 | 入口 |
+| --- | --- |
+| 文件浏览与搜索 | [read_file](src/read_file.rs)、[list_files](src/list_files.rs)、[search_text](src/search_text.rs) |
+| 项目概览与符号 | [project_overview / code_symbols](src/project_overview.rs) |
+| 文件写入与编辑 | [write_file](src/write_file.rs)、[edit_file](src/edit_file.rs) |
+| 图片与文档 | [read_image](src/read_image.rs)、[read_document](src/read_document.rs) |
+| 命令与日志 | [run_command](src/run_command.rs)、[command_jobs](src/command_jobs.rs)、[read_command_output](src/read_command_output.rs) |
+| 网页与搜索 | [web_fetch](src/web_fetch.rs) |
+| Git 与外部授权 | [git_push](src/git_push.rs)、[request_capability](src/request_capability.rs) |
+| MCP | [mcp](src/mcp.rs) |
 
 ## 执行与审批
 
-本地、SSH 和 WSL 使用相同的原生执行方式，沿用目标用户的真实路径、HOME、PATH、开发工具链、缓存和 Git 认证。产出直接保存在项目或用户指定位置，由用户管理；Orbit 不创建会话 scratch、不复制导出文件，也不清理项目产出。
+命令与 MCP 服务按目标用户权限运行，审批声明不提供文件系统或网络隔离。内置文件工具另行校验工作区、外部授权和保护路径；写入使用原子提交。
 
-`workspace_access` 与 `network` 声明预期效果，参与审批，不限制原生命令的文件系统和网络访问。超时、取消、输出预算、文件大小、地址空间及文件描述符配额仍生效。文件工具的路径保护独立生效。
+- `ask`：修改、命令、MCP 和新增外部授权按规则确认。
+- `auto`：自动批准工作区内写入及从工作区启动的命令；MCP 和新增外部授权继续审批。
+- `yolo`：自动批准工具请求，内置文件路径保护仍生效。
 
-## 共用预算和内部模块
+后台命令支持状态、等待和取消，不跨服务重启恢复。命令原始日志有保留上限，任务结束后失效；文档页图使用临时文件，持久图片另由附件库管理。
 
-[limits.rs](src/limits.rs) 统一文本工具的页预算（32 KiB）、JSON 元数据预留及目录扫描条目预算；各工具的行数、深度、匹配数等上限由各自模块拥有，参数 schema 与实际验证引用同一常量。文本/条目预算之外仍有 JSON 分页元数据，不应将其等同于整个序列化响应的精确字节数。
+网页与图片请求默认只访问公网，复用环境代理和 `[web]` 配置。`git_push` 仅支持明确的 HTTPS 目标，普通 Git 操作使用原生命令。
 
-[web_fetch/search.rs](src/web_fetch/search.rs) 管理搜索路由、超时、重试和冷却；[search/mcp.rs](src/web_fetch/search/mcp.rs) 调用 Parallel 与 Exa 的托管搜索接口，[search/duckduckgo.rs](src/web_fetch/search/duckduckgo.rs) 处理 DuckDuckGo 的页面请求与过滤参数。[web_fetch/dom.rs](src/web_fetch/dom.rs) 提供 HTML 属性读取与文本投影。
+## MCP
 
-[image_assets.rs](src/image_assets.rs) 复用 `Attachment::MAX_IMAGE_BYTES` 与有界图片文件读取，导入前使用有界读取。[web_fetch/resource.rs](src/web_fetch/resource.rs) 的 `fetch_image` 是 TUI 使用的内部网络图片接口，复用 URL、DNS 与重定向检查；同一模块的 `WebClient::fetch_json` 为公开模型规格提供有大小限制的 JSON 下载，不发送模型账号凭据。这些内部接口没有注册成额外的模型工具。
+配置位于 `[mcp.servers.<名称>]`，当前支持 stdio。启动需显式允许：CLI/TUI 使用 `--allow-mcp-start`，GUI 使用 MCP 设置开关。
 
-## 架构与核心设计
+GUI 保存后点击“应用到当前会话”重新连接；当前任务保留原工具，下一次发送使用更新结果。导入先识别配置和启动参数，确认后安装依赖；失败显示完整错误链与有界 stderr。
 
-```text
-模型 ToolCall
-  → Agent 发出 ToolStarted
-  → ToolRegistry 路由至目标工具实例
-  → 工具执行参数校验与工作区安全检查
-  → （按策略触发用户内联审批或自动授权）
-  → 执行原生命令或通过受保护文件接口完成操作
-  → 返回结构化 JSON / 多模态结果
-  → Agent 发出 ToolFinished 并将结果注入上下文
-```
-
-- **抽象解耦**：`orbit-agent` 仅依赖基础 `Tool` 特征对象，无需了解底层文件系统描述符或进程管理的具体实现。
-- **Fail-Closed 边界**：所有文件工具强制通过安全文件描述符定位，坚决拒绝符号链接越界、`..` 相对逃逸与受保护文件别名访问。
-- **分层审批策略**：文件系统能力由运行时权限引擎校验；工具审批由 CLI/TUI 模式、Git 分类与已有授权共同决定。
-
----
-
-## 工具目录与功能详解
-
-### 1. 文件读取与浏览
-
-#### `read_file`
-- **功能**：以安全方式读取工作区或已授权外部目录内的 UTF-8 文本文件。
-- **参数**：`path`（相对或已授权绝对路径）、`start_line`（从 1 起始）、`start_char`（所选行内从 0 起始的 Unicode 字符偏移）、`max_lines`（默认 200，范围 1–500）、`cursor`（原样传回 `next_cursor`）。
-- **约束与安全**：分块读取，单次扫描预算默认 64 MiB（`command.read_file_scan_bytes` 可调整，`0` 表示不限扫描量）、返回内容上限 32 KiB，扫描预算按实际读取量计算；可读取指定的中间行。优先用返回的 `next_cursor` 续读，避免重新扫描开头；文件版本变化时游标失效。`total_lines` 在到达文件末尾前为 `null`。内部链接经描述符解析，越界、循环及保护目标被拒绝；超长行仍可使用 `next_start_line`、`next_start_char` 续读。TUI 的 `[start..=end]` 行号范围包含两端。
-
-#### `list_files`
-- **功能**：以广度优先遍历浏览目录树结构，无需启动外部 Shell。
-- **参数**：`path`、`depth`（默认 1，范围 1–8）、`limit`（默认 200，上限 1000）、`offset`、`include_hidden`（默认 false）。
-- **约束与安全**：单次响应上限 32 KiB；全次扫描上限 20,000 个条目（超出时返回 `scan_truncated=true`）；单目录枚举上限 10,000 项；受保护路径与敏感隐藏目录即使开启 `include_hidden` 也坚决不予列出。
-
-#### `search_text`
-- **功能**：在工作区内执行高效的字面量或正则表达式全文检索，无需启动 Shell。
-- **参数**：`query`、`path`、`glob`、`context_lines`（前后上下文行数）、`limit`（最大匹配项，上限 500）、`offset`。
-- **约束与安全**：自动遵循 `.gitignore` 与 `.ignore`；单文件跳过上限 2 MiB；全次搜索上限 20,000 个文件或 16 MiB 文本；返回带行号的匹配内容及 `next_offset` 分页游标。
-
-#### `project_overview`
-- **功能**：只读扫描项目目录、语言分布、构建清单、测试文件及相关源码候选，不运行仓库脚本。
-- **参数**：`path`（默认 `.`）、`query`、`max_tokens`（默认 2500）。
-- **约束**：遵循忽略规则；最多遍历 20,000 项、记录 4,000 文件、读取 96 文件及 2 MiB 内容，单个源文件读取上限 128 KiB。Rust、Python、JS/TS、Go 使用 tree-sitter 提取部分声明，其余情况使用词法回退；结果不是完整符号表或依赖图。
-
-### 2. 精确编辑与写入
-
-#### `edit_file`
-- **功能**：对已有文件执行基于上下文锚点的精确局部替换，推荐日常代码修改使用。
-- **参数**：`path`、`old_text`（精确待替换旧文本）、`new_text`（替换新文本）、`replace_all`（是否替换所有非重叠匹配）。
-- **约束与安全**：建议先读取当前文件再提供上下文锚点；实现检查当前文本与锚点的精确匹配；默认强制唯一性检查，歧义多处匹配直接拒绝；需要人工审批时，TUI 显示差异预览；通过同父目录的临时文件写入、刷盘并原子重命名（atomic rename），避免直接覆盖时暴露半写入内容。
-
-#### `write_file`
-- **功能**：用于创建新文件或有意整体重写完整文件。
-- **参数**：`path`、`content`。
-- **约束与安全**：单文件大小上限 1 MiB；创建新文件时使用 `O_EXCL` / `NOREPLACE`，防止覆盖并发新增的文件；需要人工审批时展示交互式差异预览；新文件权限严格限制为 `0600`。
-
-### 3. Git 与项目版本感知
-
-#### 原生 Git 与内部 `git_inspect`
-- **Agent 入口**：通过 `run_command` 执行原生 Git。命令分类参与审批；普通本地写入和远端写入可获得绑定具体请求、仓库与配置版本的 TUI 会话授权，危险或未分类命令进入相应审批路径。
-- **内部工具**：`git_inspect` 用于内部核验、补丁与测试，通过库接口提供。提供结构化只读状态、差异与历史。
-- **参数**：`view`（`status` / `diff` / `history`）、`limit`、`offset`、`staged`（查看暂存区）。
-- **约束与安全**：工作区必须为 Git 根目录；显式剥离所有 pager、hooks、fsmonitor、外部 diff 及系统环境变量；`diff` 受 256 KiB 原始输出上限约束并支持分页；不修改任何索引或工作树。
-
-- **当前实现限制**：Git 命令分类不是完整 Shell 解析器，不能作为任意脚本效果的安全证明；TUI 的 Git 授权保存在进程内，不跨进程持久化；仅复用相同命令、工作目录、访问权限、外部能力及仓库配置版本。危险命令和配置修改不复用普通 Git 授权。原生命令使用宿主 Git 元数据及操作系统权限。
-
-#### `git_push`
-- **功能**：将一个本地分支普通推送到明确的 HTTPS 远端分支，使用用户全局 Git credential helper；需要远端写入审批，不能超过联网策略上限。
-- **参数**：`remote_url`、`source_branch`、`target_branch`。不支持强推、删除、mirror 或 SSH；执行采用 `command.process_limits` 与默认命令超时。
-- **认证边界**：宿主仅在批准后调用用户配置的 credential helper（30 秒、64 KiB 回执上限）；凭据经私有临时文件交给独立 worker。worker 使用临时裸仓库引用只读源对象，不继承项目配置或 hooks，禁用 HTTP 重定向，不把凭据或远端原始响应写入工具结果。工具结果不返回凭据；原生命令仍可使用用户自己的 Git 认证。需要已配置可非交互读取凭据的全局 helper。
-- **不可用情况**：使用调用中明确传入的 `remote_url`，不读取或自动转换仓库的 `origin`。SSH origin 不妨碍推送到另一个明确的 HTTPS 地址，但 SSH 密钥不能代替该地址的 HTTPS 认证；只在项目配置中设置的 helper 也不会运行。缺少或为空的凭据返回宿主全局 HTTPS 认证配置提示，模型不得猜测凭据或重复重试。SSH/scp 地址在审批前返回参数错误。
-
-### 4. 多模态与文档解析
-
-#### `read_image`
-- **功能**：读取工作区内的图片文件（PNG、JPEG、GIF、WebP），校验后复制至全局附件存储，并在下一次请求中作为原生视觉内容注入模型。
-- **约束与安全**：单图大小上限 20 MiB；最长边超过 2048 像素时自动等比例缩放；Agent 对非视觉模型的 `read_image` 调用直接返回错误；请求中已有图片附件的文本降级属于模型请求投影的另一条路径。
-
-#### `read_document`
-- **PDF 视觉读取**：支持视觉且未关闭图片能力时，`images=auto`（默认）将有图片、文字乱码或没有提取到文字的页面渲染为 PNG，随文字结果交给当前模型直接阅读。`images=always` 可查看矢量图/完整排版，`off` 仅取文字。每次最多 4 页、最长边 2048 像素；通过 `pdf.vision.next_image_start_page` 传入 `image_start_page`，保持原 `start_page/end_page` 继续获取。图片按物理页命名，仅放在 `/tmp` 私有临时目录，当前模型请求消费后释放；不进入永久附件库，历史和检查点不保存临时路径，需要时重新读取源文档。内置纯 Rust Hayro，无需安装浏览器、Poppler、Python 或 OCR；页面渲染在独立且有资源限制的 worker 中执行，失败仍保留提取文字。非视觉模型或关闭图片能力时明确提示图片未读。
-- **部分提取**：文字与图片混排是正常情况。按物理页保留文字；图片页、空白/未提取文字页和编码异常分别标注在 `pdf.pages`。局部无法解码的片段原位留标记，其余文字继续返回；严重损坏的文字层整页省略（包括看似正常的残留字符），只返回页码和看图提示，避免占位符刷屏或模型据乱码推断。`pdf.partial` 表示文字提取不完整；页面图片是否交付以 `pdf.vision` 为准。当前不执行 OCR，也不会把图片已附加当作内容已被理解。
-- **PDF 分页**：优先使用本工具读取 PDF，无需用户安装 `pdftotext` 或 Python 库。`start_page` / `end_page` 是从 1 开始的物理页码（含结束页），默认 20 页、单次最多 100 页。`pdf` 返回总页数、实际范围和 OCR/编码提示；文本截断时保持同一页码区间并使用 `next_start_char`，读完后以 `next_start_page` 继续。其他格式使用字符分页。
-- **功能**：基于 AnyDoc 在本地将各种文档格式（PDF、Word、PowerPoint、Excel、OpenDocument、RTF、EPUB、CSV）转换为 Markdown 文本。
-- **约束与安全**：文档 worker 在独立进程中转换，可取消并设 60 秒超时、1 GiB 地址空间与 64 MiB 输出限制；单个源文档上限 256 MiB。每次读取仍重新授权、读取并校验源内容哈希；相同内容、页码区间、扩展名和 worker 文件版本复用进程内缓存（最多 4 项、64 MiB），工具实例释放后清空；转换时建立每 4096 字符一个定位点的索引，翻页使用索引定位转换结果。按 Unicode 字符分页（默认 20,000，上限 60,000 字符）。库嵌入方应通过 `with_worker` 指定支持私有转换入口的可执行文件（如配套 `orbit-document-worker`）。
-
-### 5. 命令执行与输出管理
-
-#### `run_command`
-- **功能**：通过 `orbit-runtime` 在目标用户的 shell 和真实工作目录中执行命令。
-- **参数**：`command`（脚本正文）、`cwd`（工作目录）、`timeout_seconds`（超时时限）、`background`（默认 false）、`workspace_access`（`read` 或 `read_write`）、`network`（`deny` 或 `allow`）。
-- **审批**：Auto 自动批准从工作区内启动的所有命令，包括脚本及联网命令；Ask 按审批规则确认；Yolo 自动批准。命令声明不构成 OS 访问限制，进程可以按目标用户的权限访问其他目录及网络。
-- **资源限制**：单文件和地址空间默认不限（`0`），文件描述符默认 1024，可通过 `command.process_limits` 配置。进程数沿用宿主设置。超时默认 120 秒，上限默认 600 秒。
-- **联网声明**：`network="allow"` 不能超过全局 `command.network` 声明上限；该配置不拦截原生进程的网络连接。
-- **输出**：stdout / stderr 持续排空，在工具结果中各保留末尾 32 KiB，附带总字节数与截断标记。
-- **文件产出**：直接写入项目或用户指定的真实路径。补丁可用 `git diff` 等原生命令生成，无需额外导出工具。
-
-#### 后台命令
-- `run_command(background=true)` 在审批及执行准备完成后返回 `job_id` 和可用的 `output_id`。同会话最多同时运行 8 个后台命令，沿用普通命令的审批、执行超时和核验流程；普通工具调用仍按模型给出的顺序执行，后台命令的进程可以重叠运行。
-- `wait_commands(job_ids?, mode="any"|"all")` 通过完成事件等待任意一个或全部任务，不轮询、不调用模型。省略 ID 时等待当前运行尚未交付的任务。
-- `get_command_status(job_ids?)` 查询状态；省略 ID 时列出当前运行的任务，指定 ID 时附带有限输出预览。`cancel_commands(job_ids)` 请求取消指定任务，`cancelling` 表示进程仍在清理，最终为 `cancelled`。
-- 未经显式等待获取的结果在下一次模型请求前合并投递，stdout/stderr 各最多 2 KiB 预览，完整保留日志通过 `read_command_output` 回读。显式等待已返回的结果不重复通知模型。
-- AI 没有继续调用工具但仍有任务未完成时，Agent 自动暂停等待完成事件，再继续规划。切换或关闭仍在运行的标签不停止任务；取消当前运行或发生执行错误会取消其后台任务。任务 ID 仅对所属会话有效，进程不跨 Orbit 重启恢复，历史记录不触发自动重跑。
-
-#### `read_command_output`
-- **功能**：命令原始输出只在当前任务的 `/tmp` 私有临时目录中流式暂存（单流上限 16 MiB，单次任务滚动上限 128 MiB）。模型通过 `output_id`、`offset` 和 `max_bytes` 分页读取，UTF-8 分页使用返回的 `next_offset` 继续。任务完成、失败或取消后失效，不跨任务或服务重启保留；会话历史仍保留有长度上限的工具结果。
-- **生命周期**：草稿和没有执行命令的任务不创建日志目录；正在读取或写入的操作持有临时目录租约，最后一个租约释放时删除文件。下次执行命令时通过进程文件锁回收异常退出留下的目录，跳过其他进程仍在使用的日志。用户主动重定向到项目中的输出文件由用户管理。
-- **并行日志**：运行中的日志不会被其他命令回收；所有并行流共享当前任务的字节预算，预算不足时继续排空进程输出并标记保留日志截断。
-
-### 6. 文件工具权限扩展
-
-#### `request_capability`
-- **功能**：为内置文件工具申请工作区外部目录的访问权限。
-- **参数**：`path`（目标绝对路径）、`access`（`read` 或 `read_write`）、`reason`（申请原因）。
-- **约束**：路径必须存在；工作区内普通路径已经授权。已有外部授权直接复用，新授权经过审批并保存在当前进程的会话授权集合中。
-- **审批范围**：工作区祖先、受保护资源、`/`、整个 `/tmp`、`/opt`，以及 `/proc`、`/dev`、`/sys` 及其子路径不能授权。其他具体外部资源可以申请；不存在的嵌套路径会提示最近的已有可授权父目录。这些授权控制文件工具，不给原生命令增加隔离。
-
-### 7. 网络检索与网页读取
-
-#### `web_fetch`
-- **功能**：直接获取公网已知 URL 的网页正文并转为结构化 Markdown。
-- **约束与安全**：
-  - 默认访问公网 80/443；`[web].allowed_origins` 可授权精确的 HTTP(S) 来源，例如 `http://docs.internal:8080`。协议、主机和端口必须匹配，重定向的每一跳分别验证。
-  - 自动沿用启动环境的 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY` 与 `NO_PROXY`（均支持小写），复用 Hyper 的标准匹配规则，支持 HTTP(S) 与 SOCKS 代理；没有匹配代理时直连并校验 DNS。`[web].proxy` 可显式指定 HTTP(S) 代理，优先于环境变量和 `NO_PROXY`，无需为已有代理环境重复设置。
-  - 网页、搜索、网络图片与浏览器回退共用 `WebClient` 路由，每次重定向重新匹配。代理承担目标域名解析及出口限制；网页结果用 `trusted_proxy_resolved` 标明这一边界。未授权的内网地址、私有主机名和危险重定向被拒绝，代理凭据不进入调试输出与错误信息。
-  - 当遇到 Cloudflare 浏览器挑战且当前路由有可用的无认证 HTTP 代理时，可使用无头 Firefox 和独立临时 profile 提取正文。显式授权的内部来源使用直接 HTTP 获取。
-  - 单次响应体上限 2 MiB，总超时 60 秒，最多 5 次重定向；按 Unicode 字符分页。
-
-#### `web_search`
-- **功能**：公共网络搜索，默认依次尝试 Parallel、Exa、DuckDuckGo。Parallel 和 Exa 使用托管 MCP HTTP 接口；DuckDuckGo 解析公共搜索页面。`[web].search_providers` 可设置顺序，支持 `parallel`、`exa`、`duckduckgo`。
-- **参数**：`query`（1–512 字符）、`max_results`（1–10）、`language`、`region`、`freshness`。
-- **使用准备**：默认搜索无需 API Key、浏览器、Node.js 或本地 MCP 服务，需要能访问对应公共服务。Parallel 和 Exa 的匿名额度由提供商管理；限流时自动尝试下一来源。网络请求复用 `[web].proxy` 和环境代理设置。
-- **约束与安全**：自动规范化查询文本，去除跟踪参数后去重；针对 HTTP 429 和 MCP 响应中的限流信号进行实例级冷却退避。JSON、SSE 响应均限制为 2 MiB；MCP 请求禁止重定向，SSE 收到对应结果后立即结束读取；单条摘要最多 2000 字符。
-- **筛选支持**：HTML 搜索来源接收语言、地区和时效参数；当前 Parallel、Exa MCP 搜索接口使用完整查询词，并通过 `warnings` 明确提示未应用的可选筛选条件。
-- **查询与结果检查**：保留引号和搜索运算符，检查最终地址及搜索框回显的查询。单一、无歧义的 `site:` 条件用于过滤结果 URL；查询被改写或结果全部超出该范围时尝试下一引擎。结果标题、摘要和 URL 均未出现查询中的任何引号短语时，尝试其他引擎；简单、不带引号的拉丁文字多词查询也检查可见词汇线索。全部候选都缺少该信号时返回结果及 `query_match_unconfirmed` 警告。摘要匹配属于弱信号，实际相关性需要读取网页核实。
-- **诊断信息**：响应包含搜索来源、请求地址 `request_url`、响应地址 `response_url`、`warnings` 和回退原因。MCP 来源的地址指向搜索服务端点，完整查询词位于 `query` 字段。TUI 展示相关性警告，展开详情可查看来源地址。
-
----
-
-## 外部 MCP 服务
-
-CLI/TUI 的工具注册还可加载用户配置的 MCP 工具。启动配置的服务需传入 `--allow-mcp-start`；服务进程直接运行在宿主，清理继承环境但保留用户显式配置的环境变量。单次工具调用经过审批，审批不能限制服务进程自身的文件或网络能力。
-
-## 审批模式与权限交互
-
-TUI 使用 `/mode` 切换 `ask` / `auto` / `yolo`；非交互 `orbit-cli chat --mode` 接受 `read-only` / `auto` / `yolo`，不能假设其具有 TUI 弹窗：
-
-| 模式 | 行为特征 |
-|---|---|
-| `ask` | 默认人工确认修改、命令、MCP 和新增外部授权请求；已有文件或 Git 会话授权可能先行放行。只读文件工具不逐次弹窗。 |
-| `auto` | 自动批准工作区内文件写入，以及从工作区启动的所有命令（包括脚本和联网）；新增外部文件授权等请求继续按审批策略处理。 |
-| `yolo` | 工具审批请求自动批准；文件工具的路径保护仍生效。原生命令及 MCP 服务按操作系统用户权限运行。 |
-
----
-
-## 验证与测试
+## 验证
 
 ```sh
-# 运行 orbit-tools 单元与集成测试
-cargo test -p orbit-tools --offline
-
+cargo test -p orbit-tools
 ```
 
-## 显式模板授权
-
-`[permissions].read_templates` 和 `write_templates` 接受工作区内已有 `.env.*` 普通文件的精确路径。只有用户确认其是模板后才应配置；不会自动信任 `.env.example` 后缀。写授权同时允许读取，只有读授权时文件工具不能写入，硬链接别名也不能绕过文件工具检查。注册的认证、数据库等保护路径不能被模板授权覆盖。
+[项目总览](../../README.md)

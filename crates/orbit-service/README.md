@@ -1,62 +1,27 @@
 # orbit-service
 
-[项目总览](../../README.md)
+应用服务层，协调会话、模型、工具、审批和子 Agent。CLI、TUI、GUI 通过同一协议使用本库。
 
-`orbit-service` 是 Orbit 的应用服务层，协调配置、模型选择、会话、工具、子代理和工作区生命周期。`orbit-server` 接收客户端请求，并由本库管理目标端会话与任务。
+## 入口
 
-## 职责与接口
+- [workspace/](src/workspace/)：服务生命周期、会话 actor、请求与事件分页。
+- [session.rs](src/session.rs)、[execution.rs](src/execution.rs)：会话恢复、Agent 启动与运行结果。
+- [tools.rs](src/tools.rs)、[planning.rs](src/planning.rs)、[user_input.rs](src/user_input.rs)：工具装配、计划与问答。
+- [subagents.rs](src/subagents.rs)、[side_questions.rs](src/side_questions.rs)：子任务与旁路提问。
+- [context/](src/context/)、[extensions/](src/extensions/)：指令、记忆、技能与插件。
 
-| 模块 | 内容 |
-| --- | --- |
-| [context/](src/context) | 项目指令、历史归档、任务和会话记忆 |
-| [extensions/](src/extensions) | Skill 发现、插件市场与启用状态 |
-| [session.rs](src/session.rs)、[session/title.rs](src/session/title.rs) | 会话写入锁、恢复、检查点与标题任务 |
-| [tools.rs](src/tools.rs)、[tools/](src/tools) | 工具装配、工作区权限、命令输出和核验 |
-| [execution.rs](src/execution.rs) | Agent 启动、手动压缩、运行结果与取消处理 |
-| [policy.rs](src/policy.rs) | 会话能力上限、只读策略与模型选择 |
-| [subagents.rs](src/subagents.rs)、[side_questions.rs](src/side_questions.rs) | 子代理调度和旁路请求 |
-| [workspace/](src/workspace) | 工作区准备、会话请求、审批与事件分页 |
-| [platform.rs](src/platform.rs) | 文档与浏览器 worker 入口 |
+## 生命周期
 
-`workspace` 持有会话 actor、审批、运行任务与事件游标。客户端请求覆盖模型切换、运行中补充指令、上下文压缩、撤销、附件、旁路提问、子代理、项目任务、会话记忆和插件。目标端解析工作区路径并提供目录及历史补全。`execution::start` 在服务内启动 Agent，返回事件、取消令牌和任务句柄。
+同一数据库由共享服务管理，会话 actor 串行处理状态变更。客户端断开后任务继续；服务重启后标记中断，不自动重跑副作用命令。
 
-同一目标用户下，数据库的规范路径确定共享服务地址，连接时协商协议版本。同一构建的程序、不同配置文件和工作目录共享服务。每个连接携带配置与认证路径，用于创建会话；打开已有会话时接入它的 actor，并沿用该会话的模型、权限与工作目录。
+Plan 只允许只读操作，批准后进入 Build，工具审批仍生效。MCP 可异步应用到已有会话；当前运行保留原工具集，后续发送使用新工具。
 
-连接接入核对后台进程的实际可执行文件和构建代次。同一数据库的终端共享协议兼容的最新版服务，旧客户端复用较新的后台。升级通过服务协议请求空闲关闭，再启动新服务；启动锁串行协调切换，会话写入锁在服务地址释放前完成交接。已发布的协议 7、8 地址作为共享服务的兼容入口，已有终端重连后接入同一个服务。运行任务结束后完成切换。已连接的 TUI 标签断线时自动重连原会话，并从持久化事件恢复进度；草稿和待发送图片保留，尚未确认的请求由用户决定是否重试。构建代次使用编译时间，发布构建可通过 `SOURCE_DATE_EPOCH` 提供可复现的时间。
-
-多个终端可以同时打开同一会话，各自按事件游标同步消息、运行状态、模型设置和审批。服务按会话串行处理操作，任务运行期间接受补充指令、审批和取消，重复请求通过请求 ID 去重。写入锁由服务持有，保护会话存储；客户端断开后任务继续，重连接收已有事件。服务重启后将未完成执行标记为中断，副作用命令由用户明确决定是否重试。
-
-客户端连接、部署与事件订阅由 `orbit-client` 提供；协议类型由 `orbit-protocol` 定义。配置和模型目录由 `orbit-config` 管理。
-
-应用层依赖 `orbit-agent`、`orbit-model`、`orbit-auth`、`orbit-runtime`、`orbit-tools` 和 `orbit-store`。绘制、键鼠事件、历史显示、参数解析与终端输出属于前端。
-
-## 扩展与上下文
-
-启动和切换工作区时发现用户与项目的 `SKILL.md`，以及项目启用的插件技能。模型只在存在可用技能时获得 `load_skill` 工具与名称目录；完整内容按需加载。路径和优先级见 [TUI 使用说明](../orbit-tui/README.md)及 [工具文档](../orbit-tools/README.md)。
-
-市场条目可作为内联插件清单，不要求每个包都提供 `.claude-plugin/plugin.json`。检查与加载统一解析包清单和市场声明，兼容旧缓存；共享仓库根目录的条目按 `skills` 指定的目录隔离技能，不自动加载其他包的技能。已有包清单损坏、越界路径或冲突声明仍报错。空会话中首次启用插件后，刷新按当前工作区查找项目，避免尚未持久化的会话丢失新启用的技能。技能读取与编辑上限统一为 1 MiB，允许较大的 API 参考技能，同时保留文件大小和非符号链接检查。
-
-资源协议的 `ScanSkills` 获取本地或 Git 来源并生成完整技能包快照，返回名称、说明、相对路径与冲突信息；`ImportSkills` 使用所属会话的单次 token 安装所选路径。快照有效期 15 分钟，安装先整批预检再写入项目 `.orbit/skills`，保留辅助文件，不执行其中脚本，也不覆盖已有目录或同名技能。来源复制限制目录深度、文件与总大小，技能包内符号链接会被拒绝。安装遵守技能能力、只读和写入权限，任务执行期间拒绝扫描与安装；成功后沿用现有技能刷新流程。
-
-子代理使用独立会话和取消令牌；探索与审查使用只读工具，开发使用独立 worktree 与父会话授权的工具，父任务通过工具注册接口创建、查询或继续子任务。旁路提问使用独立流式请求，记录只保存在内存中，不会触发主会话草稿落库；最后一个查看者关闭或断连时取消请求并释放记录。
-
-任务和会话记忆操作通过 `context::project_state::actions` 更新存储，并刷新模型上下文。指令、历史归档与记忆各自维护所属领域的规则。
-
-项目任务同时提供终端报告和 `Tasks` 结构化快照，均由所属会话 actor 串行处理。创建与编辑支持标题、说明、优先级和依赖；状态、释放认领及依赖校验沿用存储规则。服务拒绝自依赖、循环、跨项目依赖，以及依赖未完成时的开始 / 完成操作；修改成功后的快照包含最新 `blocked_by` 与认领状态。
+技能和 MCP 导入先扫描来源，再按用户选择安装。配置、模型适配和持久化分别由对应 crate 负责。
 
 ## 验证
 
 ```sh
-cargo test --offline -p orbit-service
-cargo check --offline -p orbit-service
+cargo test -p orbit-service
 ```
 
-测试覆盖配置、模型目录、会话锁与恢复、工具组合、子代理、旁路请求和工作区传输。应用库可独立构建。
-
-## 用户输入请求
-
-`user_input` 管理 Agent 发起的结构化问答。`ask_user` 使用题目 ID 和选项 ID 表示答案，支持 `single`、`multiple`、`text` 题型及自定义答案。每组最多 8 题，建议模型集中询问 1～4 个关联问题。
-
-TUI 连接后通过 `EnableUserInput` 声明交互能力。会话的 `Page.user_inputs` 提供待回答快照，`AnswerUserInput` 提交答案或明确取消，`UserInputHistory` 分页读取记录。服务先持久化结果再恢复工具调用；相同提交可以重试，冲突答案返回已处理提示。问答独立于审批模式，等待用户期间保持任务活跃。
-
-子代理通过父会话的问答服务发布问题，记录中携带来源会话 ID。客户端断开后，服务保留待回答请求。任务取消会结束对应问答；服务重启后，遗留待回答记录标记为 `interrupted`，历史问题和已经提交的答案继续保留。未声明交互能力的会话调用问答工具会收到明确错误。
+[项目总览](../../README.md)
