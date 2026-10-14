@@ -3,6 +3,7 @@ use std::{collections::BTreeMap, path::Path, process::Stdio, sync::OnceLock, tim
 use tokio::{io::AsyncReadExt, process::Command};
 
 use super::environment::is_sensitive_key;
+use super::process::ProcessGroup;
 
 const MARKER: &[u8] = b"\0ORBIT-ENVIRONMENT\0";
 const MAX_BYTES: u64 = 1_024 * 1_024;
@@ -50,7 +51,8 @@ async fn discover(
     home: &Path,
     environment: &BTreeMap<String, String>,
 ) -> std::io::Result<BTreeMap<String, String>> {
-    let mut child = Command::new(shell)
+    let mut command = Command::new(shell);
+    command
         .args([
             "-l",
             "-c",
@@ -63,9 +65,8 @@ async fn discover(
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .process_group(0)
-        .kill_on_drop(true)
-        .spawn()?;
-    let _group = ProcessGroup(child.id());
+        .kill_on_drop(true);
+    let (mut child, _group) = ProcessGroup::spawn(&mut command)?;
     let mut stdout = child
         .stdout
         .take()
@@ -100,17 +101,6 @@ fn parse(bytes: &[u8]) -> std::io::Result<BTreeMap<String, String>> {
             (!key.is_empty() && !is_sensitive_key(key)).then(|| (key.to_owned(), value.to_owned()))
         })
         .collect())
-}
-
-struct ProcessGroup(Option<u32>);
-impl Drop for ProcessGroup {
-    fn drop(&mut self) {
-        if let Some(id) = self.0 {
-            unsafe {
-                libc::kill(-(id as i32), libc::SIGKILL);
-            }
-        }
-    }
 }
 
 #[cfg(test)]

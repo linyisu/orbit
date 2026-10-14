@@ -10,6 +10,7 @@ use std::{
 use anyhow::{Context, Result, bail};
 use orbit_agent::tool::{Tool, ToolError, ToolFuture, ToolOutput, ToolRegistry};
 use orbit_model::types::{ToolCall, ToolDefinition};
+use orbit_runtime::execution::process::ProcessGroup;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::{
@@ -25,6 +26,8 @@ mod diagnostics;
 
 const MAX_MESSAGE_BYTES: usize = 4 * 1_024 * 1_024;
 const PROTOCOL_VERSION: &str = "2025-11-25";
+const SHUTDOWN_GRACE: Duration = Duration::from_secs(2);
+const CANCELLATION_WRITE_TIMEOUT: Duration = Duration::from_millis(100);
 
 #[derive(Clone, Debug, Default, Deserialize, serde::Serialize)]
 pub struct McpConfig {
@@ -41,6 +44,7 @@ pub struct McpServerConfig {
     pub args: Vec<String>,
     #[serde(default)]
     pub env: BTreeMap<String, String>,
+    /// Absolute budget for writing and receiving each request, including tool execution.
     #[serde(default = "default_timeout_seconds")]
     pub timeout_seconds: u64,
     /// Empty means all server tools. A nonempty list names the only tools Orbit
@@ -247,7 +251,9 @@ impl Tool for McpTool {
             self.exposed_name.clone(),
             format!(
                 "MCP server {} · {} External process: each invocation is subject to the selected \
-                    approval mode; inspect arguments before allowing it.",
+                    approval mode; inspect arguments before allowing it. Transport recovery starts \
+                    a fresh server session; previous session handles may be invalid. Never replay \
+                    timed-out operations automatically.",
                 self.server,
                 self.definition.description.trim()
             ),
@@ -294,12 +300,20 @@ impl Tool for McpTool {
                 ));
             }
 
-            let mut client = self.client.lock().await;
+            let mut client = tokio::select! {
+                biased;
+                _ = cancellation.cancelled() => return Err(ToolError::Cancelled),
+                client = self.client.lock() => client,
+            };
             let result = client
-                .call_tool(&self.definition.name, arguments, cancellation)
+                .call_tool(&self.definition.name, arguments, cancellation.clone())
                 .await
                 .map_err(|error| {
-                    ToolError::ExecutionFailed(format!("MCP {}: {error}", self.server))
+                    if cancellation.is_cancelled() {
+                        ToolError::Cancelled
+                    } else {
+                        ToolError::ExecutionFailed(format!("MCP {}: {error:#}", self.server))
+                    }
                 })?;
 
             Ok(ToolOutput::text(result.to_string()))
@@ -308,8 +322,9 @@ impl Tool for McpTool {
 }
 
 struct StdioClient {
+    group: ProcessGroup,
     _child: Child,
-    stdin: ChildStdin,
+    stdin: Option<ChildStdin>,
     stdout: BufReader<ChildStdout>,
     pending_line: Vec<u8>,
     poisoned: bool,
@@ -317,6 +332,9 @@ struct StdioClient {
     timeout: Duration,
     workspace: PathBuf,
     diagnostics: diagnostics::Stderr,
+    name: String,
+    config: McpServerConfig,
+    tools: Vec<RemoteTool>,
 }
 
 impl StdioClient {
@@ -341,8 +359,7 @@ impl StdioClient {
             .stderr(std::process::Stdio::piped())
             .kill_on_drop(true);
         command.envs(&config.env);
-        let mut child = command
-            .spawn()
+        let (mut child, group) = ProcessGroup::spawn(&mut command)
             .with_context(|| format!("failed to start MCP server {name:?}"))?;
         let stdin = child
             .stdin
@@ -359,8 +376,9 @@ impl StdioClient {
                 .context("MCP server did not expose stderr")?,
         );
         let mut client = Self {
+            group,
             _child: child,
-            stdin,
+            stdin: Some(stdin),
             stdout: BufReader::new(stdout),
             pending_line: Vec::new(),
             poisoned: false,
@@ -368,17 +386,20 @@ impl StdioClient {
             timeout: Duration::from_secs(config.timeout_seconds),
             workspace: workspace.to_path_buf(),
             diagnostics,
+            name: name.to_owned(),
+            config: config.clone(),
+            tools: Vec::new(),
         };
         let tools = match client.initialize().await {
             Ok(tools) => tools,
             Err(error) => {
-                let _ = client._child.start_kill();
-                let exit = time::timeout(Duration::from_millis(200), client._child.wait()).await;
+                client.shutdown().await;
+                let exit = client._child.try_wait();
                 let stderr = client.diagnostics.finish().await;
                 return Err(error.context(format!(
                     "MCP server {name:?} failed{}{}",
                     match exit {
-                        Ok(Ok(status)) => format!(" ({status})"),
+                        Ok(Some(status)) => format!(" ({status})"),
                         _ => String::new(),
                     },
                     if stderr.is_empty() {
@@ -389,6 +410,7 @@ impl StdioClient {
                 )));
             }
         };
+        client.tools = tools.clone();
         Ok((client, tools))
     }
 
@@ -420,8 +442,12 @@ impl StdioClient {
             bail!("MCP initialize response has no capabilities");
         }
 
-        self.notify("notifications/initialized", json!({}))
-            .await?;
+        time::timeout(
+            self.timeout,
+            self.notify("notifications/initialized", json!({})),
+        )
+        .await
+        .context("MCP initialized notification timed out")??;
         let listed = self
             .request("tools/list", json!({}), CancellationToken::new())
             .await
@@ -437,12 +463,35 @@ impl StdioClient {
         Ok(tools)
     }
 
+    /// Reconnect only for a new invocation; failed operations are never replayed here.
     async fn call_tool(
         &mut self,
         name: &str,
         arguments: Value,
         cancellation: CancellationToken,
     ) -> Result<Value> {
+        if cancellation.is_cancelled() {
+            bail!("cancelled");
+        }
+        let reconnected = self.poisoned;
+        if reconnected {
+            self.shutdown().await;
+            let (replacement, tools) = tokio::select! {
+                biased;
+                _ = cancellation.cancelled() => bail!("cancelled"),
+                result = Self::start(&self.name, &self.config, &self.workspace) => {
+                    result.context("MCP reconnect failed; previous call was not replayed")?
+                }
+            };
+            if !self.tools.iter().all(|old| {
+                tools
+                    .iter()
+                    .any(|new| old.name == new.name && old.input_schema == new.input_schema)
+            }) {
+                bail!("MCP tool changed during reconnect; apply MCP configuration again");
+            }
+            *self = replacement;
+        }
         let result = self
             .request(
                 "tools/call",
@@ -464,7 +513,8 @@ impl StdioClient {
                 .get("isError")
                 .and_then(Value::as_bool)
                 .unwrap_or(false),
-            "source_kind": "untrusted_mcp_tool_result"
+            "source_kind": "untrusted_mcp_tool_result",
+            "connection_restarted": reconnected
         }))
     }
 
@@ -487,29 +537,38 @@ impl StdioClient {
             bail!("MCP connection is unusable after a previous protocol or timeout error");
         }
 
+        if cancellation.is_cancelled() {
+            bail!("cancelled");
+        }
         let id = self.next_id;
         self.next_id += 1;
-        self.write(json!({
+        let encoded = encode_message(json!({
             "jsonrpc": "2.0",
             "id": id,
             "method": method,
             "params": params
-        }))
-        .await?;
+        }))?;
+        self.poisoned = true;
         let timeout = self.timeout;
+        let mut issued = false;
         let response = async {
+            self.write_encoded(&encoded).await?;
+            issued = true;
             loop {
                 let message = self.read().await?;
+                if message
+                    .get("jsonrpc")
+                    .and_then(Value::as_str)
+                    != Some("2.0")
+                {
+                    bail!("server emitted an invalid JSON-RPC version");
+                }
 
-                if message.get("id") == Some(&json!(id)) {
-                    if let Some(error) = message.get("error") {
-                        bail!("server returned {error}");
+                if message.get("id") == Some(&json!(id)) && message.get("method").is_none() {
+                    if message.get("result").is_some() == message.get("error").is_some() {
+                        bail!("response must have exactly one result or error");
                     }
-
-                    return message
-                        .get("result")
-                        .cloned()
-                        .context("response has no result");
+                    return Ok(message);
                 }
 
                 if message
@@ -537,30 +596,79 @@ impl StdioClient {
             }
         };
         let outcome = tokio::select! {
+            biased;
             _ = cancellation.cancelled() => Err(anyhow::anyhow!("cancelled")),
             result = time::timeout(timeout, response) => result
-                .map_err(|_| anyhow::anyhow!("MCP request timed out"))
+                .map_err(|_| anyhow::anyhow!(
+                    "MCP {method} timed out after {} seconds (timeout_seconds); \
+                     operation outcome is unknown; do not replay automatically",
+                    timeout.as_secs()
+                ))
                 .and_then(|response| response),
         };
 
-        if outcome.is_err() {
-            self.poisoned = true;
-            let _ = self._child.start_kill();
+        match outcome {
+            Ok(message) => {
+                self.poisoned = false;
+                if let Some(error) = message.get("error") {
+                    bail!("server returned {error}");
+                }
+                Ok(message["result"].clone())
+            }
+            Err(error) => {
+                if issued && method != "initialize" {
+                    let _ = time::timeout(
+                        CANCELLATION_WRITE_TIMEOUT,
+                        self.notify(
+                            "notifications/cancelled",
+                            json!({
+                                "requestId": id,
+                                "reason": error.to_string()
+                            }),
+                        ),
+                    )
+                    .await;
+                }
+                self.shutdown().await;
+                let stderr = self.diagnostics.finish().await;
+                if stderr.is_empty() {
+                    Err(error)
+                } else {
+                    Err(error.context(format!("MCP transport failed; stderr: {stderr}")))
+                }
+            }
         }
+    }
 
-        outcome
+    /// Close stdin before terminating the owned group, then reap the server with bounded waits.
+    async fn shutdown(&mut self) {
+        self.poisoned = true;
+        self.stdin.take();
+        if time::timeout(SHUTDOWN_GRACE, self._child.wait())
+            .await
+            .is_err()
+        {
+            self.group.request_termination();
+            let _ = time::timeout(SHUTDOWN_GRACE, self._child.wait()).await;
+        }
+        self.group.kill();
+        let _ = self._child.start_kill();
+        let _ = time::timeout(SHUTDOWN_GRACE, self._child.wait()).await;
     }
 
     async fn write(&mut self, value: Value) -> Result<()> {
-        let encoded = serde_json::to_vec(&value)?;
+        self.write_encoded(&encode_message(value)?)
+            .await
+    }
 
-        if encoded.len() > MAX_MESSAGE_BYTES {
-            bail!("MCP request exceeds the 4 MiB protocol limit");
-        }
-
-        self.stdin.write_all(&encoded).await?;
-        self.stdin.write_all(b"\n").await?;
-        self.stdin.flush().await?;
+    async fn write_encoded(&mut self, encoded: &[u8]) -> Result<()> {
+        let stdin = self
+            .stdin
+            .as_mut()
+            .context("MCP stdin is closed")?;
+        stdin.write_all(encoded).await?;
+        stdin.write_all(b"\n").await?;
+        stdin.flush().await?;
 
         Ok(())
     }
@@ -568,6 +676,15 @@ impl StdioClient {
     async fn read(&mut self) -> Result<Value> {
         read_protocol_line(&mut self.stdout, &mut self.pending_line).await
     }
+}
+
+/// Validate a complete outgoing frame before changing the transport state.
+fn encode_message(value: Value) -> Result<Vec<u8>> {
+    let encoded = serde_json::to_vec(&value)?;
+    if encoded.len() > MAX_MESSAGE_BYTES {
+        bail!("MCP request exceeds the 4 MiB protocol limit");
+    }
+    Ok(encoded)
 }
 
 async fn read_protocol_line<R: AsyncBufRead + Unpin>(

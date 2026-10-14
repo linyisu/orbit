@@ -5,7 +5,7 @@ use tokio_util::task::AbortOnDropHandle;
 
 pub(super) struct Stderr {
     tail: Arc<Mutex<Vec<u8>>>,
-    task: AbortOnDropHandle<()>,
+    task: Option<AbortOnDropHandle<()>>,
 }
 
 impl Stderr {
@@ -24,11 +24,16 @@ impl Stderr {
                 bytes.drain(..excess);
             }
         }));
-        Self { tail, task }
+        Self {
+            tail,
+            task: Some(task),
+        }
     }
 
     pub async fn finish(&mut self) -> String {
-        let _ = tokio::time::timeout(std::time::Duration::from_millis(100), &mut self.task).await;
+        if let Some(mut task) = self.task.take() {
+            let _ = tokio::time::timeout(std::time::Duration::from_millis(100), &mut task).await;
+        }
         String::from_utf8_lossy(&self.tail.lock().unwrap())
             .trim()
             .to_owned()

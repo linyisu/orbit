@@ -82,44 +82,8 @@ async fn interrupted_read_keeps_the_partial_json_rpc_line() {
     assert_eq!(value["id"], 1);
 }
 
-#[tokio::test]
-async fn timed_out_request_invalidates_its_stdio_connection() {
-    let workspace = tempfile::tempdir().unwrap();
-    let config = McpServerConfig {
-            transport: "stdio".into(),
-            command: "/bin/sh".into(),
-            args: vec![
-                "-c".into(),
-                r#"while IFS= read -r line; do
-  case "$line" in
-    *'"method":"initialize"'*) printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"capabilities":{}}}' ;;
-    *'"method":"tools/list"'*) printf '%s\n' '{"jsonrpc":"2.0","id":2,"result":{"tools":[]}}' ;;
-    *'"method":"tools/call"'*) sleep 3 ;;
-  esac
-done"#
-                    .into(),
-            ],
-            env: BTreeMap::new(),
-            timeout_seconds: 1,
-            tools: Vec::new(),
-            enabled: true,
-        };
-    let (mut client, _) = StdioClient::start("fixture", &config, workspace.path())
-        .await
-        .unwrap();
+mod lifecycle;
 
-    let first = client
-        .call_tool("slow", json!({}), CancellationToken::new())
-        .await
-        .unwrap_err();
-    let second = client
-        .call_tool("slow", json!({}), CancellationToken::new())
-        .await
-        .unwrap_err();
-
-    assert!(first.to_string().contains("timed out"), "{first}");
-    assert!(second.to_string().contains("unusable"), "{second}");
-}
 use orbit_model::types::ToolCall;
 
 use crate::approval::ApprovalPreview;

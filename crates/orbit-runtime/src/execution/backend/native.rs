@@ -7,7 +7,7 @@ use crate::{
     error::{RuntimeError, failed},
     execution::{
         ExecutionEnvironment, ExecutionPolicy, ExecutionRequest, ExecutionResult, OutputLog,
-        environment::is_sensitive_key, supervisor::run_child_process,
+        environment::is_sensitive_key, process::ProcessGroup, supervisor::run_child_process,
     },
     verification::VerificationEvidence,
 };
@@ -91,9 +91,8 @@ impl ExecutionBackend for NativeBackend {
                 });
             }
 
-            let child = command.spawn().map_err(failed)?;
+            let (child, guard) = ProcessGroup::spawn(&mut command).map_err(failed)?;
             let process_group = child.id();
-            let guard = ProcessGroup(process_group);
             let verification = request
                 .fingerprint
                 .clone()
@@ -119,17 +118,5 @@ impl ExecutionBackend for NativeBackend {
             drop(guard);
             result.map(Into::into)
         })
-    }
-}
-
-struct ProcessGroup(Option<u32>);
-
-impl Drop for ProcessGroup {
-    fn drop(&mut self) {
-        if let Some(id) = self.0 {
-            unsafe {
-                libc::kill(-(id as i32), libc::SIGKILL);
-            }
-        }
     }
 }
