@@ -412,7 +412,7 @@ impl Accounts {
             })
         };
         let first = std::cell::Cell::new(true);
-        window.open_dialog(cx, move |dialog, window, cx| {
+        crate::dialog::open(window, cx, move |dialog, window, cx| {
             if first.replace(false) {
                 editor.update(cx, |editor, cx| editor.focus(window, cx));
             }
@@ -420,7 +420,6 @@ impl Accounts {
             let button_apply = apply.clone();
             dialog
                 .title("模型参数")
-                .w(window.rem_size() * 38.)
                 .child(editor.clone())
                 .on_ok(move |_, _, cx| keyboard_apply(cx))
                 .footer(
@@ -504,8 +503,9 @@ impl Accounts {
         cx: &mut Context<Self>,
     ) {
         let owner = cx.weak_entity();
-        window.open_alert_dialog(cx, move |dialog, _, _| {
-            let owner = owner.clone(); let draft = draft.clone();
+        crate::dialog::alert(window, cx, move |dialog, _, _| {
+            let owner = owner.clone();
+            let draft = draft.clone();
             dialog.confirm().title(format!("移除“{}”？", draft.name))
                 .description("此连接将从可用模型中移除。仅由它使用的凭据会一并删除，使用它的压缩模型选择将恢复默认。")
                 .button_props(DialogButtonProps::default().ok_text("移除").ok_variant(ButtonVariant::Danger).cancel_text("取消"))

@@ -565,7 +565,7 @@ impl Mcp {
 
     fn confirm_remove(&mut self, name: String, window: &mut Window, cx: &mut Context<Self>) {
         let owner = cx.weak_entity();
-        window.open_alert_dialog(cx, move |dialog, _, _| {
+        crate::dialog::alert(window, cx, move |dialog, _, _| {
             let owner = owner.clone();
             let name = name.clone();
             dialog

@@ -339,7 +339,7 @@ impl CategoryEditor {
             }
         });
         let first = std::cell::Cell::new(true);
-        window.open_dialog(cx, move |dialog, window, cx| {
+        crate::dialog::open(window, cx, move |dialog, window, cx| {
             if first.replace(false) {
                 form.read(cx)
                     .name
@@ -350,7 +350,6 @@ impl CategoryEditor {
             let confirm = form.clone();
             dialog
                 .title("新建分类")
-                .width(window.rem_size() * 25.)
                 .child(form.clone())
                 .footer(
                     h_flex()

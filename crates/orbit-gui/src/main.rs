@@ -3,6 +3,7 @@ mod appearance;
 mod assets;
 mod backend;
 mod conversation;
+mod dialog;
 mod execution;
 mod image_http;
 mod image_preview;

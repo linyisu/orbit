@@ -83,7 +83,7 @@ impl Workspace {
         let form = cx.new(|cx| SessionControls::new(owner, options, entry, operation, window, cx));
         if operation == Operation::Rename {
             let first = std::cell::Cell::new(true);
-            window.open_dialog(cx, move |dialog, window, cx| {
+            crate::dialog::open(window, cx, move |dialog, window, cx| {
                 if first.replace(false) {
                     let input = form.read(cx).input.clone();
                     input.update(cx, |input, cx| {
@@ -92,8 +92,6 @@ impl Workspace {
                 }
                 dialog
                     .title("重命名会话")
-                    .width(window.rem_size() * 28.)
-                    .close_button(false)
                     .overlay_closable(false)
                     .child(form.clone())
                     .on_ok({
@@ -114,10 +112,9 @@ impl Workspace {
             } else {
                 title
             };
-            window.open_alert_dialog(cx, move |dialog, window, _| {
+            crate::dialog::alert(window, cx, move |dialog, _, _| {
                 dialog
                     .title(format!("删除“{title}”？"))
-                    .width(window.rem_size() * 28.)
                     .child(form.clone())
                     .footer(div())
                     .on_ok({

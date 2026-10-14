@@ -342,7 +342,7 @@ impl Review {
             return;
         };
         let owner = cx.weak_entity();
-        window.open_dialog(cx, move |dialog, _, _| {
+        crate::dialog::open(window, cx, move |dialog, _, _| {
             let owner = owner.clone();
             let path = path.clone();
             let checkpoint = checkpoint.clone();

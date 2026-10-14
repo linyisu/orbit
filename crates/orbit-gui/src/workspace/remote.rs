@@ -149,15 +149,12 @@ pub(super) fn open(
 ) {
     let form = cx.new(|cx| RemoteConnection::new(options, runtime, owner.clone(), window, cx));
     let first = std::cell::Cell::new(true);
-    window.open_dialog(cx, move |dialog, window, cx| {
+    crate::dialog::open(window, cx, move |dialog, window, cx| {
         if first.replace(false) {
             form.update(cx, |view, cx| view.focus_target(window, cx));
         }
         dialog
             .title("打开远程工作区")
-            .width(
-                (window.rem_size() * 34.).min(window.bounds().size.width - window.rem_size() * 2.),
-            )
             .child(form.clone())
             .on_ok({
                 let form = form.clone();
@@ -217,7 +214,7 @@ pub(super) fn choose_project_directory(
     );
     let owner = cx.weak_entity();
     let first = std::cell::Cell::new(true);
-    window.open_dialog(cx, move |dialog, window, cx| {
+    crate::dialog::open(window, cx, move |dialog, window, cx| {
         // Retain the subscription for exactly the dialog lifetime.
         let _selection = &selection;
         if first.replace(false) {
@@ -225,9 +222,6 @@ pub(super) fn choose_project_directory(
         }
         dialog
             .title("打开项目")
-            .width(
-                (window.rem_size() * 40.).min(window.bounds().size.width - window.rem_size() * 2.),
-            )
             .child(
                 v_flex()
                     .gap_3()

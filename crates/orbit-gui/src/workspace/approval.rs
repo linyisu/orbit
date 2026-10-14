@@ -10,7 +10,7 @@ use serde_json::Value;
 
 impl Workspace {
     pub(super) fn approval(
-        &self,
+        &mut self,
         approval: &Approval,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -20,13 +20,15 @@ impl Workspace {
         };
         let session = info.id.clone();
         let id = approval.id;
+        let decision = attention::Decision::Approval(id);
+        self.attention.present(decision.clone());
         let title = title(&approval.preview);
         let destructive = matches!(approval.preview, ApprovalPreview::Delete(_));
         let content = cx.new(|cx| {
             ApprovalContent::new(approval.preview.clone(), info.workspace.clone(), window, cx)
         });
         let owner = cx.weak_entity();
-        window.open_dialog(cx, move |dialog, window, _| {
+        crate::dialog::open(window, cx, move |dialog, _, _| {
             let buttons = [
                 (false, false, "拒绝"),
                 (true, false, "允许一次"),
@@ -60,7 +62,7 @@ impl Workspace {
                                 view.report_error("审批已结束或会话已切换，请关闭后刷新。", cx);
                                 return false;
                             }
-                            view.command(
+                            let accepted = view.command(
                                 Command::Request(Request::Approve {
                                     session: session.clone(),
                                     approval: id,
@@ -68,7 +70,11 @@ impl Workspace {
                                     remember,
                                 }),
                                 cx,
-                            )
+                            );
+                            if accepted {
+                                view.attention.dismiss(&attention::Decision::Approval(id));
+                            }
+                            accepted
                         })
                         .unwrap_or(false);
                     if accepted {
@@ -76,9 +82,14 @@ impl Workspace {
                     }
                 })
             });
+            let close_owner = owner.clone();
+            let decision = decision.clone();
             dialog
+                .on_ok(|_, _, _| false)
+                .on_close(move |_, _, cx| {
+                    let _ = close_owner.update(cx, |view, _| view.attention.dismiss(&decision));
+                })
                 .title(title)
-                .w(window.rem_size() * 72.)
                 .child(content.clone())
                 .footer(h_flex().gap_2().flex_wrap().justify_end().children(buttons))
         });
@@ -553,7 +564,7 @@ impl ApprovalContent {
 
 impl Render for ApprovalContent {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let narrow = window.viewport_size().width < window.rem_size() * 48.;
+        let narrow = crate::dialog::width(window) < window.rem_size() * 36.;
         let body = match &self.preview {
             ApprovalPreview::Write(write) => self.file(
                 FileContent {
@@ -738,7 +749,7 @@ impl Render for ApprovalContent {
         v_flex()
             .id("approval-content")
             .min_w_0()
-            .max_h(window.viewport_size().height * 0.65)
+            .max_h(crate::dialog::body_height(window))
             .overflow_y_scroll()
             .gap_3()
             .when_some(self.error.clone(), |body, error| {

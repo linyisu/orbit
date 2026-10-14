@@ -131,7 +131,7 @@ impl Workspace {
         let resuming = self.options.resume.is_some();
         let owner = cx.weak_entity();
         let remote = self.options.ssh.is_some() || self.options.wsl.is_some();
-        window.open_dialog(cx, move |dialog, _, _| {
+        crate::dialog::open(window, cx, move |dialog, _, _| {
             let retry = owner.clone();
             let edit = owner.clone();
             dialog

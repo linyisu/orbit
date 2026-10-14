@@ -262,55 +262,47 @@ impl Workspace {
         let entries = self.sessions.clone();
         let state = cx.new(|cx| CommandState::new(window, cx));
         let first = std::cell::Cell::new(true);
-        window.open_dialog(cx, move |dialog, window, cx| {
+        crate::dialog::open(window, cx, move |dialog, window, cx| {
             if first.replace(false) {
                 state.update(cx, |state, cx| state.focus(window, cx));
             }
             let entries2 = entries.clone();
             let owner = owner.clone();
-            dialog
-                .title("跳转到会话")
-                .margin_top(window.viewport_size().height * 0.1)
-                .width(
-                    (window.viewport_size().width - window.rem_size() * 4.)
-                        .min(window.rem_size() * 60.),
-                )
-                .child(
-                    Palette::new(&state)
-                        .bordered(false)
-                        .placeholder("搜索会话标题或目录…")
-                        .max_h(window.viewport_size().height * 0.65)
-                        .items(entries.iter().map(|entry| {
-                            let title = entry.title.clone();
-                            let path = entry.workspace.clone();
-                            CommandItem::new()
-                                .label(title.clone())
-                                .keywords([path.clone()])
-                                .child(move |_, cx| {
-                                    v_flex()
-                                        .min_w_0()
-                                        .w_full()
-                                        .gap_1()
-                                        .py_1()
-                                        .child(div().truncate().child(title.clone()))
-                                        .child(
-                                            div()
-                                                .text_sm()
-                                                .text_color(cx.theme().muted_foreground)
-                                                .truncate()
-                                                .child(path.clone()),
-                                        )
-                                })
-                        }))
-                        .on_confirm(move |index, window, cx| {
-                            if let Some(entry) = entries2.get(index.row) {
-                                window.close_dialog(cx);
-                                let _ = owner.update(cx, |view, cx| {
-                                    view.select_session(&entry.id, window, cx)
-                                });
-                            }
-                        }),
-                )
+            dialog.title("跳转到会话").child(
+                Palette::new(&state)
+                    .bordered(false)
+                    .placeholder("搜索会话标题或目录…")
+                    .max_h(crate::dialog::body_height(window))
+                    .items(entries.iter().map(|entry| {
+                        let title = entry.title.clone();
+                        let path = entry.workspace.clone();
+                        CommandItem::new()
+                            .label(title.clone())
+                            .keywords([path.clone()])
+                            .child(move |_, cx| {
+                                v_flex()
+                                    .min_w_0()
+                                    .w_full()
+                                    .gap_1()
+                                    .py_1()
+                                    .child(div().truncate().child(title.clone()))
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .text_color(cx.theme().muted_foreground)
+                                            .truncate()
+                                            .child(path.clone()),
+                                    )
+                            })
+                    }))
+                    .on_confirm(move |index, window, cx| {
+                        if let Some(entry) = entries2.get(index.row) {
+                            window.close_dialog(cx);
+                            let _ = owner
+                                .update(cx, |view, cx| view.select_session(&entry.id, window, cx));
+                        }
+                    }),
+            )
         });
     }
 }
@@ -474,7 +466,7 @@ impl Workspace {
         let owner = cx.weak_entity();
         let environment = self.environment();
         let first = std::cell::Cell::new(true);
-        window.open_dialog(cx, move |dialog, window, cx| {
+        crate::dialog::open(window, cx, move |dialog, window, cx| {
             let keyboard_owner = owner.clone();
             let keyboard_challenge = challenge.clone();
             let keyboard_input = input.clone();

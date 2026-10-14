@@ -438,7 +438,7 @@ impl Files {
         }
         if self.has_unsaved_changes() {
             let entity = cx.weak_entity();
-            window.open_dialog(cx, move |dialog, _, _| {
+            crate::dialog::open(window, cx, move |dialog, _, _| {
                 let entity = entity.clone();
                 let path = path.clone();
                 dialog
@@ -663,7 +663,7 @@ impl Files {
         let owner = self.owner.clone();
         if self.has_unsaved_changes() {
             let entity = cx.weak_entity();
-            window.open_dialog(cx, move |dialog, _, _| {
+            crate::dialog::open(window, cx, move |dialog, _, _| {
                 let owner = owner.clone();
                 let entity = entity.clone();
                 dialog

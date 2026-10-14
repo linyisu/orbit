@@ -147,7 +147,7 @@ impl Plugins {
         let sources = cx.new(|cx| Sources::new(owner, adding, window, cx));
         let focus = sources.read(cx).source.read(cx).focus_handle(cx);
         let first = std::cell::Cell::new(true);
-        window.open_dialog(cx, move |dialog, window, cx| {
+        crate::dialog::open(window, cx, move |dialog, window, cx| {
             if first.replace(false) && adding {
                 focus.focus(window, cx);
             }
@@ -167,7 +167,6 @@ impl Plugins {
                 } else {
                     "市场来源"
                 })
-                .w(window.rem_size() * 34.)
                 .child(sources.clone())
         });
         cx.notify();
@@ -192,7 +191,7 @@ impl Plugins {
             .iter()
             .find(|p| p.source == market.source && p.name == plugin.name)
             .cloned();
-        window.open_dialog(cx, move |dialog, window, cx| {
+        crate::dialog::open(window, cx, move |dialog, _, cx| {
             let mut body = v_flex().gap_3().child(description.clone()).child(
                 div()
                     .text_sm()
@@ -235,10 +234,7 @@ impl Plugins {
                     }
                 }
             }
-            dialog
-                .title(title.clone())
-                .w(window.rem_size() * 32.)
-                .child(body)
+            dialog.title(title.clone()).child(body)
         });
     }
     fn card(&self, market_ix: usize, plugin_ix: usize, cx: &mut Context<Self>) -> AnyElement {

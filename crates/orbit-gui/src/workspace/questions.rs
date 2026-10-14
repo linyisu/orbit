@@ -464,7 +464,7 @@ impl Workspace {
         let session = info.id.clone();
         let workspace = info.workspace.clone();
         let owner = cx.weak_entity();
-        window.open_dialog(cx, move |dialog, _, cx| {
+        crate::dialog::open(window, cx, move |dialog, _, cx| {
             let owner2 = owner.clone();
             let session2 = session.clone();
             let workspace2 = workspace.clone();

@@ -366,7 +366,7 @@ impl Workbench {
         cx: &mut Context<Self>,
     ) {
         let owner = cx.weak_entity();
-        window.open_dialog(cx, move |dialog, _, _| {
+        crate::dialog::open(window, cx, move |dialog, _, _| {
             let keep_owner = owner.clone();
             let keep_key = key.clone();
             let discard_owner = owner.clone();

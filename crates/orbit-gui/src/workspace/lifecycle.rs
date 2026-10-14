@@ -331,6 +331,9 @@ impl Workspace {
             self.watch_agents(cx);
         }
         if !visible && changed {
+            if self.attention.suspend() {
+                window.close_all_dialogs(cx);
+            }
             self.suspend_connection_challenge(window, cx);
             window.remove_notification::<Workspace>(cx);
         }
@@ -342,6 +345,7 @@ impl Workspace {
         }
         if visible {
             self.show_connection_challenge(window, cx);
+            self.show_pending_decision(window, cx);
         }
         cx.notify();
     }

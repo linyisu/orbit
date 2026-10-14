@@ -463,7 +463,7 @@ impl Workspace {
         let owner = cx.weak_entity();
         let request = std::rc::Rc::new(request);
         let first = std::cell::Cell::new(true);
-        window.open_dialog(cx, move |dialog, window, cx| {
+        crate::dialog::open(window, cx, move |dialog, window, cx| {
             if first.replace(false) {
                 input.read(cx).focus_handle(cx).focus(window, cx);
             }
@@ -520,47 +520,39 @@ impl Workspace {
         let owner = cx.weak_entity();
         let state = cx.new(|cx| CommandState::new(window, cx));
         let first = std::cell::Cell::new(true);
-        window.open_dialog(cx, move |dialog, window, cx| {
+        crate::dialog::open(window, cx, move |dialog, window, cx| {
             if first.replace(false) {
                 state.update(cx, |state, cx| state.focus(window, cx));
             }
             let owner = owner.clone();
-            dialog
-                .close_button(false)
-                .p_0()
-                .width(
-                    (window.rem_size() * 34.)
-                        .min(window.viewport_size().width - window.rem_size() * 4.),
-                )
-                .child(
-                    Palette::new(&state)
-                        .placeholder("搜索命令…")
-                        .bordered(false)
-                        .max_h((window.viewport_size().height * 0.55).min(window.rem_size() * 24.))
-                        .on_cancel(|window, cx| window.close_dialog(cx))
-                        .footer(|_, _, cx| {
-                            h_flex()
-                                .px_3()
-                                .py_2()
-                                .border_t_1()
-                                .border_color(cx.theme().border)
-                                .text_xs()
-                                .text_color(cx.theme().muted_foreground)
-                                .child("↑↓ 选择　Enter 打开　Esc 关闭")
-                        })
-                        .items(WorkspaceCommand::ALL.iter().map(|(command, label)| {
-                            CommandItem::new()
-                                .label(*label)
-                                .keywords([format!("{command:?}")])
-                        }))
-                        .on_confirm(move |index, window, cx| {
-                            if let Some((command, _)) = WorkspaceCommand::ALL.get(index.row) {
-                                window.close_dialog(cx);
-                                let _ =
-                                    owner.update(cx, |view, cx| view.execute(*command, window, cx));
-                            }
-                        }),
-                )
+            dialog.title("工作区命令").child(
+                Palette::new(&state)
+                    .placeholder("搜索命令…")
+                    .bordered(false)
+                    .max_h(crate::dialog::body_height(window))
+                    .on_cancel(|window, cx| window.close_dialog(cx))
+                    .footer(|_, _, cx| {
+                        h_flex()
+                            .px_3()
+                            .py_2()
+                            .border_t_1()
+                            .border_color(cx.theme().border)
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child("↑↓ 选择　Enter 打开　Esc 关闭")
+                    })
+                    .items(WorkspaceCommand::ALL.iter().map(|(command, label)| {
+                        CommandItem::new()
+                            .label(*label)
+                            .keywords([format!("{command:?}")])
+                    }))
+                    .on_confirm(move |index, window, cx| {
+                        if let Some((command, _)) = WorkspaceCommand::ALL.get(index.row) {
+                            window.close_dialog(cx);
+                            let _ = owner.update(cx, |view, cx| view.execute(*command, window, cx));
+                        }
+                    }),
+            )
         });
     }
 
@@ -575,11 +567,11 @@ impl Workspace {
             );
         }
     }
-    pub(super) fn show_plan(&self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn show_plan(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let owner = cx.weak_entity();
         let generation = self.planning.generation;
         let Some(plan) = &self.planning.plan else {
-            window.open_dialog(cx, move |dialog, _, _| {
+            crate::dialog::open(window, cx, move |dialog, _, _| {
                 let owner = owner.clone();
                 dialog
                     .title("计划")
@@ -594,21 +586,38 @@ impl Workspace {
             });
             return;
         };
+        let decision = self.plan_decision();
+        if let Some(decision) = &decision {
+            self.attention.present(decision.clone());
+        }
         let title = plan.title.clone();
         let markdown = plan.markdown.clone();
         // submit_plan waits inside the active run for this decision. Busy is
         // expected here; the service validates the generation and file state.
         let reviewable =
             self.planning.mode == plan::WorkMode::Plan && plan.status == plan::Status::Review;
-        window.open_dialog(cx, move |dialog, window, _| {
+        crate::dialog::open(window, cx, move |dialog, window, _| {
             let approve = owner.clone();
             let feedback = owner.clone();
+            let close = owner.clone();
+            let decision = decision.clone();
             dialog
+                .on_ok(|_, _, _| false)
+                .on_close(move |_, _, cx| {
+                    if let Some(decision) = &decision {
+                        let _ = close.update(cx, |view, _| view.attention.dismiss(decision));
+                    }
+                })
                 .title(title.clone())
-                .width(window.rem_size() * 44.)
                 .child(
-                    TextView::markdown("plan", markdown.clone())
-                        .style(crate::theme::document_style()),
+                    div()
+                        .id("plan-body")
+                        .max_h(crate::dialog::body_height(window))
+                        .overflow_y_scroll()
+                        .child(
+                            TextView::markdown("plan", markdown.clone())
+                                .style(crate::theme::document_style()),
+                        ),
                 )
                 .footer(
                     h_flex()
@@ -618,6 +627,9 @@ impl Workspace {
                             move |_, window, cx| {
                                 window.close_dialog(cx);
                                 let _ = feedback.update(cx, |view, cx| {
+                                    if let Some(key) = view.plan_decision() {
+                                        view.attention.dismiss(&key);
+                                    }
                                     if let Some(info) = &view.info {
                                         let session = info.id.clone();
                                         view.prompt(
@@ -647,6 +659,9 @@ impl Workspace {
                                 .disabled(!reviewable)
                                 .on_click(move |_, window, cx| {
                                     let _ = approve.update(cx, |view, cx| {
+                                        if let Some(key) = view.plan_decision() {
+                                            view.attention.dismiss(&key);
+                                        }
                                         view.plan_action(plan::Action::Approve { generation }, cx)
                                     });
                                     window.close_dialog(cx);

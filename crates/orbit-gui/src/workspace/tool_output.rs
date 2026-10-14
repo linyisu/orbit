@@ -3,7 +3,6 @@
 use super::*;
 use crate::execution::{ToolRun, ToolStatus};
 use gpui_kit::component::{
-    dialog::DialogEntrance,
     input::{Editor, EditorState},
     scroll::ScrollableElement,
     tab::{Tab, TabBar},
@@ -174,18 +173,13 @@ pub(super) fn present(panel: Entity<ToolOutput>, window: &mut Window, cx: &mut A
         panel.closed = false;
         panel.refresh(window, cx);
     });
-    window.open_dialog(cx, move |dialog, window, _| {
+    crate::dialog::open(window, cx, move |dialog, window, _| {
         let close = panel.downgrade();
-        let viewport = window.viewport_size();
-        let height = (window.rem_size() * 48.).min(viewport.height * 0.84);
+        let height = window.viewport_size().height * 0.8;
         let content = panel.clone();
         dialog
-            .title(div().px_4().pt_4().pr_10().child("工具输出"))
-            .width((window.rem_size() * 72.).min(viewport.width - window.rem_size() * 4.))
+            .title("工具输出")
             .h(height)
-            .margin_top((viewport.height - height) / 2.)
-            .entrance(DialogEntrance::Fade)
-            .p_0()
             // The editor owns scrolling; Dialog's ordinary child slot adds
             // a second scroll viewport around the entire inspector.
             .content(move |body, _, _| {
@@ -239,7 +233,6 @@ impl Render for ToolOutput {
             .child(
                 v_flex()
                     .flex_shrink_0()
-                    .px_4()
                     .py_2()
                     .gap_1()
                     .child(
@@ -303,7 +296,6 @@ impl Render for ToolOutput {
                     .flex_shrink_0()
                     .flex_wrap()
                     .gap_2()
-                    .px_4()
                     .pb_2()
                     .child(
                         TabBar::new("tool-output-streams")
@@ -385,7 +377,6 @@ impl Render for ToolOutput {
                     .flex_shrink_0()
                     .w_full()
                     .h_auto()
-                    .px_4()
                     .py_2()
                     .text_xs()
                     .text_color(cx.theme().muted_foreground)

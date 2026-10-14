@@ -444,7 +444,7 @@ impl ChildAgents {
     fn confirm_retry(&mut self, operation: Operation, window: &mut Window, cx: &mut Context<Self>) {
         let panel = cx.weak_entity();
         let sending = matches!(operation, Operation::Send { .. });
-        window.open_dialog(cx, move |dialog, _, _| {
+        crate::dialog::open(window, cx, move |dialog, _, _| {
             let panel = panel.clone();
             let operation = operation.clone();
             dialog

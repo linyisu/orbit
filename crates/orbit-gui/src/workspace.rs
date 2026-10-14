@@ -1,5 +1,6 @@
 mod actions;
 mod approval;
+mod attention;
 pub(crate) use actions::WorkspaceCommand;
 mod composer;
 mod connection;
@@ -173,6 +174,7 @@ pub(crate) struct Workspace {
     auth_dialog_open: bool,
     busy: bool,
     approvals: Vec<Approval>,
+    attention: attention::Attention,
     usage: Entity<crate::usage::Usage>,
     quota_request: Instant,
     appearance: Option<Appearance>,
@@ -320,6 +322,7 @@ impl Workspace {
             auth_dialog_open: false,
             busy: false,
             approvals: Vec::new(),
+            attention: Default::default(),
             usage: cx.new(crate::usage::Usage::new),
             quota_request: Instant::now(),
             appearance: None,
@@ -361,6 +364,7 @@ impl Workspace {
                         {
                             view.refresh_usage(cx);
                         }
+                        view.show_pending_decision(window, cx);
                         // The footer borrows the quota view's summary; its reset
                         // countdown also needs a render while the dialog is closed.
                         if view.info.is_some() {
@@ -636,6 +640,7 @@ impl Workspace {
             }
             Event::Response(response) => self.response(response, window, cx),
         }
+        self.show_pending_decision(window, cx);
         if previous != self.summary() {
             cx.emit(WorkspaceEvent::Changed);
         }
@@ -649,6 +654,9 @@ impl Workspace {
             .as_ref()
             .is_some_and(|previous| previous.workspace != info.workspace || previous.id != info.id)
         {
+            if self.attention.clear() {
+                window.close_all_dialogs(cx);
+            }
             self.question_form = None;
             self.disconnect_tool_output(cx);
             if let Some(panel) = &self.input_queue {
@@ -1148,21 +1156,19 @@ impl Workspace {
     fn show_usage(&self, window: &mut Window, cx: &mut Context<Self>) {
         let usage = self.usage.clone();
         let weak = cx.weak_entity();
-        window.open_dialog(cx, move |dialog, window, _| {
+        crate::dialog::open(window, cx, move |dialog, _, _| {
             let weak = weak.clone();
-            dialog
-                .title("用量")
-                .width(window.rem_size() * 42.)
-                .child(usage.clone())
-                .footer(
-                    h_flex().justify_end().child(
+            dialog.title("用量").child(usage.clone()).footer(
+                h_flex()
+                    .justify_end()
+                    .child(
                         Button::new("refresh-usage")
                             .label("刷新")
                             .on_click(move |_, _, cx| {
                                 let _ = weak.update(cx, |view, cx| view.refresh_usage(cx));
                             }),
                     ),
-                )
+            )
         });
     }
 }
