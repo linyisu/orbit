@@ -308,6 +308,19 @@ fn main() -> anyhow::Result<()> {
                 if session == "process-tail" {
                     history.insert(session.clone(), process_tail());
                 }
+                if session == "process-short" {
+                    let mut events =
+                        vec![json!({"Started":{"prompt":"检查四条折叠记录的自然高度。"}})];
+                    for index in 0..2 {
+                        let call = json!({"id":format!("short-{index}"),"function":{"name":"run_command","arguments":"{\"command\":\"pwd\"}"}});
+                        events.extend([
+                            json!({"Agent":{"Model":{"ReasoningDelta":"检查项目状态，确认下一步操作。"}}}),
+                            json!({"Agent":{"ToolStarted":{"call":call}}}),
+                            json!({"Agent":{"ToolFinished":{"call":call,"content":format!("短工具结果 {index}"),"changes":[]}}}),
+                        ]);
+                    }
+                    history.insert(session.clone(), events);
+                }
                 if session == "plan-review" {
                     let (events, remaining, plan) = planning::seed(&workspace);
                     history.insert(session.clone(), events);

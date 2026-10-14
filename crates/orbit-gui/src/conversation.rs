@@ -3,8 +3,9 @@ mod markdown;
 mod model;
 mod navigation;
 mod process;
+mod process_height;
 use gpui_kit::component::{
-    ActiveTheme, Icon, IconName, Sizable,
+    ActiveTheme, ElementExt, Icon, IconName, Sizable,
     bubble::{Bubble, BubbleContent, BubbleVariant},
     button::{Button, ButtonVariants},
     h_flex,
@@ -19,6 +20,7 @@ use model::{Kind, Transcript, Turn};
 pub(crate) use navigation::bind_keys;
 use orbit_client::protocol::Update;
 use process::ProcessDisclosure;
+use process_height::ProcessHeight;
 use std::{cell::Cell, rc::Rc, sync::Arc};
 
 pub(crate) struct Conversation {
@@ -41,6 +43,8 @@ struct TurnView {
     disclosure: ProcessDisclosure,
     scroll: Entity<MessageScrollerState>,
     process_scroll: Entity<MessageScrollerState>,
+    process_height: ProcessHeight,
+    process_limit: Pixels,
     viewport_height: Rc<Cell<Pixels>>,
     viewport_bounds: Rc<Cell<Bounds<Pixels>>>,
     _subscriptions: Vec<Subscription>,
@@ -191,6 +195,23 @@ impl Conversation {
     }
 }
 impl TurnView {
+    fn measure_process_row(
+        &mut self,
+        revision: u64,
+        index: usize,
+        size: Size<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        let before = self.process_height.height(self.process_limit);
+        self.process_height.record(revision, index, size);
+        if before != self.process_height.height(self.process_limit) {
+            self.scroll.update(cx, |scroll, cx| {
+                scroll.remeasure_items(self.index..self.index + 1, cx);
+            });
+            cx.notify();
+        }
+    }
+
     fn new(
         index: usize,
         scroll: Entity<MessageScrollerState>,
@@ -209,6 +230,8 @@ impl TurnView {
             disclosure: ProcessDisclosure::default(),
             scroll,
             process_scroll: cx.new(|cx| MessageScrollerState::new(0, cx)),
+            process_height: ProcessHeight::default(),
+            process_limit: px(0.),
             viewport_height,
             viewport_bounds,
             _subscriptions: vec![],
@@ -242,6 +265,7 @@ impl TurnView {
             });
             self._subscriptions
                 .push(cx.subscribe(&row, |view, _, event: &Disclosure, cx| {
+                    view.process_height.refresh();
                     if let Some(index) = view.process.iter().position(|part| *part == event.index) {
                         view.process_scroll.update(cx, |scroll, cx| {
                             scroll.remeasure_items(index..index + 1, cx);
@@ -300,6 +324,11 @@ impl TurnView {
                 scroll.remeasure_items(preserved..count, cx)
             });
         }
+        if self.process != process {
+            self.process_height.invalidate(count);
+        } else if changed.is_some_and(|part| process.contains(&part)) {
+            self.process_height.refresh();
+        }
         self.process = process;
         self.disclosure.sync(turn.completed && conclusion.is_some());
         self.conclusion = conclusion;
@@ -319,11 +348,13 @@ impl Render for TurnView {
         } else {
             window.viewport_size().height * 0.6
         };
-        let process_height = if reading {
+        self.process_limit = if reading {
             (available * 0.7).min(window.rem_size() * 32.)
         } else {
-            (window.rem_size() * self.process.len() as f32 * 1.75).min(available * 0.5)
+            available * 0.5
         };
+        let process_height = self.process_height.height(self.process_limit);
+        let revision = self.process_height.revision();
         v_flex()
             .w_full()
             .min_w_0()
@@ -385,6 +416,7 @@ impl Render for TurnView {
                                                 })
                                             })
                                             .map(|(part, last)| {
+                                                let measured = weak.clone();
                                                 // Keep the final control clear of the clipping
                                                 // edge. Row padding participates in list height
                                                 // and wheel/scrollbar limits, unlike an inset
@@ -392,15 +424,35 @@ impl Render for TurnView {
                                                 div()
                                                     .w_full()
                                                     .min_w_0()
-                                                    .when(last, |row| row.pb_2())
-                                                    .child(part)
+                                                    .child(
+                                                        div()
+                                                            .w_full()
+                                                            .min_w_0()
+                                                            .pb_1()
+                                                            .when(last, |row| row.pb_3())
+                                                            .child(part),
+                                                    )
+                                                    .on_prepaint(move |bounds, _, cx| {
+                                                        let measured = measured.clone();
+                                                        cx.defer(move |cx| {
+                                                            let _ =
+                                                                measured.update(cx, |view, cx| {
+                                                                    view.measure_process_row(
+                                                                        revision,
+                                                                        index,
+                                                                        bounds.size,
+                                                                        cx,
+                                                                    );
+                                                                });
+                                                        });
+                                                    })
                                                     .into_any_element()
                                             })
                                             .unwrap_or_else(|| div().into_any_element())
                                     },
                                 )
                                 .jump_button(false)
-                                .with_row_style(StyleRefinement::default().px_0().pb_1())
+                                .with_row_style(StyleRefinement::default().px_0().pb_0())
                                 .with_list_style(StyleRefinement::default().py_0())
                                 .size_full(),
                             ),
