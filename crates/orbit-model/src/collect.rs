@@ -1,66 +1,51 @@
-use std::collections::BTreeMap;
-
 use futures_util::StreamExt;
 
-use crate::{error::ModelError, types::*};
+use crate::{error::ModelError, stream::StreamAccumulator, types::*};
 
 /// SSE-only account endpoints also serve non-interactive and summary callers.
 pub(crate) async fn completion(
     mut stream: ModelStream,
     model: &str,
 ) -> Result<ChatCompletion, ModelError> {
-    let mut text = String::new();
-    let mut calls = BTreeMap::<usize, ToolCall>::new();
-    let mut finished = None;
-
+    let mut accumulator = StreamAccumulator::default();
     while let Some(event) = stream.next().await {
-        match event? {
-            StreamEvent::TextDelta(delta) => text.push_str(&delta),
-            StreamEvent::ReasoningDelta(_) => {}
-            StreamEvent::ToolCallDelta(delta) => {
-                let call = calls
-                    .entry(delta.index)
-                    .or_insert_with(|| ToolCall {
-                        metadata: None,
-                        id: String::new(),
-                        kind: "function".into(),
-                        function: FunctionCall {
-                            name: String::new(),
-                            arguments: String::new(),
-                        },
-                    });
-                if let Some(id) = delta.id {
-                    call.id = id;
-                }
-                if let Some(name) = delta.name {
-                    call.function.name.push_str(&name);
-                }
-                if let Some(metadata) = delta.metadata {
-                    call.metadata = Some(metadata);
-                }
-                call.function
-                    .arguments
-                    .push_str(&delta.arguments);
-            }
-
-            StreamEvent::Completed {
-                finish_reason,
-                usage,
-            } => finished = Some((finish_reason, usage)),
-        }
+        accumulator.push(event?);
     }
+    let mut completion = accumulator.finish()?;
+    completion.model = Some(model.into());
+    Ok(completion)
+}
 
-    let (finish_reason, usage) = finished
-        .ok_or_else(|| ModelError::Protocol("account response ended without completion".into()))?;
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-    Ok(ChatCompletion {
-        id: None,
-        model: Some(model.into()),
-        message: ChatMessage::Assistant {
-            content: (!text.is_empty()).then_some(text),
-            tool_calls: calls.into_values().collect(),
-        },
-        finish_reason,
-        usage,
-    })
+    #[tokio::test]
+    async fn account_completion_retains_terminal_reason_before_usage_tail() {
+        let stream = futures_util::stream::iter([
+            Ok(StreamEvent::TextDelta("generated answer".into())),
+            Ok(StreamEvent::Completed {
+                finish_reason: Some("stop".into()),
+                usage: Some(Usage {
+                    prompt_tokens: Some(11),
+                    ..Default::default()
+                }),
+            }),
+            Ok(StreamEvent::Completed {
+                finish_reason: None,
+                usage: Some(Usage {
+                    completion_tokens: Some(4),
+                    ..Default::default()
+                }),
+            }),
+        ]);
+        let result = completion(Box::pin(stream), "synthetic-model")
+            .await
+            .unwrap();
+        assert_eq!(result.model.as_deref(), Some("synthetic-model"));
+        assert_eq!(result.finish_reason.as_deref(), Some("stop"));
+        let usage = result.usage.unwrap();
+        assert_eq!(usage.prompt_tokens, Some(11));
+        assert_eq!(usage.completion_tokens, Some(4));
+    }
 }

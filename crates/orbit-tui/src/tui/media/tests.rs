@@ -328,6 +328,7 @@ async fn restored_read_image_results_upload_complete_rgba_with_selection_and_row
                 })
                 .to_string(),
                 changes: Vec::new(),
+                files: None,
             })),
         ],
     );

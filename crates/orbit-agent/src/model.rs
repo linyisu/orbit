@@ -22,6 +22,8 @@ pub type StreamFuture<'a> =
 pub type ObservedStreamFuture<'a> =
     Pin<Box<dyn Future<Output = Result<(ModelStream, Option<u32>), ModelError>> + Send + 'a>>;
 
+/// Supplies model responses without replaying a request after stream data is visible.
+/// Streams must include a nonempty terminal finish reason; partial usage is not completion.
 pub trait ModelBackend: Send + Sync {
     fn supports_vision(&self) -> bool {
         false

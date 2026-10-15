@@ -15,7 +15,7 @@ use serde::Serialize;
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 
-use crate::tool::{ToolError, ToolOutput};
+use crate::tool::{ToolError, ToolOutcome, ToolOutput};
 
 pub const MAX_BACKGROUND_COMMANDS: usize = 8;
 const MAX_RETAINED_JOBS: usize = 128;
@@ -627,24 +627,11 @@ impl Job {
             Some(_) if self.cancelled => JobStatus::Cancelled,
             Some(Err(ToolError::Cancelled)) => JobStatus::Cancelled,
             Some(Err(_)) => JobStatus::Failed,
-            Some(Ok(output)) => {
-                let result = serde_json::from_str::<serde_json::Value>(&output.content).ok();
-                if result.as_ref().is_some_and(|value| {
-                    value["cancelled"] == true || value["status"] == "cancelled"
-                }) {
-                    JobStatus::Cancelled
-                } else if result.as_ref().is_some_and(|value| {
-                    value["timed_out"] == true
-                        || matches!(value["status"].as_str(), Some("failed" | "interrupted"))
-                        || value
-                            .get("exit_code")
-                            .is_some_and(|code| code != 0)
-                }) {
-                    JobStatus::Failed
-                } else {
-                    JobStatus::Completed
-                }
-            }
+            Some(Ok(output)) => match output.outcome {
+                ToolOutcome::Completed => JobStatus::Completed,
+                ToolOutcome::Failed => JobStatus::Failed,
+                ToolOutcome::Cancelled => JobStatus::Cancelled,
+            },
         };
         let result = if include_result {
             self.result
@@ -993,5 +980,36 @@ mod tests {
         assert_eq!(value["completion_preview_truncated"], true);
         assert!(value["stdout"].as_str().unwrap().len() < 2_100);
         assert!(value["stderr"].as_str().unwrap().len() < 2_100);
+    }
+
+    #[test]
+    fn typed_receipts_determine_status_independently_of_output_format() {
+        let jobs = BackgroundJobs::default();
+        for (outcome, expected, content) in [
+            (
+                ToolOutcome::Completed,
+                JobStatus::Completed,
+                r#"{"status":"failed","exit_code":8}"#,
+            ),
+            (
+                ToolOutcome::Failed,
+                JobStatus::Failed,
+                "failure receipt without JSON",
+            ),
+            (
+                ToolOutcome::Cancelled,
+                JobStatus::Cancelled,
+                r#"{"status":"completed"}"#,
+            ),
+        ] {
+            let snapshot = jobs
+                .restore_result(
+                    ToolCall::function("generated", "sample", serde_json::json!({})),
+                    "synthetic task".into(),
+                    ToolOutput::text(content).with_outcome(outcome),
+                )
+                .unwrap();
+            assert_eq!(snapshot.status, expected);
+        }
     }
 }

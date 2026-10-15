@@ -273,7 +273,7 @@ async fn remembered_file_grant_survives_reopen_and_matches_changed_content() {
         .await
         .unwrap();
     session
-        .finish("cancelled", None)
+        .finish(orbit_store::types::RunCompletion::Cancelled)
         .await
         .unwrap();
     let id = session.id().to_owned();

@@ -281,6 +281,7 @@ async fn image_input_is_uploaded_queued_and_authorized_for_withdrawal() {
     assert_eq!(entries[0].state, State::Queued);
     let Response::File(data) = fixture
         .request(Request::ReadFile {
+            allow_missing: false,
             session: session.clone(),
             path: entries[0].images[0].path.clone(),
         })
@@ -381,6 +382,7 @@ async fn file_input_is_queued_without_vision_and_can_be_withdrawn() {
     assert_eq!(entries[0].state, State::Queued);
     let Response::File(data) = fixture
         .request(Request::ReadFile {
+            allow_missing: false,
             session: session.clone(),
             path: entries[0].files[0].path.clone(),
         })

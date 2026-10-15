@@ -232,6 +232,7 @@ mod tests {
             // File activity is recovered from successful receipts even when the
             // containing message has already left the model's context window.
             let receipt = AgentEvent::ToolFinished {
+                files: None,
                 call: ToolCall::function(
                     format!("read-{run}"),
                     "read_file",
@@ -262,12 +263,13 @@ mod tests {
                 .unwrap();
             writer
                 .finish(
-                    "completed",
+                    &crate::types::RunCompletion::Completed {
+                        history: vec![ChatMessage::user(format!("question {run}"))],
+                    },
                     vec![AgentEvent::Completed {
                         turns: 1,
                         tool_calls: 1,
                     }],
-                    Some(vec![ChatMessage::user(format!("question {run}"))]),
                 )
                 .await
                 .unwrap();

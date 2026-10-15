@@ -6,6 +6,29 @@ use orbit_runtime::execution::{
 use tokio_util::sync::CancellationToken;
 
 #[tokio::test]
+async fn environment_is_the_single_source_of_command_working_directory() {
+    let root = tempfile::tempdir().unwrap();
+    let directory = root.path().join("nested");
+    std::fs::create_dir(&directory).unwrap();
+    let mut environment = ExecutionEnvironment::new(root.path(), &directory).unwrap();
+    environment.set_var("SHELL", "/bin/sh");
+    let request = ExecutionRequest::new("printf ready > marker", Duration::from_secs(5));
+    let result = execution_backend()
+        .execute(
+            &request,
+            &ExecutionPolicy::default(),
+            &environment,
+            None,
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    assert!(result.is_success());
+    assert_eq!(std::fs::read(directory.join("marker")).unwrap(), b"ready");
+    assert!(!root.path().join("marker").exists());
+}
+
+#[tokio::test]
 async fn native_execution_uses_host_paths_and_retains_output() {
     let root = tempfile::tempdir().unwrap();
     let mut env = ExecutionEnvironment::new(root.path(), root.path()).unwrap();
@@ -14,7 +37,6 @@ async fn native_execution_uses_host_paths_and_retains_output() {
     let request = ExecutionRequest::new(
         "printf '%s' \"$HOME\"; printf 'saved' > result; /bin/sh -c 'printf child > child'; printf \
             'err' >&2",
-        root.path(),
         Duration::from_secs(5),
     );
     let output = orbit_runtime::execution::OutputLog::create(&root.path().join("logs"))
@@ -64,7 +86,6 @@ async fn timeout_and_cancellation_stop_descendants_holding_output_pipes() {
         });
         let request = ExecutionRequest::new(
             ": > started; sleep 30 & wait",
-            root.path(),
             if cancel {
                 Duration::from_secs(10)
             } else {

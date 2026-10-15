@@ -599,8 +599,9 @@ mod tests {
         });
         child
             .finish_subagent(
-                "completed",
-                Some(vec![ChatMessage::assistant("done")]),
+                &crate::types::RunCompletion::Completed {
+                    history: vec![ChatMessage::assistant("done")],
+                },
                 parent.id().into(),
                 invocation,
                 result.clone(),
@@ -613,6 +614,7 @@ mod tests {
             .unwrap();
         assert_eq!(pending[0].result, Some(result.clone()));
         let finished = AgentEvent::ToolFinished {
+            files: None,
             call,
             content: result.to_string(),
             changes: vec![],

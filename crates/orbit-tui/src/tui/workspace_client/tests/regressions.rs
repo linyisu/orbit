@@ -685,6 +685,7 @@ fn running_command_card_updates_stdout_without_overwriting_a_finished_result() {
                 call: call.clone(),
                 content: "final result".into(),
                 changes: vec![],
+                files: None,
             },
         ))],
     );

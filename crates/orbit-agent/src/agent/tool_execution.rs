@@ -114,7 +114,7 @@ impl<B: ModelBackend> Agent<B> {
                 in_flight.retain(|id| id != &call.id);
                 let (event, content) = match output {
                     Ok(output) => {
-                        files.observe(&call, &output.content);
+                        files.merge(&output.files);
                         if let Some(evidence) = output.verification {
                             emit(AgentEvent::VerificationRecorded {
                                 call_id: call.id.clone(),
@@ -132,6 +132,7 @@ impl<B: ModelBackend> Agent<B> {
                                 call: call.clone(),
                                 content: output.content.clone(),
                                 changes: output.changes,
+                                files: Some(output.files),
                             },
                         };
                         loaded_attachments.extend(output.attachments);

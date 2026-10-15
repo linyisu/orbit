@@ -18,7 +18,7 @@ async fn generated_title_follows_its_session_and_manual_rename_wins() {
         .await
         .unwrap();
     current
-        .finish("cancelled", None)
+        .finish(orbit_store::types::RunCompletion::Cancelled)
         .await
         .unwrap();
     let original_id = current.id().to_owned();
@@ -54,7 +54,7 @@ async fn generated_title_follows_its_session_and_manual_rename_wins() {
         .rename("手动标题".into())
         .await
         .unwrap();
-    assert!(!current.poll_title().await.unwrap());
+    assert!(!current.poll_metadata().await.unwrap());
     assert!(
         current
             .store
@@ -67,7 +67,7 @@ async fn generated_title_follows_its_session_and_manual_rename_wins() {
         .await
         .unwrap();
     current
-        .finish("cancelled", None)
+        .finish(orbit_store::types::RunCompletion::Cancelled)
         .await
         .unwrap();
     assert_eq!(
@@ -92,7 +92,7 @@ async fn prepared_resume_is_atomic_and_releases_lease_when_cancelled() {
         .await
         .unwrap();
     current
-        .finish("cancelled", None)
+        .finish(orbit_store::types::RunCompletion::Cancelled)
         .await
         .unwrap();
     let target = current.id().to_owned();
@@ -105,7 +105,7 @@ async fn prepared_resume_is_atomic_and_releases_lease_when_cancelled() {
         .await
         .unwrap();
     current
-        .finish("cancelled", None)
+        .finish(orbit_store::types::RunCompletion::Cancelled)
         .await
         .unwrap();
     let original = current.id().to_owned();
@@ -239,13 +239,12 @@ async fn restored_completed_run_keeps_its_persisted_elapsed_time() {
         .unwrap();
     tokio::time::sleep(Duration::from_millis(5)).await;
     state
-        .finish(
-            "completed",
-            Some(vec![
+        .finish(orbit_store::types::RunCompletion::Completed {
+            history: vec![
                 ChatMessage::user("question"),
                 ChatMessage::assistant("answer"),
-            ]),
-        )
+            ],
+        })
         .await
         .unwrap();
     drop(state);
@@ -278,7 +277,7 @@ async fn resumed_session_keeps_its_selected_model_profile() {
         .await
         .unwrap();
     state
-        .finish("cancelled", None)
+        .finish(orbit_store::types::RunCompletion::Cancelled)
         .await
         .unwrap();
     drop(state);
@@ -318,7 +317,7 @@ async fn renamed_session_keeps_its_identity_and_title_after_resume() {
         .await
         .unwrap();
     state
-        .finish("cancelled", None)
+        .finish(orbit_store::types::RunCompletion::Cancelled)
         .await
         .unwrap();
     drop(state);
@@ -366,7 +365,9 @@ async fn switching_restores_context_preserves_old_session_and_checks_scope_and_l
     drop(log);
 
     state
-        .finish("completed", Some(history.clone()))
+        .finish(orbit_store::types::RunCompletion::Completed {
+            history: history.clone(),
+        })
         .await
         .unwrap();
     assert!(command_output.lease().is_none());
@@ -467,7 +468,7 @@ async fn failed_cancelled_and_dropped_tasks_release_temporary_command_logs() {
     let mut session = SessionState::open(database.clone(), None, "model".into())
         .await
         .unwrap();
-    for status in ["failed", "cancelled"] {
+    for completion in [RunCompletion::Failed, RunCompletion::Cancelled] {
         session
             .begin("run a command".into(), "model".into())
             .await
@@ -485,7 +486,7 @@ async fn failed_cancelled_and_dropped_tasks_release_temporary_command_logs() {
             .to_owned();
         drop(log);
         session
-            .finish(status, None)
+            .finish(completion)
             .await
             .unwrap();
         assert!(session.command_output.lease().is_none());
@@ -542,13 +543,9 @@ async fn calibration_restores_per_profile_without_cross_provider_contamination()
     }
 
     session
-        .finish(
-            "completed",
-            Some(vec![
-                ChatMessage::user("hello"),
-                ChatMessage::assistant("hi"),
-            ]),
-        )
+        .finish(orbit_store::types::RunCompletion::Completed {
+            history: vec![ChatMessage::user("hello"), ChatMessage::assistant("hi")],
+        })
         .await
         .unwrap();
     drop(session);
@@ -691,9 +688,8 @@ async fn test_resume_preserves_attachments_losslessly_and_projects_for_text_only
         .await
         .unwrap();
     session
-        .finish(
-            "completed",
-            Some(vec![
+        .finish(orbit_store::types::RunCompletion::Completed {
+            history: vec![
                 ChatMessage::user("hi"),
                 ChatMessage::user_with_attachments(
                     "check this",
@@ -704,8 +700,8 @@ async fn test_resume_preserves_attachments_losslessly_and_projects_for_text_only
                         path: "/path/to/pic.png".into(),
                     }],
                 ),
-            ]),
-        )
+            ],
+        })
         .await
         .unwrap();
 
@@ -779,7 +775,7 @@ async fn test_full_roundtrip_vision_to_text_to_vision_persists_attachments_lossl
     ];
 
     session
-        .finish("completed", Some(history))
+        .finish(orbit_store::types::RunCompletion::Completed { history })
         .await
         .unwrap();
     let id = session.id().to_owned();
@@ -814,7 +810,9 @@ async fn test_full_roundtrip_vision_to_text_to_vision_persists_attachments_lossl
     history_turn2.push(ChatMessage::user("what was that mountain?"));
     history_turn2.push(ChatMessage::assistant("It was Mount Fuji."));
     session_text
-        .finish("completed", Some(history_turn2))
+        .finish(orbit_store::types::RunCompletion::Completed {
+            history: history_turn2,
+        })
         .await
         .unwrap();
     drop(session_text);
@@ -920,4 +918,247 @@ async fn test_real_session_recovery_validation() {
     let projected_vision = orbit_agent::model_messages(&prepared.snapshot.history, true);
 
     assert_eq!(projected_vision.len(), prepared.snapshot.history.len());
+}
+
+struct FailFirstFlush(std::sync::atomic::AtomicBool);
+
+impl orbit_agent::checkpoint::ExecutionJournal for FailFirstFlush {
+    fn record(&self, _event: orbit_agent::events::AgentEvent) {}
+
+    fn flush(&self) -> orbit_agent::checkpoint::CheckpointFuture<'_> {
+        Box::pin(async {
+            if self
+                .0
+                .swap(false, std::sync::atomic::Ordering::SeqCst)
+            {
+                Err(orbit_agent::error::AgentError::Checkpoint(
+                    "injected flush failure".into(),
+                ))
+            } else {
+                Ok(())
+            }
+        })
+    }
+
+    fn save<'a>(
+        &'a self,
+        _checkpoint: orbit_agent::checkpoint::ExecutionCheckpoint,
+        _event: Option<orbit_agent::events::AgentEvent>,
+    ) -> orbit_agent::checkpoint::CheckpointFuture<'a> {
+        Box::pin(async { Ok(()) })
+    }
+}
+
+#[tokio::test]
+async fn failed_terminal_flush_retries_receipt_before_a_new_run() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut session = SessionState::open_in(
+        directory.path().join("sessions.db"),
+        None,
+        "model".into(),
+        directory.path(),
+    )
+    .await
+    .unwrap();
+    session
+        .begin("first request".into(), "model".into())
+        .await
+        .unwrap();
+    let RunState::Running { journal, .. } = &mut session.run else {
+        panic!("running")
+    };
+    *journal = Some(std::sync::Arc::new(FailFirstFlush(true.into())));
+    let history = vec![
+        ChatMessage::user("first request"),
+        ChatMessage::assistant("first result"),
+    ];
+    assert!(
+        session
+            .finish(RunCompletion::Completed {
+                history: history.clone()
+            })
+            .await
+            .is_err()
+    );
+    assert!(matches!(session.run, RunState::Finalizing { .. }));
+    assert!(session.command_output.lease().is_none());
+    session
+        .begin("second request".into(), "model".into())
+        .await
+        .unwrap();
+    let snapshot = session
+        .store
+        .load(session.id())
+        .await
+        .unwrap();
+    assert_eq!(snapshot.runs.len(), 2);
+    assert_eq!(snapshot.runs[0].status, "completed");
+    assert_eq!(snapshot.history, history);
+    session
+        .finish(RunCompletion::Cancelled)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn failed_terminal_transaction_preserves_completion_until_retry() {
+    let directory = tempfile::tempdir().unwrap();
+    let database = directory.path().join("sessions.db");
+    let mut session =
+        SessionState::open_in(database.clone(), None, "model".into(), directory.path())
+            .await
+            .unwrap();
+    session
+        .begin("initial request".into(), "model".into())
+        .await
+        .unwrap();
+    let connection = rusqlite::Connection::open(&database).unwrap();
+    connection
+        .execute_batch(
+            "CREATE TRIGGER reject_completion BEFORE UPDATE OF status ON runs \
+         BEGIN SELECT RAISE(ABORT, 'injected transaction failure'); END;",
+        )
+        .unwrap();
+    assert!(
+        session
+            .finish(RunCompletion::Completed {
+                history: vec![ChatMessage::assistant("saved result")]
+            })
+            .await
+            .is_err()
+    );
+    assert!(matches!(session.run, RunState::Finalizing { .. }));
+    assert_eq!(
+        session
+            .store
+            .load(session.id())
+            .await
+            .unwrap()
+            .runs[0]
+            .status,
+        "running"
+    );
+    let elapsed_ms = session
+        .writer
+        .as_mut()
+        .unwrap()
+        .freeze_elapsed()
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(30)).await;
+    connection
+        .execute_batch("DROP TRIGGER reject_completion;")
+        .unwrap();
+    session
+        .begin("later request".into(), "model".into())
+        .await
+        .unwrap();
+    let snapshot = session
+        .store
+        .load(session.id())
+        .await
+        .unwrap();
+    assert_eq!(snapshot.runs.len(), 2);
+    assert_eq!(snapshot.runs[0].status, "completed");
+    assert_eq!(
+        snapshot.runs[0].elapsed_ms,
+        Some(u64::try_from(elapsed_ms).unwrap())
+    );
+    assert_eq!(
+        snapshot.history,
+        vec![ChatMessage::assistant("saved result")]
+    );
+    session
+        .finish(RunCompletion::Cancelled)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn committed_terminal_receipt_only_retries_its_failed_projection_refresh() {
+    let directory = tempfile::tempdir().unwrap();
+    let database = directory.path().join("sessions.db");
+    let mut session =
+        SessionState::open_in(database.clone(), None, "model".into(), directory.path())
+            .await
+            .unwrap();
+    session
+        .begin("first request".into(), "model".into())
+        .await
+        .unwrap();
+    let connection = rusqlite::Connection::open(&database).unwrap();
+    connection
+        .execute_batch(
+            "CREATE TRIGGER invalidate_projection AFTER UPDATE OF status ON runs \
+         WHEN NEW.status = 'failed' BEGIN \
+         UPDATE sessions SET history = 'invalid json' WHERE id = NEW.session_id; END;",
+        )
+        .unwrap();
+    assert!(
+        session
+            .finish(RunCompletion::Failed)
+            .await
+            .is_err()
+    );
+    assert!(matches!(session.run, RunState::Refreshing));
+    assert_eq!(session.active_run_id(), None);
+    connection
+        .execute_batch("DROP TRIGGER invalidate_projection; UPDATE sessions SET history = '[]';")
+        .unwrap();
+    session
+        .begin("second request".into(), "model".into())
+        .await
+        .unwrap();
+    let snapshot = session
+        .store
+        .load(session.id())
+        .await
+        .unwrap();
+    assert_eq!(snapshot.runs.len(), 2);
+    assert_eq!(snapshot.runs[0].status, "failed");
+    session
+        .finish(RunCompletion::Cancelled)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn idle_metadata_poll_releases_a_transient_finalization_lease() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut session = SessionState::open_in(
+        directory.path().join("sessions.db"),
+        None,
+        "model".into(),
+        directory.path(),
+    )
+    .await
+    .unwrap();
+    session.enable_shared();
+    session
+        .begin("request".into(), "model".into())
+        .await
+        .unwrap();
+    let RunState::Running { journal, .. } = &mut session.run else {
+        panic!("running")
+    };
+    *journal = Some(std::sync::Arc::new(FailFirstFlush(true.into())));
+    assert!(
+        session
+            .finish(RunCompletion::Cancelled)
+            .await
+            .is_err()
+    );
+    assert!(session.metadata_pending());
+    assert!(session.writer.is_some());
+    assert!(session.poll_metadata().await.unwrap());
+    assert!(!session.metadata_pending());
+    assert!(session.writer.is_none());
+    assert!(!session.poll_metadata().await.unwrap());
+    assert_eq!(session.snapshot.runs[0].status, "cancelled");
+    assert!(
+        session
+            .store
+            .acquire(session.id())
+            .await
+            .is_ok()
+    );
 }

@@ -171,6 +171,7 @@ impl Tool for ReadFile {
             let workspace = self.workspace.clone();
             let token = cancellation.clone();
             let budget = self.scan_budget;
+            let path = arguments.path.clone();
             let task =
                 tokio::task::spawn_blocking(move || read(workspace, arguments, token, budget));
 
@@ -180,7 +181,7 @@ impl Tool for ReadFile {
                     result.map_err(|error| ToolError::ExecutionFailed(error.to_string()))?
                 }
             }
-            .map(ToolOutput::text)
+            .map(|content| ToolOutput::text(content).with_read(path))
         })
     }
 }

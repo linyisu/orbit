@@ -560,6 +560,9 @@ pub enum StreamEvent {
     TextDelta(String),
     ReasoningDelta(String),
     ToolCallDelta(ToolCallDelta),
+    /// A nonempty finish reason confirms a terminal response. Without a reason,
+    /// this is a partial usage update, including provider input-usage preambles.
+    /// Consumers must retain earlier usage fields and terminal reasons.
     Completed {
         finish_reason: Option<String>,
         usage: Option<Usage>,

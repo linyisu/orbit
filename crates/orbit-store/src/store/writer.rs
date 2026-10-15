@@ -5,7 +5,7 @@ use std::{
 };
 
 use crate::{database::now, entities::*};
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{Context, Result, ensure};
 use orbit_agent::events::AgentEvent;
 use orbit_model::types::ChatMessage;
 use sea_orm::*;
@@ -161,6 +161,8 @@ impl SessionWriter {
 
     pub fn active_run_id(&self) -> Option<i64> {
         self.active_run
+            .as_ref()
+            .map(|run| run.id)
     }
 
     /// Writer ownership rules out another process's inbox. During a local run
@@ -277,8 +279,10 @@ impl SessionWriter {
             })
             .await?;
 
-        self.active_run = Some(run);
-        self.active_started = Some(std::time::Instant::now());
+        self.active_run = Some(super::ActiveRun {
+            id: run,
+            timing: super::RunTiming::Running(std::time::Instant::now()),
+        });
 
         Ok(())
     }
@@ -286,7 +290,9 @@ impl SessionWriter {
     pub async fn append(&self, events: Vec<AgentEvent>) -> Result<()> {
         let run = self
             .active_run
-            .context("no active run")?;
+            .as_ref()
+            .context("no active run")?
+            .id;
 
         self.store
             .write_access(move |conn| async move {
@@ -306,7 +312,9 @@ impl SessionWriter {
             store: self.store.clone(),
             run: self
                 .active_run
-                .context("no active run")?,
+                .as_ref()
+                .context("no active run")?
+                .id,
             session: self.id.clone(),
             commit_lock: tokio::sync::Mutex::new(()),
             pending: Mutex::new(Vec::new()),
@@ -316,29 +324,22 @@ impl SessionWriter {
 
     pub async fn finish(
         &mut self,
-        status: &str,
+        completion: &crate::types::RunCompletion,
         events: Vec<AgentEvent>,
-        history: Option<Vec<ChatMessage>>,
     ) -> Result<()> {
-        self.finish_with_result(status, events, history, None)
+        self.finish_with_result(completion, events, None)
             .await
     }
 
     pub async fn finish_subagent(
         &mut self,
-        status: &str,
-        history: Option<Vec<ChatMessage>>,
+        completion: &crate::types::RunCompletion,
         parent: String,
         invocation: i64,
         result: serde_json::Value,
     ) -> Result<()> {
-        self.finish_with_result(
-            status,
-            Vec::new(),
-            history,
-            Some((parent, invocation, result)),
-        )
-        .await
+        self.finish_with_result(completion, Vec::new(), Some((parent, invocation, result)))
+            .await
     }
 
     /// Recovery must hold the child's OS writer lease. Acquiring that lease
@@ -361,31 +362,33 @@ impl SessionWriter {
             .await
     }
 
-    async fn finish_with_result(
-        &mut self,
-        status: &str,
-        events: Vec<AgentEvent>,
-        history: Option<Vec<ChatMessage>>,
-        agent_result: Option<(String, i64, serde_json::Value)>,
-    ) -> Result<()> {
-        ensure!(
-            matches!(status, "completed" | "failed" | "cancelled"),
-            "invalid terminal status"
-        );
-        ensure!(
-            (status == "completed") == history.is_some(),
-            "only completed runs may update model history"
-        );
-        let Some(run) = self.active_run else {
-            bail!("no active run")
-        };
-
-        let elapsed_ms = self.active_started.map(|started| {
-            started
+    /// Freeze execution duration before asynchronous finalization; retries reuse this value.
+    pub fn freeze_elapsed(&mut self) -> Result<i64> {
+        let active = self
+            .active_run
+            .as_mut()
+            .context("no active run")?;
+        let elapsed_ms = match active.timing {
+            super::RunTiming::Running(started) => started
                 .elapsed()
                 .as_millis()
-                .min(i64::MAX as u128) as i64
-        });
+                .min(i64::MAX as u128) as i64,
+            super::RunTiming::Stopped(elapsed_ms) => elapsed_ms,
+        };
+        active.timing = super::RunTiming::Stopped(elapsed_ms);
+        Ok(elapsed_ms)
+    }
+
+    async fn finish_with_result(
+        &mut self,
+        completion: &crate::types::RunCompletion,
+        events: Vec<AgentEvent>,
+        agent_result: Option<(String, i64, serde_json::Value)>,
+    ) -> Result<()> {
+        let status = completion.status();
+        let history = completion.history();
+        let elapsed_ms = Some(self.freeze_elapsed()?);
+        let run = self.active_run.as_ref().unwrap().id;
         let status = status.to_owned();
         let id = self.id.clone();
         let database = self.store.path().to_owned();
@@ -427,10 +430,10 @@ impl SessionWriter {
                         &transaction,
                         &database,
                         &id,
-                        crate::attachments::in_messages(&history),
+                        crate::attachments::in_messages(history),
                     )
                     .await?;
-                    row.history = Set(serde_json::to_string(&history)?);
+                    row.history = Set(serde_json::to_string(history)?);
                 }
                 sessions::Entity::update_many()
                     .set(row)
@@ -443,7 +446,6 @@ impl SessionWriter {
             })
             .await?;
         self.active_run = None;
-        self.active_started = None;
 
         Ok(())
     }

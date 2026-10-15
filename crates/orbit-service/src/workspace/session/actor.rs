@@ -341,7 +341,7 @@ pub(super) async fn run(
                 if actor
                     .setup
                     .session
-                    .poll_title()
+                    .poll_metadata()
                     .await
                     .unwrap_or(false)
                 {
@@ -518,23 +518,13 @@ impl Actor {
                 ));
             }
             Command::SendSubagent { agent, message } => {
-                let message = message.trim().to_owned();
-                self.setup
-                    .resources
-                    .tools
-                    .execute(
-                        orbit_model::types::ToolCall::function(
-                            super::super::request_id(),
-                            "send_agent_message",
-                            serde_json::json!({
-                                "agent_id": agent,
-                                "message": message
-                            }),
-                        ),
-                        CancellationToken::new(),
-                    )
-                    .await?;
+                crate::workspace::subagents::execute(
+                    &mut self.setup,
+                    orbit_protocol::subagents::Action::Send { id: agent, message },
+                )
+                .await?;
             }
+
             Command::SetMode { mode } => {
                 if self.setup.session.is_persisted() {
                     self.setup
@@ -1045,7 +1035,7 @@ impl Actor {
                     model.as_deref(),
                 )
                 .await;
-                let (events, task, cancellation, inbox, image_assets, file_assets) = match started {
+                let started = match started {
                     Ok(started) => started,
                     Err(error) => {
                         let _ = self
@@ -1064,12 +1054,8 @@ impl Actor {
                 self.accepted.clear();
                 self.accepted
                     .insert(request_id.clone(), identity);
-                self.activate_run(
-                    (events, task, cancellation, inbox, image_assets, file_assets),
-                    prompt,
-                    presentation,
-                )
-                .await;
+                self.activate_run(started, prompt, presentation)
+                    .await;
                 self.setup
                     .session
                     .store
@@ -1183,14 +1169,13 @@ impl Actor {
         prompt: String,
         mut presentation: orbit_protocol::RunPresentation,
     ) {
-        let (events, task, cancellation, inbox, image_assets, file_assets) = started;
-        presentation.image_assets = image_assets;
-        presentation.file_assets = file_assets;
+        presentation.image_assets = started.image_assets;
+        presentation.file_assets = started.file_assets;
         self.running = Some(Running {
-            events,
-            task,
-            cancellation,
-            inbox,
+            events: started.execution.receiver,
+            task: started.execution.task,
+            cancellation: started.execution.cancellation,
+            inbox: started.execution.inbox,
         });
         self.profile().await;
         let mut view = self.view.lock().await;
@@ -1234,16 +1219,17 @@ impl Actor {
         let run = self.running.take().unwrap();
         let continue_queued = std::mem::take(&mut self.continue_after_cancel);
         self.pending.clear();
-        let (status, event, history) =
-            crate::execution::outcome(run.task.await, Some(&run.cancellation));
-        let error = match event {
+        let outcome = crate::execution::outcome(run.task.await, Some(&run.cancellation));
+        let error = match outcome.event() {
             AgentEvent::Failed { error } => Some(error),
             _ => None,
         };
+        let completion = outcome.into_completion();
+        let status = completion.status();
         let saved = self
             .setup
             .session
-            .finish(status, history)
+            .finish(completion)
             .await;
         if let Ok(mut workspace) = self.workspace.write() {
             *workspace = self.setup.resources.workspace.clone();

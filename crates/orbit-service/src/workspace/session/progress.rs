@@ -271,6 +271,7 @@ mod tests {
         );
         let in_flight = progress.start_snapshot(&tools, &output);
         progress.record(&AgentEvent::ToolFinished {
+            files: None,
             call: call.clone(),
             content: "done".into(),
             changes: vec![],

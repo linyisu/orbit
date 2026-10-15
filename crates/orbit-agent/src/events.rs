@@ -110,6 +110,9 @@ pub enum AgentEvent {
         /// have no reversible workspace mutation attached.
         #[serde(default)]
         changes: Vec<FileChange>,
+        /// Missing only in legacy events, whose receipts are reconstructed on read.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        files: Option<crate::memory::FileActivity>,
     },
     VerificationRecorded {
         call_id: String,

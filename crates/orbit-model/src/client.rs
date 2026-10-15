@@ -488,6 +488,7 @@ where
         let mut buffer = Vec::new();
         let mut received_bytes = 0;
         let mut decoded_events = 0;
+        let mut completed = false;
 
         loop {
             let next = select! {
@@ -539,11 +540,7 @@ where
                 };
 
                 if let Some(data) = sse_data(&frame) {
-                    if data == "[DONE]" {
-                        return;
-                    }
-
-                    match decode_sse_data(&data, &mut decode) {
+                    match decode_sse_data(&data, &mut completed, &mut decode) {
                         Ok((events, terminal)) => {
                             decoded_events += events.len();
                             for event in events {
@@ -570,8 +567,7 @@ where
         };
         if !buffer.trim().is_empty() {
             match sse_data(&buffer) {
-                Some(data) if data == "[DONE]" => {}
-                Some(data) => match decode_sse_data(&data, &mut decode) {
+                Some(data) => match decode_sse_data(&data, &mut completed, &mut decode) {
                     Ok((events, _)) => {
                         for event in events {
                             yield Ok(event);
@@ -585,10 +581,27 @@ where
     })
 }
 
-fn decode_sse_data<F>(data: &str, decode: &mut F) -> Result<(Vec<StreamEvent>, bool), ModelError>
+/// Preserve explicit protocol terminators without replacing a provider's earlier stop reason.
+fn decode_sse_data<F>(
+    data: &str,
+    completed: &mut bool,
+    decode: &mut F,
+) -> Result<(Vec<StreamEvent>, bool), ModelError>
 where
     F: FnMut(&str) -> Result<Vec<StreamEvent>, ModelError>,
 {
+    if data == "[DONE]" {
+        let events = if *completed {
+            Vec::new()
+        } else {
+            *completed = true;
+            vec![StreamEvent::Completed {
+                finish_reason: Some("stop".into()),
+                usage: None,
+            }]
+        };
+        return Ok((events, true));
+    }
     let value: serde_json::Value = serde_json::from_str(data)?;
 
     if let Some(error) = upstream_error(&value) {
@@ -601,7 +614,27 @@ where
     ) || value["response"]["candidates"][0]["finishReason"].is_string()
         || value["candidates"][0]["finishReason"].is_string();
 
-    Ok((decode(data)?, terminal))
+    let mut events = decode(data)?;
+    *completed |= events.iter().any(|event| {
+        matches!(
+            event,
+            StreamEvent::Completed { finish_reason: Some(reason), .. }
+                if !reason.trim().is_empty()
+        )
+    });
+    if terminal && !*completed {
+        let reason = if value["type"] == "response.incomplete" {
+            "max_tokens"
+        } else {
+            "stop"
+        };
+        events.push(StreamEvent::Completed {
+            finish_reason: Some(reason.into()),
+            usage: None,
+        });
+        *completed = true;
+    }
+    Ok((events, terminal))
 }
 
 pub(crate) fn upstream_error(value: &serde_json::Value) -> Option<ModelError> {

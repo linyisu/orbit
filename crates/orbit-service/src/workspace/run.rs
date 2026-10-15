@@ -1,16 +1,10 @@
 use anyhow::Result;
-use orbit_agent::{error::AgentError, events::AgentEvent};
-use tokio::sync::mpsc;
-use tokio_util::sync::CancellationToken;
 
-pub(super) type Started = (
-    mpsc::Receiver<AgentEvent>,
-    tokio::task::JoinHandle<Result<orbit_agent::agent::AgentResult, AgentError>>,
-    CancellationToken,
-    orbit_agent::inbox::AgentInbox,
-    Vec<orbit_protocol::MessageImage>,
-    Vec<orbit_protocol::MessageImage>,
-);
+pub(super) struct Started {
+    pub execution: crate::execution::StartedRun,
+    pub image_assets: Vec<orbit_protocol::MessageImage>,
+    pub file_assets: Vec<orbit_protocol::MessageImage>,
+}
 
 pub(super) async fn start(
     setup: &mut crate::PreparedWorkspace,
@@ -36,17 +30,19 @@ pub(super) async fn start(
     );
     let queued_input = prompt.is_none();
     let prompt = prompt.unwrap_or_default();
-    let messages = context_messages(setup).await?;
-    let crate::PreparedWorkspace { session, resources } = setup;
-    session
+    setup
+        .session
         .set_model_profile(
-            resources.model_name.clone(),
-            resources
+            setup.resources.model_name.clone(),
+            setup
+                .resources
                 .model
                 .config()
                 .reasoning_effort,
         )
         .await?;
+    let messages = context_messages(setup).await?;
+    let crate::PreparedWorkspace { session, resources } = setup;
     let mut tools = resources.tools.clone();
     if !resources.model.supports_vision() {
         tools.remove("read_image");
@@ -118,14 +114,11 @@ pub(super) async fn start(
         },
     )
     .await?;
-    Ok((
-        started.receiver,
-        started.task,
-        started.cancellation,
-        started.inbox,
+    Ok(Started {
+        execution: started,
         image_assets,
         file_assets,
-    ))
+    })
 }
 
 pub(super) async fn context_messages(
@@ -305,3 +298,6 @@ pub(super) fn grant_files(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests;

@@ -50,8 +50,9 @@ pub struct Plan {
 }
 
 impl Plan {
+    /// Use the host's complete evidence snapshot instead of reconstructing legacy receipts.
     pub fn with_files(mut self, files: &FileActivity) -> Self {
-        self.files.merge(files);
+        self.files = files.clone();
         self
     }
 }
@@ -1366,6 +1367,31 @@ fn finish(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use orbit_model::types::ToolCall;
+
+    #[test]
+    fn authoritative_file_evidence_replaces_legacy_receipt_inference() {
+        let history = vec![
+            ChatMessage::system("generated instructions"),
+            ChatMessage::user("earlier work"),
+            ChatMessage::assistant_tool_calls(vec![ToolCall::function(
+                "legacy",
+                "write_file",
+                serde_json::json!({}),
+            )]),
+            ChatMessage::tool("legacy", r#"{"path":"legacy.dat","written_bytes":1}"#),
+            ChatMessage::assistant("old detail ".repeat(3_000)),
+            ChatMessage::user("current work"),
+        ];
+        let plan = plan_manual(&history, &[], 256, 8_192).unwrap();
+        assert!(
+            plan.files
+                .written
+                .contains("legacy.dat")
+        );
+        let plan = plan.with_files(&FileActivity::default());
+        assert_eq!(plan.files, FileActivity::default());
+    }
 
     #[test]
     fn compaction_keeps_latest_runtime_state_without_pinning_obsolete_states() {

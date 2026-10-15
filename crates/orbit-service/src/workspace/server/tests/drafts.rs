@@ -20,9 +20,10 @@ async fn global_history_resolves_a_moved_project_before_resume_without_writing_o
         .unwrap();
     writer
         .finish(
-            "completed",
+            &orbit_store::types::RunCompletion::Completed {
+                history: vec![orbit_model::types::ChatMessage::user("remember this")],
+            },
             vec![],
-            Some(vec![orbit_model::types::ChatMessage::user("remember this")]),
         )
         .await
         .unwrap();
@@ -149,7 +150,10 @@ async fn global_history_lists_other_directories_without_changing_project_scoped_
             .await
             .unwrap();
         writer
-            .finish("completed", vec![], Some(vec![]))
+            .finish(
+                &orbit_store::types::RunCompletion::Completed { history: vec![] },
+                vec![],
+            )
             .await
             .unwrap();
     }
@@ -233,11 +237,12 @@ async fn resumed_transcript_pages_join_live_updates_without_reordering_or_losing
         journal.flush().await.unwrap();
         writer
             .finish(
-                "completed",
+                &orbit_store::types::RunCompletion::Completed {
+                    history: vec![orbit_model::types::ChatMessage::user(format!(
+                        "question {run}"
+                    ))],
+                },
                 vec![],
-                Some(vec![orbit_model::types::ChatMessage::user(format!(
-                    "question {run}"
-                ))]),
             )
             .await
             .unwrap();
@@ -675,11 +680,12 @@ async fn closing_idle_persisted_sessions_releases_capacity_and_preserves_resume(
             .unwrap();
         writer
             .finish(
-                "completed",
+                &orbit_store::types::RunCompletion::Completed {
+                    history: vec![orbit_model::types::ChatMessage::user(format!(
+                        "question {index}"
+                    ))],
+                },
                 vec![],
-                Some(vec![orbit_model::types::ChatMessage::user(format!(
-                    "question {index}"
-                ))]),
             )
             .await
             .unwrap();
@@ -943,9 +949,10 @@ async fn explicit_directory_replacement_recovers_history_after_filesystem_identi
         .unwrap();
     writer
         .finish(
-            "completed",
+            &orbit_store::types::RunCompletion::Completed {
+                history: vec![orbit_model::types::ChatMessage::user("remember this")],
+            },
             vec![],
-            Some(vec![orbit_model::types::ChatMessage::user("remember this")]),
         )
         .await
         .unwrap();

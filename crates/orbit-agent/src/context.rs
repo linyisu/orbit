@@ -321,6 +321,11 @@ mod tests {
 
     #[tokio::test]
     async fn budget_is_checked_again_after_tool_output_before_next_model_call() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+
         use crate::tool::ClosureTool;
 
         let backend = MockModel::new(vec![ChatCompletion {
@@ -330,9 +335,11 @@ mod tests {
                 content: None,
                 tool_calls: vec![ToolCall::function("one", "large", serde_json::json!({}))],
             },
-            finish_reason: None,
+            finish_reason: Some("tool_calls".into()),
             usage: None,
         }]);
+        let executions = Arc::new(AtomicUsize::new(0));
+        let observed = executions.clone();
         let mut tools = ToolRegistry::new();
         tools.register(ClosureTool::new(
             "large",
@@ -340,7 +347,10 @@ mod tests {
             serde_json::json!({
                 "type": "object"
             }),
-            |_, _| async { Ok("x".repeat(20_000)) },
+            move |_, _| {
+                observed.fetch_add(1, Ordering::SeqCst);
+                async { Ok("x".repeat(20_000)) }
+            },
         ));
         let agent = Agent::new(
             backend.clone(),
@@ -351,15 +361,17 @@ mod tests {
             },
         );
 
-        assert!(matches!(
-            agent
-                .run(
-                    ChatRequest::new(vec![ChatMessage::user("run")]),
-                    CancellationToken::new()
-                )
-                .await,
-            Err(AgentError::ContextBudget { .. })
-        ));
+        let result = agent
+            .run(
+                ChatRequest::new(vec![ChatMessage::user("run")]),
+                CancellationToken::new(),
+            )
+            .await;
+        assert!(
+            matches!(result, Err(AgentError::ContextBudget { .. })),
+            "unexpected result: {result:?}"
+        );
+        assert_eq!(executions.load(Ordering::SeqCst), 1);
         assert_eq!(backend.requests().len(), 1);
     }
 }

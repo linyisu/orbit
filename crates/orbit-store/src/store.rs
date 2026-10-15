@@ -47,8 +47,17 @@ pub struct SessionWriter {
     store: Store,
     id: String,
     _lock: File,
-    active_run: Option<i64>,
-    active_started: Option<std::time::Instant>,
+    active_run: Option<ActiveRun>,
+}
+
+struct ActiveRun {
+    id: i64,
+    timing: RunTiming,
+}
+
+enum RunTiming {
+    Running(std::time::Instant),
+    Stopped(i64),
 }
 
 impl Store {
@@ -623,7 +632,6 @@ impl Store {
             id,
             _lock: lock,
             active_run: None,
-            active_started: None,
         })
     }
 }

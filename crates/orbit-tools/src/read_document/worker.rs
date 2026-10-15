@@ -52,7 +52,7 @@ pub(super) async fn run(
     ];
     argv.extend(arguments.iter().map(String::as_str));
     let command = shlex::try_join(argv).map_err(failed)?;
-    let request = ExecutionRequest::new(command, input.path(), std::time::Duration::from_secs(60));
+    let request = ExecutionRequest::new(command, std::time::Duration::from_secs(60));
     let environment = ExecutionEnvironment::new(input.path(), input.path()).map_err(failed)?;
     let policy = ExecutionPolicy {
         resources: ResourceLimits {

@@ -70,6 +70,7 @@ pub struct WorkspaceResources {
     pub model: ModelClient,
     pub model_name: String,
     pub tools: orbit_agent::tool::ToolRegistry,
+    pub(super) subagents: Option<subagents::Control>,
     pub undo_writer: orbit_tools::write_file::WriteFile,
     pub approvals: orbit_tools::approval::ApprovalReceiver,
     pub(super) mcp_approvals: Option<orbit_tools::approval::ApprovalSender>,
@@ -356,7 +357,7 @@ async fn prepare_resolved_resources(
     user_input.register(&mut tools, None);
     // Delegated agents capture this allowlist at registration.
     filter_configured_tools(&mut tools, &policy, &file_config.disabled_tools);
-    if !policy.disabled(Capability::Subagents) {
+    let subagents = if !policy.disabled(Capability::Subagents) {
         subagents::register(
             &mut tools,
             session.store.clone(),
@@ -368,8 +369,10 @@ async fn prepare_resolved_resources(
             (!policy.read_only).then_some(approvals.clone()),
             Some(user_input.clone()),
         )
-        .await?;
-    }
+        .await?
+    } else {
+        None
+    };
     if policy.disabled(Capability::Files) {
         tools.remove("verification_status");
     }
@@ -406,6 +409,7 @@ async fn prepare_resolved_resources(
         None
     };
     Ok(WorkspaceResources {
+        subagents,
         skill_import: None,
         mcp_import: None,
         mcp_startup,
@@ -886,13 +890,12 @@ mod selection_tests {
             .unwrap();
         setup
             .session
-            .finish(
-                "completed",
-                Some(vec![
+            .finish(orbit_store::types::RunCompletion::Completed {
+                history: vec![
                     orbit_model::types::ChatMessage::user("question"),
                     orbit_model::types::ChatMessage::assistant("answer"),
-                ]),
-            )
+                ],
+            })
             .await
             .unwrap();
         let id = setup.session.id().to_owned();

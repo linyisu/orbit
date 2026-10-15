@@ -440,6 +440,7 @@ impl Execution {
                 call,
                 changes,
                 content,
+                ..
             } => {
                 if !self.accepts(call) {
                     return;
@@ -629,6 +630,7 @@ mod tests {
             call: call.clone(),
             content: running.clone(),
             changes: vec![],
+            files: None,
         });
         let mut stored = Agent {
             id: "child".into(),
@@ -651,6 +653,7 @@ mod tests {
                 call: call.clone(),
                 content: running.clone(),
                 changes: vec![],
+                files: None,
             });
             assert_eq!(state.agents()[0].status, label);
             assert_eq!(state.agents()[0].task(), Some("检查项目"));
@@ -1005,6 +1008,7 @@ mod tests {
             call,
             content: receipt("completed"),
             changes: vec![],
+            files: None,
         });
         for name in ["read_agent", "send_agent_message", "wait_agents"] {
             state.agent(&AgentEvent::ToolFinished {
@@ -1018,6 +1022,7 @@ mod tests {
                 ),
                 content: receipt("running"),
                 changes: vec![],
+                files: None,
             });
             assert_eq!(state.agents()[0].task(), Some(task));
         }
@@ -1026,6 +1031,7 @@ mod tests {
             call: ToolCall::function("historical", "spawn_agent", serde_json::json!({})),
             content: receipt("completed"),
             changes: vec![],
+            files: None,
         });
         assert_eq!(state.agents().len(), 1);
         assert_eq!(state.agents()[0].task(), Some(task));
@@ -1060,6 +1066,7 @@ mod tests {
                 })
                 .to_string(),
                 changes: vec![],
+                files: None,
             });
             assert_eq!(state.agents()[0].task(), task);
             assert_eq!(
@@ -1111,6 +1118,7 @@ mod tests {
                 call,
                 content: command_result(exit, timed_out, cancelled),
                 changes: vec![],
+                files: None,
             });
             assert_eq!(state.tools()[0].status, expected);
             assert_eq!(state.tools()[0].elapsed_ms, Some(1_234));
@@ -1153,6 +1161,7 @@ mod tests {
             call,
             content: command_result(0.into(), false, false),
             changes: vec![],
+            files: None,
         });
         state.apply_progress(&[progress(Some("stale"))]);
         assert!(!state.tools()[0].live);
@@ -1215,6 +1224,7 @@ mod tests {
             call: old,
             content: command_result(0.into(), false, false),
             changes: vec![],
+            files: None,
         });
         assert!(state.tools()[0].output.is_none());
         let mut restored = Execution::default();

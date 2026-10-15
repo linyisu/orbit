@@ -496,7 +496,7 @@ mod tests {
                 .await
                 .unwrap();
             writer
-                .finish("failed", Vec::new(), None)
+                .finish(&crate::types::RunCompletion::Failed, Vec::new())
                 .await
                 .unwrap();
             drop(writer);

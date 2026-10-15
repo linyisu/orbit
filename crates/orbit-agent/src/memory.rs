@@ -13,9 +13,9 @@ pub struct FileActivity {
 }
 
 impl FileActivity {
-    /// Only successful built-in file-tool receipts count. A shell command or a
-    /// model statement about a file is not evidence that a file was changed.
-    pub fn observe(&mut self, call: &ToolCall, output: &str) {
+    /// Reconstruct older receipts that predate typed file evidence. Live tools
+    /// supply `ToolOutput::files`; model claims and shell output are never evidence.
+    pub fn observe_legacy_receipt(&mut self, call: &ToolCall, output: &str) {
         let Ok(value) = serde_json::from_str::<serde_json::Value>(output) else {
             return;
         };
@@ -76,7 +76,7 @@ impl FileActivity {
                     content,
                 } => {
                     if let Some(call) = calls.remove(tool_call_id) {
-                        files.observe(call, content);
+                        files.observe_legacy_receipt(call, content);
                     }
                 }
 
@@ -94,7 +94,18 @@ impl FileActivity {
 
         for event in events {
             match event {
-                AgentEvent::ToolFinished { call, content, .. } => files.observe(call, content),
+                AgentEvent::ToolFinished {
+                    files: Some(receipt),
+                    ..
+                } => files.merge(receipt),
+                AgentEvent::ToolFinished {
+                    call,
+                    content,
+                    files: None,
+                    ..
+                } => {
+                    files.observe_legacy_receipt(call, content);
+                }
                 AgentEvent::CompactionRecorded { record } => files.merge(&record.files),
                 _ => {}
             }

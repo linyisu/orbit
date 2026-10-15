@@ -147,14 +147,13 @@ async fn context_handles_the_gap_before_checkpoint_and_failed_partial_answers() 
     );
     writer
         .finish(
-            "failed",
+            &orbit_store::types::RunCompletion::Failed,
             vec![
                 AgentEvent::Model(StreamEvent::TextDelta("部分回答".into())),
                 AgentEvent::Failed {
                     error: "Orbit 请求失败".into(),
                 },
             ],
-            None,
         )
         .await
         .unwrap();

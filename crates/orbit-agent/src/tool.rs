@@ -12,12 +12,25 @@ pub type ToolFuture<'a> = Pin<Box<dyn Future<Output = Result<ToolOutput, ToolErr
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ToolOutput {
     pub content: String,
+    /// Host-owned lifecycle evidence, independent of the model-facing content.
+    pub outcome: ToolOutcome,
+    /// Confirmed file access, recorded only after the operation succeeds.
+    pub files: crate::memory::FileActivity,
     pub attachments: Vec<Attachment>,
     /// Local audit data for a successfully committed workspace write. This is
     /// intentionally excluded from the model-facing tool result.
     pub changes: Vec<FileChange>,
     pub verification: Option<orbit_runtime::verification::VerificationEvidence>,
     pub background_job: Option<String>,
+}
+
+/// Terminal outcome reported by a tool that returns a receipt rather than an error.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ToolOutcome {
+    #[default]
+    Completed,
+    Failed,
+    Cancelled,
 }
 
 /// A reversible text-file mutation reported only after the filesystem commit
@@ -33,6 +46,8 @@ impl ToolOutput {
     pub fn text(content: impl Into<String>) -> Self {
         Self {
             content: content.into(),
+            outcome: ToolOutcome::Completed,
+            files: Default::default(),
             attachments: Vec::new(),
             changes: Vec::new(),
             verification: None,
@@ -43,6 +58,8 @@ impl ToolOutput {
     pub fn with_attachments(content: impl Into<String>, attachments: Vec<Attachment>) -> Self {
         Self {
             content: content.into(),
+            outcome: ToolOutcome::Completed,
+            files: Default::default(),
             attachments,
             changes: Vec::new(),
             verification: None,
@@ -51,13 +68,32 @@ impl ToolOutput {
     }
 
     pub fn with_changes(content: impl Into<String>, changes: Vec<FileChange>) -> Self {
+        let files = crate::memory::FileActivity {
+            read: Default::default(),
+            written: changes
+                .iter()
+                .map(|change| change.path.clone())
+                .collect(),
+        };
         Self {
             content: content.into(),
+            outcome: ToolOutcome::Completed,
+            files,
             attachments: Vec::new(),
             changes,
             verification: None,
             background_job: None,
         }
+    }
+
+    pub fn with_outcome(mut self, outcome: ToolOutcome) -> Self {
+        self.outcome = outcome;
+        self
+    }
+
+    pub fn with_read(mut self, path: impl Into<String>) -> Self {
+        self.files.read.insert(path.into());
+        self
     }
 }
 
@@ -104,6 +140,9 @@ pub struct ToolContext {
     pub supports_vision: bool,
 }
 
+/// A tool validates its arguments and reports failures without panicking.
+/// Cancellation must not claim that an already committed operation was undone.
+/// The registry applies policy before calling this interface; direct callers own authorization.
 pub trait Tool: Send + Sync {
     fn definition(&self) -> ToolDefinition;
 
@@ -387,11 +426,16 @@ where
     }
 
     fn execute<'a>(&'a self, call: ToolCall, cancellation: CancellationToken) -> ToolFuture<'a> {
-        let arguments = call
-            .arguments_json()
-            .expect("ToolRegistry validates arguments before execution");
-
         Box::pin(async move {
+            if cancellation.is_cancelled() {
+                return Err(ToolError::Cancelled);
+            }
+            let arguments = call
+                .arguments_json()
+                .map_err(|error| ToolError::InvalidArguments {
+                    tool: call.function.name.clone(),
+                    message: error.to_string(),
+                })?;
             (self.execute)(arguments, cancellation)
                 .await
                 .map(ToolOutput::text)
@@ -493,6 +537,21 @@ mod tests {
             error,
             ToolError::InvalidArguments { tool, .. } if tool == "echo"
         ));
+    }
+
+    #[tokio::test]
+    async fn directly_called_closure_returns_argument_errors_without_invoking_work() {
+        let tool = ClosureTool::new(
+            "inspect",
+            "inspect a generated value",
+            json!({}),
+            |_, _| async { panic!("invalid arguments must not reach the implementation") },
+        );
+        let error = tool
+            .execute(call("direct", "inspect", "{"), CancellationToken::new())
+            .await
+            .unwrap_err();
+        assert!(matches!(error, ToolError::InvalidArguments { tool, .. } if tool == "inspect"));
     }
 
     #[tokio::test]

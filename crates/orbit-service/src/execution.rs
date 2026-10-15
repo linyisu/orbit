@@ -271,78 +271,69 @@ async fn compaction_source_history(
     Ok(restored)
 }
 
+/// The terminal execution result, before the store commits its receipt.
+pub enum RunOutcome {
+    Completed(AgentResult),
+    Failed(String),
+    Cancelled,
+}
+
+impl RunOutcome {
+    pub fn event(&self) -> AgentEvent {
+        match self {
+            Self::Completed(result) => AgentEvent::Completed {
+                turns: result.turns,
+                tool_calls: result.tool_calls,
+            },
+            Self::Failed(error) => AgentEvent::Failed {
+                error: error.clone(),
+            },
+            Self::Cancelled => AgentEvent::Cancelled,
+        }
+    }
+
+    pub fn into_completion(self) -> orbit_store::types::RunCompletion {
+        match self {
+            Self::Completed(result) => orbit_store::types::RunCompletion::Completed {
+                history: result.history,
+            },
+            Self::Failed(_) => orbit_store::types::RunCompletion::Failed,
+            Self::Cancelled => orbit_store::types::RunCompletion::Cancelled,
+        }
+    }
+}
+
 pub fn outcome(
     result: std::result::Result<Result<AgentResult, AgentError>, tokio::task::JoinError>,
     cancellation: Option<&CancellationToken>,
-) -> (&'static str, AgentEvent, Option<Vec<ChatMessage>>) {
+) -> RunOutcome {
     match result {
         Ok(Ok(result))
             if matches!(
                 &result.final_message,
-                ChatMessage::Assistant {
-                    content,
-                    tool_calls,
-                } if content
-                    .as_deref()
-                    .unwrap_or_default()
-                    .trim()
-                    .is_empty()
-                    && tool_calls.is_empty()
+                ChatMessage::Assistant { content, tool_calls }
+                    if content.as_deref().unwrap_or_default().trim().is_empty()
+                        && tool_calls.is_empty()
             ) =>
         {
-            (
-                "failed",
-                AgentEvent::Failed {
-                    error: "模型已结束响应，但未返回回答或工具调用；请检查服务端返回内容。".into(),
-                },
-                None,
+            RunOutcome::Failed(
+                "模型已结束响应，但未返回回答或工具调用；请检查服务端返回内容。".into(),
             )
         }
-
-        Ok(Ok(result)) => (
-            "completed",
-            AgentEvent::Completed {
-                turns: result.turns,
-                tool_calls: result.tool_calls,
-            },
-            Some(result.history),
-        ),
-
+        Ok(Ok(result)) => RunOutcome::Completed(result),
         Ok(Err(_)) if cancellation.is_some_and(CancellationToken::is_cancelled) => {
-            ("cancelled", AgentEvent::Cancelled, None)
+            RunOutcome::Cancelled
         }
-        Ok(Err(AgentError::Cancelled)) => ("cancelled", AgentEvent::Cancelled, None),
-        Ok(Err(AgentError::CompactionFailed { kind, .. })) => (
-            "failed",
-            AgentEvent::Failed {
-                error: format!("上下文整理未完成：{}。原上下文已保留。", kind.label()),
-            },
-            None,
-        ),
-
-        Ok(Err(AgentError::Compaction(_))) => (
-            "failed",
-            AgentEvent::Failed {
-                error: "上下文整理未完成，原上下文已保留。".into(),
-            },
-            None,
-        ),
-
-        Ok(Err(error)) => (
-            "failed",
-            AgentEvent::Failed {
-                error: error.to_string(),
-            },
-            None,
-        ),
-
-        Err(error) => (
-            "failed",
-            AgentEvent::Failed {
-                error: format!("后台任务中断：{error}"),
-            },
-            None,
-        ),
+        Ok(Err(AgentError::Cancelled)) => RunOutcome::Cancelled,
+        Ok(Err(AgentError::CompactionFailed { kind, .. })) => RunOutcome::Failed(format!(
+            "上下文整理未完成：{}。原上下文已保留。",
+            kind.label(),
+        )),
+        Ok(Err(AgentError::Compaction(_))) => {
+            RunOutcome::Failed("上下文整理未完成，原上下文已保留。".into())
+        }
+        Ok(Err(error)) => RunOutcome::Failed(error.to_string()),
+        Err(error) => RunOutcome::Failed(format!("后台任务中断：{error}")),
     }
 }
 

@@ -22,7 +22,7 @@ async fn compact_retry_restores_the_original_history_after_a_failed_retry() {
         .await
         .unwrap();
     session
-        .finish("cancelled", None)
+        .finish(orbit_store::types::RunCompletion::Cancelled)
         .await
         .unwrap();
     let id = session
@@ -88,7 +88,9 @@ async fn compact_retry_restores_the_original_history_after_a_failed_retry() {
         Some(id)
     );
 
-    session.snapshot.runs = vec![archive_run.clone()];
+    let mut snapshot = (*session.snapshot).clone();
+    snapshot.runs = vec![archive_run.clone()];
+    session.snapshot = snapshot.into();
     let restored = compaction_source_history(&session, &projected)
         .await
         .unwrap();

@@ -65,12 +65,13 @@ async fn catalogue_discovers_stored_children_and_their_own_workspace_without_exe
             .unwrap();
         child
             .finish(
-                "completed",
+                &orbit_store::types::RunCompletion::Completed {
+                    history: vec![
+                        orbit_model::types::ChatMessage::user("stored child run"),
+                        orbit_model::types::ChatMessage::assistant("stored child result"),
+                    ],
+                },
                 vec![],
-                Some(vec![
-                    orbit_model::types::ChatMessage::user("stored child run"),
-                    orbit_model::types::ChatMessage::assistant("stored child result"),
-                ]),
             )
             .await
             .unwrap();
@@ -118,7 +119,7 @@ async fn catalogue_discovers_stored_children_and_their_own_workspace_without_exe
 }
 
 #[tokio::test]
-async fn native_mutations_check_parent_and_sampled_run_before_calling_registered_tools() {
+async fn native_mutations_check_parent_and_run_without_executing_untyped_tools() {
     let root = tempfile::tempdir().unwrap();
     let mut setup = setup(root.path()).await;
     let store = setup.session.store.clone();
@@ -209,10 +210,7 @@ async fn native_mutations_check_parent_and_sampled_run_before_calling_registered
         .contains("另一轮任务")
     );
     assert_eq!(calls.load(Ordering::SeqCst), 0);
-    let Snapshot::Stopping {
-        id: stopped,
-        run: sampled,
-    } = execute(
+    let error = execute(
         &mut setup,
         Action::Cancel {
             id: id.clone(),
@@ -220,12 +218,9 @@ async fn native_mutations_check_parent_and_sampled_run_before_calling_registered
         },
     )
     .await
-    .unwrap()
-    else {
-        panic!("stopping acknowledgement expected")
-    };
-    assert_eq!((stopped, sampled), (id.clone(), run));
-    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    .unwrap_err();
+    assert!(error.to_string().contains("inactive"));
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
     assert_eq!(
         store
             .session_revision(&id)

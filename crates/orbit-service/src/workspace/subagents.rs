@@ -1,13 +1,10 @@
 //! The native child catalogue shares the store's ownership boundary and the
 //! existing subagent tools' policy, inbox, and cancellation implementation.
 use anyhow::{Context, Result, ensure};
-use orbit_model::types::ToolCall;
 use orbit_protocol::{
     Capability,
     subagents::{Action, Agent, Snapshot},
 };
-use serde::Deserialize;
-use tokio_util::sync::CancellationToken;
 
 const PAGE_SIZE: usize = 32;
 const MAX_MESSAGE_BYTES: usize = 32_768;
@@ -72,45 +69,13 @@ pub(super) async fn execute(
                 !message.is_empty() && message.len() <= MAX_MESSAGE_BYTES,
                 "消息需要 1–32768 字节"
             );
-            ensure!(
-                setup
-                    .resources
-                    .tools
-                    .contains("send_agent_message"),
-                "当前会话不能向子 Agent 发送消息"
-            );
-            let output = setup
+            setup
                 .resources
-                .tools
-                .execute(
-                    ToolCall::function(
-                        orbit_protocol::request_id(),
-                        "send_agent_message",
-                        serde_json::json!({
-                            "agent_id": id,
-                            "message": message
-                        }),
-                    ),
-                    CancellationToken::new(),
-                )
-                .await?;
-            #[derive(Deserialize)]
-            struct Receipt {
-                agent_id: String,
-                status: String,
-                message_id: Option<i64>,
-            }
-            let receipt: Receipt =
-                serde_json::from_str(&output.content).context("子 Agent 消息回执无效")?;
-            ensure!(
-                receipt.agent_id == id && matches!(receipt.status.as_str(), "queued" | "running"),
-                "子 Agent 消息回执不匹配"
-            );
-            Ok(Snapshot::Sent {
-                id,
-                status: receipt.status,
-                message_id: receipt.message_id,
-            })
+                .subagents
+                .as_ref()
+                .context("当前会话不能向子 Agent 发送消息")?
+                .send(&setup.resources.tools, id, message)
+                .await
         }
         Action::Cancel { id, run } => {
             store
@@ -128,27 +93,12 @@ pub(super) async fn execute(
                 revision.status == "running",
                 "子 Agent 当前任务已结束，请刷新列表"
             );
-            ensure!(
-                setup
-                    .resources
-                    .tools
-                    .contains("cancel_agents"),
-                "当前会话不能停止子 Agent"
-            );
             setup
                 .resources
-                .tools
-                .execute(
-                    ToolCall::function(
-                        orbit_protocol::request_id(),
-                        "cancel_agents",
-                        serde_json::json!({
-                            "agent_ids": [id],
-                            "expected_run_id": run
-                        }),
-                    ),
-                    CancellationToken::new(),
-                )
+                .subagents
+                .as_ref()
+                .context("当前会话不能停止子 Agent")?
+                .cancel(&setup.resources.tools, id.clone(), run)
                 .await?;
             Ok(Snapshot::Stopping { id, run })
         }

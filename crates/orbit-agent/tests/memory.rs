@@ -57,21 +57,25 @@ fn only_confirmed_file_receipts_are_recorded_not_failed_tools_or_model_claims() 
             call: read.clone(),
             content: r#"{"path":"source.rs","total_lines":12,"content":"1: source"}"#.into(),
             changes: Vec::new(),
+            files: None,
         },
         AgentEvent::ToolFinished {
             call: edit.clone(),
             content: r#"{"path":"source.rs","written_bytes":0}"#.into(),
             changes: Vec::new(),
+            files: None,
         },
         AgentEvent::ToolFinished {
             call: shell,
             content: r#"{"path":"shell.txt","written_bytes":99}"#.into(),
             changes: Vec::new(),
+            files: None,
         },
         AgentEvent::ToolFinished {
             call: call("fake", "write_file", "fake.txt"),
             content: "I wrote fake.txt".into(),
             changes: Vec::new(),
+            files: None,
         },
     ];
     let activity = FileActivity::from_events(&events);
@@ -104,6 +108,31 @@ fn only_confirmed_file_receipts_are_recorded_not_failed_tools_or_model_claims() 
     ];
 
     assert_eq!(FileActivity::from_history(&history), activity);
+}
+
+#[test]
+fn typed_file_evidence_survives_events_without_interpreting_tool_text() {
+    let receipt = FileActivity {
+        read: ["input.dat".into()].into(),
+        written: ["output.dat".into()].into(),
+    };
+    let events = [
+        AgentEvent::ToolFinished {
+            call: call("typed", "custom_file_adapter", "unrelated"),
+            content: "a human-readable receipt".into(),
+            changes: Vec::new(),
+            files: Some(receipt.clone()),
+        },
+        AgentEvent::ToolFinished {
+            call: call("plain", "write_file", "claimed.dat"),
+            content: r#"{"path":"claimed.dat","written_bytes":12}"#.into(),
+            changes: Vec::new(),
+            files: Some(FileActivity::default()),
+        },
+    ];
+    let restored: Vec<AgentEvent> =
+        serde_json::from_str(&serde_json::to_string(&events).unwrap()).unwrap();
+    assert_eq!(FileActivity::from_events(&restored), receipt);
 }
 
 #[test]
@@ -140,7 +169,7 @@ fn structured_summary_rejects_missing_fields_and_accepts_fenced_json() {
 #[tokio::test]
 async fn repeated_compaction_and_event_reload_keep_confirmed_files_and_cut_metadata() {
     let mut activity = FileActivity::default();
-    activity.observe(
+    activity.observe_legacy_receipt(
         &call("old", "edit_file", "original.rs"),
         r#"{"path":"original.rs","written_bytes":80}"#,
     );
@@ -163,6 +192,7 @@ async fn repeated_compaction_and_event_reload_keep_confirmed_files_and_cut_metad
             r#"{"path":"recent.rs","total_lines":1,"content":"recent"}"#,
         ),
     ];
+    activity.merge(&FileActivity::from_history(&history));
     let plan = autocompact::plan(&history, &[], 1_000, 8_000)
         .unwrap()
         .with_files(&activity);

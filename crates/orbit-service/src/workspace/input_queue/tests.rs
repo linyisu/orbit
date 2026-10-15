@@ -203,7 +203,9 @@ async fn running_edit_remove_use_real_inbox_and_canonical_consumption_under_send
     )));
     setup
         .session
-        .finish("completed", Some(result.history))
+        .finish(orbit_store::types::RunCompletion::Completed {
+            history: result.history,
+        })
         .await
         .unwrap();
 }
@@ -357,7 +359,9 @@ async fn drained_but_not_checkpointed_is_claimed_and_cannot_be_rewritten_in_data
     );
     setup
         .session
-        .finish("completed", Some(result.history))
+        .finish(orbit_store::types::RunCompletion::Completed {
+            history: result.history,
+        })
         .await
         .unwrap();
 }
@@ -415,7 +419,7 @@ async fn foreign_live_writer_blocks_idle_mutation_and_external_workspace_change_
         "pending"
     );
     foreign
-        .finish("cancelled", vec![], None)
+        .finish(&orbit_store::types::RunCompletion::Cancelled, vec![])
         .await
         .unwrap();
     let moved = root.path().join("moved");

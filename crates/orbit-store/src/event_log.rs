@@ -52,8 +52,19 @@ pub(crate) async fn load_by_session(
             if let Some(last_completed) = runtime {
                 let receipt: AgentEvent = serde_json::from_str(&event.payload)?;
                 match receipt {
-                    AgentEvent::ToolFinished { call, content, .. } => {
-                        evidence.files.observe(&call, &content);
+                    AgentEvent::ToolFinished {
+                        call,
+                        content,
+                        files,
+                        ..
+                    } => {
+                        if let Some(files) = files {
+                            evidence.files.merge(&files);
+                        } else {
+                            evidence
+                                .files
+                                .observe_legacy_receipt(&call, &content);
+                        }
                         continue;
                     }
                     AgentEvent::RequestMetrics {
@@ -182,7 +193,10 @@ mod tests {
         )));
         journal.flush().await.unwrap();
         writer
-            .finish("cancelled", vec![AgentEvent::Cancelled], None)
+            .finish(
+                &crate::types::RunCompletion::Cancelled,
+                vec![AgentEvent::Cancelled],
+            )
             .await
             .unwrap();
         let snapshot = Store::open(path)

@@ -1086,77 +1086,6 @@ async fn sparse_content_indices_execute_only_real_tools_in_both_stream_paths() {
     }
 }
 
-#[test]
-fn tool_signature_metadata_survives_delta_merging_and_history_serialization() {
-    let metadata = orbit_model::types::ToolCallMetadata {
-        google: orbit_model::types::GoogleToolMetadata {
-            model: "test-model".into(),
-            thought_signature: Some("opaque-signature".into()),
-            native_id: None,
-        },
-    };
-    let mut calls = BTreeMap::new();
-
-    merge_tool_call(
-        &mut calls,
-        ToolCallDelta {
-            metadata: Some(metadata.clone()),
-            index: 0,
-            id: Some("call".into()),
-            name: Some("read_file".into()),
-            arguments: "{".into(),
-        },
-    );
-    merge_tool_call(
-        &mut calls,
-        ToolCallDelta {
-            metadata: None,
-            index: 0,
-            id: None,
-            name: None,
-            arguments: "}".into(),
-        },
-    );
-    let history = ChatMessage::assistant_tool_calls(calls.into_values().collect());
-    let restored: ChatMessage =
-        serde_json::from_str(&serde_json::to_string(&history).unwrap()).unwrap();
-
-    assert_eq!(restored, history);
-    let ChatMessage::Assistant { tool_calls, .. } = restored else {
-        panic!("assistant history expected")
-    };
-    assert_eq!(tool_calls[0].metadata, Some(metadata));
-    assert_eq!(tool_calls[0].function.arguments, "{}");
-}
-
-#[test]
-fn sparse_and_large_indices_merge_argument_fragments_without_padding() {
-    let mut calls = BTreeMap::new();
-
-    for (index, id, name, arguments) in [
-        (usize::MAX, Some("later"), Some("echo"), "{\"text\":"),
-        (2, Some("first"), Some("echo"), "{}"),
-        (usize::MAX, None, None, "\"你好\"}"),
-    ] {
-        merge_tool_call(
-            &mut calls,
-            ToolCallDelta {
-                metadata: None,
-                index,
-                id: id.map(str::to_owned),
-                name: name.map(str::to_owned),
-                arguments: arguments.into(),
-            },
-        );
-    }
-
-    let calls: Vec<_> = calls.into_values().collect();
-
-    assert_eq!(calls.len(), 2);
-    assert_eq!(calls[0].id, "first");
-    assert_eq!(calls[1].function.arguments, "{\"text\":\"你好\"}");
-}
-
 #[tokio::test]
 async fn malformed_ids_stop_before_tools_or_a_followup_request() {
     for ids in [["", ""], ["same", "same"]] {
@@ -1169,7 +1098,7 @@ async fn malformed_ids_stop_before_tools_or_a_followup_request() {
                         .map(|id| ToolCall::function(id, "fail_if_executed", json!({})))
                         .collect(),
                 ),
-                finish_reason: None,
+                finish_reason: Some("tool_calls".into()),
                 usage: None,
             }]);
             let mut tools = ToolRegistry::new();
@@ -1259,6 +1188,65 @@ async fn reasoning_is_displayed_but_not_added_to_assistant_history() {
 }
 
 struct StreamOnlyModel;
+
+struct PartialStreamModel(StreamEvent);
+
+impl ModelBackend for PartialStreamModel {
+    fn complete<'a>(
+        &'a self,
+        _: ChatRequest,
+        _: CancellationToken,
+    ) -> crate::model::CompletionFuture<'a> {
+        Box::pin(async { panic!("an incomplete stream must not replay the request") })
+    }
+
+    fn stream<'a>(
+        &'a self,
+        _: ChatRequest,
+        _: CancellationToken,
+    ) -> crate::model::StreamFuture<'a> {
+        Box::pin(async {
+            Ok(Box::pin(futures_util::stream::iter([Ok(self.0.clone())]))
+                as orbit_model::types::ModelStream)
+        })
+    }
+}
+
+#[tokio::test]
+async fn incomplete_streams_neither_execute_partial_tools_nor_replay_the_request() {
+    for event in [
+        StreamEvent::TextDelta("unfinished response".into()),
+        StreamEvent::ToolCallDelta(orbit_model::types::ToolCallDelta {
+            metadata: None,
+            index: 1,
+            id: Some("partial".into()),
+            name: Some("never_execute".into()),
+            arguments: "{}".into(),
+        }),
+        StreamEvent::Completed {
+            finish_reason: None,
+            usage: Some(Usage::default()),
+        },
+    ] {
+        let mut tools = ToolRegistry::new();
+        tools.register(ClosureTool::new(
+            "never_execute",
+            "",
+            json!({}),
+            |_, _| async { panic!("unconfirmed tool calls must not run") },
+        ));
+        let agent = Agent::new(PartialStreamModel(event), tools, AgentConfig::default());
+        let error = agent
+            .run(request(), CancellationToken::new())
+            .await
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("terminal finish reason")
+        );
+    }
+}
 
 impl ModelBackend for StreamOnlyModel {
     fn complete<'a>(
@@ -1591,39 +1579,6 @@ async fn cancellation_is_checked_before_first_model_call() {
 
     assert!(matches!(error, AgentError::Cancelled));
     assert!(model.requests().is_empty());
-}
-
-#[test]
-fn usage_events_combine_input_and_output_counts() {
-    let mut usage = None;
-    merge_usage(
-        &mut usage,
-        Some(Usage {
-            prompt_tokens: Some(321),
-            completion_tokens: None,
-            total_tokens: None,
-            ..Default::default()
-        }),
-    );
-    merge_usage(
-        &mut usage,
-        Some(Usage {
-            prompt_tokens: None,
-            completion_tokens: Some(16_384),
-            total_tokens: None,
-            ..Default::default()
-        }),
-    );
-
-    assert_eq!(
-        usage,
-        Some(Usage {
-            prompt_tokens: Some(321),
-            completion_tokens: Some(16_384),
-            total_tokens: None,
-            ..Default::default()
-        })
-    );
 }
 
 #[test]

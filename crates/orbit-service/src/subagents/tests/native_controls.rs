@@ -209,3 +209,100 @@ async fn run_guard_requires_one_owned_child_and_never_means_cancel_all() {
         .await
         .unwrap();
 }
+
+struct RejectNativeControl;
+
+impl orbit_agent::tool::ToolPolicy for RejectNativeControl {
+    fn visible(&self, _capabilities: orbit_agent::tool::ToolCapabilities) -> bool {
+        false
+    }
+
+    fn acquire(
+        &self,
+        _call: &ToolCall,
+        _capabilities: orbit_agent::tool::ToolCapabilities,
+    ) -> Result<Box<dyn Send>, ToolError> {
+        Err(ToolError::ExecutionFailed("policy rejected control".into()))
+    }
+}
+
+#[tokio::test]
+async fn typed_native_controls_retain_policy_and_the_active_run_guard() {
+    let directory = tempfile::tempdir().unwrap();
+    let model = GatedModel::new();
+    let (service, _parent) = fixture(directory.path(), model.clone(), Default::default()).await;
+    let first = spawn(&service, "typed-control", CancellationToken::new()).await;
+    let id = first["agent_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let run = first["run_id"].as_i64().unwrap();
+    model.received(1).await;
+    let control = Control(service.clone());
+    let tools = install(&service);
+    let response = control
+        .send(&tools, id.clone(), "verify the second module".into())
+        .await
+        .unwrap();
+    assert!(matches!(
+        response,
+        orbit_protocol::subagents::Snapshot::Sent {
+            message_id: Some(_),
+            ..
+        }
+    ));
+    let mut restricted = tools.clone();
+    restricted.set_policy(Arc::new(RejectNativeControl));
+    assert!(
+        control
+            .send(&restricted, id.clone(), "must remain undelivered".into())
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("policy rejected")
+    );
+    assert_eq!(
+        service
+            .store
+            .pending_agent_messages(&id)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(
+        control
+            .cancel(&tools, id.clone(), run + 1)
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        service
+            .store
+            .session_revision(&id)
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        "running"
+    );
+    control
+        .cancel(&tools, id.clone(), run)
+        .await
+        .unwrap();
+    service
+        .jobs
+        .wait(&[], true, CancellationToken::new())
+        .await
+        .unwrap();
+    assert_eq!(
+        service
+            .store
+            .session_revision(&id)
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        "cancelled"
+    );
+}

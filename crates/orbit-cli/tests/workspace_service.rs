@@ -373,7 +373,10 @@ async fn disconnect_preserves_approval_and_run_duplicate_submission_does_not_rep
         .as_u64()
         .unwrap();
     child
-        .finish("completed", vec![], Some(vec![]))
+        .finish(
+            &orbit_store::types::RunCompletion::Completed { history: vec![] },
+            vec![],
+        )
         .await
         .unwrap();
     let child_page = client
@@ -1567,11 +1570,12 @@ async fn packaged_service_lists_history_created_by_the_native_store() {
         .unwrap();
     writer
         .finish(
-            "completed",
+            &orbit_store::types::RunCompletion::Completed {
+                history: vec![orbit_model::types::ChatMessage::user(
+                    "existing conversation",
+                )],
+            },
             Vec::new(),
-            Some(vec![orbit_model::types::ChatMessage::user(
-                "existing conversation",
-            )]),
         )
         .await
         .unwrap();

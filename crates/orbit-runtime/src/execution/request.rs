@@ -1,37 +1,28 @@
-use std::{path::PathBuf, time::Duration};
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
 use crate::verification::{VerificationEvidence, WorkspaceFingerprint};
 
-/// A command request in the target user environment.
+/// A command and its execution budget. Paths and variables belong to `ExecutionEnvironment`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ExecutionRequest {
     pub command: String,
-    pub cwd: PathBuf,
     pub timeout: Duration,
-    pub foreground_wait: Option<Duration>,
     pub fingerprint: Option<WorkspaceFingerprint>,
     pub workspace_files: usize,
     pub skipped_entries: usize,
 }
 
 impl ExecutionRequest {
-    pub fn new(command: impl Into<String>, cwd: impl Into<PathBuf>, timeout: Duration) -> Self {
+    pub fn new(command: impl Into<String>, timeout: Duration) -> Self {
         Self {
             command: command.into(),
-            cwd: cwd.into(),
             timeout,
-            foreground_wait: None,
             fingerprint: None,
             workspace_files: 0,
             skipped_entries: 0,
         }
-    }
-
-    pub fn with_foreground_wait(mut self, wait: Duration) -> Self {
-        self.foreground_wait = Some(wait);
-        self
     }
 
     pub fn with_verification(
@@ -113,17 +104,6 @@ impl ExecutionResult {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn execution_request_builders() {
-        let req = ExecutionRequest::new("cargo test", "/workspace", Duration::from_secs(30))
-            .with_foreground_wait(Duration::from_millis(500));
-
-        assert_eq!(req.command, "cargo test");
-        assert_eq!(req.cwd, PathBuf::from("/workspace"));
-        assert_eq!(req.timeout, Duration::from_secs(30));
-        assert_eq!(req.foreground_wait, Some(Duration::from_millis(500)));
-    }
 
     #[test]
     fn execution_result_summary() {

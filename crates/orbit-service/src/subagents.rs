@@ -1,4 +1,7 @@
+mod control;
 mod workspace;
+pub use control::Control;
+use control::{LaunchResult, SendResult};
 
 use std::{
     collections::{HashMap, HashSet},
@@ -14,7 +17,7 @@ use orbit_agent::{
     background::{BackgroundJobs, JobStatus},
     inbox::{AgentInbox, InboxMessage},
     model::{ModelBackend, ModelClientBackend},
-    tool::{Tool, ToolError, ToolFuture, ToolOutput, ToolRegistry},
+    tool::{Tool, ToolError, ToolFuture, ToolOutcome, ToolOutput, ToolRegistry},
 };
 use orbit_model::{
     client::ModelClient,
@@ -23,6 +26,7 @@ use orbit_model::{
 use orbit_store::{
     store::{SessionWriter, Store},
     subagents::SubagentSession,
+    types::RunCompletion,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -90,14 +94,14 @@ pub async fn register(
     limits: SubagentConfig,
     approvals: Option<orbit_tools::approval::ApprovalSender>,
     user_input: Option<crate::user_input::Questions>,
-) -> Result<()> {
+) -> Result<Option<Control>> {
     if store.is_subagent(&parent).await? {
         restrict_child_tools(tools);
-        return Ok(());
+        return Ok(None);
     }
 
     if !limits.enabled {
-        return Ok(());
+        return Ok(None);
     }
     let service = Arc::new(Service {
         approvals,
@@ -134,7 +138,7 @@ pub async fn register(
         });
     }
 
-    Ok(())
+    Ok(Some(Control(service)))
 }
 
 #[derive(Clone, Copy)]
@@ -473,7 +477,13 @@ impl Service {
             self.jobs.restore_result(
                 record.call,
                 format!("{}: {}", record.agent.role, record.agent.task),
-                ToolOutput::text(result.to_string()),
+                ToolOutput::text(result.to_string()).with_outcome(
+                    match result["status"].as_str() {
+                        Some("completed") => ToolOutcome::Completed,
+                        Some("cancelled") => ToolOutcome::Cancelled,
+                        _ => ToolOutcome::Failed,
+                    },
+                ),
             )?;
         }
 
@@ -607,106 +617,14 @@ impl Service {
                     permit,
                 )
                 .await
+                .map(LaunchResult::into_output)
             }
 
             Action::Send => {
                 let args: SendArgs = serde_json::from_value(args)?;
-                ensure!(
-                    !args.message.trim().is_empty() && args.message.len() <= MAX_INPUT_BYTES,
-                    "message must contain 1..{MAX_INPUT_BYTES} bytes"
-                );
-                let agent = self
-                    .store
-                    .owned_subagent(&self.parent, &args.agent_id)
-                    .await?;
-                ensure!(
-                    agent.role != "develop"
-                        || self
-                            .tool_policy
-                            .as_ref()
-                            .is_none_or(|p| p.visible(orbit_agent::tool::ToolCapabilities::WRITE)),
-                    "Plan 模式不能继续开发子代理，请使用 explore 或 review"
-                );
-                let active = self.active.lock().await;
-                if let Some(entry) = active.get(&args.agent_id) {
-                    let status = self
-                        .jobs
-                        .snapshots(std::slice::from_ref(&entry.job_id), false)?[0]
-                        .status;
-
-                    if matches!(status, JobStatus::Running | JobStatus::Cancelling) {
-                        ensure!(
-                            status == JobStatus::Running,
-                            "agent is finalizing or cancelling; retry after its result arrives"
-                        );
-                        let mut message_id = 0;
-                        entry
-                            .inbox
-                            .persist_and_push(|| async {
-                                let id = self
-                                    .store
-                                    .queue_agent_message(
-                                        &self.parent,
-                                        &args.agent_id,
-                                        args.message.clone(),
-                                    )
-                                    .await
-                                    .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
-
-                                message_id = id;
-                                Ok(InboxMessage {
-                                    attachments: vec![],
-                                    id,
-                                    content: args.message.clone(),
-                                })
-                            })
-                            .await?;
-                        return Ok(ToolOutput::text(
-                            json!({
-                                "agent_id": args.agent_id,
-                                "role": agent.role,
-                                "model": agent.model,
-                                "status": "queued",
-                                "message_id": message_id
-                            })
-                            .to_string(),
-                        ));
-                    }
-                }
-
-                drop(active);
-                let permit = self
-                    .slots
-                    .clone()
-                    .try_acquire_owned()
-                    .context("subagent concurrency limit reached; wait for an existing agent")?;
-                let writer = self.store.acquire(&agent.id).await?;
-                let config =
-                    crate::config::FileConfig::load(&self.config_path, &self.auth_directory)?;
-                let session = self.store.session(&agent.id).await?;
-                let mut model = crate::policy::select_model(&config, Some(&session.model))?;
-                if let Some(effort) = session
-                    .reasoning_effort
-                    .as_deref()
-                    .map(str::parse::<ReasoningEffort>)
-                    .transpose()
-                    .map_err(|_| anyhow::anyhow!("invalid saved reasoning effort"))?
-                {
-                    ensure!(
-                        model
-                            .reasoning_efforts
-                            .contains(&effort),
-                        "saved subagent reasoning effort is no longer supported; select a current \
-                            model in a new spawn_agent call"
-                    );
-                    model.config.reasoning_effort = Some(effort);
-                }
-
-                self.store
-                    .queue_agent_message(&self.parent, &agent.id, args.message)
-                    .await?;
-                self.launch(call, token, writer, agent, model, config, None, permit)
+                self.send(call, args, token)
                     .await
+                    .map(SendResult::into_output)
             }
 
             Action::Read => {
@@ -901,37 +819,9 @@ impl Service {
 
             Action::Wait | Action::Cancel => {
                 let args: IdsArgs = serde_json::from_value(args)?;
-                ensure!(
-                    args.expected_run_id.is_none()
-                        || (matches!(action, Action::Cancel)
-                            && args.agent_ids.len() == 1
-                            && args
-                                .expected_run_id
-                                .is_some_and(|run| run > 0)),
-                    "run guard is valid only when cancelling exactly one agent"
-                );
-                ensure!(
-                    args.agent_ids.len() <= 128,
-                    "at most 128 agent IDs per request"
-                );
-                let active = self.active.lock().await;
-                let mut ids = Vec::new();
-                for id in &args.agent_ids {
-                    self.store
-                        .owned_subagent(&self.parent, id)
-                        .await?;
-                    let entry = active.get(id).context(
-                        "agent is inactive in this run; use read_agent for stored results",
-                    )?;
-                    ensure!(
-                        args.expected_run_id
-                            .is_none_or(|run| run == entry.run_id),
-                        "子 Agent 已开始另一轮任务，请刷新后重试"
-                    );
-                    ids.push(entry.job_id.clone());
-                }
-
-                drop(active);
+                let ids = self
+                    .controlled_jobs(&args, matches!(action, Action::Cancel))
+                    .await?;
                 let results = if matches!(action, Action::Cancel) {
                     self.jobs.cancel(&ids)?
                 } else {
@@ -949,6 +839,133 @@ impl Service {
         }
     }
 
+    async fn controlled_jobs(&self, args: &IdsArgs, cancelling: bool) -> Result<Vec<String>> {
+        ensure!(
+            args.expected_run_id.is_none()
+                || (cancelling
+                    && args.agent_ids.len() == 1
+                    && args
+                        .expected_run_id
+                        .is_some_and(|run| run > 0)),
+            "run guard is valid only when cancelling exactly one agent"
+        );
+        ensure!(
+            args.agent_ids.len() <= 128,
+            "at most 128 agent IDs per request"
+        );
+        let active = self.active.lock().await;
+        let mut ids = Vec::new();
+        for id in &args.agent_ids {
+            self.store
+                .owned_subagent(&self.parent, id)
+                .await?;
+            let entry = active
+                .get(id)
+                .context("agent is inactive in this run; use read_agent for stored results")?;
+            ensure!(
+                args.expected_run_id
+                    .is_none_or(|run| run == entry.run_id),
+                "子 Agent 已开始另一轮任务，请刷新后重试"
+            );
+            ids.push(entry.job_id.clone());
+        }
+
+        drop(active);
+        Ok(ids)
+    }
+
+    async fn send(
+        self: &Arc<Self>,
+        call: ToolCall,
+        args: SendArgs,
+        token: CancellationToken,
+    ) -> Result<SendResult> {
+        ensure!(!token.is_cancelled(), ToolError::Cancelled);
+        ensure!(
+            !args.message.trim().is_empty() && args.message.len() <= MAX_INPUT_BYTES,
+            "message must contain 1..{MAX_INPUT_BYTES} bytes"
+        );
+        let agent = self
+            .store
+            .owned_subagent(&self.parent, &args.agent_id)
+            .await?;
+        ensure!(
+            agent.role != "develop"
+                || self
+                    .tool_policy
+                    .as_ref()
+                    .is_none_or(|p| p.visible(orbit_agent::tool::ToolCapabilities::WRITE)),
+            "Plan 模式不能继续开发子代理，请使用 explore 或 review"
+        );
+        let active = self.active.lock().await;
+        if let Some(entry) = active.get(&args.agent_id) {
+            let status = self
+                .jobs
+                .snapshots(std::slice::from_ref(&entry.job_id), false)?[0]
+                .status;
+
+            if matches!(status, JobStatus::Running | JobStatus::Cancelling) {
+                ensure!(
+                    status == JobStatus::Running,
+                    "agent is finalizing or cancelling; retry after its result arrives"
+                );
+                let mut message_id = 0;
+                entry
+                    .inbox
+                    .persist_and_push(|| async {
+                        let id = self
+                            .store
+                            .queue_agent_message(&self.parent, &args.agent_id, args.message.clone())
+                            .await
+                            .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
+
+                        message_id = id;
+                        Ok(InboxMessage {
+                            attachments: vec![],
+                            id,
+                            content: args.message.clone(),
+                        })
+                    })
+                    .await?;
+                return Ok(SendResult::Queued { agent, message_id });
+            }
+        }
+
+        drop(active);
+        let permit = self
+            .slots
+            .clone()
+            .try_acquire_owned()
+            .context("subagent concurrency limit reached; wait for an existing agent")?;
+        let writer = self.store.acquire(&agent.id).await?;
+        let config = crate::config::FileConfig::load(&self.config_path, &self.auth_directory)?;
+        let session = self.store.session(&agent.id).await?;
+        let mut model = crate::policy::select_model(&config, Some(&session.model))?;
+        if let Some(effort) = session
+            .reasoning_effort
+            .as_deref()
+            .map(str::parse::<ReasoningEffort>)
+            .transpose()
+            .map_err(|_| anyhow::anyhow!("invalid saved reasoning effort"))?
+        {
+            ensure!(
+                model
+                    .reasoning_efforts
+                    .contains(&effort),
+                "saved subagent reasoning effort is no longer supported; select a current \
+                            model in a new spawn_agent call"
+            );
+            model.config.reasoning_effort = Some(effort);
+        }
+
+        self.store
+            .queue_agent_message(&self.parent, &agent.id, args.message)
+            .await?;
+        self.launch(call, token, writer, agent, model, config, None, permit)
+            .await
+            .map(SendResult::Launched)
+    }
+
     #[allow(clippy::too_many_arguments)]
     async fn launch(
         self: &Arc<Self>,
@@ -960,7 +977,7 @@ impl Service {
         config: crate::config::FileConfig,
         prompt: Option<String>,
         permit: tokio::sync::OwnedSemaphorePermit,
-    ) -> Result<ToolOutput> {
+    ) -> Result<LaunchResult> {
         let snapshot = self.store.load(&agent.id).await?;
         let workspace = PathBuf::from(&snapshot.session.workspace);
         let outputs = orbit_runtime::execution::output::CommandOutputs::default();
@@ -1126,11 +1143,12 @@ impl Service {
                     .await
                     .take()
                     .expect("failed launch retains child run");
-                let status = if error == ToolError::Cancelled {
-                    "cancelled"
+                let completion = if error == ToolError::Cancelled {
+                    RunCompletion::Cancelled
                 } else {
-                    "failed"
+                    RunCompletion::Failed
                 };
+                let status = completion.status();
                 let result = json!({
                     "agent_id": run.agent.id,
                     "invocation_id": invocation,
@@ -1139,15 +1157,15 @@ impl Service {
                     "error": error.to_string()
                 });
                 run.writer
-                    .finish_subagent(
-                        status,
-                        None,
-                        self.parent.clone(),
-                        invocation,
-                        result.clone(),
-                    )
+                    .finish_subagent(&completion, self.parent.clone(), invocation, result.clone())
                     .await?;
-                return Ok(ToolOutput::text(result.to_string()));
+                return Ok(LaunchResult::Rejected {
+                    agent_id: run.agent.id,
+                    invocation,
+                    run_id,
+                    error: error.to_string(),
+                    cancelled: matches!(completion, RunCompletion::Cancelled),
+                });
             }
         };
 
@@ -1159,21 +1177,13 @@ impl Service {
                 run_id,
             },
         );
-        let mut output = ToolOutput::text(
-            json!({
-                "workspace": workspace,
-                "agent_id": agent.id,
-                "invocation_id": invocation,
-                "run_id": run_id,
-                "job_id": receipt.job_id,
-                "role": agent.role,
-                "model": agent.model,
-                "status": "running"
-            })
-            .to_string(),
-        );
-        output.background_job = Some(receipt.job_id);
-        Ok(output)
+        Ok(LaunchResult::Started {
+            workspace: workspace.to_string_lossy().into_owned(),
+            agent,
+            invocation,
+            run_id,
+            job_id: receipt.job_id,
+        })
     }
 
     async fn run_child(
@@ -1223,31 +1233,37 @@ impl Service {
                 }
             }
         };
-        let (status, answer, error, history, tool_calls) = match result {
+        let (completion, answer, error, tool_calls) = match result {
             Ok(result) => {
                 let answer = match result.final_message {
                     ChatMessage::Assistant { content, .. } => content.unwrap_or_default(),
                     _ => String::new(),
                 };
                 (
-                    "completed",
+                    RunCompletion::Completed {
+                        history: result.history,
+                    },
                     answer,
                     None,
-                    Some(result.history),
                     Some(result.tool_calls),
                 )
             }
 
             Err(orbit_agent::error::AgentError::Cancelled) => (
-                "cancelled",
+                RunCompletion::Cancelled,
                 String::new(),
                 Some("subagent cancelled".to_owned()),
                 None,
-                None,
             ),
 
-            Err(error) => ("failed", String::new(), Some(error.to_string()), None, None),
+            Err(error) => (
+                RunCompletion::Failed,
+                String::new(),
+                Some(error.to_string()),
+                None,
+            ),
         };
+        let status = completion.status();
         let total_characters = answer.chars().count();
         let message_id = if status == "completed" {
             self.store
@@ -1301,16 +1317,16 @@ impl Service {
         });
 
         writer
-            .finish_subagent(
-                status,
-                history,
-                self.parent.clone(),
-                invocation,
-                result.clone(),
-            )
+            .finish_subagent(&completion, self.parent.clone(), invocation, result.clone())
             .await
             .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
-        Ok(ToolOutput::text(result.to_string()))
+        Ok(
+            ToolOutput::text(result.to_string()).with_outcome(match completion {
+                RunCompletion::Completed { .. } => ToolOutcome::Completed,
+                RunCompletion::Failed => ToolOutcome::Failed,
+                RunCompletion::Cancelled => ToolOutcome::Cancelled,
+            }),
+        )
     }
 
     async fn progress_reminder(

@@ -373,7 +373,10 @@ mod tests {
             .await
             .unwrap();
         first
-            .finish("completed", vec![], Some(vec![]))
+            .finish(
+                &crate::types::RunCompletion::Completed { history: vec![] },
+                vec![],
+            )
             .await
             .unwrap();
         let empty = store
@@ -389,7 +392,10 @@ mod tests {
             .await
             .unwrap();
         other
-            .finish("completed", vec![], Some(vec![]))
+            .finish(
+                &crate::types::RunCompletion::Completed { history: vec![] },
+                vec![],
+            )
             .await
             .unwrap();
         for id in [first.id(), empty.id(), other.id()] {

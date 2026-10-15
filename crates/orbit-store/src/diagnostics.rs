@@ -378,12 +378,13 @@ mod tests {
             .unwrap();
         writer
             .finish(
-                "completed",
+                &crate::types::RunCompletion::Completed {
+                    history: vec![ChatMessage::user("inspect")],
+                },
                 vec![AgentEvent::Completed {
                     turns: 1,
                     tool_calls: 1,
                 }],
-                Some(vec![ChatMessage::user("inspect")]),
             )
             .await
             .unwrap();

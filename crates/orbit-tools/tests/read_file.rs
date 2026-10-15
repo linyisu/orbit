@@ -69,6 +69,8 @@ async fn reads_numbered_unicode_lines_and_reports_remaining_content() {
     assert_eq!(value["content"], "2: second\n");
     assert!(value["total_lines"].is_null());
     assert_eq!(value["truncated"], true);
+    assert_eq!(output.files.read, ["source.rs".into()].into());
+    assert!(output.files.written.is_empty());
 }
 
 #[tokio::test]

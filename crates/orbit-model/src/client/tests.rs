@@ -502,15 +502,38 @@ async fn stream_accepts_done_frame_without_trailing_separator() {
         .stream(ChatRequest::new(vec![ChatMessage::user("hello")]))
         .await
         .expect("stream starts");
-    let mut text = String::new();
+    let mut accumulator = crate::stream::StreamAccumulator::default();
 
     while let Some(event) = stream.next().await {
-        if let StreamEvent::TextDelta(delta) = event.expect("stream event succeeds") {
-            text.push_str(&delta);
-        }
+        accumulator.push(event.expect("stream event succeeds"));
     }
 
-    assert_eq!(text, "hello");
+    assert_eq!(
+        accumulator.finish().unwrap().message,
+        ChatMessage::assistant("hello")
+    );
+}
+
+#[test]
+fn explicit_sse_terminators_supply_completion_without_overwriting_stop_reasons() {
+    for (data, reason) in [
+        ("[DONE]", "stop"),
+        (r#"{"type":"message_stop"}"#, "stop"),
+        (r#"{"type":"response.completed"}"#, "stop"),
+        (r#"{"type":"response.incomplete"}"#, "max_tokens"),
+    ] {
+        let mut completed = false;
+        let (events, terminal) =
+            decode_sse_data(data, &mut completed, &mut |_| Ok(Vec::new())).unwrap();
+        assert!(completed && terminal);
+        assert!(matches!(
+            &events[..],
+            [StreamEvent::Completed { finish_reason: Some(actual), usage: None }]
+                if actual == reason
+        ));
+        let (events, _) = decode_sse_data(data, &mut completed, &mut |_| Ok(Vec::new())).unwrap();
+        assert!(events.is_empty());
+    }
 }
 
 #[tokio::test]
@@ -569,7 +592,7 @@ fn reports_error_envelopes_in_all_stream_formats() {
             }
         }),
     ] {
-        let error = decode_sse_data(&value.to_string(), &mut |_| {
+        let error = decode_sse_data(&value.to_string(), &mut false, &mut |_| {
             panic!("failed responses must not reach the normal decoder")
         })
         .unwrap_err();
@@ -665,14 +688,29 @@ async fn active_stream_can_run_longer_than_the_idle_timeout() {
         .unwrap();
     let started = time::Instant::now();
     let mut count = 0;
+    let mut completed = false;
 
     while let Some(event) = events.next().await {
-        assert!(matches!(event.unwrap(), StreamEvent::ReasoningDelta(_)));
-
-        count += 1;
+        assert!(!completed, "received another event after stream completion");
+        match event.unwrap() {
+            StreamEvent::ReasoningDelta(text) => {
+                assert_eq!(text, "thinking");
+                count += 1;
+            }
+            StreamEvent::Completed {
+                finish_reason,
+                usage,
+            } => {
+                assert_eq!(finish_reason.as_deref(), Some("stop"));
+                assert!(usage.is_none());
+                completed = true;
+            }
+            event => panic!("unexpected stream event: {event:?}"),
+        }
     }
 
     assert_eq!(count, 30);
+    assert!(completed);
     assert!(started.elapsed() > timeout);
 }
 

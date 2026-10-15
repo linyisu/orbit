@@ -475,8 +475,7 @@ async fn child_worktrees_share_the_board_and_terminal_receipts_release_unfinishe
         .unwrap();
     child
         .finish_subagent(
-            "cancelled",
-            None,
+            &crate::types::RunCompletion::Cancelled,
             parent.id().into(),
             invocation,
             serde_json::json!({

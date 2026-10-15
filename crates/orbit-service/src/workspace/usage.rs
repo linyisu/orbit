@@ -286,7 +286,10 @@ mod tests {
                 .unwrap();
         }
         writer
-            .finish("completed", vec![], Some(vec![]))
+            .finish(
+                &orbit_store::types::RunCompletion::Completed { history: vec![] },
+                vec![],
+            )
             .await
             .unwrap();
         writer
@@ -304,7 +307,7 @@ mod tests {
             .await
             .unwrap();
         writer
-            .finish("failed", vec![], None)
+            .finish(&orbit_store::types::RunCompletion::Failed, vec![])
             .await
             .unwrap();
         let result = session_usage(&store, writer.id(), true).await;

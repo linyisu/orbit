@@ -1,13 +1,7 @@
-use std::{
-    collections::{BTreeMap, HashSet},
-    future::Future,
-};
+use std::{collections::HashSet, future::Future};
 
 use futures_util::StreamExt;
-use orbit_model::types::{
-    ChatCompletion, ChatMessage, ChatRequest, FunctionCall, StreamEvent, ToolCall, ToolCallDelta,
-    Usage,
-};
+use orbit_model::types::{ChatCompletion, ChatMessage, ChatRequest, StreamEvent, ToolCall};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
@@ -57,7 +51,7 @@ pub struct Agent<B> {
     backend: B,
     tools: ToolRegistry,
     config: AgentConfig,
-    files: crate::memory::FileActivity,
+    files: Option<crate::memory::FileActivity>,
     archive: Option<std::sync::Arc<dyn crate::archive::ContextArchive>>,
     calibration: crate::calibration::TokenCalibration,
     observation_profile: String,
@@ -128,8 +122,10 @@ where
         self
     }
 
+    /// Supply complete host evidence, including an explicitly empty snapshot.
+    /// History receipt reconstruction is used only when the host omits this snapshot.
     pub fn with_file_activity(mut self, files: crate::memory::FileActivity) -> Self {
-        self.files = files;
+        self.files = Some(files);
         self
     }
 
@@ -338,8 +334,10 @@ where
             journal.record_message(message.clone());
         }
 
-        let mut files = self.files.clone();
-        files.merge(&crate::memory::FileActivity::from_history(&history));
+        let mut files = self
+            .files
+            .clone()
+            .unwrap_or_else(|| crate::memory::FileActivity::from_history(&history));
         let mut turns = 0;
         let mut tool_calls = 0;
         let mut context_thresholds = ContextThresholds::default();
@@ -672,7 +670,7 @@ where
 
                 let event = match &completion.result {
                     Ok(output) => {
-                        files.observe(&completion.call, &output.content);
+                        files.merge(&output.files);
                         if let Some(evidence) = &output.verification {
                             emit(AgentEvent::VerificationRecorded {
                                 call_id: completion.call.id.clone(),
@@ -685,6 +683,7 @@ where
                             call: completion.call.clone(),
                             content: output.content.clone(),
                             changes: output.changes.clone(),
+                            files: Some(output.files.clone()),
                         }
                     }
 
@@ -733,7 +732,7 @@ where
             )
         {
             match crate::autocompact::execute_pruning_configured(
-                plan,
+                plan.with_files(files),
                 &tools,
                 output,
                 local_limit,
@@ -898,17 +897,13 @@ where
         F: FnMut(AgentEvent) -> Fut,
         Fut: Future<Output = Result<(), AgentError>>,
     {
-        let fallback_request = request.clone();
         let mut reasoning_start = std::time::Instant::now();
         let mut reasoning_active = false;
         let (mut stream, retries) = self
             .backend
             .stream_with_retries(request, cancellation.clone())
             .await?;
-        let mut text = String::new();
-        let mut calls = BTreeMap::new();
-        let mut finish_reason = None;
-        let mut usage = None;
+        let mut accumulator = orbit_model::stream::StreamAccumulator::default();
 
         while let Some(event) = stream.next().await {
             let event = event.map_err(AgentError::Model)?;
@@ -941,77 +936,10 @@ where
 
             emit(AgentEvent::Model(event.clone())).await?;
 
-            match event {
-                StreamEvent::TextDelta(delta) => text.push_str(&delta),
-                StreamEvent::ReasoningDelta(_) => {}
-                StreamEvent::ToolCallDelta(delta) => merge_tool_call(&mut calls, delta),
-                StreamEvent::Completed {
-                    finish_reason: reason,
-                    usage: event_usage,
-                } => {
-                    // OpenAI-compatible streams commonly send a final usage-only
-                    // chunk after the choice carrying `finish_reason`. Keep the
-                    // terminal reason while accepting the later usage payload.
-                    if reason.is_some() {
-                        finish_reason = reason;
-                    }
-
-                    merge_usage(&mut usage, event_usage);
-                }
-            }
+            accumulator.push(event);
         }
 
-        if text.is_empty() && calls.is_empty() && finish_reason.is_none() {
-            let completion = self
-                .backend
-                .complete(fallback_request, cancellation)
-                .await?;
-
-            if let ChatMessage::Assistant {
-                content,
-                tool_calls,
-            } = &completion.message
-            {
-                if let Some(content) = content {
-                    emit(AgentEvent::Model(StreamEvent::TextDelta(content.clone()))).await?;
-                }
-
-                for (index, call) in tool_calls.iter().enumerate() {
-                    emit(AgentEvent::Model(StreamEvent::ToolCallDelta(
-                        ToolCallDelta {
-                            metadata: call.metadata.clone(),
-                            index,
-                            id: Some(call.id.clone()),
-                            name: Some(call.function.name.clone()),
-                            arguments: call.function.arguments.clone(),
-                        },
-                    )))
-                    .await?;
-                }
-
-                emit(AgentEvent::Model(StreamEvent::Completed {
-                    finish_reason: completion.finish_reason.clone(),
-                    usage: completion.usage.clone(),
-                }))
-                .await?;
-            }
-
-            return Ok((completion, None));
-        }
-
-        Ok((
-            ChatCompletion {
-                id: None,
-                model: None,
-                message: ChatMessage::Assistant {
-                    content: (!text.is_empty()).then_some(text),
-                    tool_calls: calls.into_values().collect(),
-                },
-                finish_reason,
-                usage,
-            },
-            retries,
-        ))
+        Ok((accumulator.finish()?, retries))
     }
 }
 
@@ -1144,32 +1072,6 @@ fn check_finish_reason(reason: Option<&str>) -> Result<(), AgentError> {
     Ok(())
 }
 
-fn merge_usage(current: &mut Option<Usage>, update: Option<Usage>) {
-    let Some(update) = update else {
-        return;
-    };
-
-    if let Some(current) = current {
-        current.prompt_tokens = update
-            .prompt_tokens
-            .or(current.prompt_tokens);
-        current.completion_tokens = update
-            .completion_tokens
-            .or(current.completion_tokens);
-        current.total_tokens = update
-            .total_tokens
-            .or(current.total_tokens);
-        current.cached_input_tokens = update
-            .cached_input_tokens
-            .or(current.cached_input_tokens);
-        current.cache_write_input_tokens = update
-            .cache_write_input_tokens
-            .or(current.cache_write_input_tokens);
-    } else {
-        *current = Some(update);
-    }
-}
-
 fn validate_tool_ids(calls: &[ToolCall]) -> Result<(), AgentError> {
     let mut ids = HashSet::new();
 
@@ -1184,38 +1086,6 @@ fn validate_tool_ids(calls: &[ToolCall]) -> Result<(), AgentError> {
     }
 
     Ok(())
-}
-
-/// Providers index all output blocks, including text and reasoning. Only materialize actual tool
-/// blocks; never pad sparse indices with fake calls.
-fn merge_tool_call(calls: &mut BTreeMap<usize, ToolCall>, delta: ToolCallDelta) {
-    let call = calls
-        .entry(delta.index)
-        .or_insert_with(|| ToolCall {
-            metadata: None,
-            id: String::new(),
-            kind: "function".to_owned(),
-            function: FunctionCall {
-                name: String::new(),
-                arguments: String::new(),
-            },
-        });
-
-    if let Some(id) = delta.id {
-        call.id = id;
-    }
-
-    if let Some(name) = delta.name {
-        call.function.name.push_str(&name);
-    }
-
-    if let Some(metadata) = delta.metadata {
-        call.metadata = Some(metadata);
-    }
-
-    call.function
-        .arguments
-        .push_str(&delta.arguments);
 }
 
 async fn send_agent_event(

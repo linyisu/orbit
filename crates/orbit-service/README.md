@@ -7,12 +7,13 @@
 - [workspace/](src/workspace/)：服务生命周期、会话 actor、请求与事件分页。
 - [session.rs](src/session.rs)、[execution.rs](src/execution.rs)：会话恢复、Agent 启动与运行结果。
 - [tools.rs](src/tools.rs)、[planning.rs](src/planning.rs)、[user_input.rs](src/user_input.rs)：工具装配、计划与问答。
-- [subagents.rs](src/subagents.rs)、[side_questions.rs](src/side_questions.rs)：子任务与旁路提问。
+- [subagents.rs](src/subagents.rs)、[side_questions.rs](src/side_questions.rs)：子任务与旁路提问。子 Agent 的原生操作与模型工具共用类型化控制入口和授权规则。
 - [context/](src/context/)、[extensions/](src/extensions/)：指令、记忆、技能与插件。
 
 ## 生命周期
 
 同一数据库由共享服务管理，会话 actor 串行处理状态变更。客户端断开后任务继续；服务重启后标记中断，不自动重跑副作用命令。
+运行收尾保留类型化终态；持久化失败后只重试回执或快照刷新，不重复模型与工具执行。
 
 主动停止响应后，尚未领取的暂存消息会自动开始下一轮；普通报错与服务重启保留队列，等待手动继续。
 

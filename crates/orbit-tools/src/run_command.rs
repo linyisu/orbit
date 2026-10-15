@@ -2,7 +2,7 @@ use std::{path::PathBuf, time::Duration};
 
 use orbit_agent::{
     background::BackgroundJobs,
-    tool::{Tool, ToolError, ToolFuture, ToolOutput},
+    tool::{Tool, ToolError, ToolFuture, ToolOutcome, ToolOutput},
 };
 use orbit_model::types::{ToolCall, ToolDefinition};
 use orbit_runtime::{
@@ -428,12 +428,9 @@ impl Tool for RunCommand {
                 };
 
             let backend = execution_backend();
-            let request = ExecutionRequest::new(
-                args.command.clone(),
-                execution_env.cwd.clone(),
-                Duration::from_secs(timeout_seconds),
-            )
-            .with_verification(fingerprint, workspace_files, skipped_entries);
+            let request =
+                ExecutionRequest::new(args.command.clone(), Duration::from_secs(timeout_seconds))
+                    .with_verification(fingerprint, workspace_files, skipped_entries);
 
             let execution_policy = ExecutionPolicy {
                 resources: self
@@ -510,10 +507,17 @@ impl Tool for RunCommand {
 
                 result.verification_error = verification_error;
                 let evidence = result.verification.take();
+                let outcome = if result.cancelled {
+                    ToolOutcome::Cancelled
+                } else if result.is_success() {
+                    ToolOutcome::Completed
+                } else {
+                    ToolOutcome::Failed
+                };
 
                 serde_json::to_string(&result)
                     .map(|content| {
-                        let mut output = ToolOutput::text(content);
+                        let mut output = ToolOutput::text(content).with_outcome(outcome);
                         output.verification = evidence;
                         output
                     })

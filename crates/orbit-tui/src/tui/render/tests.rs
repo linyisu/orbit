@@ -3297,6 +3297,7 @@ fn activity_animates_only_in_footer_and_stops_when_completed() {
         call,
         content: "stable output".into(),
         changes: vec![],
+        files: None,
     });
     state.apply(AgentEvent::Completed {
         turns: 1,

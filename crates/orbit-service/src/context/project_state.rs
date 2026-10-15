@@ -663,7 +663,7 @@ mod tests {
             id: None,
             model: None,
             message,
-            finish_reason: None,
+            finish_reason: Some("stop".into()),
             usage: None,
         };
         let model = MockModel::new(vec![

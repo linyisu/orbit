@@ -284,9 +284,10 @@ mod tests {
             .unwrap();
         first
             .finish(
-                "completed",
+                &crate::types::RunCompletion::Completed {
+                    history: vec![ChatMessage::user("compacted")],
+                },
                 vec![],
-                Some(vec![ChatMessage::user("compacted")]),
             )
             .await
             .unwrap();

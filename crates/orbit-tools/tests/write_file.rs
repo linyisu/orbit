@@ -123,6 +123,8 @@ async fn requires_approval_then_creates_and_replaces_exact_utf8_with_mode_preser
         assert_eq!(output.changes[0].path, "file");
         assert_eq!(output.changes[0].before.as_deref(), before);
         assert_eq!(output.changes[0].after, after);
+        assert_eq!(output.files.written, ["file".into()].into());
+        assert!(output.files.read.is_empty());
 
         let result: serde_json::Value = serde_json::from_str(&output).unwrap();
 

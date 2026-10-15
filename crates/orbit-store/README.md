@@ -9,7 +9,8 @@
 - [subagents.rs](src/subagents.rs)、[tasks.rs](src/tasks.rs)、[plans.rs](src/plans.rs)：子 Agent、项目任务与计划。
 - [migrations/](src/migrations/)：SeaORM Rust 迁移；已发布迁移保持稳定，后续变更追加版本。
 
-会话、检查点和子任务结果按事务提交；恢复不会自动重跑中断命令。项目身份跟踪同文件系统的移动与改名，跨盘移动可用 `orbit-cli projects link ID` 显式关联。
+会话、检查点和子任务结果按事务提交；运行终态区分成功历史、失败和取消。
+运行投影由 store 维护证据和游标，调用方只更新会话元数据；恢复不会自动重跑中断命令。项目身份跟踪同文件系统的移动与改名，跨盘移动可用 `orbit-cli projects link ID` 显式关联。
 
 ## 存储位置
 

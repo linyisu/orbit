@@ -267,7 +267,7 @@ impl Tool for GitPush {
                     .ok_or_else(|| failed("non-UTF-8 request path"))?,
             ])
             .map_err(failed)?;
-            let request = ExecutionRequest::new(command, self.workspace.root(), self.timeout);
+            let request = ExecutionRequest::new(command, self.timeout);
             let environment =
                 ExecutionEnvironment::new(self.workspace.root(), self.workspace.root())
                     .map_err(failed)?;

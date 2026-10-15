@@ -413,7 +413,7 @@ mod tests {
             .unwrap();
         setup
             .session
-            .finish("cancelled", None)
+            .finish(orbit_store::types::RunCompletion::Cancelled)
             .await
             .unwrap();
         drop(setup);

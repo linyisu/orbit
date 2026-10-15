@@ -8,7 +8,7 @@ use orbit_model::types::ChatMessage;
 use orbit_model::types::ReasoningEffort;
 use orbit_store::{
     store::{SessionWriter, Store},
-    types::{RuntimeSnapshot, Snapshot},
+    types::{RunCompletion, RuntimeSnapshot, Snapshot},
 };
 
 pub fn database_path(explicit: Option<PathBuf>) -> Result<PathBuf> {
@@ -93,21 +93,47 @@ pub struct SessionState {
     persisted: bool,
     pub snapshot: RuntimeSnapshot,
     pub command_output: orbit_runtime::execution::output::CommandOutputs,
-    output_run: Option<orbit_runtime::execution::output::OutputRun>,
     pub git_baseline: Option<serde_json::Value>,
     pub audit_workspace: Option<orbit_runtime::filesystem::Workspace>,
     pub audit_limits: orbit_tools::run_command::CommandLimits,
     title_task: Option<crate::session::title::TitleTask>,
-    active: bool,
+    run: RunState,
     shared: bool,
-    journal: Option<std::sync::Arc<dyn orbit_agent::checkpoint::ExecutionJournal>>,
+}
+
+type Journal = std::sync::Arc<dyn orbit_agent::checkpoint::ExecutionJournal>;
+
+/// Execution and durable finalization have separate lifetimes. Failed writes retain the
+/// completion receipt so a later request can retry persistence without repeating execution.
+#[derive(Default)]
+enum RunState {
+    #[default]
+    Idle,
+    Running {
+        _output: orbit_runtime::execution::output::OutputRun,
+        journal: Option<Journal>,
+    },
+    Finalizing {
+        completion: RunCompletion,
+        journal: Option<Journal>,
+    },
+    Refreshing,
+}
+
+impl RunState {
+    fn journal(&self) -> Option<&Journal> {
+        match self {
+            Self::Running { journal, .. } | Self::Finalizing { journal, .. } => journal.as_ref(),
+            Self::Idle | Self::Refreshing => None,
+        }
+    }
 }
 
 async fn apply_title(
     store: &Store,
     task: &mut Option<crate::session::title::TitleTask>,
     writer: &Option<SessionWriter>,
-    snapshot: &mut Snapshot,
+    snapshot: &mut RuntimeSnapshot,
 ) -> Result<bool> {
     if !task
         .as_ref()
@@ -129,7 +155,7 @@ async fn apply_title(
         return Ok(false);
     };
     writer.set_title(title.clone()).await?;
-    snapshot.session.title = title;
+    snapshot.session_mut().title = title;
     Ok(true)
 }
 
@@ -158,6 +184,7 @@ impl PreparedResume {
 impl SessionState {
     pub(crate) fn metadata_pending(&self) -> bool {
         self.title_task.is_some()
+            || matches!(self.run, RunState::Finalizing { .. } | RunState::Refreshing)
     }
 
     pub fn import_image(&self, source: &Path) -> Result<Attachment> {
@@ -278,7 +305,6 @@ impl SessionState {
         } = prepared;
         Self {
             command_output: Default::default(),
-            output_run: None,
             git_baseline,
             store,
             writer,
@@ -287,9 +313,8 @@ impl SessionState {
             audit_workspace: None,
             audit_limits: Default::default(),
             title_task,
-            active: false,
+            run: RunState::Idle,
             shared,
-            journal: None,
         }
     }
 
@@ -298,17 +323,21 @@ impl SessionState {
         workspace: orbit_runtime::filesystem::Workspace,
         limits: orbit_tools::run_command::CommandLimits,
     ) -> Result<()> {
-        ensure!(!self.active, "请先结束当前响应再移动会话");
+        self.retry_finalization().await?;
+        ensure!(
+            matches!(self.run, RunState::Idle),
+            "请先结束当前响应再移动会话"
+        );
         if !self.persisted {
             let project = self
                 .store
                 .project_at(workspace.root())
                 .await?;
-            self.snapshot.session.workspace = workspace
+            self.snapshot.session_mut().workspace = workspace
                 .root()
                 .to_string_lossy()
                 .into_owned();
-            self.snapshot.session.project_id = project
+            self.snapshot.session_mut().project_id = project
                 .map(|p| p.id)
                 .unwrap_or_default();
             self.audit_workspace = Some(workspace);
@@ -325,7 +354,7 @@ impl SessionState {
             .await;
 
         self.release_idle_writer();
-        self.snapshot.session = session?;
+        *self.snapshot.session_mut() = session?;
         self.git_baseline = baseline;
         self.audit_workspace = Some(workspace);
         self.audit_limits = limits;
@@ -392,9 +421,10 @@ impl SessionState {
         reasoning_effort: Option<ReasoningEffort>,
     ) -> Result<()> {
         if !self.persisted {
-            self.snapshot.session.model = model;
-            self.snapshot.session.reasoning_effort =
-                reasoning_effort.map(|value| value.as_str().to_owned());
+            self.snapshot.session_mut().model = model;
+            self.snapshot
+                .session_mut()
+                .reasoning_effort = reasoning_effort.map(|value| value.as_str().to_owned());
             return Ok(());
         }
         self.ensure_writer().await?;
@@ -412,8 +442,10 @@ impl SessionState {
 
         self.release_idle_writer();
         result?;
-        self.snapshot.session.model = model;
-        self.snapshot.session.reasoning_effort = reasoning_effort
+        self.snapshot.session_mut().model = model;
+        self.snapshot
+            .session_mut()
+            .reasoning_effort = reasoning_effort
             .map(ReasoningEffort::as_str)
             .map(str::to_owned);
 
@@ -422,7 +454,8 @@ impl SessionState {
 
     pub async fn append_context(&mut self, message: ChatMessage) -> Result<()> {
         if !self.persisted {
-            self.snapshot.history.push(message);
+            self.snapshot
+                .append_draft_context(message);
             return Ok(());
         }
         self.ensure_writer().await?;
@@ -443,7 +476,7 @@ impl SessionState {
     pub async fn rename(&mut self, title: String) -> Result<()> {
         if !self.persisted {
             self.title_task = None;
-            self.snapshot.session.title = title;
+            self.snapshot.session_mut().title = title;
             return Ok(());
         }
         self.ensure_writer().await?;
@@ -456,7 +489,7 @@ impl SessionState {
         self.release_idle_writer();
         result?;
         self.title_task = None;
-        self.snapshot.session.title = title;
+        self.snapshot.session_mut().title = title;
         Ok(())
     }
 
@@ -478,14 +511,18 @@ impl SessionState {
         Ok(())
     }
 
-    pub async fn poll_title(&mut self) -> Result<bool> {
-        apply_title(
+    /// Reconcile completed execution receipts and generated metadata without starting work.
+    pub async fn poll_metadata(&mut self) -> Result<bool> {
+        let finalizing = matches!(self.run, RunState::Finalizing { .. } | RunState::Refreshing);
+        self.retry_finalization().await?;
+        let titled = apply_title(
             &self.store,
             &mut self.title_task,
             &self.writer,
             &mut self.snapshot,
         )
-        .await
+        .await?;
+        Ok(finalizing || titled)
     }
 
     pub async fn begin(&mut self, prompt: String, model: String) -> Result<()> {
@@ -527,9 +564,10 @@ impl SessionState {
             return Err(error);
         }
 
-        self.active = true;
-        self.output_run = Some(output_run);
-        self.journal = None;
+        self.run = RunState::Running {
+            _output: output_run,
+            journal: None,
+        };
         Ok(())
     }
 
@@ -542,38 +580,69 @@ impl SessionState {
             .context("no active writer")?
             .execution_journal()?;
 
-        self.journal = Some(journal.clone());
+        let RunState::Running {
+            journal: current, ..
+        } = &mut self.run
+        else {
+            anyhow::bail!("execution is not running");
+        };
+        *current = Some(journal.clone());
         Ok(journal)
     }
 
-    /// The executor has stopped. A later persistence error must not extend the lifetime of
-    /// temporary raw logs or expose them to a future task.
-    pub async fn finish(&mut self, status: &str, history: Option<Vec<ChatMessage>>) -> Result<()> {
-        self.output_run = None;
-        if let Some(journal) = &self.journal {
-            journal.flush().await?;
+    /// Stop execution ownership before flushing its terminal receipt. A failed flush or
+    /// transaction retains finalization state and never authorizes another tool execution.
+    pub async fn finish(&mut self, completion: RunCompletion) -> Result<()> {
+        if matches!(self.run, RunState::Running { .. }) {
+            self.writer
+                .as_mut()
+                .context("no active writer")?
+                .freeze_elapsed()?;
         }
+        let run = std::mem::take(&mut self.run);
+        self.run = match run {
+            RunState::Running { journal, .. } => RunState::Finalizing {
+                completion,
+                journal,
+            },
+            pending @ (RunState::Finalizing { .. } | RunState::Refreshing) => pending,
+            RunState::Idle => anyhow::bail!("no active run"),
+        };
+        self.retry_finalization().await
+    }
 
-        self.writer
-            .as_mut()
-            .context("no active writer")?
-            .finish(status, Vec::new(), history)
-            .await?;
-        self.active = false;
-        self.journal = None;
-        self.store
-            .refresh_runtime(&mut self.snapshot)
-            .await?;
-        self.release_idle_writer();
-
+    /// Retry only durable bookkeeping; model calls and tools are never replayed.
+    async fn retry_finalization(&mut self) -> Result<()> {
+        if let RunState::Finalizing {
+            completion,
+            journal,
+        } = &self.run
+        {
+            if let Some(journal) = journal {
+                journal.flush().await?;
+            }
+            self.writer
+                .as_mut()
+                .context("no finalizing writer")?
+                .finish(completion, Vec::new())
+                .await?;
+            self.run = RunState::Refreshing;
+        }
+        if matches!(self.run, RunState::Refreshing) {
+            self.store
+                .refresh_runtime(&mut self.snapshot)
+                .await?;
+            self.run = RunState::Idle;
+            self.release_idle_writer();
+        }
         Ok(())
     }
 
     pub async fn close(&mut self) -> Result<()> {
-        if self.active {
-            self.finish("cancelled", None).await?;
+        if !matches!(self.run, RunState::Idle) {
+            self.finish(RunCompletion::Cancelled)
+                .await?;
         }
-
         Ok(())
     }
 
@@ -605,7 +674,10 @@ impl SessionState {
 
     #[cfg(test)]
     pub async fn resume(&mut self, id: &str) -> Result<()> {
-        ensure!(!self.active, "请先取消当前响应，再恢复会话。");
+        ensure!(
+            matches!(self.run, RunState::Idle),
+            "请先取消当前响应，再恢复会话。"
+        );
         if id == self.id() {
             return Ok(());
         }
@@ -681,7 +753,7 @@ impl SessionState {
     }
 
     fn release_idle_writer(&mut self) {
-        if self.shared && !self.active {
+        if self.shared && matches!(self.run, RunState::Idle) {
             self.writer = None;
         }
     }
@@ -700,7 +772,7 @@ impl SessionState {
                 .await?,
         );
         self.persisted = true;
-        self.snapshot.session = self.store.session(self.id()).await?;
+        *self.snapshot.session_mut() = self.store.session(self.id()).await?;
         self.git_baseline =
             orbit_tools::git_inspect::capture_baseline(Path::new(&self.snapshot.session.workspace));
         if let Some(baseline) = &self.git_baseline {
@@ -717,6 +789,7 @@ impl SessionState {
     }
 
     async fn ensure_writer(&mut self) -> Result<()> {
+        self.retry_finalization().await?;
         ensure!(self.persisted, "会话尚未开始");
         if self.writer.is_none() {
             self.writer = Some(self.store.acquire(self.id()).await?);
@@ -766,7 +839,7 @@ impl SessionState {
     }
 
     pub async fn flush_events(&self) -> Result<()> {
-        if let Some(journal) = &self.journal {
+        if let Some(journal) = self.run.journal() {
             journal.flush().await?;
         }
         Ok(())
@@ -785,13 +858,11 @@ impl SessionState {
             git_baseline: std::mem::replace(&mut self.git_baseline, prepared.git_baseline),
         };
 
-        self.journal = None;
+        self.run = RunState::Idle;
 
         if let Some(ws) = &self.audit_workspace {
             ws.clear_session_grants();
         }
-
-        self.output_run = None;
 
         previous
     }

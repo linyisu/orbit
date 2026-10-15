@@ -16,11 +16,10 @@ async fn saved_session_rename_keeps_history_and_rejects_another_writer() {
         .unwrap();
     writer
         .finish(
-            "completed",
+            &orbit_store::types::RunCompletion::Completed {
+                history: vec![orbit_model::types::ChatMessage::user("saved conversation")],
+            },
             vec![],
-            Some(vec![orbit_model::types::ChatMessage::user(
-                "saved conversation",
-            )]),
         )
         .await
         .unwrap();

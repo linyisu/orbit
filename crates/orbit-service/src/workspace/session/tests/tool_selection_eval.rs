@@ -171,6 +171,7 @@ async fn evaluate(settings: &Settings, case: Case, repetition: usize) -> Result<
                             call,
                             content,
                             changes,
+                            ..
                         } => {
                             if call.function.name == "web_fetch"
                                 && let Ok(value) =

@@ -5,6 +5,31 @@ use serde::{Deserialize, Serialize};
 
 pub use orbit_protocol::Session;
 
+/// A terminal run result. Only success may replace the model context.
+#[derive(Clone, Debug)]
+pub enum RunCompletion {
+    Completed { history: Vec<ChatMessage> },
+    Failed,
+    Cancelled,
+}
+
+impl RunCompletion {
+    pub fn status(&self) -> &'static str {
+        match self {
+            Self::Completed { .. } => "completed",
+            Self::Failed => "failed",
+            Self::Cancelled => "cancelled",
+        }
+    }
+
+    pub(crate) fn history(&self) -> Option<&[ChatMessage]> {
+        match self {
+            Self::Completed { history } => Some(history),
+            Self::Failed | Self::Cancelled => None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Run {
     #[serde(default)]
@@ -132,9 +157,15 @@ impl std::ops::Deref for RuntimeSnapshot {
     }
 }
 
-impl std::ops::DerefMut for RuntimeSnapshot {
-    fn deref_mut(&mut self) -> &mut Snapshot {
-        &mut self.snapshot
+impl RuntimeSnapshot {
+    /// Edit session metadata without exposing the run cursor or derived evidence.
+    pub fn session_mut(&mut self) -> &mut Session {
+        &mut self.snapshot.session
+    }
+
+    /// Append idle context before a draft has a durable transcript.
+    pub fn append_draft_context(&mut self, message: ChatMessage) {
+        self.snapshot.history.push(message);
     }
 }
 

@@ -19,6 +19,7 @@ fn background_tools_finish_the_original_row_and_cancel_pending_rows() {
         call: first,
         content: "Orbit finished".into(),
         changes: vec![],
+        files: None,
     });
     assert_eq!(state.tool_calls, 2);
     let TranscriptItem::Tool(first) = &state.transcript[0] else {
@@ -193,6 +194,7 @@ fn reducer_tracks_stream_and_tool_lifecycle() {
         call: call("one"),
         content: "done".to_owned(),
         changes: Vec::new(),
+        files: None,
     });
     state.apply(AgentEvent::Completed {
         turns: 1,
@@ -373,6 +375,7 @@ fn activity_tracks_compaction_and_concurrent_tools_without_background_completion
         call: edit,
         content: String::new(),
         changes: vec![],
+        files: None,
     });
     assert_eq!(state.activity.label(), "正在调用工具");
     state.apply(AgentEvent::ToolBackgrounded {
@@ -390,6 +393,7 @@ fn activity_tracks_compaction_and_concurrent_tools_without_background_completion
         call: read,
         content: String::new(),
         changes: vec![],
+        files: None,
     });
     assert_eq!(state.activity.label(), "正在回复");
     state.apply(AgentEvent::Cancelled);

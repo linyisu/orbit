@@ -13,12 +13,13 @@ async fn background_model_refresh_updates_the_open_session_catalog() {
         &fixture.service.options.auth_directory,
     )
     .unwrap();
-    config
+    let provider = config
         .providers
         .get_mut("test")
-        .unwrap()
-        .spec
-        .auto_refresh_models = true;
+        .unwrap();
+    let mut spec = provider.spec().clone();
+    spec.auto_refresh_models = true;
+    provider.replace_spec(spec).unwrap();
     fs::write(
         &fixture.service.options.config,
         toml::to_string(&config).unwrap(),
@@ -154,12 +155,13 @@ async fn new_and_saved_sessions_open_while_model_refresh_and_mcp_are_stalled() {
         &fixture.service.options.auth_directory,
     )
     .unwrap();
-    config
+    let provider = config
         .providers
         .get_mut("test")
-        .unwrap()
-        .spec
-        .auto_refresh_models = true;
+        .unwrap();
+    let mut spec = provider.spec().clone();
+    spec.auto_refresh_models = true;
+    provider.replace_spec(spec).unwrap();
     fs::write(
         &fixture.service.options.config,
         toml::to_string(&config).unwrap(),
@@ -186,9 +188,10 @@ async fn new_and_saved_sessions_open_while_model_refresh_and_mcp_are_stalled() {
         .unwrap();
     writer
         .finish(
-            "completed",
+            &orbit_store::types::RunCompletion::Completed {
+                history: vec![orbit_model::types::ChatMessage::user("saved message")],
+            },
             vec![],
-            Some(vec![orbit_model::types::ChatMessage::user("saved message")]),
         )
         .await
         .unwrap();

@@ -36,7 +36,7 @@ pub(super) async fn execute(
     setup
         .session
         .snapshot
-        .session
+        .session_mut()
         .project_id = project
         .map(|p| p.id)
         .unwrap_or_default();

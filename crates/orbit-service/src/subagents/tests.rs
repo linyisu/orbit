@@ -516,7 +516,12 @@ async fn eight_children_overlap_while_parent_works_and_waits_without_polling() {
         8
     );
     parent
-        .finish("completed", Vec::new(), Some(result.history))
+        .finish(
+            &orbit_store::types::RunCompletion::Completed {
+                history: result.history,
+            },
+            Vec::new(),
+        )
         .await
         .unwrap();
 }
@@ -572,9 +577,10 @@ async fn running_input_and_finished_continuation_keep_identity_and_canonical_his
     );
     parent
         .finish(
-            "completed",
+            &orbit_store::types::RunCompletion::Completed {
+                history: vec![ChatMessage::user("private parent context")],
+            },
             Vec::new(),
-            Some(vec![ChatMessage::user("private parent context")]),
         )
         .await
         .unwrap();
@@ -918,7 +924,12 @@ async fn recovery_delivers_finished_results_once_and_never_replays_interrupted_w
     );
     assert_eq!(model.requests.lock().unwrap().len(), 1);
     parent
-        .finish("completed", Vec::new(), Some(result.history))
+        .finish(
+            &orbit_store::types::RunCompletion::Completed {
+                history: result.history,
+            },
+            Vec::new(),
+        )
         .await
         .unwrap();
 }

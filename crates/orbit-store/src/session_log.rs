@@ -189,9 +189,10 @@ mod tests {
                 .unwrap();
             writer
                 .finish(
-                    "completed",
+                    &crate::types::RunCompletion::Completed {
+                        history: vec![ChatMessage::user("compacted")],
+                    },
                     vec![],
-                    Some(vec![ChatMessage::user("compacted")]),
                 )
                 .await
                 .unwrap();
@@ -264,9 +265,10 @@ mod tests {
             .unwrap();
         writer
             .finish(
-                "completed",
+                &crate::types::RunCompletion::Completed {
+                    history: vec![ChatMessage::user("compacted task state")],
+                },
                 vec![],
-                Some(vec![ChatMessage::user("compacted task state")]),
             )
             .await
             .unwrap();
@@ -330,7 +332,12 @@ mod tests {
             .unwrap();
 
         writer
-            .finish("completed", vec![], Some(result.history))
+            .finish(
+                &crate::types::RunCompletion::Completed {
+                    history: result.history,
+                },
+                vec![],
+            )
             .await
             .unwrap();
 
@@ -386,7 +393,10 @@ mod tests {
         journal.record_message(ChatMessage::assistant("Orbit 第一轮结果"));
         journal.flush().await.unwrap();
         writer
-            .finish("completed", vec![], Some(vec![]))
+            .finish(
+                &crate::types::RunCompletion::Completed { history: vec![] },
+                vec![],
+            )
             .await
             .unwrap();
         writer
@@ -495,7 +505,12 @@ mod tests {
             .unwrap();
 
         writer
-            .finish("completed", vec![], Some(result.history))
+            .finish(
+                &crate::types::RunCompletion::Completed {
+                    history: result.history,
+                },
+                vec![],
+            )
             .await
             .unwrap();
         let (_, messages) = store

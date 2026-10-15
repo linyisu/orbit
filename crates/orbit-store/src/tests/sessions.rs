@@ -44,12 +44,11 @@ async fn incremental_refresh_preserves_receipts_and_detects_stale_model_context(
         let history = vec![ChatMessage::assistant(format!("answer {turn}"))];
         writer
             .finish(
-                "completed",
+                &crate::types::RunCompletion::Completed { history },
                 vec![
                     text(&format!("answer {turn}")),
                     command_receipt("cargo test", 0),
                 ],
-                Some(history),
             )
             .await
             .unwrap();
@@ -130,6 +129,7 @@ fn text(value: &str) -> AgentEvent {
 
 fn write_receipt(path: &str, before: Option<&str>, after: &str) -> AgentEvent {
     AgentEvent::ToolFinished {
+        files: None,
         call: ToolCall::function("write-1", "write_file", serde_json::json!({})),
         content: format!(r#"{{"path":"{path}"}}"#),
         changes: vec![FileChange {
@@ -142,6 +142,7 @@ fn write_receipt(path: &str, before: Option<&str>, after: &str) -> AgentEvent {
 
 fn command_receipt(command: &str, exit_code: i32) -> AgentEvent {
     AgentEvent::ToolFinished {
+        files: None,
         call: ToolCall::function(
             "command-1",
             "run_command",
@@ -179,7 +180,12 @@ async fn restart_preserves_event_order_and_successful_context() {
         .unwrap();
     let history = vec![ChatMessage::user("你好"), ChatMessage::assistant("一二三")];
     writer
-        .finish("completed", vec![text("三")], Some(history.clone()))
+        .finish(
+            &crate::types::RunCompletion::Completed {
+                history: history.clone(),
+            },
+            vec![text("三")],
+        )
         .await
         .unwrap();
     writer
@@ -187,7 +193,10 @@ async fn restart_preserves_event_order_and_successful_context() {
         .await
         .unwrap();
     writer
-        .finish("cancelled", vec![text("partial")], None)
+        .finish(
+            &crate::types::RunCompletion::Cancelled,
+            vec![text("partial")],
+        )
         .await
         .unwrap();
     drop(writer);
@@ -234,12 +243,13 @@ async fn workspace_change_ledger_keeps_only_successful_write_receipts() {
         .unwrap();
     writer
         .finish(
-            "completed",
+            &crate::types::RunCompletion::Completed {
+                history: vec![ChatMessage::user("change")],
+            },
             vec![
                 write_receipt("src/lib.rs", Some("old"), "new"),
                 command_receipt("cargo test", 0),
             ],
-            Some(vec![ChatMessage::user("change")]),
         )
         .await
         .unwrap();
@@ -336,7 +346,7 @@ async fn lease_blocks_second_writer_and_recovers_only_after_release() {
 }
 
 #[tokio::test]
-async fn invalid_finish_keeps_run_recoverable() {
+async fn failed_run_keeps_saved_context_recoverable() {
     let db = Database::new();
     let store = Store::open(db.path()).await.unwrap();
     let mut writer = store
@@ -348,18 +358,6 @@ async fn invalid_finish_keeps_run_recoverable() {
         .await
         .unwrap();
 
-    assert!(
-        writer
-            .finish("completed", vec![], None)
-            .await
-            .is_err()
-    );
-    assert!(
-        writer
-            .finish("failed", vec![], Some(vec![]))
-            .await
-            .is_err()
-    );
     assert_eq!(
         store
             .load(writer.id())
@@ -371,7 +369,7 @@ async fn invalid_finish_keeps_run_recoverable() {
     );
 
     writer
-        .finish("failed", vec![], None)
+        .finish(&crate::types::RunCompletion::Failed, vec![])
         .await
         .unwrap();
     drop(writer);
@@ -429,7 +427,7 @@ async fn deleting_a_closed_session_reclaims_its_private_sidecars() {
         .await
         .unwrap();
     writer
-        .finish("failed", Vec::new(), None)
+        .finish(&crate::types::RunCompletion::Failed, Vec::new())
         .await
         .unwrap();
     let with_event = store
@@ -508,9 +506,10 @@ async fn finalization_rolls_back_events_status_and_context_together() {
 
     let error = writer
         .finish(
-            "completed",
+            &crate::types::RunCompletion::Completed {
+                history: vec![ChatMessage::user("prompt")],
+            },
             vec![text("final")],
-            Some(vec![ChatMessage::user("prompt")]),
         )
         .await
         .unwrap_err();
@@ -531,9 +530,10 @@ async fn finalization_rolls_back_events_status_and_context_together() {
     connection.close().await.unwrap();
     writer
         .finish(
-            "completed",
+            &crate::types::RunCompletion::Completed {
+                history: vec![ChatMessage::user("prompt")],
+            },
             vec![text("final")],
-            Some(vec![ChatMessage::user("prompt")]),
         )
         .await
         .unwrap();
@@ -574,9 +574,10 @@ async fn project_rename_preserves_history_without_markers_and_copy_is_separate()
         .unwrap();
     writer
         .finish(
-            "completed",
+            &crate::types::RunCompletion::Completed {
+                history: vec![ChatMessage::user("remember")],
+            },
             vec![text("answer")],
-            Some(vec![ChatMessage::user("remember")]),
         )
         .await
         .unwrap();
@@ -829,7 +830,7 @@ async fn explicit_link_rejects_copies_active_writers_and_populated_destinations(
         .await
         .unwrap();
     other
-        .finish("failed", vec![], None)
+        .finish(&crate::types::RunCompletion::Failed, vec![])
         .await
         .unwrap();
     drop(other);
@@ -1015,7 +1016,12 @@ async fn compaction_audit_survives_failure_without_publishing_failed_context() {
         .unwrap();
     let original = vec![ChatMessage::user("initial"), ChatMessage::assistant("done")];
     writer
-        .finish("completed", vec![], Some(original.clone()))
+        .finish(
+            &crate::types::RunCompletion::Completed {
+                history: original.clone(),
+            },
+            vec![],
+        )
         .await
         .unwrap();
     let record = CompactionRecord {
@@ -1061,7 +1067,7 @@ async fn compaction_audit_survives_failure_without_publishing_failed_context() {
     );
 
     writer
-        .finish("failed", vec![], None)
+        .finish(&crate::types::RunCompletion::Failed, vec![])
         .await
         .unwrap();
     drop(writer);
@@ -1085,9 +1091,10 @@ async fn compaction_audit_survives_failure_without_publishing_failed_context() {
 
     let error = writer
         .finish(
-            "completed",
+            &crate::types::RunCompletion::Completed {
+                history: vec![ChatMessage::user("replacement context")],
+            },
             vec![AgentEvent::CompactionRecorded { record }],
-            Some(vec![ChatMessage::user("replacement context")]),
         )
         .await
         .unwrap_err();
@@ -1365,6 +1372,7 @@ async fn checkpoint_receipts_survive_restart_without_replaying_tools() {
                 attachments: vec![],
             },
             Some(AgentEvent::ToolFinished {
+                files: None,
                 call: calls[0].clone(),
                 content: "saved first file".into(),
                 changes: vec![],
@@ -1423,7 +1431,7 @@ async fn checkpoint_receipts_survive_restart_without_replaying_tools() {
         .await
         .unwrap();
     writer
-        .finish("cancelled", vec![], None)
+        .finish(&crate::types::RunCompletion::Cancelled, vec![])
         .await
         .unwrap();
 
@@ -1439,7 +1447,12 @@ async fn checkpoint_receipts_survive_restart_without_replaying_tools() {
         ChatMessage::assistant("verified"),
     ];
     writer
-        .finish("completed", vec![], Some(complete.clone()))
+        .finish(
+            &crate::types::RunCompletion::Completed {
+                history: complete.clone(),
+            },
+            vec![],
+        )
         .await
         .unwrap();
 
@@ -1535,7 +1548,7 @@ async fn verification_evidence_and_start_baseline_are_durable_and_session_scoped
 
     writer
         .finish(
-            "failed",
+            &crate::types::RunCompletion::Failed,
             vec![
                 AgentEvent::VerificationRecorded {
                     call_id: "command-1".into(),
@@ -1543,7 +1556,6 @@ async fn verification_evidence_and_start_baseline_are_durable_and_session_scoped
                 },
                 command_receipt("cargo test", 1),
             ],
-            None,
         )
         .await
         .unwrap();
@@ -1591,9 +1603,10 @@ async fn moving_session_preserves_history_and_scopes_undo_to_the_new_workspace()
     );
     writer
         .finish(
-            "completed",
+            &crate::types::RunCompletion::Completed {
+                history: history.clone(),
+            },
             vec![write_receipt("same.rs", None, "old content")],
-            Some(history.clone()),
         )
         .await
         .unwrap();
@@ -1633,9 +1646,8 @@ async fn moving_session_preserves_history_and_scopes_undo_to_the_new_workspace()
         .unwrap();
     writer
         .finish(
-            "completed",
+            &crate::types::RunCompletion::Completed { history },
             vec![write_receipt("same.rs", None, "new content")],
-            Some(history),
         )
         .await
         .unwrap();
@@ -1964,7 +1976,7 @@ async fn resume_history_excludes_drafts_but_keeps_failed_and_untitled_runs() {
         conversation.id()
     );
     conversation
-        .finish("failed", Vec::new(), None)
+        .finish(&crate::types::RunCompletion::Failed, Vec::new())
         .await
         .unwrap();
     let connection = support::connect(db.path()).await;
@@ -1979,4 +1991,54 @@ async fn resume_history_excludes_drafts_but_keeps_failed_and_untitled_runs() {
     assert_eq!(history.len(), 1);
     assert_eq!(history[0].id, conversation.id());
     assert!(history[0].title.is_empty());
+}
+
+#[tokio::test]
+async fn runtime_recovery_prefers_typed_file_evidence_to_tool_text() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::open(directory.path().join("sessions.db"))
+        .await
+        .unwrap();
+    let mut writer = store
+        .create(directory.path().display().to_string(), "model".into())
+        .await
+        .unwrap();
+    writer
+        .begin("inspect generated sources".into(), "model".into())
+        .await
+        .unwrap();
+    let receipt = |id: &str, path: &str, files| AgentEvent::ToolFinished {
+        call: ToolCall::function(id, "read_file", serde_json::json!({ "path": path })),
+        content: serde_json::json!({ "path": path, "content": "source", "total_lines": 1 })
+            .to_string(),
+        changes: vec![],
+        files,
+    };
+    writer
+        .finish(
+            &crate::types::RunCompletion::Completed { history: vec![] },
+            vec![
+                receipt("old", "legacy.rs", None),
+                receipt("empty", "unconfirmed.rs", Some(Default::default())),
+                receipt(
+                    "typed",
+                    "display-only.rs",
+                    Some(orbit_agent::memory::FileActivity {
+                        read: ["observed.rs".into()].into(),
+                        written: Default::default(),
+                    }),
+                ),
+            ],
+        )
+        .await
+        .unwrap();
+    let runtime = store
+        .load_runtime(writer.id())
+        .await
+        .unwrap();
+    assert_eq!(
+        runtime.files.read,
+        ["legacy.rs".into(), "observed.rs".into()].into()
+    );
+    assert!(runtime.files.written.is_empty());
 }
