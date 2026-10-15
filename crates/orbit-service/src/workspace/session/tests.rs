@@ -331,7 +331,7 @@ async fn smaller_context_setup(root: &Path, auto_compact: bool) -> crate::Prepar
                         .key("test-only")
                         .models([
                             TestModel::new("large")
-                                .input_context(64_000)
+                                .input_context(128_000)
                                 .output(512),
                             TestModel::new("small")
                                 .input_context(32_768)
@@ -431,6 +431,12 @@ async fn manual_compaction_after_a_smaller_model_switch_preserves_history_and_fi
 
     let directory = tempfile::tempdir().unwrap();
     let mut setup = smaller_context_setup(directory.path(), false).await;
+    let final_answer = ChatMessage::assistant("generated completion report ".repeat(4_000));
+    setup
+        .session
+        .append_context(final_answer.clone())
+        .await
+        .unwrap();
     let summary = serde_json::to_string(&TaskSummary {
         goal: "Continue the generated investigation using archived evidence.".into(),
         constraints: vec![],
@@ -441,7 +447,7 @@ async fn manual_compaction_after_a_smaller_model_switch_preserves_history_and_fi
         uncertainty: vec![],
     })
     .unwrap();
-    let backend = MockModel::new((0..64).map(|_| ChatCompletion {
+    let backend = MockModel::new((0..256).map(|_| ChatCompletion {
         id: None,
         model: None,
         message: ChatMessage::assistant(summary.clone()),
@@ -474,6 +480,9 @@ async fn manual_compaction_after_a_smaller_model_switch_preserves_history_and_fi
         .unwrap();
     let info = handle.current_info().await;
     assert!(orbit_agent::context::estimate_tokens(&original, &tools) > info.input_context_tokens);
+    assert!(
+        orbit_agent::context::estimate_tokens(&[final_answer], &[]) > info.input_context_tokens
+    );
     handle
         .command(Command::Start {
             request_id: orbit_protocol::request_id(),
@@ -534,6 +543,78 @@ async fn manual_compaction_after_a_smaller_model_switch_preserves_history_and_fi
             .iter()
             .all(|message| archived.contains(message))
     );
+    handle
+        .command(Command::Close)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn oversized_tool_catalog_reports_the_budget_and_preserves_history() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut setup = smaller_context_setup(directory.path(), false).await;
+    setup
+        .resources
+        .tools
+        .register(orbit_agent::tool::ClosureTool::new(
+            "generated_catalog",
+            "generated tool specification ".repeat(5_000),
+            serde_json::json!({"type": "object"}),
+            |_, _| async { Ok("unused".into()) },
+        ));
+    let original = setup.session.snapshot.history.clone();
+    let store = setup.session.store.clone();
+    let handle = Handle::spawn(setup, None)
+        .await
+        .unwrap();
+    handle
+        .command(Command::SetModel {
+            model: "test::small".into(),
+            effort: None,
+        })
+        .await
+        .unwrap();
+    let info = handle.current_info().await;
+    handle
+        .command(Command::Start {
+            request_id: orbit_protocol::request_id(),
+            prompt: String::new(),
+            images: vec![],
+            files: vec![],
+            compact: true,
+            model: None,
+        })
+        .await
+        .unwrap();
+    let page = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        loop {
+            let page = handle
+                .view
+                .lock()
+                .await
+                .page(0)
+                .unwrap();
+            if !page.busy {
+                break page;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(
+        page.updates
+            .iter()
+            .any(|update| matches!(update,
+                Update::Agent(event) if matches!(event.as_ref(),
+                    AgentEvent::Failed { error }
+                        if error.contains("tool definitions:") && error.contains("input budget is")
+                )
+            ))
+    );
+    let snapshot = store.load(&info.id).await.unwrap();
+    assert_eq!(snapshot.history, original);
+    assert_eq!(snapshot.runs.last().unwrap().status, "failed");
     handle
         .command(Command::Close)
         .await

@@ -1,5 +1,28 @@
 use super::*;
 
+#[test]
+fn compaction_outcomes_preserve_diagnostic_causes() {
+    for error in [
+        AgentError::Compaction("history has no completed assistant turn".into()),
+        AgentError::CompactionFailed {
+            kind: orbit_agent::compaction::CompactionFailureKind::InputBudget,
+            message: "retained working set exceeds the configured input budget".into(),
+        },
+    ] {
+        let cause = match &error {
+            AgentError::Compaction(message) | AgentError::CompactionFailed { message, .. } => {
+                message.clone()
+            }
+            _ => unreachable!(),
+        };
+        let RunOutcome::Failed(message) = outcome(Ok(Err(error)), None) else {
+            panic!("compaction failure must remain failed");
+        };
+        assert!(message.contains(&cause));
+        assert!(message.contains("原上下文已保留"));
+    }
+}
+
 #[tokio::test]
 async fn compact_retry_restores_the_original_history_after_a_failed_retry() {
     use orbit_agent::memory::{CompactionMode, CompactionRecord, FileActivity, TaskSummary};

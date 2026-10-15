@@ -36,6 +36,7 @@ const TOOL_EXCERPT_BYTES: usize = 2_048;
 // are useful only after the backend has demonstrated adequate throughput.
 const INITIAL_SUMMARY_INPUT_TOKENS: usize = 4_096;
 const RECORD_PREFIX: &str = "BEGIN_UNTRUSTED_COMPACTION_RECORD\n";
+const COMPACTION_OVERHEAD_TOKENS: usize = 512;
 
 pub struct Plan {
     original: Vec<ChatMessage>,
@@ -57,8 +58,7 @@ impl Plan {
     }
 }
 
-/// Automatic and explicit compaction use identical protocol boundaries and
-/// working-set budgets. A single long user turn can be compacted too.
+/// Automatic and explicit compaction share protocol boundaries and working-set budgets.
 pub fn plan(
     history: &[ChatMessage],
     tools: &[ToolDefinition],
@@ -82,6 +82,7 @@ pub fn plan(
         CompactionMode::Automatic,
         SUMMARY_OUTPUT_TOKENS,
     )
+    .ok()
 }
 
 pub fn plan_manual(
@@ -97,6 +98,26 @@ pub fn plan_manual(
         limit,
         CompactionMode::Manual,
         SUMMARY_OUTPUT_TOKENS,
+    )
+    .ok()
+}
+
+/// Plan explicit compaction, retaining diagnostics when the working set cannot fit.
+/// System instructions, current runtime state and the latest user request remain verbatim.
+pub fn plan_manual_configured(
+    history: &[ChatMessage],
+    tools: &[ToolDefinition],
+    output: usize,
+    limit: usize,
+    settings: &crate::compaction::CompactionSettings,
+) -> Result<Plan, AgentError> {
+    plan_for(
+        history,
+        tools,
+        output,
+        limit,
+        CompactionMode::Manual,
+        settings.max_output_tokens,
     )
 }
 
@@ -126,6 +147,7 @@ pub fn plan_configured(
         mode,
         settings.max_output_tokens,
     )
+    .ok()
 }
 
 /// Cheap, model-free reduction begins before the summary threshold. It only
@@ -154,6 +176,7 @@ pub fn plan_pruning(
         CompactionMode::Automatic,
         settings.max_output_tokens,
     )
+    .ok()
 }
 
 fn is_summary(message: &ChatMessage) -> bool {
@@ -169,8 +192,19 @@ fn plan_for(
     limit: usize,
     mode: CompactionMode,
     summary_cap: usize,
-) -> Option<Plan> {
-    let available = limit.checked_sub(output)?;
+) -> Result<Plan, AgentError> {
+    let available = limit
+        .checked_sub(output)
+        .filter(|input| *input > 0)
+        .ok_or_else(|| {
+            failure(
+                Failure::InputBudget,
+                format!(
+                    "output reserve {output} tokens leaves no input budget \
+                        in a {limit}-token window"
+                ),
+            )
+        })?;
     let before_tokens = estimate_tokens(history, tools);
     let summary_tokens = (available / 8).clamp(256, summary_cap.max(256));
     let mut systems: Vec<_> = history
@@ -180,11 +214,15 @@ fn plan_for(
         .collect();
     systems.extend(orbit_model::runtime_context::latest(history));
     let fixed = estimate_tokens(&systems, tools);
+    let instruction_tokens = estimate_tokens(&systems, &[]);
+    let tool_tokens = fixed.saturating_sub(instruction_tokens);
     let recent_budget = (available / 6).min(RECENT_TOKENS);
-    let target_tokens = (fixed + recent_budget + summary_tokens + 512).min(available);
+    let target_tokens =
+        (fixed + recent_budget + summary_tokens + COMPACTION_OVERHEAD_TOKENS).min(available);
     let latest = history
         .iter()
-        .rposition(|m| matches!(m, ChatMessage::User { .. }) && !is_summary(m))?;
+        .rposition(|m| matches!(m, ChatMessage::User { .. }) && !is_summary(m))
+        .ok_or_else(|| AgentError::Compaction("history has no user request to retain".into()))?;
     let mut pending = HashSet::new();
     let mut candidates = Vec::new();
     let mut saw_assistant = false;
@@ -205,31 +243,48 @@ fn plan_for(
         match message {
             ChatMessage::Assistant { tool_calls, .. } => {
                 if !pending.is_empty() {
-                    return None;
+                    return Err(AgentError::Compaction(format!(
+                        "assistant message {i} interrupts pending tool results"
+                    )));
                 }
 
                 saw_assistant = true;
 
                 for call in tool_calls {
                     if !pending.insert(call.id.clone()) {
-                        return None;
+                        return Err(AgentError::Compaction(format!(
+                            "assistant message {i} repeats a pending tool call"
+                        )));
                     }
                 }
             }
 
             ChatMessage::Tool { tool_call_id, .. } => {
                 if !pending.remove(tool_call_id) {
-                    return None;
+                    return Err(AgentError::Compaction(format!(
+                        "tool result at message {i} has no matching pending call"
+                    )));
                 }
             }
 
-            _ if !pending.is_empty() => return None,
+            _ if !pending.is_empty() => {
+                return Err(AgentError::Compaction(format!(
+                    "message {i} interrupts pending tool results"
+                )));
+            }
             _ => {}
         }
     }
 
     if !pending.is_empty() {
-        return None;
+        return Err(AgentError::Compaction(format!(
+            "history ends with {} pending tool results",
+            pending.len()
+        )));
+    }
+
+    if saw_assistant {
+        candidates.push(history.len());
     }
 
     // Estimate each message once instead of serializing every candidate tail.
@@ -259,9 +314,11 @@ fn plan_for(
         .iter()
         .copied()
         .find(|&i| {
-            tail_size(i) <= fixed + recent_budget && tail_size(i) + summary_tokens + 512 < available
+            tail_size(i) <= fixed + recent_budget
+                && tail_size(i) + summary_tokens + COMPACTION_OVERHEAD_TOKENS < available
         })
-        .or_else(|| candidates.last().copied())?;
+        .or_else(|| candidates.last().copied())
+        .ok_or_else(|| AgentError::Compaction("history has no completed assistant turn".into()))?;
     let mut retained = systems;
 
     if latest < cutoff {
@@ -276,16 +333,28 @@ fn plan_for(
     );
     let retained_tokens = estimate_tokens(&retained, tools);
 
-    if retained_tokens + summary_tokens + 512 >= available {
-        return None;
+    if retained_tokens + summary_tokens + COMPACTION_OVERHEAD_TOKENS >= available {
+        return Err(failure(
+            Failure::InputBudget,
+            format!(
+                "retained working set needs {retained_tokens} tokens \
+                    (instructions and runtime state: {instruction_tokens}; \
+                    tool definitions: {tool_tokens}; \
+                    latest user request: {}), plus {summary_tokens} summary tokens and \
+                    {COMPACTION_OVERHEAD_TOKENS} overhead tokens; input budget is {available}. \
+                    Reduce instructions, enabled tools or output reserve, or select a larger window",
+                weights[latest],
+            ),
+        ));
     }
 
-    Some(Plan {
+    Ok(Plan {
         original: history.to_vec(),
         retained,
         before_tokens,
         summary_tokens,
-        target_tokens: target_tokens.max(retained_tokens + summary_tokens + 512),
+        target_tokens: target_tokens
+            .max(retained_tokens + summary_tokens + COMPACTION_OVERHEAD_TOKENS),
         retained_from: cutoff,
         pinned_user: (latest < cutoff).then_some(latest),
         mode,
@@ -1368,6 +1437,94 @@ fn finish(
 mod tests {
     use super::*;
     use orbit_model::types::ToolCall;
+
+    #[test]
+    fn completed_final_turn_can_be_summarized_after_a_window_reduction() {
+        for with_tools in [false, true] {
+            let user = ChatMessage::user("Review the generated inventory.");
+            let mut history = vec![ChatMessage::system("Keep verified evidence."), user.clone()];
+            if with_tools {
+                history.extend([
+                    ChatMessage::assistant_tool_calls(vec![ToolCall::function(
+                        "inventory",
+                        "inspect",
+                        json!({}),
+                    )]),
+                    ChatMessage::tool("inventory", "generated entries ".repeat(4_000)),
+                ]);
+            }
+            history.push(ChatMessage::assistant("completed findings ".repeat(4_000)));
+            let plan = plan_manual(&history, &[], 512, 8_192).unwrap();
+
+            assert_eq!(plan.original, history);
+            assert_eq!(plan.retained_from, history.len());
+            assert_eq!(plan.pinned_user, Some(1));
+            assert_eq!(plan.retained, vec![history[0].clone(), user]);
+            assert!(estimate_tokens(&plan.retained, &[]) + plan.summary_tokens + 512 < 7_680);
+        }
+    }
+
+    #[test]
+    fn final_boundary_requires_complete_tool_results() {
+        let mut history = vec![
+            ChatMessage::user("Inspect the generated inventory."),
+            ChatMessage::assistant_tool_calls(vec![ToolCall::function(
+                "inventory",
+                "inspect",
+                json!({}),
+            )]),
+        ];
+        assert!(plan_manual(&history, &[], 512, 8_192).is_none());
+        history.push(ChatMessage::tool("unrelated", "orphaned result"));
+        assert!(plan_manual(&history, &[], 512, 8_192).is_none());
+        history.pop();
+        history.push(ChatMessage::tool(
+            "inventory",
+            "generated entries ".repeat(4_000),
+        ));
+        let plan = plan_manual(&history, &[], 512, 8_192).unwrap();
+        assert_eq!(plan.retained_from, history.len());
+        assert_eq!(plan.retained, vec![history[0].clone()]);
+    }
+
+    #[test]
+    fn unshrinkable_working_set_reports_budget_without_exposing_content() {
+        for oversized_part in ["system", "user", "tools"] {
+            let long = "generated private material ".repeat(1_000);
+            let history = vec![
+                ChatMessage::system(if oversized_part == "system" {
+                    &long
+                } else {
+                    "rules"
+                }),
+                ChatMessage::user(if oversized_part == "user" {
+                    &long
+                } else {
+                    "current work"
+                }),
+                ChatMessage::assistant("completed findings ".repeat(2_000)),
+            ];
+            let tools = if oversized_part == "tools" {
+                vec![ToolDefinition::function("inspect", &long, json!({}))]
+            } else {
+                vec![]
+            };
+            let error = plan_manual_configured(
+                &history,
+                &tools,
+                512,
+                8_192,
+                &crate::compaction::CompactionSettings::default(),
+            )
+            .err()
+            .unwrap();
+            assert_eq!(error.compaction_kind(), Some(Failure::InputBudget));
+            let detail = error.to_string();
+            assert!(detail.contains("input budget is 7680"));
+            assert!(detail.contains("latest user request:"));
+            assert!(!detail.contains("generated private material"));
+        }
+    }
 
     #[test]
     fn authoritative_file_evidence_replaces_legacy_receipt_inference() {

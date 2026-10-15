@@ -10,6 +10,7 @@
 - [inbox.rs](src/inbox.rs)、[background.rs](src/background.rs)、[checkpoint.rs](src/checkpoint.rs)：补充消息、后台等待和检查点。
 
 压缩前先归档原文，保留完整工具调用与回执配对。取消不会重放已完成的副作用；子 Agent 调度由 [orbit-service](../orbit-service/README.md) 负责。
+已结束的最后一轮也可归档并摘要。系统指令、当前运行状态和最新用户请求保留原文；这些内容与工具定义超过窗口时，返回预算明细，不丢弃内容强行压缩。
 
 工具通过 `ToolOutput` 的类型化结果和文件收据报告执行证据；模型输出文本不决定任务状态。
 旧事件缺少文件收据时，仅在恢复入口按旧格式读取。模型流的聚合与结束校验由 `orbit-model` 负责。

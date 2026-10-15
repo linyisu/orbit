@@ -780,22 +780,13 @@ where
         }
 
         let plan = if force {
-            Some(
-                crate::autocompact::plan_configured(
-                    history,
-                    &tools,
-                    output,
-                    local_limit,
-                    crate::memory::CompactionMode::Manual,
-                    &self.compaction.settings,
-                )
-                .ok_or_else(|| AgentError::CompactionFailed {
-                    kind: crate::compaction::CompactionFailureKind::InputBudget,
-                    message: "no safe compaction boundary fits the rejected request; original \
-                        context preserved"
-                        .into(),
-                })?,
-            )
+            Some(crate::autocompact::plan_manual_configured(
+                history,
+                &tools,
+                output,
+                local_limit,
+                &self.compaction.settings,
+            )?)
         } else if self.config.auto_compact
             && self.archive.is_some()
             && estimated >= thresholds.compact_after

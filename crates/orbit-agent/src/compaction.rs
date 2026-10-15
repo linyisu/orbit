@@ -96,6 +96,7 @@ pub enum CompactionFailureKind {
     TotalTimeout,
     Upstream,
     InvalidSummary,
+    /// Summary input or the preserved working set cannot fit its input allowance.
     InputBudget,
     InsufficientReduction,
     Archive,
@@ -108,7 +109,7 @@ impl CompactionFailureKind {
             Self::TotalTimeout => "整理总时限已到",
             Self::Upstream => "摘要服务请求失败",
             Self::InvalidSummary => "摘要格式不完整",
-            Self::InputBudget => "摘要输入超出预算",
+            Self::InputBudget => "输入内容超出预算",
             Self::InsufficientReduction => "未释放足够上下文",
             Self::Archive => "历史归档失败",
         }

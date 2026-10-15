@@ -148,19 +148,13 @@ pub async fn compact_configured(
         return Err(AgentError::Cancelled);
     }
 
-    let plan = crate::autocompact::plan_configured(
+    let plan = crate::autocompact::plan_manual_configured(
         &history,
         tools,
         output,
         limit,
-        crate::memory::CompactionMode::Manual,
         &runtime.settings,
-    )
-    .ok_or_else(|| {
-        AgentError::Compaction(
-            "no safe compaction boundary fits this context; original context preserved".into(),
-        )
-    })?
+    )?
     .with_files(files);
 
     crate::autocompact::execute_configured(

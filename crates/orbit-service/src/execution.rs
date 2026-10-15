@@ -325,12 +325,12 @@ pub fn outcome(
             RunOutcome::Cancelled
         }
         Ok(Err(AgentError::Cancelled)) => RunOutcome::Cancelled,
-        Ok(Err(AgentError::CompactionFailed { kind, .. })) => RunOutcome::Failed(format!(
-            "上下文整理未完成：{}。原上下文已保留。",
+        Ok(Err(AgentError::CompactionFailed { kind, message })) => RunOutcome::Failed(format!(
+            "上下文整理未完成：{}。原上下文已保留。\n\n{message}",
             kind.label(),
         )),
-        Ok(Err(AgentError::Compaction(_))) => {
-            RunOutcome::Failed("上下文整理未完成，原上下文已保留。".into())
+        Ok(Err(AgentError::Compaction(message))) => {
+            RunOutcome::Failed(format!("上下文整理未完成，原上下文已保留。\n\n{message}"))
         }
         Ok(Err(error)) => RunOutcome::Failed(error.to_string()),
         Err(error) => RunOutcome::Failed(format!("后台任务中断：{error}")),
