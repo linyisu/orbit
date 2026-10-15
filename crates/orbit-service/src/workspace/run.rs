@@ -67,6 +67,15 @@ pub(super) async fn start(
             grant_files(&resources.workspace, attachments)?;
         }
     }
+    if !compact {
+        for message in session
+            .store
+            .pending_agent_messages(session.id())
+            .await?
+        {
+            grant_files(&resources.workspace, &message.attachments)?;
+        }
+    }
     let metadata = |attachment: &orbit_model::types::Attachment| orbit_protocol::MessageImage {
         name: attachment.name().to_owned(),
         path: attachment
