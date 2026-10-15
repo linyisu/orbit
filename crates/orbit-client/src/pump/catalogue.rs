@@ -2,7 +2,7 @@
 use super::Event;
 use crate::{
     protocol::{Request, Response},
-    transport::Client,
+    transport::{Client, RequestError},
 };
 use anyhow::{Result, ensure};
 use orbit_protocol::subagents::{Action, Agent, Snapshot};
@@ -51,7 +51,12 @@ impl Watch {
                     expected_workspace: workspace.clone(),
                     action: Action::List { offset },
                 })
-                .await?;
+                .await;
+            let response = match response {
+                Ok(response) => response,
+                Err(RequestError::Remote(_)) => return Ok(()),
+                Err(error) => return Err(error.into()),
+            };
             let Response::Subagents(Snapshot::List { agents: page, next }) = response else {
                 // A policy denial or workspace change must not manufacture a
                 // terminal result, nor erase previously observed evidence.
@@ -76,5 +81,95 @@ impl Watch {
             self.last = Some(agents);
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn agent(status: &str) -> Agent {
+        Agent {
+            id: "sample-child".into(),
+            role: "explore".into(),
+            model: "sample::model".into(),
+            task: "Inspect generated module".into(),
+            workspace: "sample-workspace".into(),
+            status: status.into(),
+            run: 3,
+        }
+    }
+
+    #[tokio::test]
+    async fn rejected_catalogue_pages_preserve_observed_status_and_allow_later_refresh() {
+        let running = vec![agent("running")];
+        let completed = vec![agent("completed")];
+        let mut client = crate::transport::tests::fixture_client(vec![
+            Response::Error("synthetic capability denial".into()),
+            Response::Subagents(Snapshot::List {
+                agents: running.clone(),
+                next: None,
+            }),
+            Response::Subagents(Snapshot::List {
+                agents: completed.clone(),
+                next: Some(1),
+            }),
+            Response::Error("synthetic workspace changed during pagination".into()),
+            Response::Subagents(Snapshot::List {
+                agents: completed.clone(),
+                next: None,
+            }),
+        ])
+        .await;
+        let mut watch = Watch::default();
+        watch.set(Some(("sample-session".into(), "sample-workspace".into())));
+        let (events, mut receiver) = mpsc::channel(8);
+
+        watch
+            .poll(&mut client, "sample-session", &events)
+            .await
+            .unwrap();
+        assert!(!client.failed());
+        assert!(watch.last.is_none());
+        assert!(receiver.try_recv().is_err());
+
+        watch.due = None;
+        watch
+            .poll(&mut client, "sample-session", &events)
+            .await
+            .unwrap();
+        assert!(matches!(
+            receiver.try_recv().unwrap(),
+            Event::AgentStatuses { agents, .. } if agents == running
+        ));
+
+        watch.due = None;
+        watch
+            .poll(&mut client, "sample-session", &events)
+            .await
+            .unwrap();
+        assert!(!client.failed());
+        assert_eq!(watch.last.as_ref(), Some(&running));
+        assert!(receiver.try_recv().is_err());
+
+        watch.due = None;
+        watch
+            .poll(&mut client, "sample-session", &events)
+            .await
+            .unwrap();
+        assert!(matches!(
+            receiver.try_recv().unwrap(),
+            Event::AgentStatuses { agents, .. } if agents == completed
+        ));
+
+        watch.due = None;
+        assert!(
+            watch
+                .poll(&mut client, "sample-session", &events)
+                .await
+                .is_err()
+        );
+        assert!(client.failed());
+        assert_eq!(watch.last.as_ref(), Some(&completed));
     }
 }
