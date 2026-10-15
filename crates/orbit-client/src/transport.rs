@@ -377,10 +377,11 @@ impl Connection {
     }
 }
 
-/// Remote rejections leave framing usable; transport failures require reconnecting.
+/// Encoding and remote rejections leave framing usable; transport failures require reconnecting.
 #[derive(Debug)]
 pub enum RequestError {
     Closed,
+    Encoding(std::io::Error),
     Remote(String),
     Transport(anyhow::Error),
 }
@@ -392,6 +393,7 @@ impl std::fmt::Display for RequestError {
                 "workspace connection is closed; reconnect before sending another request",
             ),
             Self::Remote(message) => formatter.write_str(message),
+            Self::Encoding(error) => write!(formatter, "request could not be encoded: {error}"),
             Self::Transport(error) => write!(formatter, "{error:#}"),
         }
     }
@@ -401,6 +403,7 @@ impl std::error::Error for RequestError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Transport(error) => Some(error.as_ref()),
+            Self::Encoding(error) => Some(error),
             _ => None,
         }
     }
@@ -428,11 +431,12 @@ impl Client {
         if self.failed {
             return Err(RequestError::Closed);
         }
+        let frame = orbit_protocol::EncodedFrame::new(&request).map_err(RequestError::Encoding)?;
         // Mark it unusable before awaiting: cancellation halfway through a frame
         // must never let the next request consume the previous response.
         self.failed = true;
         let result = tokio::time::timeout(REQUEST_TIMEOUT, async {
-            protocol::write(&mut self.stdin, &request).await?;
+            frame.write(&mut self.stdin).await?;
             protocol::read::<Response>(&mut self.stdout).await
         })
         .await;
@@ -539,6 +543,43 @@ pub(crate) mod tests {
                 .await
                 .unwrap();
         }
+    }
+
+    #[tokio::test]
+    async fn oversized_attachments_do_not_close_or_write_to_the_transport() {
+        let mut client = fixture_client(vec![Response::FileMissing]).await;
+        let request = Request::SubmitAttachments {
+            session: "sample".into(),
+            request_id: "generated-upload".into(),
+            prompt: String::new(),
+            images: Vec::new(),
+            files: (0..2)
+                .map(|index| orbit_protocol::FileUpload {
+                    name: format!("part-{index}.bin"),
+                    data: "A".repeat(orbit_protocol::MAX_FRAME_BYTES / 2),
+                })
+                .collect(),
+            steer: false,
+        };
+        assert!(matches!(
+            client.request(request).await,
+            Err(RequestError::Encoding(_))
+        ));
+        assert!(
+            !client.failed(),
+            "encoding rejection precedes all transport I/O"
+        );
+        assert!(matches!(
+            client
+                .request(Request::ReadFile {
+                    session: "sample".into(),
+                    path: "absent.txt".into(),
+                    allow_missing: true,
+                })
+                .await
+                .unwrap(),
+            Response::FileMissing
+        ));
     }
 
     #[tokio::test]

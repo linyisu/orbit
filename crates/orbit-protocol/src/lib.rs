@@ -462,18 +462,35 @@ pub async fn write<T: Serialize>(
     writer: &mut (impl AsyncWrite + Unpin),
     value: &T,
 ) -> io::Result<()> {
-    let bytes = serde_json::to_vec(value)?;
-    if bytes.len() > MAX_FRAME_BYTES {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "workspace frame exceeds limit",
-        ));
+    EncodedFrame::new(value)?
+        .write(writer)
+        .await
+}
+
+/// A size-checked payload prepared before a caller enters a transport transaction.
+pub struct EncodedFrame(Vec<u8>);
+
+impl EncodedFrame {
+    /// Serialize without I/O, rejecting invalid or oversized payloads before any bytes are sent.
+    pub fn new<T: Serialize>(value: &T) -> io::Result<Self> {
+        let bytes = serde_json::to_vec(value)?;
+        if bytes.len() > MAX_FRAME_BYTES {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "workspace frame exceeds limit",
+            ));
+        }
+        Ok(Self(bytes))
     }
-    writer
-        .write_u32(bytes.len() as u32)
-        .await?;
-    writer.write_all(&bytes).await?;
-    writer.flush().await
+
+    /// Write and flush one complete frame; cancellation may leave the transport partially written.
+    pub async fn write(&self, writer: &mut (impl AsyncWrite + Unpin)) -> io::Result<()> {
+        writer
+            .write_u32(self.0.len() as u32)
+            .await?;
+        writer.write_all(&self.0).await?;
+        writer.flush().await
+    }
 }
 
 #[cfg(test)]
