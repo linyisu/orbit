@@ -10,6 +10,9 @@ use base64::Engine;
 use std::{path::PathBuf, sync::Arc, time::Duration};
 use tokio::sync::mpsc;
 
+#[cfg(all(test, unix))]
+mod tests;
+
 /// Session opening intent; paths and connection preparation have already been resolved.
 pub struct SessionOptions {
     pub connection: Arc<Connection>,
@@ -166,6 +169,7 @@ pub async fn observe(
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut quota_tasks = tokio::task::JoinSet::new();
     let mut review_tasks = tokio::task::JoinSet::new();
+    let mut model_tasks = tokio::task::JoinSet::new();
     let mut queue_images = std::collections::HashMap::new();
     let mut questions_revision = None;
     let mut subagent: Option<(String, usize)> = None;
@@ -207,32 +211,20 @@ pub async fn observe(
                         subagent = None;
                     }
                     Command::RefreshModels => {
-                        let result = async {
-                            let local = connection
-                                .local_configuration
-                                .as_ref()
-                                .context("当前连接没有本地模型配置")?;
-                            let configuration = local
-                                .snapshot_with_refresh(true)
-                                .await?;
-                            client
-                                .request(Request::ConfigureModels {
-                                    session: session.clone(),
-                                    configuration: Some(configuration),
-                                })
-                                .await
-                                .map_err(anyhow::Error::new)
-                        }
-                        .await;
-                        match result {
-                            Ok(response) => {
-                                deliver(response, &mut session, &mut cursor, events).await?;
-                            }
-                            Err(error) => {
-                                events
-                                    .send(Event::Error(format!("{error:#}")))
-                                    .await?;
-                            }
+                        if model_tasks.is_empty() {
+                            let connection = connection.clone();
+                            let session = session.clone();
+                            model_tasks.spawn(async move {
+                                let result = async {
+                                    let local = connection
+                                        .local_configuration
+                                        .as_ref()
+                                        .context("当前连接没有本地模型配置")?;
+                                    local.snapshot_with_refresh(true).await
+                                }
+                                .await;
+                                (session, result)
+                            });
                         }
                     }
                     Command::ReadImage { session, path } => {
@@ -448,6 +440,34 @@ pub async fn observe(
             }
             _ = quota_tasks.join_next(), if !quota_tasks.is_empty() => {}
             _ = review_tasks.join_next(), if !review_tasks.is_empty() => {}
+            Some(result) = model_tasks.join_next(), if !model_tasks.is_empty() => {
+                let configuration = match result {
+                    Ok((scope, result)) if scope == session => result,
+                    Ok(_) => continue,
+                    Err(error) => Err(error.into()),
+                };
+                let result = match configuration {
+                    Ok(configuration) => client
+                        .request(Request::ConfigureModels {
+                            session: session.clone(),
+                            configuration: Some(configuration),
+                        })
+                        .await
+                        .map_err(anyhow::Error::new),
+                    Err(error) => Err(error),
+                };
+                match result {
+                    Ok(response) => {
+                        deliver(response, &mut session, &mut cursor, events).await?;
+                    }
+                    Err(error) => {
+                        events.send(Event::Error(format!("{error:#}"))).await?;
+                    }
+                }
+                if client.failed() {
+                    bail!("工作区连接已断开。")
+                }
+            }
             _ = async {
                 if !backlog {
                     interval.tick().await;

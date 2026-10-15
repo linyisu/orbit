@@ -1,0 +1,162 @@
+use super::*;
+use orbit_config::test_support::{TestConfig, TestProvider};
+use std::os::unix::fs::PermissionsExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+#[tokio::test]
+async fn model_refresh_preserves_controls_and_applies_single_discovery() {
+    let root = tempfile::tempdir().unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .unwrap();
+    let config = root.path().join("config.toml");
+    let mut settings = TestConfig::new().provider(
+        TestProvider::new("slow")
+            .endpoint(format!("http://{}/v1", listener.local_addr().unwrap()))
+            .automatic(),
+    );
+    let blocked_proxy = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    settings.config.web.proxy = Some(format!("http://{}", blocked_proxy.local_addr().unwrap()));
+    drop(blocked_proxy);
+    settings.write(&config).unwrap();
+    let peer = root.path().join("peer.py");
+    std::fs::write(&peer, include_str!("peer.py")).unwrap();
+    let launcher = root.path().join("server.sh");
+    std::fs::write(
+        &launcher,
+        format!(
+            "#!/bin/sh\nexec /usr/bin/python3 -u {}\n",
+            shlex::try_quote(peer.to_str().unwrap()).unwrap()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&launcher, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let local = crate::configuration::Local {
+        config: config.clone(),
+        auth: root.path().join("auth"),
+        model: None,
+    };
+    let options = SessionOptions {
+        connection: Arc::new(Connection {
+            local_configuration: Some(local),
+            target: crate::transport::Target::Local,
+            workspace: root
+                .path()
+                .to_string_lossy()
+                .into_owned(),
+            executable: launcher.to_string_lossy().into_owned(),
+            config,
+            database: None,
+            auth_dir: None,
+            allow_mcp_start: false,
+            unattended: true,
+            interactive: None,
+        }),
+        resume: None,
+        model: Some("slow::declared-model".into()),
+        relink_on_resume: false,
+        recover_draft: false,
+        attachment_cache: root.path().join("attachments"),
+    };
+    let (commands, receiver) = mpsc::channel(8);
+    let (events, mut incoming) = mpsc::channel(16);
+    let (progress, _updates) = crate::interaction::channel();
+    let task = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
+        observe(options, receiver, &events, progress).await
+    }));
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while !matches!(
+            incoming
+                .recv()
+                .await
+                .expect("observer events remain open"),
+            Event::Response(Response::Opened(_))
+        ) {}
+    })
+    .await
+    .expect("observer must open the isolated peer");
+
+    commands
+        .send(Command::RefreshModels)
+        .await
+        .unwrap();
+    let (mut held, _) = tokio::time::timeout(Duration::from_secs(3), listener.accept())
+        .await
+        .expect("refresh must start model discovery")
+        .unwrap();
+    commands
+        .send(Command::RefreshModels)
+        .await
+        .unwrap();
+    commands
+        .send(Command::Request(Request::Cancel {
+            session: "synthetic-session".into(),
+        }))
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_millis(500), async {
+        loop {
+            match incoming
+                .recv()
+                .await
+                .expect("observer events remain open")
+            {
+                Event::Response(Response::Ok) => break,
+                Event::Error(error) => panic!("refresh failed: {error}"),
+                _ => {}
+            }
+        }
+    })
+    .await
+    .expect("a stalled catalogue must not delay cancellation");
+    assert!(
+        tokio::time::timeout(Duration::from_millis(30), listener.accept())
+            .await
+            .is_err(),
+        "repeated refresh commands must share the pending discovery"
+    );
+    let mut request = Vec::new();
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while !request.ends_with(b"\r\n\r\n") {
+            request.push(held.read_u8().await.unwrap());
+        }
+        let body = r#"{"data":[{"id":"refreshed-model"}]}"#;
+        held.write_all(
+            format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
+                 Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            )
+            .as_bytes(),
+        )
+        .await
+        .unwrap();
+        loop {
+            match incoming
+                .recv()
+                .await
+                .expect("observer events remain open")
+            {
+                Event::Response(Response::Ok) => break,
+                Event::Error(error) => panic!("refresh failed: {error}"),
+                _ => {}
+            }
+        }
+    })
+    .await
+    .expect("completed discovery must apply its configuration to the original session");
+    commands
+        .send(Command::RefreshModels)
+        .await
+        .unwrap();
+    let (_pending, _) = tokio::time::timeout(Duration::from_secs(3), listener.accept())
+        .await
+        .expect("completed discovery must allow a later refresh")
+        .unwrap();
+    drop(commands);
+    tokio::time::timeout(Duration::from_millis(500), task)
+        .await
+        .expect("closing the observer must cancel pending discovery")
+        .unwrap()
+        .unwrap();
+}
