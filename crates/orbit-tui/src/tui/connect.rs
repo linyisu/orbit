@@ -85,6 +85,7 @@ pub(super) async fn run(
     let mut pointer = None;
     let mut selected = 0;
     let mut pending_project = None;
+    let mut saved_models = None;
     let mut project = String::new();
     let mut message = String::new();
     let mut task = None;
@@ -204,20 +205,21 @@ pub(super) async fn run(
             let result: Result<(LoginOutcome, Option<String>)> =
                 task.take().expect("login task").await?;
             match result {
-                Ok((LoginOutcome::Connected, _)) => match accounts::save_login(
-                    &options.config,
-                    &options.auth_directory,
-                    match PROVIDERS[selected].0 {
-                        ConnectionProvider::OAuth(provider) => provider,
-                        _ => unreachable!(),
-                    },
-                    None,
-                )
-                .await
-                {
-                    Ok(models) => return Ok(Some(models)),
-                    Err(error) => message = format!("账号已连接，但配置未保存：{error:#}"),
-                },
+                Ok((LoginOutcome::Connected(account), _)) => {
+                    match account.save(&options.config).await {
+                        Ok(outcome) if outcome.diagnostics.is_empty() => {
+                            return Ok(Some(outcome.models));
+                        }
+                        Ok(outcome) => {
+                            saved_models = Some(outcome.models);
+                            message = format!(
+                                "连接已保存，模型刷新未完成：{}。按 Enter 继续。",
+                                outcome.diagnostics.join("；")
+                            );
+                        }
+                        Err(error) => message = format!("账号已连接，但配置未保存：{error:#}"),
+                    }
+                }
 
                 Ok((LoginOutcome::GoogleProjectRequired(pending), error)) => {
                     pending_project = Some(pending);
@@ -240,7 +242,9 @@ pub(super) async fn run(
             }
 
             url.clear();
-            connected = accounts::credentials(&options.auth_directory)?;
+            if saved_models.is_none() {
+                connected = accounts::credentials(&options.auth_directory)?;
+            }
         }
 
         let event = tokio::select! {
@@ -249,7 +253,7 @@ pub(super) async fn run(
                 Some(event) => event?,
                 None => {
                     abort(&mut task);
-                    return Ok(None);
+                    return Ok(saved_models.take());
                 }
             },
         };
@@ -273,6 +277,20 @@ pub(super) async fn run(
                 crate::platform::launch_browser(link).await;
                 continue;
             }
+        }
+
+        if saved_models.is_some() {
+            if let Event::Key(key) = &event
+                && key.kind != KeyEventKind::Release
+                && (matches!(key.code, KeyCode::Enter | KeyCode::Esc)
+                    || (key.code == KeyCode::Char('c')
+                        && key
+                            .modifiers
+                            .contains(KeyModifiers::CONTROL)))
+            {
+                return Ok(saved_models.take());
+            }
+            continue;
         }
 
         let mut activate = false;
@@ -347,12 +365,11 @@ pub(super) async fn run(
                 continue;
             }
 
-            let auth = options.auth_directory.clone();
             let project_id = project.trim().to_owned();
             message = "正在初始化 Google Cloud Code Assist 项目…".into();
             task = Some(AbortOnDropHandle::new(tokio::spawn(async move {
-                match accounts::finish_project(&mut pending, &project_id, &auth).await {
-                    Ok(()) => Ok((LoginOutcome::Connected, None)),
+                match pending.finish(&project_id).await {
+                    Ok(account) => Ok((LoginOutcome::Connected(account), None)),
                     Err(error) => Ok((
                         LoginOutcome::GoogleProjectRequired(pending),
                         Some(format!("项目初始化失败：{error}")),

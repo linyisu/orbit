@@ -330,8 +330,15 @@ fn anthropic_discovery_uses_advertised_capacity_vision_and_adaptive_efforts() {
 
 #[test]
 fn google_quota_models_do_not_retire_unlisted_or_exhausted_models() {
-    let mut provider = provider(ApiFormat::GoogleCodeAssist, false);
-    provider.base_url = "https://cloudcode-pa.googleapis.com".into();
+    let mut provider = crate::test_support::TestProvider::new("quota")
+        .format(ApiFormat::GoogleCodeAssist)
+        .endpoint("https://cloudcode-pa.googleapis.com")
+        .automatic()
+        .build();
+    provider.set_discovered(vec![
+        ModelProfile::new("orbit-live"),
+        ModelProfile::new("orbit-retired"),
+    ]);
     let (models, _) = normalize(
         ApiFormat::GoogleCodeAssist,
         &json!({
@@ -516,11 +523,13 @@ async fn all_api_connections_refresh_with_scoped_caches_and_independent_failures
 
     let mut reloaded = baseline.clone();
     reloaded.auth_directory = Some(directory.clone());
-    reloaded
+    let provider = reloaded
         .providers
         .get_mut("orbit-failure")
-        .unwrap()
-        .auto_refresh_models = false;
+        .unwrap();
+    let mut spec = provider.spec().clone();
+    spec.auto_refresh_models = false;
+    provider.replace_spec(spec).unwrap();
     assert!(
         refresh(&mut reloaded, false)
             .await
@@ -549,16 +558,20 @@ async fn all_api_connections_refresh_with_scoped_caches_and_independent_failures
 
     let mut rotated = baseline;
     rotated.auth_directory = Some(directory.clone());
-    rotated
+    let provider = rotated
         .providers
         .get_mut("orbit-failure")
-        .unwrap()
-        .auto_refresh_models = false;
-    rotated
+        .unwrap();
+    let mut spec = provider.spec().clone();
+    spec.auto_refresh_models = false;
+    provider.replace_spec(spec).unwrap();
+    let provider = rotated
         .providers
         .get_mut("orbit-chat")
-        .unwrap()
-        .api_key = "orbit-rotated-inline".into();
+        .unwrap();
+    let mut spec = provider.spec().clone();
+    spec.api_key = "orbit-rotated-inline".into();
+    provider.replace_spec(spec).unwrap();
     let endpoint = rotated.providers["orbit-responses"]
         .base_url
         .clone();

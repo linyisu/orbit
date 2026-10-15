@@ -37,3 +37,48 @@ pub enum AuthError {
     #[error("OAuth login timed out")]
     Timeout,
 }
+
+/// Distinguish authentication failure from an external commit that was rolled back.
+#[derive(Debug)]
+pub enum CredentialCommitError<E> {
+    Authentication(AuthError),
+    Write {
+        error: AuthError,
+        rollback: Option<AuthError>,
+    },
+    Commit {
+        error: E,
+        rollback: Option<AuthError>,
+    },
+}
+
+impl<E: std::fmt::Display> std::fmt::Display for CredentialCommitError<E> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let rollback = match self {
+            Self::Authentication(error) => return error.fmt(formatter),
+            Self::Write { error, rollback } => {
+                write!(formatter, "{error}")?;
+                rollback
+            }
+            Self::Commit { error, rollback } => {
+                write!(formatter, "{error}")?;
+                rollback
+            }
+        };
+        if let Some(error) = rollback {
+            write!(formatter, "; credential rollback failed: {error}")?;
+        }
+        Ok(())
+    }
+}
+
+impl<E: std::fmt::Debug + std::fmt::Display> std::error::Error for CredentialCommitError<E> {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Authentication(error) | Self::Write { error, .. } => Some(error),
+            Self::Commit { rollback, .. } => rollback
+                .as_ref()
+                .map(|error| error as _),
+        }
+    }
+}

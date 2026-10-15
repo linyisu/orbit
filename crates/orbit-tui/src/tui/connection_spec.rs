@@ -143,14 +143,13 @@ impl Spec {
     }
 
     pub fn label(&self) -> String {
-        self.target_identity().label()
+        self.target_identity()
+            .map(|target| target.label())
+            .unwrap_or_else(|_| "连接设置".into())
     }
 
-    pub fn target_identity(&self) -> crate::workspace::transport::Target {
-        self.args
-            .options()
-            .target()
-            .expect("connection target validated by clap or the connection form")
+    pub fn target_identity(&self) -> Result<crate::workspace::transport::Target> {
+        self.args.options().target()
     }
 
     pub fn workspace(&self) -> &str {
@@ -293,6 +292,16 @@ impl ConnectArgs {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unfinished_connection_forms_have_no_target_identity() {
+        for command in ["/ssh", "/wsl"] {
+            let spec = Spec::parse(command).unwrap();
+            assert!(spec.configure_required());
+            assert!(spec.target_identity().is_err());
+            assert_eq!(spec.label(), "连接设置");
+        }
+    }
 
     #[test]
     fn remote_commands_inherit_local_settings_without_overwriting_explicit_paths() {

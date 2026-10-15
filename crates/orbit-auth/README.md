@@ -28,7 +28,7 @@ credential = "chatgpt"
 models = ["gpt-5.6-sol"]
 ```
 
-默认凭据目录为 `$XDG_CONFIG_HOME/orbit/auth`，未设置时使用 `~/.config/orbit/auth`。Unix 目录与文件权限分别为 `0700`、`0600`，刷新通过锁和原子替换协调。
+默认凭据目录为 `$XDG_CONFIG_HOME/orbit/auth`，未设置时使用 `~/.config/orbit/auth`。Unix 目录与文件权限分别为 `0700`、`0600`，刷新通过锁和原子替换协调。API Key 与连接配置联动提交时持有凭据锁，配置写入失败会恢复旧凭据；这不承诺跨文件的崩溃原子性。
 
 ## 入口与验证
 

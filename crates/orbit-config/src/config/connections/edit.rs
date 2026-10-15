@@ -12,9 +12,9 @@ use crate::{
 #[derive(Clone)]
 pub struct ConnectionDraft {
     pub name: String,
-    pub original_name: Option<String>,
-    pub source: String,
-    pub provider: Option<ProviderConfig>,
+    original_name: Option<String>,
+    source: String,
+    provider: Option<ProviderConfig>,
     pub format: ApiFormat,
     pub endpoint: String,
     pub models: Vec<ModelProfile>,
@@ -22,6 +22,19 @@ pub struct ConnectionDraft {
 }
 
 impl ConnectionDraft {
+    pub fn original_name(&self) -> Option<&str> {
+        self.original_name.as_deref()
+    }
+
+    pub fn provider(&self) -> Option<&ProviderConfig> {
+        self.provider.as_ref()
+    }
+
+    /// Identify whether an asynchronous edit still belongs to this reviewed source.
+    pub fn same_snapshot(&self, other: &Self) -> bool {
+        self.source == other.source && self.original_name == other.original_name
+    }
+
     pub fn load(path: &Path, name: Option<&str>) -> Result<Self> {
         let source = super::read_config(path)?;
         let config: FileConfig = toml::from_str(&source)?;
@@ -244,30 +257,23 @@ pub async fn save(
     }
 
     let updated = document.to_string();
-    let parsed = FileConfig::parse(&updated, auth)?;
-    for model in parsed.model_options()? {
-        orbit_model::client::ModelClient::new(model.config)?;
-    }
+    let prepared =
+        super::PreparedConnectionChange::validate(path, draft.source.clone(), updated, auth)?;
     ensure!(
         super::read_config(path)? == draft.source,
         "配置已被其他程序修改，请返回后重新打开"
     );
 
-    let store = orbit_auth::AuthStore::new(auth.to_path_buf())?;
     if let KeyChange::Replace(secret) = key {
-        store
-            .set_api_key(&credential, secret.to_owned(), &draft.endpoint)
-            .await?;
+        return orbit_auth::AuthStore::new(auth.to_path_buf())?
+            .commit_api_key(&credential, secret.to_owned(), &draft.endpoint, || {
+                prepared.commit()
+            })
+            .await
+            .map_err(anyhow::Error::new);
     }
 
-    if let Err(error) = super::persist(path, &draft.source, &updated) {
-        if matches!(key, KeyChange::Replace(_)) {
-            store.remove(&credential).await?;
-        }
-        return Err(error);
-    }
-
-    FileConfig::load(path, auth)?.model_options()
+    prepared.commit()
 }
 
 /// Remove one connection from the reviewed snapshot. A credential shared with

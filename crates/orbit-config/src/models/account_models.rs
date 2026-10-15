@@ -241,7 +241,8 @@ fn merge_discovered_models(provider: &mut ProviderConfig, models: Vec<ModelProfi
             }
         }
     } else {
-        provider.discovered = Some(models);
+        provider.set_discovered(models);
+        return;
     }
     provider.resolve();
 }

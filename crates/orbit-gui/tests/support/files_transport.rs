@@ -92,6 +92,7 @@ fn file_transport_preserves_raw_text_and_refuses_stale_saves() {
         let Response::File(encoded) = request(
             &backend,
             Request::ReadFile {
+                allow_missing: false,
                 session: session.clone(),
                 path: "src/notes.md".into(),
             },
@@ -108,6 +109,7 @@ fn file_transport_preserves_raw_text_and_refuses_stale_saves() {
         );
         backend
             .send(Command::Request(Request::ReadFile {
+                allow_missing: false,
                 session: session.clone(),
                 path: "src/notes.md".into(),
             }))

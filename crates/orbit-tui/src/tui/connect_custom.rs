@@ -42,8 +42,7 @@ pub(super) async fn run(
     let mut endpoint = Field::text("Base URL", &draft.endpoint, "例如 http://localhost:8000/v1");
     endpoint.readonly = draft.account();
     let saved_key = draft
-        .provider
-        .as_ref()
+        .provider()
         .is_some_and(|provider| provider.credential.is_some() || !provider.api_key.is_empty());
     let mut key = Field::text(
         "API Key",

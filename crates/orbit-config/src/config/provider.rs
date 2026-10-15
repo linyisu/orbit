@@ -6,10 +6,7 @@ use orbit_model::{
     types::{ReasoningAdapter, ReasoningEffort},
 };
 use serde::{Deserialize, Serialize};
-use std::{
-    collections::BTreeMap,
-    ops::{Deref, DerefMut},
-};
+use std::{collections::BTreeMap, ops::Deref};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(untagged)]
@@ -237,9 +234,9 @@ impl ProviderSpec {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(from = "ProviderSpec")]
 pub struct ProviderConfig {
-    pub spec: ProviderSpec,
+    pub(crate) spec: ProviderSpec,
     /// Resolved projection; never serialize this into the user's configuration.
-    pub models: Vec<ModelProfile>,
+    pub(crate) models: Vec<ModelProfile>,
     pub(crate) discovered: Option<Vec<ModelProfile>>,
 }
 
@@ -247,12 +244,6 @@ impl Deref for ProviderConfig {
     type Target = ProviderSpec;
     fn deref(&self) -> &ProviderSpec {
         &self.spec
-    }
-}
-
-impl DerefMut for ProviderConfig {
-    fn deref_mut(&mut self) -> &mut ProviderSpec {
-        &mut self.spec
     }
 }
 
@@ -269,6 +260,34 @@ impl From<ProviderSpec> for ProviderConfig {
 }
 
 impl ProviderConfig {
+    pub fn spec(&self) -> &ProviderSpec {
+        &self.spec
+    }
+
+    pub fn models(&self) -> &[ModelProfile] {
+        &self.models
+    }
+
+    /// Replace declarations, discarding discoveries when their authentication or endpoint changes.
+    pub fn replace_spec(&mut self, spec: ProviderSpec) -> Result<()> {
+        spec.validate()?;
+        if self.spec.api_format != spec.api_format
+            || self.spec.base_url != spec.base_url
+            || self.spec.credential != spec.credential
+            || self.spec.api_key != spec.api_key
+        {
+            self.discovered = None;
+        }
+        self.spec = spec;
+        self.resolve();
+        Ok(())
+    }
+
+    pub(crate) fn set_discovered(&mut self, models: Vec<ModelProfile>) {
+        self.discovered = Some(models);
+        self.resolve();
+    }
+
     pub fn resolve(&mut self) {
         let base = self
             .discovered
@@ -343,5 +362,34 @@ impl Serialize for ProviderConfig {
         serializer: S,
     ) -> std::result::Result<S::Ok, S::Error> {
         self.spec.serialize(serializer)
+    }
+}
+
+#[cfg(test)]
+mod invariant_tests {
+    use super::*;
+
+    #[test]
+    fn declaration_updates_rebuild_projection_and_endpoint_changes_drop_old_discoveries() {
+        let mut provider = ProviderConfig::from(ProviderSpec::new(
+            ApiFormat::OpenaiChatCompletions,
+            "https://first.invalid/v1",
+            ModelSelection::auto(),
+        ));
+        provider.set_discovered(vec![ModelProfile::new("discovered")]);
+        let mut spec = provider.spec().clone();
+        spec.models = ModelSelection::Explicit(vec!["selected".into()]);
+        provider.replace_spec(spec).unwrap();
+        assert_eq!(provider.models()[0].id, "selected");
+        let mut spec = provider.spec().clone();
+        spec.models = ModelSelection::auto();
+        spec.base_url = "https://second.invalid/v1".into();
+        provider.replace_spec(spec).unwrap();
+        assert!(provider.models().is_empty());
+        let before = provider.spec().base_url.clone();
+        let mut invalid = provider.spec().clone();
+        invalid.models = ModelSelection::Explicit(vec![String::new()]);
+        assert!(provider.replace_spec(invalid).is_err());
+        assert_eq!(provider.spec().base_url, before);
     }
 }

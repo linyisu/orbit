@@ -22,7 +22,7 @@ pub use callback::CallbackListener;
 pub use credential::{
     AuthTarget, CredentialInfo, CredentialKind, CredentialRef, CredentialSnapshot, RequestAuth,
 };
-pub use error::{AuthError, Result};
+pub use error::{AuthError, CredentialCommitError, Result};
 pub use oauth::{CallbackFlow, LoginOutcome, OAuthLogin, OAuthProvider, PendingGoogleLogin};
 pub use store::AuthStore;
 

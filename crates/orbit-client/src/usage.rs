@@ -19,7 +19,6 @@ pub async fn fetch(connection: &Connection, session: String) -> Result<Snapshot>
         .await?
     {
         Response::Usage(snapshot) => Ok(snapshot),
-        Response::Error(error) => bail!(error),
         _ => bail!("工作区服务未返回用量信息"),
     }
 }

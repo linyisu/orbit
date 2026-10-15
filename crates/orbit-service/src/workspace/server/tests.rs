@@ -374,6 +374,7 @@ async fn sent_images_are_readable_only_through_the_owning_session() {
     let response = service
         .dispatch(
             Request::ReadFile {
+                allow_missing: false,
                 session: owner.info.id.clone(),
                 path: path.clone(),
             },
@@ -394,6 +395,7 @@ async fn sent_images_are_readable_only_through_the_owning_session() {
         service
             .dispatch(
                 Request::ReadFile {
+                    allow_missing: false,
                     session: other.info.id.clone(),
                     path,
                 },
@@ -407,4 +409,38 @@ async fn sent_images_are_readable_only_through_the_owning_session() {
         .command(session::Command::Cancel)
         .await
         .unwrap();
+}
+
+#[tokio::test]
+async fn missing_file_response_is_opt_in_and_never_masks_access_errors() {
+    let fixture = Fixture::new("http://127.0.0.1:1/v1").await;
+    let request = |path: String, allow_missing| Request::ReadFile {
+        session: fixture.handle.info.id.clone(),
+        path,
+        allow_missing,
+    };
+    assert!(matches!(
+        fixture
+            .request(request("missing-asset.bin".into(), true))
+            .await
+            .unwrap(),
+        Response::FileMissing
+    ));
+    assert!(
+        fixture
+            .request(request("missing-asset.bin".into(), false))
+            .await
+            .is_err()
+    );
+    let denied = fixture
+        ._root
+        .path()
+        .join("outside-not-found.txt");
+    fs::write(&denied, "synthetic private content").unwrap();
+    assert!(
+        fixture
+            .request(request(denied.to_string_lossy().into_owned(), true))
+            .await
+            .is_err()
+    );
 }

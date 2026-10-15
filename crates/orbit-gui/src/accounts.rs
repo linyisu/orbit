@@ -15,7 +15,10 @@ use gpui_kit::component::{
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use model_parameters::ModelParameters;
-use orbit_client::accounts::{Connection, Login, OAuthProvider, connections};
+use orbit_client::accounts::{
+    AccountIdentity, Connection, Login, LoginOutcome, OAuthProvider, PendingAccountSetup,
+    connections,
+};
 use orbit_config::ApiFormat;
 use orbit_config::config::connections::edit::{self, ConnectionDraft, KeyChange};
 use std::{path::PathBuf, sync::Arc};
@@ -35,11 +38,12 @@ pub(crate) struct Accounts {
     error: Option<String>,
     busy: bool,
     loading: bool,
-    logging_in: bool,
+    login_stage: Option<LoginStage>,
     task: Task<()>,
     operation: Option<tokio::task::JoinHandle<()>>,
     format: ApiFormat,
     project: Entity<InputState>,
+    pending_project: Option<PendingAccountSetup>,
     adding: bool,
     api_form: bool,
 }
@@ -48,13 +52,25 @@ impl EventEmitter<AccountsEvent> for Accounts {}
 
 enum AccountEvent {
     Browser(String),
+    ProjectRequired(PendingAccountSetup, Option<String>),
+    Connected(Result<Vec<Connection>, String>, Vec<String>),
     Finished(Result<Vec<Connection>, String>),
     Removed(Result<Vec<Connection>, String>, Option<String>),
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LoginStage {
+    Browser,
+    Project,
+}
+
 impl Accounts {
     pub(crate) fn has_pending_work(&self) -> bool {
-        self.busy || self.loading || self.logging_in || self.adding || self.draft.is_some()
+        self.busy
+            || self.loading
+            || self.login_stage.is_some()
+            || self.adding
+            || self.draft.is_some()
     }
 
     pub(crate) fn new(
@@ -91,12 +107,13 @@ impl Accounts {
             error,
             busy: false,
             loading: false,
-            logging_in: false,
+            login_stage: None,
             task: Task::ready(()),
             operation: None,
             format: ApiFormat::OpenaiChatCompletions,
             project: cx
                 .new(|cx| InputState::new(window, cx).placeholder("Google Cloud 项目 ID（可选）")),
+            pending_project: None,
         };
         view.load(cx);
         view
@@ -141,10 +158,49 @@ impl Accounts {
                     .update_in(cx, |view, window, cx| {
                         match event {
                             AccountEvent::Browser(url) => cx.open_url(&url),
+                            AccountEvent::ProjectRequired(pending, error) => {
+                                view.pending_project = Some(pending);
+                                view.adding = true;
+                                view.api_form = false;
+                                view.busy = false;
+                                view.login_stage = None;
+                                view.operation = None;
+                                view.error = error;
+                                view.project
+                                    .update(cx, |input, cx| input.focus(window, cx));
+                            }
+                            AccountEvent::Connected(result, diagnostics) => {
+                                view.busy = false;
+                                view.login_stage = None;
+                                view.operation = None;
+                                view.pending_project = None;
+                                if !diagnostics.is_empty() {
+                                    window.push_notification(
+                                        format!(
+                                            "连接已保存，模型刷新未完成：{}",
+                                            diagnostics.join("；")
+                                        ),
+                                        cx,
+                                    );
+                                }
+                                match result {
+                                    Ok(entries) => {
+                                        view.entries = entries;
+                                        view.adding = false;
+                                        view.api_form = false;
+                                        view.draft = None;
+                                    }
+                                    Err(error) => {
+                                        view.error =
+                                            Some(format!("连接已保存，列表加载失败：{error}"));
+                                    }
+                                }
+                                cx.emit(AccountsEvent::Changed);
+                            }
                             AccountEvent::Finished(result)
                             | AccountEvent::Removed(result, None) => {
                                 view.busy = false;
-                                view.logging_in = false;
+                                view.login_stage = None;
                                 view.operation = None;
                                 match result {
                                     Ok(entries) => {
@@ -221,7 +277,7 @@ impl Accounts {
                         }
                         view.fields[2].update(cx, |input, cx| {
                             input.set_placeholder(
-                                if draft.original_name.is_some() {
+                                if draft.original_name().is_some() {
                                     "留空以保留现有密钥"
                                 } else {
                                     "没有密钥时可留空"
@@ -236,7 +292,7 @@ impl Accounts {
                         let ix = usize::from(
                             view.draft
                                 .as_ref()
-                                .is_some_and(|draft| draft.original_name.is_some()),
+                                .is_some_and(|draft| draft.original_name().is_some()),
                         );
                         view.fields[ix].update(cx, |input, cx| input.focus(window, cx));
                     }
@@ -271,7 +327,8 @@ impl Accounts {
             .trim()
             .to_string();
         let (sender, receiver) = tokio::sync::mpsc::channel(4);
-        self.logging_in = true;
+        self.pending_project = None;
+        self.login_stage = Some(LoginStage::Browser);
         self.operation = Some(self.runtime.spawn(async move {
             let result = async {
                 let login = Login::start(
@@ -284,14 +341,19 @@ impl Accounts {
                 sender
                     .send(AccountEvent::Browser(login.url().to_owned()))
                     .await?;
-                login.finish_required(&config).await?;
-                connections(&config, &auth)
+                match login.finish().await? {
+                    LoginOutcome::Connected(account) => {
+                        saved_account_event(account, &config, &auth).await
+                    }
+                    LoginOutcome::GoogleProjectRequired(pending) => {
+                        Ok(AccountEvent::ProjectRequired(pending, None))
+                    }
+                }
             }
             .await
             .map_err(|error| format!("{error:#}"));
-            let _ = sender
-                .send(AccountEvent::Finished(result))
-                .await;
+            let event = result.unwrap_or_else(|error| AccountEvent::Finished(Err(error)));
+            let _ = sender.send(event).await;
         }));
         self.receive(receiver, cx);
     }
@@ -302,8 +364,38 @@ impl Accounts {
         }
         self.task = Task::ready(());
         self.busy = false;
-        self.logging_in = false;
+        self.login_stage = None;
+        self.pending_project = None;
         self.load(cx);
+    }
+
+    fn finish_project(&mut self, cx: &mut Context<Self>) {
+        if self.busy || self.loading {
+            return;
+        }
+        let project = self
+            .project
+            .read(cx)
+            .value()
+            .trim()
+            .to_owned();
+        let Some(mut pending) = self.pending_project.take() else {
+            return;
+        };
+        let config = self.config.clone();
+        let auth = self.auth.clone();
+        let (sender, receiver) = tokio::sync::mpsc::channel(1);
+        self.login_stage = Some(LoginStage::Project);
+        self.operation = Some(self.runtime.spawn(async move {
+            let event = match pending.finish(&project).await {
+                Ok(account) => saved_account_event(account, &config, &auth)
+                    .await
+                    .unwrap_or_else(|error| AccountEvent::Finished(Err(format!("{error:#}")))),
+                Err(error) => AccountEvent::ProjectRequired(pending, Some(format!("{error:#}"))),
+            };
+            let _ = sender.send(event).await;
+        }));
+        self.receive(receiver, cx);
     }
 
     fn parameters(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -329,8 +421,7 @@ impl Accounts {
                 return;
             }
         };
-        let source = draft.source.clone();
-        let original_name = draft.original_name.clone();
+        let snapshot = draft.clone();
         let defaults = match draft.model_defaults() {
             Ok(defaults) => defaults,
             Err(error) => {
@@ -355,7 +446,7 @@ impl Accounts {
                         let Some(draft) = view.draft.as_mut() else {
                             return false;
                         };
-                        if draft.source != source || draft.original_name != original_name {
+                        if !draft.same_snapshot(&snapshot) {
                             return false;
                         }
                         draft.models = profiles;
@@ -447,7 +538,7 @@ impl Accounts {
         let (sender, receiver) = tokio::sync::mpsc::channel(2);
         self.operation = Some(self.runtime.spawn(async move {
             let result = async {
-                let key = KeyChange::from_input(&values[2], draft.original_name.is_some());
+                let key = KeyChange::from_input(&values[2], draft.original_name().is_some());
                 edit::save(&config, &auth, &draft, key).await?;
                 connections(&config, &auth)
             }
@@ -520,6 +611,16 @@ impl Drop for Accounts {
     }
 }
 
+async fn saved_account_event(
+    account: AccountIdentity,
+    config: &std::path::Path,
+    auth: &std::path::Path,
+) -> anyhow::Result<AccountEvent> {
+    let outcome = account.save(config).await?;
+    let entries = connections(config, auth).map_err(|error| format!("{error:#}"));
+    Ok(AccountEvent::Connected(entries, outcome.diagnostics))
+}
+
 fn format_label(format: ApiFormat) -> &'static str {
     match format {
         ApiFormat::OpenaiChatCompletions => "OpenAI Chat Completions",
@@ -532,10 +633,12 @@ fn format_label(format: ApiFormat) -> &'static str {
 
 impl Render for Accounts {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let awaiting_project =
+            self.pending_project.is_some() || self.login_stage == Some(LoginStage::Project);
         let editing = self
             .draft
             .as_ref()
-            .is_some_and(|draft| draft.original_name.is_some());
+            .is_some_and(|draft| draft.original_name().is_some());
         let managed = self.oauth.is_some()
             || self
                 .draft
@@ -593,6 +696,7 @@ impl Render for Accounts {
                                 view.api_form = false;
                                 view.draft = None;
                                 view.oauth = None;
+                                view.pending_project = None;
                                 view.error = None;
                                 cx.notify();
                             })),
@@ -625,8 +729,7 @@ impl Render for Accounts {
                 let oauth = entry.oauth;
                 let credential = entry
                     .draft
-                    .provider
-                    .as_ref()
+                    .provider()
                     .and_then(|provider| provider.credential.clone());
                 content = content.child(
                     h_flex()
@@ -667,10 +770,9 @@ impl Render for Accounts {
                                             entry.draft.models.len(),
                                             if entry
                                                 .draft
-                                                .provider
-                                                .as_ref()
+                                                .provider()
                                                 .is_some_and(|provider| provider
-                                                    .spec
+                                                    .spec()
                                                     .models
                                                     .is_auto())
                                             {
@@ -726,43 +828,78 @@ impl Render for Accounts {
                     div()
                         .text_sm()
                         .text_color(cx.theme().muted_foreground)
-                        .child("选择登录方式"),
-                )
-                .child(
-                    h_flex().gap_2().flex_wrap().children(
-                        [
-                            (OAuthProvider::Antigravity, "Antigravity"),
-                            (OAuthProvider::Chatgpt, "ChatGPT"),
-                            (OAuthProvider::Google, "Gemini"),
-                            (OAuthProvider::Anthropic, "Claude"),
-                        ]
-                        .into_iter()
-                        .map(|(provider, label)| {
-                            Button::new(provider.name())
-                                .label(format!("登录 {label}"))
-                                .disabled(self.busy)
-                                .on_click(
-                                    cx.listener(move |view, _, _, cx| view.login(provider, cx)),
-                                )
+                        .child(if awaiting_project {
+                            "账号已授权，填写项目后继续连接"
+                        } else {
+                            "选择登录方式"
                         }),
-                    ),
                 )
+                .when(!awaiting_project, |view| {
+                    view.child(
+                        h_flex().gap_2().flex_wrap().children(
+                            [
+                                (OAuthProvider::Antigravity, "Antigravity"),
+                                (OAuthProvider::Chatgpt, "ChatGPT"),
+                                (OAuthProvider::Google, "Gemini"),
+                                (OAuthProvider::Anthropic, "Claude"),
+                            ]
+                            .into_iter()
+                            .map(|(provider, label)| {
+                                Button::new(provider.name())
+                                    .label(format!("登录 {label}"))
+                                    .disabled(self.busy)
+                                    .on_click(
+                                        cx.listener(move |view, _, _, cx| view.login(provider, cx)),
+                                    )
+                            }),
+                        ),
+                    )
+                })
                 .child(
                     v_flex()
                         .gap_1()
-                        .child("Google Cloud 项目 ID（可选）")
+                        .child(if awaiting_project {
+                            "Google Cloud 项目 ID"
+                        } else {
+                            "Google Cloud 项目 ID（可选）"
+                        })
                         .child(
                             Input::new(&self.project)
                                 .aria_label("Google Cloud 项目 ID")
                                 .disabled(self.busy),
                         ),
                 )
-                .child(
-                    Button::new("add-api-key")
-                        .label("使用 API Key…")
-                        .disabled(self.busy || self.loading)
-                        .on_click(cx.listener(|view, _, window, cx| view.edit(None, window, cx))),
-                );
+                .when(!awaiting_project, |view| {
+                    view.child(
+                        Button::new("add-api-key")
+                            .label("使用 API Key…")
+                            .disabled(self.busy || self.loading)
+                            .on_click(
+                                cx.listener(|view, _, window, cx| view.edit(None, window, cx)),
+                            ),
+                    )
+                })
+                .when(awaiting_project && !self.busy, |view| {
+                    view.child(
+                        h_flex()
+                            .gap_2()
+                            .child(
+                                Button::new("finish-account-project")
+                                    .primary()
+                                    .label("继续连接")
+                                    .disabled(self.busy || self.loading)
+                                    .on_click(
+                                        cx.listener(|view, _, _, cx| view.finish_project(cx)),
+                                    ),
+                            )
+                            .child(
+                                Button::new("cancel-account-project")
+                                    .label("取消")
+                                    .disabled(self.busy || self.loading)
+                                    .on_click(cx.listener(|view, _, _, cx| view.cancel_login(cx))),
+                            ),
+                    )
+                });
         } else {
             let protocol = Button::new("api-format")
                 .label(format_label(self.format))
@@ -826,12 +963,12 @@ impl Render for Accounts {
                 h_flex()
                     .gap_2()
                     .child(gpui_kit::component::spinner::Spinner::new())
-                    .child(if self.logging_in {
-                        "等待浏览器登录…"
-                    } else {
-                        "正在保存连接…"
+                    .child(match self.login_stage {
+                        Some(LoginStage::Browser) => "等待浏览器登录…",
+                        Some(LoginStage::Project) => "正在初始化项目…",
+                        None => "正在保存连接…",
                     })
-                    .when(self.logging_in, |view| {
+                    .when(self.login_stage.is_some(), |view| {
                         view.child(
                             Button::new("cancel-account-login")
                                 .small()

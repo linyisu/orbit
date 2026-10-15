@@ -111,7 +111,7 @@ impl Tab {
             .or_else(|| {
                 self.spec
                     .as_ref()
-                    .map(Spec::target_identity)
+                    .and_then(|spec| spec.target_identity().ok())
             })
     }
 

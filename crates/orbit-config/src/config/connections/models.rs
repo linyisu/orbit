@@ -139,7 +139,7 @@ pub async fn discover(
 ) -> Result<Vec<ModelProfile>> {
     draft.validate_service(key)?;
     let ids = if let KeyChange::Keep = key
-        && let Some(provider) = &draft.provider
+        && let Some(provider) = draft.provider()
     {
         if let Some(name) = &provider.credential {
             let reference = orbit_auth::CredentialRef {

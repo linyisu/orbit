@@ -10,6 +10,7 @@
 - [search.rs](src/search.rs)：选择器与补全的共用匹配规则。
 
 写操作携带会话及工作区身份，服务校验过期请求。更改协议时同步检查客户端、服务端及兼容回归。`SubmitAttachments` 统一提交或暂存文件与图片，回放和队列分别保留两类附件元数据。
+`ReadFile.allow_missing` 默认关闭；仅明确启用的请求可收到 `FileMissing`，旧客户端仍收到原有错误响应。
 
 ```sh
 cargo test -p orbit-protocol

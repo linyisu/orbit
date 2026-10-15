@@ -51,26 +51,58 @@ impl AuthStore {
     }
 
     pub async fn set_api_key(&self, name: &str, key: String, base_url: &str) -> Result<()> {
-        let endpoint = endpoint_scope(base_url)?;
-        if key.trim().is_empty() || key.len() > 16_384 || key.chars().any(char::is_control) {
-            return Err(AuthError::Configuration(
-                "API key must contain 1–16384 bytes and no control characters",
-            ));
-        }
+        self.save(name, &api_key_credential(key, base_url)?)
+            .await
+    }
 
-        let credential = Credential {
-            version: 1,
-            kind: CredentialKind::ApiKey,
-            endpoint: endpoint.to_string(),
-            access: Secret(key),
-            refresh: None,
-            expires_at: None,
-            account: None,
-            account_id: None,
-            project_id: None,
+    /// Replace a key under its lock and retain the old credential if the caller's commit fails.
+    /// The commit is synchronous so cancellation cannot interrupt the two writes. This is not
+    /// a crash-atomic transaction across the credential store and the caller's storage.
+    pub async fn commit_api_key<T, E>(
+        &self,
+        name: &str,
+        key: String,
+        base_url: &str,
+        commit: impl FnOnce() -> std::result::Result<T, E>,
+    ) -> std::result::Result<T, crate::CredentialCommitError<E>> {
+        use crate::CredentialCommitError;
+        let credential =
+            api_key_credential(key, base_url).map_err(CredentialCommitError::Authentication)?;
+        let _lock = self
+            .lock(name)
+            .await
+            .map_err(CredentialCommitError::Authentication)?;
+        let previous = match self.load(name) {
+            Ok(value) => Some(value),
+            Err(AuthError::Missing) => None,
+            Err(error) => return Err(CredentialCommitError::Authentication(error)),
         };
+        if let Err(error) = self.write(name, &credential) {
+            let rollback = self
+                .restore(name, previous.as_ref())
+                .err();
+            return Err(CredentialCommitError::Write { error, rollback });
+        }
+        match commit() {
+            Ok(value) => Ok(value),
+            Err(error) => Err(CredentialCommitError::Commit {
+                error,
+                rollback: self
+                    .restore(name, previous.as_ref())
+                    .err(),
+            }),
+        }
+    }
 
-        self.save(name, &credential).await
+    fn restore(&self, name: &str, previous: Option<&Credential>) -> Result<()> {
+        if let Some(previous) = previous {
+            return self.write(name, previous);
+        }
+        match fs::remove_file(self.path(name)) {
+            Ok(()) => self.sync_directory(),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error.into()),
+        }
     }
 
     pub async fn remove(&self, name: &str) -> Result<bool> {
@@ -275,6 +307,26 @@ impl AuthStore {
     }
 }
 
+fn api_key_credential(key: String, base_url: &str) -> Result<Credential> {
+    let endpoint = endpoint_scope(base_url)?;
+    if key.trim().is_empty() || key.len() > 16_384 || key.chars().any(char::is_control) {
+        return Err(AuthError::Configuration(
+            "API key must contain 1–16384 bytes and no control characters",
+        ));
+    }
+    Ok(Credential {
+        version: 1,
+        kind: CredentialKind::ApiKey,
+        endpoint: endpoint.to_string(),
+        access: Secret(key),
+        refresh: None,
+        expires_at: None,
+        account: None,
+        account_id: None,
+        project_id: None,
+    })
+}
+
 fn private_file(path: &Path, create: bool) -> std::io::Result<File> {
     let mut options = OpenOptions::new();
     options
@@ -430,6 +482,47 @@ mod tests {
                 .await
                 .is_err()
         );
+    }
+
+    #[tokio::test]
+    async fn failed_external_commit_restores_existing_key_and_removes_uncommitted_key() {
+        let root = tempfile::tempdir().unwrap();
+        let store = AuthStore::new(root.path().join("auth")).unwrap();
+        store
+            .set_api_key(
+                "existing",
+                "original-key".into(),
+                "https://sample.invalid/v1",
+            )
+            .await
+            .unwrap();
+        for name in ["existing", "new"] {
+            let result = store
+                .commit_api_key(
+                    name,
+                    "replacement-key".into(),
+                    "https://sample.invalid/v1",
+                    || Err::<(), _>(std::io::Error::other("synthetic commit conflict")),
+                )
+                .await;
+            assert!(matches!(
+                result,
+                Err(crate::CredentialCommitError::Commit { rollback: None, .. })
+            ));
+        }
+        assert_eq!(store.load("existing").unwrap().access.0, "original-key");
+        assert!(matches!(store.load("new"), Err(AuthError::Missing)));
+        let value = store
+            .commit_api_key(
+                "existing",
+                "committed-key".into(),
+                "https://sample.invalid/v1",
+                || Ok::<_, std::io::Error>(42),
+            )
+            .await
+            .unwrap();
+        assert_eq!(value, 42);
+        assert_eq!(store.load("existing").unwrap().access.0, "committed-key");
     }
 
     #[cfg(unix)]

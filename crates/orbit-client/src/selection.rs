@@ -227,7 +227,7 @@ mod tests {
                 .contains("default_provider")
         );
         let config = FileConfig::parse(&snapshot.content, &first.auth).unwrap();
-        assert_eq!(config.providers["one"].models[0].id, "first");
+        assert_eq!(config.providers["one"].models()[0].id, "first");
     }
 
     #[tokio::test]

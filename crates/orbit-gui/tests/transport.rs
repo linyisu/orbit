@@ -854,6 +854,7 @@ fn transport_retries_sends_and_resolves_approvals() {
         .await;
         backend
             .send(Command::Request(Request::ReadFile {
+                allow_missing: false,
                 session: session.clone(),
                 path: "README.md".into(),
             }))

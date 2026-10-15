@@ -223,7 +223,6 @@ pub async fn send(
     };
     match client.request(request).await? {
         Response::Ok | Response::InputQueued { .. } => Ok(()),
-        Response::Error(error) => bail!(error),
         _ => bail!("服务未确认发送，请检查会话状态。"),
     }
 }

@@ -53,15 +53,15 @@ impl Local {
         let mut credentials = BTreeMap::new();
         for (name, provider) in &parsed.providers {
             // Transport an explicit resolved snapshot, without changing the source file.
-            let mut snapshot = provider.spec.clone();
-            snapshot.set_models(&provider.models);
-            for model in &provider.models {
+            let mut snapshot = provider.spec().clone();
+            snapshot.set_models(provider.models());
+            for model in provider.models() {
                 if let Some(settings) = snapshot
                     .model_overrides
                     .get_mut(&model.id)
                 {
                     let requested = provider
-                        .spec
+                        .spec()
                         .model_overrides
                         .get(&model.id)
                         .and_then(|m| m.max_output_tokens)

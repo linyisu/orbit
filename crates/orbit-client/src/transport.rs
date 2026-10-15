@@ -34,6 +34,56 @@ pub enum Target {
 }
 
 impl Target {
+    /// Validate transport identity once before constructing any platform command.
+    pub fn validate(&self) -> Result<()> {
+        let user = match self {
+            Self::Local => return Ok(()),
+            Self::Ssh { host, options } => {
+                ensure!(
+                    !host.is_empty()
+                        && !host.starts_with('-')
+                        && !host
+                            .chars()
+                            .any(|c| c.is_whitespace() || c.is_control())
+                        && !host.contains("://"),
+                    "invalid SSH host"
+                );
+                ensure!(
+                    options.port != Some(0),
+                    "SSH port must be between 1 and 65535"
+                );
+                ensure!(
+                    options
+                        .identity
+                        .as_ref()
+                        .is_none_or(|path| !path.chars().any(char::is_control)),
+                    "invalid SSH identity path"
+                );
+                options.user.as_ref()
+            }
+            Self::Wsl { distribution, user } => {
+                ensure!(
+                    !distribution.is_empty()
+                        && !distribution.starts_with('-')
+                        && !distribution
+                            .chars()
+                            .any(char::is_control),
+                    "invalid WSL distribution"
+                );
+                user.as_ref()
+            }
+        };
+        ensure!(
+            user.is_none_or(|user| !user.is_empty()
+                && !user.starts_with('-')
+                && !user
+                    .chars()
+                    .any(|c| c.is_whitespace() || c.is_control())),
+            "invalid remote username"
+        );
+        Ok(())
+    }
+
     pub fn label(&self) -> String {
         match self {
             Self::Local => "本地".into(),
@@ -48,6 +98,8 @@ impl Target {
         unattended: bool,
         interactive: Option<&super::interaction::Interaction>,
     ) -> Result<Command> {
+        self.validate()?;
+        ensure!(!arguments.is_empty(), "workspace command is empty");
         let command = match self {
             Target::Local => {
                 let mut command = Command::new(&arguments[0]);
@@ -55,12 +107,6 @@ impl Target {
                 command
             }
             Target::Ssh { host, options } => {
-                ensure!(
-                    !host.is_empty()
-                        && !host.starts_with('-')
-                        && !host.contains(['\n', '\r', '\0']),
-                    "invalid SSH host"
-                );
                 let mut command = Command::new("ssh");
                 if let Some(user) = &options.user {
                     command.arg("-l").arg(user);
@@ -93,10 +139,6 @@ impl Target {
                 command
             }
             Target::Wsl { distribution, user } => {
-                ensure!(
-                    !distribution.is_empty(),
-                    "WSL distribution must not be empty"
-                );
                 let mut command = Command::new("wsl.exe");
                 command.args(["--distribution", distribution]);
                 if let Some(user) = user {
@@ -326,11 +368,40 @@ impl Connection {
                 Ok(client)
             }
             Ok(Ok(response)) => bail!("incompatible workspace server: {response:?}"),
-            Ok(Err(error)) => Err(error.context(
+            Ok(Err(error)) => Err(anyhow::Error::new(error).context(
                 "workspace connection failed; ensure Orbit is \
                 installed on the target and available through --server",
             )),
             Err(_) => bail!("workspace connection timed out"),
+        }
+    }
+}
+
+/// Remote rejections leave framing usable; transport failures require reconnecting.
+#[derive(Debug)]
+pub enum RequestError {
+    Closed,
+    Remote(String),
+    Transport(anyhow::Error),
+}
+
+impl std::fmt::Display for RequestError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Closed => formatter.write_str(
+                "workspace connection is closed; reconnect before sending another request",
+            ),
+            Self::Remote(message) => formatter.write_str(message),
+            Self::Transport(error) => write!(formatter, "{error:#}"),
+        }
+    }
+}
+
+impl std::error::Error for RequestError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Transport(error) => Some(error.as_ref()),
+            _ => None,
         }
     }
 }
@@ -350,11 +421,13 @@ impl Client {
         self.failed
     }
 
-    pub async fn request(&mut self, request: Request) -> Result<Response> {
-        ensure!(
-            !self.failed,
-            "workspace connection is closed; reconnect before sending another request"
-        );
+    pub async fn request(
+        &mut self,
+        request: Request,
+    ) -> std::result::Result<Response, RequestError> {
+        if self.failed {
+            return Err(RequestError::Closed);
+        }
         // Mark it unusable before awaiting: cancellation halfway through a frame
         // must never let the next request consume the previous response.
         self.failed = true;
@@ -367,7 +440,7 @@ impl Client {
             Ok(Ok(response)) => {
                 self.failed = false;
                 if let Response::Error(error) = response {
-                    bail!("{error}");
+                    return Err(RequestError::Remote(error));
                 }
                 Ok(response)
             }
@@ -376,7 +449,9 @@ impl Client {
                 let _ = tokio::time::timeout(Duration::from_secs(1), &mut self.drain).await;
                 let log = self.diagnostics.lock().await;
                 let diagnostic = String::from_utf8_lossy(&log);
-                bail!("workspace transport failed: {result:?}\n{diagnostic}")
+                Err(RequestError::Transport(anyhow::anyhow!(
+                    "workspace transport failed: {result:?}\n{diagnostic}"
+                )))
             }
         }
     }
@@ -404,8 +479,149 @@ fn shell_words(arguments: &[String]) -> Result<String> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+
+    const RESPONSES_PATH_ENV: &str = "ORBIT_CLIENT_TEST_RESPONSES";
+
+    pub(crate) async fn fixture_client(responses: Vec<Response>) -> Client {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("responses.json");
+        std::fs::write(&path, serde_json::to_vec(&responses).unwrap()).unwrap();
+        let mut process = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "transport::tests::response_fixture",
+                "--exact",
+                "--nocapture",
+            ])
+            .env(RESPONSES_PATH_ENV, path)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let stdin = process.stdin.take().unwrap();
+        let mut stdout = process.stdout.take().unwrap();
+        protocol::read_preamble(&mut stdout)
+            .await
+            .unwrap();
+        Client {
+            capabilities: None,
+            process,
+            stdin,
+            stdout,
+            diagnostics: Arc::new(Mutex::new(Vec::new())),
+            drain: tokio::spawn(async {}),
+            failed: false,
+        }
+    }
+
+    #[tokio::test]
+    async fn response_fixture() {
+        use tokio::io::AsyncWriteExt;
+        let Some(path) = std::env::var_os(RESPONSES_PATH_ENV) else {
+            return;
+        };
+        let responses: Vec<Response> =
+            serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        let mut stdin = tokio::io::stdin();
+        let mut stdout = tokio::io::stdout();
+        stdout
+            .write_all(protocol::PREAMBLE)
+            .await
+            .unwrap();
+        stdout.flush().await.unwrap();
+        for response in responses {
+            let _: Request = protocol::read(&mut stdin)
+                .await
+                .unwrap();
+            protocol::write(&mut stdout, &response)
+                .await
+                .unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn remote_rejections_preserve_transport_and_disconnection_is_typed() {
+        let mut client = fixture_client(vec![
+            Response::Error("synthetic denial".into()),
+            Response::FileMissing,
+        ])
+        .await;
+        let request = || Request::ReadFile {
+            session: "sample".into(),
+            path: "absent.txt".into(),
+            allow_missing: true,
+        };
+        assert!(matches!(
+            client.request(request()).await,
+            Err(RequestError::Remote(message)) if message == "synthetic denial"
+        ));
+        assert!(!client.failed());
+        assert!(matches!(
+            client.request(request()).await.unwrap(),
+            Response::FileMissing
+        ));
+        assert!(matches!(
+            client.request(request()).await,
+            Err(RequestError::Transport(_))
+        ));
+        assert!(client.failed());
+        assert!(matches!(
+            client.request(request()).await,
+            Err(RequestError::Closed)
+        ));
+    }
+
+    #[test]
+    fn switching_targets_clears_inapplicable_fields_and_rejects_incomplete_options() {
+        let mut options = crate::ConnectionOptions::local("workspace".into());
+        options.ssh_port = Some(2222);
+        assert!(options.target().is_err());
+        options
+            .set_target(Target::Ssh {
+                host: "sample-host".into(),
+                options: SshOptions {
+                    user: Some("builder".into()),
+                    port: Some(2222),
+                    identity: Some("sample-key".into()),
+                },
+            })
+            .unwrap();
+        options
+            .set_target(Target::Wsl {
+                distribution: "Sample Linux".into(),
+                user: Some("developer".into()),
+            })
+            .unwrap();
+        assert!(
+            options.ssh.is_none()
+                && options.ssh_user.is_none()
+                && options.ssh_port.is_none()
+                && options.identity.is_none()
+        );
+        assert!(matches!(options.target().unwrap(), Target::Wsl { .. }));
+        options
+            .set_target(Target::Local)
+            .unwrap();
+        assert!(options.wsl.is_none() && options.wsl_user.is_none());
+        assert!(
+            Target::Ssh {
+                host: "sample-host".into(),
+                options: SshOptions {
+                    port: Some(0),
+                    ..Default::default()
+                }
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            Target::Local
+                .command(&[], false, None)
+                .is_err()
+        );
+    }
 
     fn connection(target: Target) -> Connection {
         Connection {

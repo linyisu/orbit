@@ -221,6 +221,7 @@ pub async fn observe(
                                     configuration: Some(configuration),
                                 })
                                 .await
+                                .map_err(anyhow::Error::new)
                         }
                         .await;
                         match result {
@@ -239,6 +240,7 @@ pub async fn observe(
                             .request(Request::ReadFile {
                                 session: session.clone(),
                                 path: path.clone(),
+                                allow_missing: false,
                             })
                             .await
                         {
@@ -247,7 +249,7 @@ pub async fn observe(
                                     .decode(content)
                                     .map_err(|error| error.to_string())
                             }
-                            Ok(Response::Error(error)) => Err(error),
+
                             Err(error) => Err(format!("{error:#}")),
                             _ => Err("无法读取图片".into()),
                         };
@@ -289,7 +291,6 @@ pub async fn observe(
                             .await
                         {
                             Ok(Response::Tasks(tasks)) => Ok(tasks),
-                            Ok(Response::Error(error)) => Err(error),
                             Ok(_) => Err("服务没有返回任务数据，请更新工作区服务后重试。".into()),
                             Err(error) => Err(format!("{error:#}")),
                         };
@@ -309,7 +310,6 @@ pub async fn observe(
                                         .await
                                         .map_err(|error| format!("{error:#}"))?;
                                     match client.request(request).await {
-                                        Ok(Response::Error(error)) => Err(error),
                                         Ok(response) => Ok(response),
                                         Err(error) => Err(format!("{error:#}")),
                                     }
@@ -324,7 +324,6 @@ pub async fn observe(
                             _ => None,
                         };
                         let response = match client.request(request).await {
-                            Ok(Response::Error(error)) => Err(error),
                             Ok(mut response) => {
                                 if let Some(session) = queue_session {
                                     queue_attachments::localize(
@@ -490,9 +489,9 @@ pub async fn observe(
                             agent: agent.clone(),
                             after,
                         })
-                        .await?
+                        .await
                     {
-                        Response::Subagent(page) => {
+                        Ok(Response::Subagent(page)) => {
                             subagent = Some((agent.clone(), page.next));
                             if !page.updates.is_empty() {
                                 events
@@ -504,10 +503,11 @@ pub async fn observe(
                                     .await?;
                             }
                         }
-                        Response::Error(error) => {
+                        Err(crate::transport::RequestError::Remote(error)) => {
                             subagent = None;
                             events.send(Event::Error(error)).await?;
                         }
+                        Err(error) => return Err(error.into()),
                         _ => {}
                     }
                 }

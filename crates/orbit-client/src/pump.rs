@@ -75,11 +75,14 @@ pub async fn pump(
         let response = client.request(call.request).await;
         let response = match response {
             Ok(response) => response,
-            Err(error) if client.failed() => {
+            Err(
+                error @ (crate::transport::RequestError::Closed
+                | crate::transport::RequestError::Transport(_)),
+            ) => {
                 if let Some(reply) = call.reply {
                     let _ = reply.send(Err(anyhow::anyhow!(error.to_string())));
                 }
-                let _ = responses.send(Err(error)).await;
+                let _ = responses.send(Err(error.into())).await;
                 break;
             }
             Err(error) => Response::Error(format!("{error:#}")),

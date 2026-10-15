@@ -88,18 +88,20 @@ impl RemoteDraft {
             "服务程序使用目标机器上的绝对路径，或 PATH 中的命令名"
         );
         let mut options = super::ConnectionOptions::local(path.into());
-        options.ssh = (self.mode == RemoteKind::Ssh).then(|| target.into());
-        options.ssh_user = (self.mode == RemoteKind::Ssh)
-            .then_some(user.clone())
-            .flatten();
-        options.ssh_port = port;
-        options.identity = (self.mode == RemoteKind::Ssh)
-            .then(|| optional(&self.identity))
-            .flatten();
-        options.wsl = (self.mode == RemoteKind::Wsl).then(|| target.into());
-        options.wsl_user = (self.mode == RemoteKind::Wsl)
-            .then_some(user)
-            .flatten();
+        options.set_target(match self.mode {
+            RemoteKind::Ssh => super::transport::Target::Ssh {
+                host: target.into(),
+                options: super::transport::SshOptions {
+                    user,
+                    port,
+                    identity: optional(&self.identity),
+                },
+            },
+            RemoteKind::Wsl => super::transport::Target::Wsl {
+                distribution: target.into(),
+                user,
+            },
+        })?;
 
         options.server = optional(&self.server);
         let database = optional(&self.database).map(std::path::PathBuf::from);
@@ -155,7 +157,6 @@ pub async fn open_session(
         .await?
     {
         Response::Opened(info) => Ok(info),
-        Response::Error(error) => anyhow::bail!(error),
         _ => anyhow::bail!("unexpected workspace response"),
     }
 }

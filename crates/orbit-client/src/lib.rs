@@ -54,7 +54,16 @@ pub struct ConnectionOptions {
 impl ConnectionOptions {
     /// Resolve exactly one workspace transport, rejecting contradictory target options.
     pub fn target(&self) -> Result<Target> {
-        Ok(match (self.ssh.clone(), self.wsl.clone()) {
+        anyhow::ensure!(
+            self.ssh.is_some()
+                || (self.ssh_user.is_none() && self.ssh_port.is_none() && self.identity.is_none()),
+            "SSH options require an SSH target"
+        );
+        anyhow::ensure!(
+            self.wsl.is_some() || self.wsl_user.is_none(),
+            "WSL user requires a WSL target"
+        );
+        let target = match (self.ssh.clone(), self.wsl.clone()) {
             (Some(host), None) => Target::Ssh {
                 host,
                 options: transport::SshOptions {
@@ -69,7 +78,34 @@ impl ConnectionOptions {
             },
             (None, None) => Target::Local,
             _ => bail!("choose one workspace target"),
-        })
+        };
+        target.validate()?;
+        Ok(target)
+    }
+
+    /// Replace the transport as one unit, dropping fields that belong to the previous target.
+    pub fn set_target(&mut self, target: Target) -> Result<()> {
+        target.validate()?;
+        self.ssh = None;
+        self.ssh_user = None;
+        self.ssh_port = None;
+        self.identity = None;
+        self.wsl = None;
+        self.wsl_user = None;
+        match target {
+            Target::Local => {}
+            Target::Ssh { host, options } => {
+                self.ssh = Some(host);
+                self.ssh_user = options.user;
+                self.ssh_port = options.port;
+                self.identity = options.identity;
+            }
+            Target::Wsl { distribution, user } => {
+                self.wsl = Some(distribution);
+                self.wsl_user = user;
+            }
+        }
+        Ok(())
     }
 
     pub fn local(workspace: String) -> Self {
@@ -96,6 +132,10 @@ pub async fn prepare_connection(
     progress: Option<interaction::Progress>,
 ) -> Result<Arc<Connection>> {
     let target = args.target()?;
+    anyhow::ensure!(
+        args.server.is_none() || args.upload_server.is_none(),
+        "choose a server command or an uploaded server, not both"
+    );
     let unattended = progress.is_some();
     let interactive = if matches!(target, Target::Ssh { .. }) {
         match &progress {
@@ -197,6 +237,7 @@ impl Files {
                 request: Request::ReadFile {
                     session: self.session.clone(),
                     path: path.into(),
+                    allow_missing: false,
                 },
                 reply: Some(reply),
             })

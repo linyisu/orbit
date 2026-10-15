@@ -520,3 +520,110 @@ async fn stale_draft_cannot_overwrite_config_or_create_credentials() {
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "# changed\n");
     assert!(!auth.exists());
 }
+
+#[tokio::test]
+async fn invalid_configuration_does_not_replace_official_api_key() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("config.toml");
+    let auth = root.path().join("auth");
+    let provider = orbit_auth::ApiKeyProvider::Deepseek;
+    let store = orbit_auth::AuthStore::new(&auth).unwrap();
+    store
+        .set_api_key(
+            provider.name(),
+            "original-fixture-key".into(),
+            provider.base_url(),
+        )
+        .await
+        .unwrap();
+    std::fs::write(&path, "[invalid").unwrap();
+    assert!(
+        save_api_key(
+            &path,
+            &auth,
+            provider,
+            "replacement-fixture-key".into(),
+            vec!["fixture-model".into()]
+        )
+        .await
+        .is_err()
+    );
+    let auth = store
+        .resolve(
+            provider.name(),
+            &url::Url::parse(provider.base_url()).unwrap(),
+            orbit_auth::AuthTarget::Openai,
+        )
+        .await
+        .unwrap();
+    assert_eq!(auth.headers["authorization"], "Bearer original-fixture-key");
+}
+
+#[tokio::test]
+async fn stale_prepared_change_rolls_back_key_and_preserves_new_configuration() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("config.toml");
+    let auth = root.path().join("auth");
+    let provider = orbit_auth::ApiKeyProvider::Deepseek;
+    let mut spec = ProviderSpec::new(
+        ApiFormat::OpenaiChatCompletions,
+        provider.base_url(),
+        ModelSelection::Explicit(vec!["fixture-model".into()]),
+    );
+    spec.credential = Some(provider.name().into());
+    let prepared = prepare_account(&path, &auth, provider.name(), &spec).unwrap();
+    let store = orbit_auth::AuthStore::new(&auth).unwrap();
+    store
+        .set_api_key(
+            provider.name(),
+            "old-fixture-key".into(),
+            provider.base_url(),
+        )
+        .await
+        .unwrap();
+    std::fs::write(&path, "# concurrent edit\n[providers]\n").unwrap();
+    let result = store
+        .commit_api_key(
+            provider.name(),
+            "new-fixture-key".into(),
+            provider.base_url(),
+            || prepared.commit(),
+        )
+        .await;
+    assert!(matches!(
+        result,
+        Err(orbit_auth::CredentialCommitError::Commit { rollback: None, .. })
+    ));
+    assert!(
+        std::fs::read_to_string(&path)
+            .unwrap()
+            .starts_with("# concurrent edit")
+    );
+    let auth = store
+        .resolve(
+            provider.name(),
+            &url::Url::parse(provider.base_url()).unwrap(),
+            orbit_auth::AuthTarget::Openai,
+        )
+        .await
+        .unwrap();
+    assert_eq!(auth.headers["authorization"], "Bearer old-fixture-key");
+}
+
+#[tokio::test]
+async fn committed_configuration_survives_followup_catalog_read_failure() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("config.toml");
+    let auth = root.path().join("auth");
+    let spec = ProviderSpec::new(
+        ApiFormat::OpenaiChatCompletions,
+        "https://sample.invalid/v1",
+        ModelSelection::Explicit(vec!["fixture-model".into()]),
+    );
+    let models = save_provider(&path, &auth, "sample", &spec).unwrap();
+    let saved = std::fs::read_to_string(&path).unwrap();
+    let outcome = refresh_saved(&root.path().join("missing.toml"), &auth, models).await;
+    assert_eq!(outcome.models[0].model, "fixture-model");
+    assert!(!outcome.diagnostics.is_empty());
+    assert_eq!(std::fs::read_to_string(path).unwrap(), saved);
+}

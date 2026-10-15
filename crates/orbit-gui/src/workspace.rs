@@ -217,6 +217,7 @@ impl Workspace {
                         view.command(
                             Command::Settings {
                                 request: Request::ReadFile {
+                                    allow_missing: false,
                                     session: info.id.clone(),
                                     path: request.path().to_owned(),
                                 },

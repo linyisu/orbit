@@ -43,6 +43,7 @@ impl Tab {
                             .await?
                             .request(request)
                             .await
+                            .map_err(anyhow::Error::from)
                     }
                     .await;
                     let _ = reply.send(result);

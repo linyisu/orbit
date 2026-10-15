@@ -233,6 +233,9 @@ pub enum Request {
     ReadFile {
         session: String,
         path: String,
+        /// Opt in to FileMissing for absent files; omitted by older peers.
+        #[serde(default)]
+        allow_missing: bool,
     },
     ReadSubagent {
         session: String,
@@ -432,6 +435,8 @@ pub enum Response<E, A> {
     InputQueue(input_queue::Snapshot),
     Files(files::Snapshot),
     File(String),
+    /// Sent only in response to ReadFile with allow_missing set.
+    FileMissing,
     InputQueued {
         message_id: i64,
     },
@@ -807,5 +812,38 @@ mod mode_tests {
             assert_eq!(Mode::parse(text), Some(mode));
         }
         assert_eq!(Mode::parse("unknown"), None);
+    }
+}
+
+#[cfg(test)]
+mod file_request_compatibility_tests {
+    use super::*;
+
+    #[test]
+    fn legacy_file_read_does_not_opt_into_new_responses() {
+        let legacy =
+            serde_json::json!({"method": "read_file", "session": "fixture", "path": "notes.txt"});
+        assert!(matches!(
+            serde_json::from_value::<Request>(legacy).unwrap(),
+            Request::ReadFile {
+                allow_missing: false,
+                ..
+            }
+        ));
+        let request = Request::ReadFile {
+            session: "fixture".into(),
+            path: "notes.txt".into(),
+            allow_missing: true,
+        };
+        assert_eq!(
+            serde_json::to_value(request).unwrap()["allow_missing"],
+            true
+        );
+        let response: Response<(), ()> = Response::FileMissing;
+        assert!(matches!(
+            serde_json::from_value::<Response<(), ()>>(serde_json::to_value(response).unwrap())
+                .unwrap(),
+            Response::FileMissing
+        ));
     }
 }

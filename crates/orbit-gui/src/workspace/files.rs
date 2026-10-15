@@ -479,6 +479,7 @@ impl Files {
     fn read(&mut self, path: String, cx: &mut Context<Self>) {
         self.request(
             Request::ReadFile {
+                allow_missing: false,
                 session: self.session.clone(),
                 path: path.clone(),
             },
@@ -492,6 +493,7 @@ impl Files {
             let path = document.path.clone();
             self.request(
                 Request::ReadFile {
+                    allow_missing: false,
                     session: self.session.clone(),
                     path: path.clone(),
                 },

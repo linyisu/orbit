@@ -342,6 +342,7 @@ impl State {
         self.pending = Some(Pending::Read { path: path.clone() });
         self.message = None;
         Request::ReadFile {
+            allow_missing: false,
             session: self.session.clone(),
             path,
         }
@@ -409,6 +410,7 @@ impl State {
             return Action::None;
         };
         let request = Request::ReadFile {
+            allow_missing: false,
             session: self.session.clone(),
             path: document.path.clone(),
         };

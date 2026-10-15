@@ -981,7 +981,11 @@ impl Service {
                     .await?;
                 Ok(Response::Ok)
             }
-            Request::ReadFile { session, path } => {
+            Request::ReadFile {
+                session,
+                path,
+                allow_missing,
+            } => {
                 let session = self.session(&session).await?;
                 let attachment = session.has_image(&path).await;
                 let bytes = tokio::task::spawn_blocking(move || -> Result<Vec<u8>> {
@@ -1006,7 +1010,23 @@ impl Service {
                     );
                     Ok(bytes)
                 })
-                .await??;
+                .await?;
+                let bytes = match bytes {
+                    Ok(bytes) => bytes,
+                    Err(error)
+                        if allow_missing
+                            && error.chain().any(|cause| {
+                                cause
+                                    .downcast_ref::<std::io::Error>()
+                                    .is_some_and(|error| {
+                                        error.kind() == std::io::ErrorKind::NotFound
+                                    })
+                            }) =>
+                    {
+                        return Ok(Response::FileMissing);
+                    }
+                    Err(error) => return Err(error),
+                };
                 Ok(Response::File(
                     base64::engine::general_purpose::STANDARD.encode(bytes),
                 ))

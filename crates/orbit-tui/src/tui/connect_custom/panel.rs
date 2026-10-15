@@ -80,8 +80,7 @@ impl Panel {
         let mut panel = Self {
             saved_auth: draft.account()
                 || draft
-                    .provider
-                    .as_ref()
+                    .provider()
                     .is_some_and(|provider| {
                         provider.credential.is_some() || !provider.api_key.is_empty()
                     }),
