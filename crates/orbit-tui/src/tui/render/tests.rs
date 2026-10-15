@@ -432,6 +432,42 @@ fn composer_metadata_is_below_input_without_a_background_or_sidebar() {
 }
 
 #[test]
+fn short_tabs_fit_their_titles_while_long_tabs_are_capped() {
+    let mut state = UiState::new("synthetic-model");
+    state.tabs = [
+        "Draft",
+        "短签",
+        "A deliberately lengthy independent session title",
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(index, title)| SessionTab {
+        id: format!("generated-{index}"),
+        title: title.into(),
+        active: index == 2,
+        status: RunStatus::Idle,
+        waiting_approval: false,
+        elapsed: std::time::Duration::ZERO,
+    })
+    .collect();
+    state
+        .transcript
+        .push(TranscriptItem::User("Generated prompt".into()));
+    let mut terminal = Terminal::new(TestBackend::new(100, 20)).unwrap();
+    terminal
+        .draw(|frame| draw(frame, &mut state))
+        .unwrap();
+    assert_eq!(
+        state
+            .tab_areas
+            .iter()
+            .map(|(area, _)| area.width)
+            .collect::<Vec<_>>(),
+        [10, 9, MAX_SESSION_TAB_WIDTH_COLUMNS as u16]
+    );
+}
+
+#[test]
 fn selected_tab_remains_visible_and_clickable_at_narrow_width() {
     use crate::tui::{TabAction, tab_target};
     use crossterm::event::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
@@ -469,7 +505,10 @@ fn selected_tab_remains_visible_and_clickable_at_narrow_width() {
             state
                 .tab_areas
                 .windows(2)
-                .all(|tabs| tabs[0].0.width == tabs[1].0.width)
+                .all(
+                    |tabs| tabs[0].0.width <= MAX_SESSION_TAB_WIDTH_COLUMNS as u16
+                        && tabs[1].0.width <= MAX_SESSION_TAB_WIDTH_COLUMNS as u16
+                )
         );
         let click = |x, y| {
             Event::Mouse(MouseEvent {

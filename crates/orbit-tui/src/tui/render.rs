@@ -52,7 +52,7 @@ const MUTED: Color = Color::Reset;
 // visually centered in a single terminal cell, with equal space above/below.
 const TAB_SPINNER_FRAMES: [&str; 4] = ["⠖", "⠲", "⠴", "⠦"];
 const TAB_SPINNER_FRAME_INTERVAL: std::time::Duration = std::time::Duration::from_millis(200);
-const SESSION_TAB_WIDTH: usize = 22;
+const MAX_SESSION_TAB_WIDTH_COLUMNS: usize = 22;
 pub(super) const MAX_COMPLETION_ITEMS: usize = 8;
 
 /// Notices paint after selection snapshots, including a frozen transcript.
@@ -837,10 +837,41 @@ fn draw_header(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
         .position(|tab| tab.active)
         .unwrap_or(0);
     let budget = area.width.saturating_sub(8) as usize;
-    let tab_width = SESSION_TAB_WIDTH.min(budget);
+    let prefixes = state
+        .tabs
+        .iter()
+        .map(|tab| {
+            let running = (tab.active && state.status == RunStatus::Running)
+                || tab.status == RunStatus::Running;
+            if tab.waiting_approval {
+                "待审批 ".to_owned()
+            } else if running {
+                let index = (tab.elapsed.as_millis() / TAB_SPINNER_FRAME_INTERVAL.as_millis())
+                    as usize
+                    % TAB_SPINNER_FRAMES.len();
+                format!("{} ", TAB_SPINNER_FRAMES[index])
+            } else {
+                String::new()
+            }
+        })
+        .collect::<Vec<_>>();
+    let widths = titles
+        .iter()
+        .zip(&prefixes)
+        .map(|(title, prefix)| {
+            (title.width() + prefix.width() + 5)
+                .min(MAX_SESSION_TAB_WIDTH_COLUMNS)
+                .min(budget)
+        })
+        .collect::<Vec<_>>();
     let mut start = 0;
-
-    while start < active_index && (active_index - start + 1) * (tab_width + 1) > budget {
+    while start < active_index
+        && widths[start..=active_index]
+            .iter()
+            .map(|width| width + 1)
+            .sum::<usize>()
+            > budget
+    {
         start += 1;
     }
 
@@ -854,22 +885,13 @@ fn draw_header(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
     {
         let available = area.right().saturating_sub(x + 5) as usize;
 
+        let tab_width = widths[index];
         if tab_width < 6 || available < tab_width {
             break;
         }
 
         let width = tab_width as u16;
-        let is_running =
-            (tab.active && state.status == RunStatus::Running) || tab.status == RunStatus::Running;
-        let spinner_prefix = if tab.waiting_approval {
-            "待审批 ".into()
-        } else if is_running {
-            let idx = (tab.elapsed.as_millis() / TAB_SPINNER_FRAME_INTERVAL.as_millis()) as usize
-                % TAB_SPINNER_FRAMES.len();
-            format!("{} ", TAB_SPINNER_FRAMES[idx])
-        } else {
-            String::new()
-        };
+        let spinner_prefix = &prefixes[index];
         let title_width = width.saturating_sub(5 + spinner_prefix.width() as u16) as usize;
         let elapsed = state
             .tab_hover
