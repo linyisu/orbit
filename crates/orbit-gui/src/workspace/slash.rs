@@ -3,6 +3,7 @@ use super::{actions::WorkspaceCommand as Command, *};
 use gpui_kit::component::{
     IndexPath,
     command::{Command as CommandList, CommandItem},
+    input::RopeExt,
 };
 
 #[derive(Clone, Copy)]
@@ -516,7 +517,10 @@ impl Workspace {
             self.arguments.dismissed = (!entry.continue_input).then(|| value.clone());
             self.input.update(cx, |input, cx| {
                 input.set_value(value.clone(), window, cx);
-                input.focus(window, cx);
+                let end = input
+                    .text()
+                    .offset_to_position(input.text().len());
+                input.set_cursor_position(end, window, cx);
             });
             self.update_completions(&value, window, cx);
             cx.notify();
@@ -539,7 +543,10 @@ impl Workspace {
                 window,
                 cx,
             );
-            input.focus(window, cx);
+            let end = input
+                .text()
+                .offset_to_position(input.text().len());
+            input.set_cursor_position(end, window, cx);
         });
         match entry.action {
             Action::Workspace(action) => self.execute(action, window, cx),
