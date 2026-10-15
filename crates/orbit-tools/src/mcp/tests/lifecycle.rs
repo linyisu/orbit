@@ -92,7 +92,10 @@ async fn timeout_cancels_reaps_and_reconnects_without_replaying() {
         .call_tool("work", json!({}), CancellationToken::new())
         .await
         .unwrap();
-    assert_eq!(result["connection_restarted"], true);
+    assert_eq!(
+        serde_json::from_str::<Value>(&result.content).unwrap()["connection_restarted"],
+        true
+    );
     assert_eq!(
         std::fs::read_to_string(directory.path().join("starts")).unwrap(),
         "2"
@@ -103,6 +106,58 @@ async fn timeout_cancels_reaps_and_reconnects_without_replaying() {
             .filter(|message| message["method"] == "tools/call")
             .count(),
         2
+    );
+}
+
+#[tokio::test]
+async fn registered_tool_preserves_business_failure_without_restarting_the_peer() {
+    use orbit_agent::tool::ToolOutcome;
+
+    let directory = tempfile::tempdir().unwrap();
+    let (approvals, mut receiver) = crate::approval::channel();
+    let approval = tokio::spawn(async move {
+        for _ in 0..2 {
+            receiver
+                .recv()
+                .await
+                .unwrap()
+                .decision
+                .send(true)
+                .unwrap();
+        }
+    });
+    let mut registry = ToolRegistry::new();
+    let statuses = register(
+        &mut registry,
+        &McpConfig {
+            servers: BTreeMap::from([("synthetic".into(), config("tool_error"))]),
+        },
+        directory.path(),
+        Some(approvals),
+        true,
+    )
+    .await;
+    assert!(statuses[0].connected);
+    for (index, expected) in [ToolOutcome::Failed, ToolOutcome::Completed]
+        .into_iter()
+        .enumerate()
+    {
+        let output = registry
+            .execute(
+                ToolCall::function(format!("call-{index}"), "mcp__synthetic__work", json!({})),
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(output.outcome, expected);
+        let content: Value = serde_json::from_str(&output.content).unwrap();
+        assert_eq!(content["is_error"], index == 0);
+        assert_eq!(content["connection_restarted"], false);
+    }
+    approval.await.unwrap();
+    assert_eq!(
+        std::fs::read_to_string(directory.path().join("starts")).unwrap(),
+        "1"
     );
 }
 
@@ -121,14 +176,17 @@ async fn server_errors_do_not_destroy_a_healthy_connection() {
                     .contains("busy")
             );
         } else {
-            assert_eq!(result.unwrap()["is_error"], true);
+            assert_eq!(result.unwrap().outcome, ToolOutcome::Failed);
         }
         assert!(!client.poisoned);
         let result = client
             .call_tool("work", json!({}), CancellationToken::new())
             .await
             .unwrap();
-        assert_eq!(result["connection_restarted"], false);
+        assert_eq!(
+            serde_json::from_str::<Value>(&result.content).unwrap()["connection_restarted"],
+            false
+        );
         assert_eq!(
             std::fs::read_to_string(directory.path().join("starts")).unwrap(),
             "1"
@@ -152,7 +210,10 @@ async fn broken_frames_and_eof_recover_on_a_fresh_transport() {
             .call_tool("work", json!({}), CancellationToken::new())
             .await
             .unwrap();
-        assert_eq!(result["connection_restarted"], true);
+        assert_eq!(
+            serde_json::from_str::<Value>(&result.content).unwrap()["connection_restarted"],
+            true
+        );
         assert!(client.pending_line.is_empty());
     }
 }

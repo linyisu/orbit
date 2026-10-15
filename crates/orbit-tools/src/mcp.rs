@@ -8,7 +8,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
-use orbit_agent::tool::{Tool, ToolError, ToolFuture, ToolOutput, ToolRegistry};
+use orbit_agent::tool::{Tool, ToolError, ToolFuture, ToolOutcome, ToolOutput, ToolRegistry};
 use orbit_model::types::{ToolCall, ToolDefinition};
 use orbit_runtime::execution::process::ProcessGroup;
 use serde::Deserialize;
@@ -316,7 +316,7 @@ impl Tool for McpTool {
                     }
                 })?;
 
-            Ok(ToolOutput::text(result.to_string()))
+            Ok(result)
         })
     }
 }
@@ -469,7 +469,7 @@ impl StdioClient {
         name: &str,
         arguments: Value,
         cancellation: CancellationToken,
-    ) -> Result<Value> {
+    ) -> Result<ToolOutput> {
         if cancellation.is_cancelled() {
             bail!("cancelled");
         }
@@ -507,15 +507,23 @@ impl StdioClient {
             .cloned()
             .unwrap_or_else(|| json!([]));
 
-        Ok(json!({
+        let failed = result
+            .get("isError")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        let content = json!({
             "server_result": content,
-            "is_error": result
-                .get("isError")
-                .and_then(Value::as_bool)
-                .unwrap_or(false),
+            "is_error": failed,
             "source_kind": "untrusted_mcp_tool_result",
             "connection_restarted": reconnected
-        }))
+        });
+        Ok(
+            ToolOutput::text(content.to_string()).with_outcome(if failed {
+                ToolOutcome::Failed
+            } else {
+                ToolOutcome::Completed
+            }),
+        )
     }
 
     async fn notify(&mut self, method: &str, params: Value) -> Result<()> {
