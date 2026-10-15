@@ -168,14 +168,16 @@ fn draw_contents(frame: &mut Frame<'_>, state: &mut UiState) {
         state.is_home() && !state.tabs.is_empty() && state.approval.is_none() && area.height >= 18;
     let content_width = if home { area.width.min(86) } else { area.width };
 
-    let width = content_width.saturating_sub(6) as usize;
+    let controls_width = super::navigation::controls_width(state);
+    let width = content_width.saturating_sub(6 + controls_width) as usize;
     state.input_width = width;
     let (input_lines, cursor) = state.input.visual_lines(width);
     let input_height = input_lines
         .len()
         .clamp(1, 6)
         .min(area.height.saturating_sub(8) as usize) as u16;
-    let thumbnails = super::attachments::thumbnails(state, content_width.saturating_sub(4));
+    let thumbnails =
+        super::attachments::thumbnails(state, content_width.saturating_sub(4 + controls_width));
     let attachment_height =
         (thumbnails.rows.len() as u16).saturating_add(u16::from(!thumbnails.rows.is_empty()));
     let details_height = composer_details(state, width).len() as u16;
@@ -323,6 +325,7 @@ fn draw_contents(frame: &mut Frame<'_>, state: &mut UiState) {
     }
     draw_panel(frame, state, areas[3]);
     draw_composer(frame, state, areas[4], input_lines, cursor, thumbnails);
+    super::navigation::draw_controls(frame, state, areas[4]);
     draw_status(frame, state, areas[5]);
     let footer = footer_layout(state, areas[6].width as usize);
     state.context_details_visible = footer.context_details_visible;
@@ -1552,7 +1555,9 @@ fn draw_composer(
 ) {
     let area = Rect {
         x: area.x + 2,
-        width: area.width.saturating_sub(4),
+        width: area
+            .width
+            .saturating_sub(4 + super::navigation::controls_width(state)),
         ..area
     };
     let block = Block::default()

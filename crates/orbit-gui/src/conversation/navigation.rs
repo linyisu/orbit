@@ -1,6 +1,6 @@
 //! User-turn navigation; the message scroller remains the scroll owner.
 use gpui_kit::component::{
-    ActiveTheme, Disableable, Sizable,
+    ActiveTheme, Sizable,
     button::{Button, ButtonVariants},
     message_scroller::MessageScrollerState,
     scroll::Scrollbar,
@@ -329,23 +329,24 @@ impl Render for Controls {
                             });
                     })),
             )
-            .child(
-                Button::new("latest-round")
-                    .flex_shrink_0()
-                    .ghost()
-                    .small()
-                    .icon(gpui_kit::assets::IconName::ArrowDown)
-                    .tooltip("回到最新消息 · End")
-                    .accessibility_label("回到最新消息")
-                    .disabled(!scrolled_up)
-                    .on_click(cx.listener(|view, _, window, cx| {
-                        view.navigation
-                            .update(cx, |navigation, cx| {
-                                window.focus(&navigation.focus, cx);
-                                navigation.latest(cx);
-                            });
-                    })),
-            )
+            .when(scrolled_up, |view| {
+                view.child(
+                    Button::new("latest-round")
+                        .flex_shrink_0()
+                        .ghost()
+                        .small()
+                        .icon(gpui_kit::assets::IconName::ArrowDown)
+                        .tooltip("回到最新消息 · End")
+                        .accessibility_label("回到最新消息")
+                        .on_click(cx.listener(|view, _, window, cx| {
+                            view.navigation
+                                .update(cx, |navigation, cx| {
+                                    window.focus(&navigation.focus, cx);
+                                    navigation.latest(cx);
+                                });
+                        })),
+                )
+            })
             .into_any_element()
     }
 }

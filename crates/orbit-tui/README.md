@@ -23,6 +23,8 @@ cargo run --release -p orbit-tui --locked
 | 任务与扩展 | `/tasks`、`/queue`、`/skills`、`/mcp`、`/plugins` |
 | 快捷键与历史 | `/keys`；Ctrl+Up / Ctrl+Down 浏览输入历史 |
 
+标签按标题收缩并限制最大宽度，长标题悬停时滚动。消息定位编号位于输入区右侧，到达最新消息后隐藏返回底部箭头。
+
 ## 工作区连接
 
 启动时自动恢复与 GUI 共用的标签、选中项、未发送文字和附件；`/restore` 保留为手动补充入口。

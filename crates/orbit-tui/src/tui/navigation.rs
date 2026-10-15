@@ -5,7 +5,6 @@ use ratatui::{
     Frame,
     layout::Rect,
     style::{Modifier, Style},
-    text::{Line, Span},
     widgets::Paragraph,
 };
 use unicode_width::UnicodeWidthStr;
@@ -21,12 +20,15 @@ enum Target {
     Round(u16),
     Latest,
     Current,
+    More,
 }
 
 #[derive(Debug, Default)]
 pub(super) struct Navigation {
     area: Rect,
     current_area: Rect,
+    latest_area: Rect,
+    active: usize,
     tooltip_area: Rect,
     targets: Vec<(u16, usize, String)>,
     hovered: Option<Target>,
@@ -42,6 +44,9 @@ impl Navigation {
     pub(super) fn reset_area(&mut self) {
         self.area = Rect::default();
         self.current_area = Rect::default();
+        self.latest_area = Rect::default();
+        self.count = 0;
+        self.show_latest = false;
         self.clear_hover();
     }
 
@@ -88,14 +93,17 @@ pub(super) fn handle(state: &mut UiState, event: &Event) -> Option<bool> {
     let point = (mouse.column, mouse.row).into();
     let inside_rail = nav.area.contains(point);
     let inside_current = nav.current_area.contains(point);
-    let inside = inside_rail || inside_current;
+    let inside_latest = nav.latest_area.contains(point);
+    let inside = inside_rail || inside_current || inside_latest;
     let bottom = nav.area.bottom().saturating_sub(1);
     let slots = nav.area.height.saturating_sub(1) as usize;
-    let hit_bottom = (nav.show_latest || (nav.first + slots) < nav.count) && mouse.row == bottom;
+    let hit_bottom = ((nav.first + slots) < nav.count) && mouse.row == bottom;
     let target = if inside_current {
         Some(Target::Current)
-    } else if inside_rail && hit_bottom {
+    } else if inside_latest && nav.show_latest {
         Some(Target::Latest)
+    } else if inside_rail && hit_bottom {
+        Some(Target::More)
     } else if inside_rail
         && nav
             .targets
@@ -127,17 +135,15 @@ pub(super) fn handle(state: &mut UiState, event: &Event) -> Option<bool> {
                 nav.manual_scroll = false;
             } else if target == Some(Target::Latest) {
                 state.selection.clear();
-                if nav.show_latest {
-                    state.follow_bottom = true;
-                    state.scroll = 0;
-                    nav.manual_scroll = false;
-                } else {
-                    nav.manual_scroll = true;
-                    nav.first = (nav.first + 5).min(nav.count.saturating_sub(slots));
-                    if let Some((_, offset, _)) = nav.targets.last() {
-                        state.follow_bottom = false;
-                        state.scroll = state.max_scroll.saturating_sub(*offset);
-                    }
+                state.follow_bottom = true;
+                state.scroll = 0;
+                nav.manual_scroll = false;
+            } else if target == Some(Target::More) {
+                nav.manual_scroll = true;
+                nav.first = (nav.first + 5).min(nav.count.saturating_sub(slots));
+                if let Some((_, offset, _)) = nav.targets.last() {
+                    state.follow_bottom = false;
+                    state.scroll = state.max_scroll.saturating_sub(*offset);
                 }
             } else if let Some((_, offset, _)) = nav
                 .targets
@@ -186,10 +192,9 @@ pub(super) fn draw(frame: &mut Frame<'_>, state: &mut UiState, area: Rect, offse
     let nav = &mut state.navigation;
     let rail_width = area.width.min(2);
     nav.area = Rect::new(area.right() - rail_width, area.y, rail_width, area.height);
-    nav.current_area = Rect::default();
     nav.targets.clear();
     nav.count = anchors.len();
-    nav.show_latest = offset < state.max_scroll;
+    nav.show_latest = offset < state.max_scroll && !state.follow_bottom;
     let slots = area.height.saturating_sub(1) as usize;
 
     if slots == 0 || anchors.is_empty() || rail_width == 0 {
@@ -204,6 +209,8 @@ pub(super) fn draw(frame: &mut Frame<'_>, state: &mut UiState, area: Rect, offse
             .partition_point(|(start, _)| *start <= offset)
             .saturating_sub(1)
     };
+
+    nav.active = active;
 
     if state.follow_bottom && !nav.manual_scroll {
         nav.first = anchors.len().saturating_sub(slots);
@@ -283,41 +290,11 @@ pub(super) fn draw(frame: &mut Frame<'_>, state: &mut UiState, area: Rect, offse
     let bottom = nav.area.bottom() - 1;
     let has_more_below = (nav.first + slots) < anchors.len();
 
-    let current = format!("当前 {}/{}", active + 1, anchors.len());
-    let range = format!("{}–{} · ", nav.first + 1, nav.first + shown);
-    let available = area
-        .width
-        .saturating_sub(rail_width + 4) as usize;
-    let label = if range.width() + current.width() <= available {
-        Line::from(vec![
-            Span::styled(range, Style::default().fg(THEME.navigation_muted)),
-            Span::styled(current, Style::default().fg(THEME.accent)),
-        ])
-    } else {
-        Line::from(Span::styled(
-            render::fit_label(&current, available, false),
-            Style::default().fg(THEME.accent),
-        ))
-    };
-    let label_width = label.width() as u16;
-    if label_width > 0 {
-        nav.current_area = Rect::new(nav.area.x - label_width - 1, bottom, label_width, 1);
-        frame.render_widget(Paragraph::new(label), nav.current_area);
-    }
-
-    if nav.show_latest || has_more_below {
+    if has_more_below {
         frame.render_widget(
-            Paragraph::new(icons::ARROW_DOWN).style(Style::default().fg(
-                if nav.hovered == Some(Target::Latest) {
-                    crate::tui::theme::THEME.accent
-                } else {
-                    crate::tui::theme::THEME.secondary
-                },
-            )),
+            Paragraph::new("…").style(Style::default().fg(THEME.navigation_muted)),
             Rect::new(nav.area.x, bottom, 1, 1),
         );
-    } else if nav.hovered == Some(Target::Latest) {
-        nav.hovered = None;
     }
 
     let tooltip = if nav.hovered == Some(Target::Current) {
@@ -327,7 +304,7 @@ pub(super) fn draw(frame: &mut Frame<'_>, state: &mut UiState, area: Rect, offse
         ))
     } else if nav.show_latest && nav.hovered == Some(Target::Latest) {
         Some((bottom - 1, "回到最新 · 继续跟随输出".to_owned()))
-    } else if has_more_below && nav.hovered == Some(Target::Latest) {
+    } else if has_more_below && nav.hovered == Some(Target::More) {
         Some((
             bottom - 1,
             format!(
@@ -381,6 +358,47 @@ pub(super) fn draw(frame: &mut Frame<'_>, state: &mut UiState, area: Rect, offse
         nav.tooltip_area = tooltip_area;
     } else {
         nav.preview_scroll = None;
+    }
+}
+
+/// Reserve a compact column beside the composer for the current turn and latest action.
+pub(super) fn controls_width(state: &UiState) -> u16 {
+    let count = state
+        .transcript
+        .iter()
+        .filter(|item| matches!(item, TranscriptItem::User(_)))
+        .count();
+    if count == 0 {
+        0
+    } else {
+        count.to_string().len().max(2) as u16 + 1
+    }
+}
+
+pub(super) fn draw_controls(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
+    let nav = &mut state.navigation;
+    nav.current_area = Rect::default();
+    nav.latest_area = Rect::default();
+    if nav.count == 0 || area.height < 2 {
+        return;
+    }
+    let width = (nav.count.to_string().len().max(2) as u16).min(area.width.saturating_sub(1));
+    if width == 0 {
+        return;
+    }
+    nav.current_area = Rect::new(area.right() - width - 1, area.bottom() - 2, width, 1);
+    frame.render_widget(
+        Paragraph::new((nav.active + 1).to_string())
+            .alignment(ratatui::layout::Alignment::Center)
+            .style(Style::default().fg(THEME.accent)),
+        nav.current_area,
+    );
+    if nav.show_latest {
+        nav.latest_area = Rect::new(nav.current_area.x + width / 2, area.bottom() - 1, 1, 1);
+        frame.render_widget(
+            Paragraph::new(icons::ARROW_DOWN).style(Style::default().fg(THEME.secondary)),
+            nav.latest_area,
+        );
     }
 }
 

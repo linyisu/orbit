@@ -26,6 +26,49 @@ fn row_text(buffer: &ratatui::buffer::Buffer, area: Rect) -> String {
 }
 
 #[test]
+fn composer_navigation_hides_latest_at_the_bottom_and_reveals_it_when_scrolled_up() {
+    let mut state = UiState::new("synthetic-model");
+    state
+        .transcript
+        .push(TranscriptItem::User("Independent question".into()));
+    state
+        .transcript
+        .push(TranscriptItem::Assistant(
+            "Generated reply line\n".repeat(50),
+        ));
+    let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+    terminal
+        .draw(|frame| render::draw(frame, &mut state))
+        .unwrap();
+    assert_eq!(
+        row_text(terminal.backend().buffer(), state.navigation.current_area).trim(),
+        "1"
+    );
+    assert!(state.navigation.current_area.y >= state.input_area.y);
+    assert!(state.navigation.current_area.x >= state.input_area.right());
+    assert_eq!(state.navigation.latest_area, Rect::default());
+    state.follow_bottom = false;
+    state.scroll = 5;
+    terminal
+        .draw(|frame| render::draw(frame, &mut state))
+        .unwrap();
+    let latest = state.navigation.latest_area;
+    assert_eq!(
+        terminal.backend().buffer()[(latest.x, latest.y)].symbol(),
+        icons::ARROW_DOWN
+    );
+    handle(
+        &mut state,
+        &mouse(MouseEventKind::Down(MouseButton::Left), latest.x, latest.y),
+    );
+    terminal
+        .draw(|frame| render::draw(frame, &mut state))
+        .unwrap();
+    assert!(state.follow_bottom);
+    assert_eq!(state.navigation.latest_area, Rect::default());
+}
+
+#[test]
 fn hover_jump_and_latest_preserve_the_draft_and_stream_anchor() {
     let mut state = UiState::new("model");
 
@@ -43,12 +86,7 @@ fn hover_jump_and_latest_preserve_the_draft_and_stream_anchor() {
     terminal
         .draw(|f| render::draw(f, &mut state))
         .unwrap();
-    let bottom = state.navigation.area.bottom() - 1;
-
-    assert_eq!(
-        terminal.backend().buffer()[(state.navigation.area.x, bottom)].symbol(),
-        " "
-    );
+    assert_eq!(state.navigation.latest_area, Rect::default());
 
     let x = state.navigation.area.x;
     let (y, target, _) = state.navigation.targets[1].clone();
@@ -108,16 +146,16 @@ fn hover_jump_and_latest_preserve_the_draft_and_stream_anchor() {
 
     assert_eq!(state.max_scroll - state.scroll, target);
 
-    let bottom = state.navigation.area.bottom() - 1;
+    let latest = state.navigation.latest_area;
 
     assert_eq!(
-        terminal.backend().buffer()[(x, bottom)].symbol(),
+        terminal.backend().buffer()[(latest.x, latest.y)].symbol(),
         icons::ARROW_DOWN
     );
 
     handle(
         &mut state,
-        &mouse(MouseEventKind::Down(MouseButton::Left), x, bottom),
+        &mouse(MouseEventKind::Down(MouseButton::Left), latest.x, latest.y),
     );
 
     assert!(state.follow_bottom);
@@ -431,11 +469,11 @@ fn scrolling_changes_navigation_and_current_location_can_be_found_without_moving
 
     let old_caption = row_text(&original, caption);
     let new_caption = row_text(scrolled, state.navigation.current_area);
-    assert_ne!(old_caption, new_caption);
+    assert_eq!(old_caption, new_caption);
     assert!(
         new_caption
             .replace(' ', "")
-            .contains("当前1000/1000")
+            .contains("1000")
     );
     assert!(
         !state
@@ -523,7 +561,7 @@ fn scrolling_changes_navigation_and_current_location_can_be_found_without_moving
     assert!(
         caption
             .replace(' ', "")
-            .contains(&format!("当前{}/1000", chosen + 1)),
+            .contains(&(chosen + 1).to_string()),
         "chosen={chosen}, caption={caption:?}, offset={}, max={}",
         state.max_scroll - state.scroll,
         state.max_scroll
