@@ -5,6 +5,40 @@ use serde_json::Value;
 
 const MAX_LIMITS: usize = 128;
 
+/// Legacy quota summaries name pools instead of reporting their model membership.
+/// Keep this wire compatibility rule at the provider boundary, never in protocol or UI code.
+pub(super) fn select_summary(provider: UsageProvider, model: &str, account: &mut Account) {
+    if provider != UsageProvider::Antigravity {
+        return;
+    }
+    let model = model
+        .rsplit("::")
+        .next()
+        .unwrap_or(model);
+    let family = quota_family(model);
+    for limit in &mut account.limits {
+        limit.include_in_summary =
+            Some(quota_family(&limit.label).is_none_or(|group| Some(group) == family));
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum QuotaFamily {
+    Gemini,
+    ClaudeGpt,
+}
+
+fn quota_family(name: &str) -> Option<QuotaFamily> {
+    let name = name.to_ascii_lowercase();
+    if name.contains("gemini") {
+        Some(QuotaFamily::Gemini)
+    } else if name.contains("claude") || name.contains("gpt") {
+        Some(QuotaFamily::ClaudeGpt)
+    } else {
+        None
+    }
+}
+
 fn number(value: &Value) -> Option<f64> {
     value
         .as_f64()
@@ -325,11 +359,64 @@ fn antigravity_buckets(value: &Value, prefix: &str, limits: &mut Vec<Limit>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use orbit_protocol::usage::Snapshot;
     use serde_json::json;
     fn parse_fixture(provider: UsageProvider, value: Value) -> Account {
         let mut account = Account::default();
         parse(provider, &value, &mut account).unwrap();
         account
+    }
+
+    #[test]
+    fn summary_uses_the_active_antigravity_pool_without_hiding_details() {
+        let mut snapshot = Snapshot {
+            account: Account {
+                provider: "Antigravity".into(),
+                limits: [
+                    ("Gemini Models · Weekly Limit Remaining", 0.77),
+                    ("Gemini Models · Five Hour Limit Remaining", 0.0),
+                    ("Claude and GPT models · Weekly Limit Remaining", 0.98),
+                    ("Claude and GPT models · Five Hour Limit Remaining", 0.93),
+                ]
+                .into_iter()
+                .map(|(label, fraction)| Limit {
+                    label: label.into(),
+                    remaining_fraction: Some(fraction),
+                    ..Default::default()
+                })
+                .collect(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        for (model, expected) in [
+            ("generated-account::gemini-generated", vec![0.77, 0.0]),
+            ("claude-generated", vec![0.98, 0.93]),
+            ("gpt-generated", vec![0.98, 0.93]),
+            ("Gemini-generated", vec![0.77, 0.0]),
+            ("generated-unknown", vec![]),
+        ] {
+            snapshot.model = model.into();
+            select_summary(UsageProvider::Antigravity, model, &mut snapshot.account);
+            let remaining = snapshot
+                .summary_limits()
+                .map(|limit| limit.remaining_fraction.unwrap())
+                .collect::<Vec<_>>();
+            assert_eq!(remaining, expected, "{model}");
+            assert_eq!(snapshot.account.limits.len(), 4);
+        }
+        snapshot.account.limits.reverse();
+        snapshot.model = "gemini-generated".into();
+        select_summary(
+            UsageProvider::Antigravity,
+            &snapshot.model,
+            &mut snapshot.account,
+        );
+        assert!(
+            snapshot
+                .summary_limits()
+                .all(|limit| limit.label.starts_with("Gemini"))
+        );
     }
 
     #[test]

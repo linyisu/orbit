@@ -75,6 +75,7 @@ async fn account(config: &ModelConfig) -> Account {
         account.name = authorization.account.clone();
         let payload = fetch(&authorization).await?;
         providers::parse(authorization.provider, &payload, &mut account)?;
+        providers::select_summary(authorization.provider, &config.model, &mut account);
         account.fetched_at = Some(now());
         Ok(())
     })

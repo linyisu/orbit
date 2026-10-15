@@ -278,7 +278,7 @@ mod tests {
     use orbit_protocol::usage::{Account, Limit, Scope, Snapshot};
 
     #[test]
-    fn account_rows_hide_model_counters_and_follow_the_active_pool() {
+    fn account_rows_hide_model_counters_and_follow_service_selection() {
         let mut snapshot = Snapshot {
             account: Account {
                 provider: "Antigravity".into(),
@@ -318,12 +318,15 @@ mod tests {
             },
             ..Default::default()
         };
-        for (model, expected) in [
-            ("account::gemini-flash", vec![89., 73.]),
-            ("account::claude-opus", vec![100., 50.]),
-            ("account::gpt-oss", vec![100., 50.]),
-        ] {
-            snapshot.model = model.into();
+        for (selected, expected) in [([0, 2], vec![89., 73.]), ([3, 4], vec![100., 50.])] {
+            for (index, limit) in snapshot
+                .account
+                .limits
+                .iter_mut()
+                .enumerate()
+            {
+                limit.include_in_summary = Some(selected.contains(&index));
+            }
             let rows = quota_rows(&snapshot);
             assert_eq!(
                 rows.iter()

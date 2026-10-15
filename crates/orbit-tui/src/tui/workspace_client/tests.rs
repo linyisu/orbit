@@ -2014,16 +2014,16 @@ fn closing_btw_drops_an_outstanding_poll_without_preserving_a_draft_session() {
 }
 
 #[tokio::test]
-async fn switching_antigravity_models_replaces_the_footer_pool() {
+async fn switching_models_renders_service_selected_footer_limits() {
     use orbit_protocol::usage::{Account, Limit, Snapshot};
     let (mut tab, _) = tab("本地");
     let account = Account {
-        provider: "Antigravity".into(),
+        provider: "generated-provider".into(),
         limits: [
-            ("Gemini Models · weekly", 0.77),
-            ("Gemini Models · 5h", 0.0),
-            ("Claude and GPT models · weekly", 0.98),
-            ("Claude and GPT models · 5h", 0.93),
+            ("Generated A · weekly", 0.77),
+            ("Generated A · 5h", 0.0),
+            ("Generated B · weekly", 0.98),
+            ("Generated B · 5h", 0.93),
         ]
         .into_iter()
         .map(|(label, fraction)| Limit {
@@ -2034,17 +2034,17 @@ async fn switching_antigravity_models_replaces_the_footer_pool() {
         .collect(),
         ..Default::default()
     };
-    for (model, expected, excluded) in [
-        ("gemini-3.8-flash", ["77%", "0%"], "93%"),
-        ("claude-opus-4-6", ["98%", "93%"], "77%"),
-        ("gpt-oss-120b", ["98%", "93%"], "77%"),
-        ("gemini-3.8-pro", ["77%", "0%"], "93%"),
+    for (model, selected, expected, excluded) in [
+        ("generated-a", [0, 1], ["77%", "0%"], "93%"),
+        ("generated-b", [2, 3], ["98%", "93%"], "77%"),
+        ("generated-c", [2, 3], ["98%", "93%"], "77%"),
+        ("generated-d", [0, 1], ["77%", "0%"], "93%"),
     ] {
         let info: SessionInfo = serde_json::from_value(serde_json::json!({
             "id": "same-session",
             "title": "",
             "workspace": "/project",
-            "model": format!("antigravity::{model}"),
+            "model": format!("generated-account::{model}"),
             "models": [],
             "supports_vision": false,
             "reasoning_effort": null,
@@ -2056,11 +2056,19 @@ async fn switching_antigravity_models_replaces_the_footer_pool() {
         .unwrap();
         tab.profile(&info);
         assert!(tab.state.usage.snapshot.is_none());
-        let snapshot = Snapshot {
+        let mut snapshot = Snapshot {
             model: model.into(),
             account: account.clone(),
             ..Default::default()
         };
+        for (index, limit) in snapshot
+            .account
+            .limits
+            .iter_mut()
+            .enumerate()
+        {
+            limit.include_in_summary = Some(selected.contains(&index));
+        }
         tab.usage_task = Some(AbortOnDropHandle::new(tokio::spawn(async { Ok(snapshot) })));
         tokio::task::yield_now().await;
         tab.poll_usage().await;

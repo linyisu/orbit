@@ -120,11 +120,13 @@ pub async fn fetch(connection: &Connection, session: String) -> Result<Snapshot>
     }
 }
 
-/// Preserve successful account evidence only for the same account after a provider failure.
+/// Preserve successful evidence only for the same account and model after a provider failure.
+/// Summary selection belongs to that model and cannot be reused across model changes.
 pub fn retain_account(mut snapshot: Snapshot, previous: Option<&Snapshot>) -> Snapshot {
     if snapshot.account.error.is_some()
         && let Some(old) = previous
         && old.account.identity == snapshot.account.identity
+        && old.model == snapshot.model
         && (snapshot.account.provider.is_empty()
             || old.account.provider == snapshot.account.provider)
     {
@@ -333,6 +335,14 @@ mod tests {
                 .len(),
             1
         );
+        failed.model = "generated-other-model".into();
+        assert!(
+            retain_account(failed.clone(), Some(&old))
+                .account
+                .limits
+                .is_empty()
+        );
+        failed.model = old.model.clone();
         failed.account.identity = "source-b".into();
         assert!(
             retain_account(failed, Some(&old))

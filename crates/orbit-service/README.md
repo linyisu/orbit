@@ -21,6 +21,7 @@
 Plan 只允许只读操作，批准后进入 Build，工具审批仍生效。MCP 可异步应用到已有会话；当前运行保留原工具集，后续发送使用新工具。
 
 技能和 MCP 导入先扫描来源，再按用户选择安装。配置、模型适配和持久化分别由对应 crate 负责。
+额度池与当前模型的对应关系在 [workspace/usage/providers.rs](src/workspace/usage/providers.rs) 归一化，再通过协议提供给两端。
 
 ## 验证
 

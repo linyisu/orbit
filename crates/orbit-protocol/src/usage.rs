@@ -9,45 +9,14 @@ pub struct Snapshot {
 }
 
 impl Snapshot {
-    /// Shared quota windows relevant to this model. Antigravity has separate
-    /// Gemini and Claude/GPT pools; their order in the response is not meaningful.
-    /// Keep all limits in `account` so the details view can still show both pools.
+    /// Account limits selected by the service for this model; old snapshots include all pools.
     pub fn summary_limits(&self) -> impl Iterator<Item = &Limit> {
-        let antigravity = self
-            .account
-            .provider
-            .eq_ignore_ascii_case("antigravity");
-        let model = self
-            .model
-            .rsplit("::")
-            .next()
-            .unwrap_or(&self.model);
-        let family = quota_family(model);
         self.account
             .limits
             .iter()
-            .filter(move |limit| {
-                limit.scope == Scope::Account
-                    && (!antigravity
-                        || quota_family(&limit.label).is_none_or(|group| Some(group) == family))
+            .filter(|limit| {
+                limit.scope == Scope::Account && limit.include_in_summary.unwrap_or(true)
             })
-    }
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum QuotaFamily {
-    Gemini,
-    ClaudeGpt,
-}
-
-fn quota_family(name: &str) -> Option<QuotaFamily> {
-    let name = name.to_ascii_lowercase();
-    if name.contains("gemini") {
-        Some(QuotaFamily::Gemini)
-    } else if name.contains("claude") || name.contains("gpt") {
-        Some(QuotaFamily::ClaudeGpt)
-    } else {
-        None
     }
 }
 
@@ -71,6 +40,9 @@ pub struct Limit {
     pub kind: LimitKind,
     #[serde(default)]
     pub scope: Scope,
+    /// Provider adapter selection for the active model; absent in older snapshots.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub include_in_summary: Option<bool>,
     /// Fraction remaining. Missing is distinct from exhausted.
     pub remaining_fraction: Option<f64>,
     /// Preserve decimal amounts/currencies instead of converting to tokens.
@@ -122,51 +94,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn summary_uses_the_active_antigravity_pool_without_hiding_details() {
-        let mut snapshot = Snapshot {
-            account: Account {
-                provider: "Antigravity".into(),
-                limits: [
-                    ("Gemini Models · Weekly Limit Remaining", 0.77),
-                    ("Gemini Models · Five Hour Limit Remaining", 0.0),
-                    ("Claude and GPT models · Weekly Limit Remaining", 0.98),
-                    ("Claude and GPT models · Five Hour Limit Remaining", 0.93),
-                ]
-                .into_iter()
-                .map(|(label, fraction)| Limit {
-                    label: label.into(),
-                    remaining_fraction: Some(fraction),
-                    ..Default::default()
-                })
-                .collect(),
+    fn summary_obeys_service_selection_without_interpreting_labels() {
+        let mut snapshot = Snapshot::default();
+        snapshot.account.limits = [None, Some(true), Some(false)]
+            .into_iter()
+            .enumerate()
+            .map(|(index, selected)| Limit {
+                label: format!("generated-pool-{index}"),
+                include_in_summary: selected,
                 ..Default::default()
-            },
-            ..Default::default()
-        };
-        for (model, expected) in [
-            (
-                "antigravity-account::gemini-3.8-flash-high",
-                vec![0.77, 0.0],
-            ),
-            ("claude-opus-4-6", vec![0.98, 0.93]),
-            ("gpt-oss-120b", vec![0.98, 0.93]),
-            ("Gemini-3.8-pro", vec![0.77, 0.0]),
-            ("unknown-model", vec![]),
-        ] {
-            snapshot.model = model.into();
-            let remaining = snapshot
-                .summary_limits()
-                .map(|limit| limit.remaining_fraction.unwrap())
-                .collect::<Vec<_>>();
-            assert_eq!(remaining, expected, "{model}");
-            assert_eq!(snapshot.account.limits.len(), 4);
-        }
-        snapshot.account.limits.reverse();
-        snapshot.model = "gemini-pro".into();
-        assert!(
+            })
+            .collect();
+        assert_eq!(
             snapshot
                 .summary_limits()
-                .all(|limit| limit.label.starts_with("Gemini"))
+                .map(|limit| limit.label.as_str())
+                .collect::<Vec<_>>(),
+            ["generated-pool-0", "generated-pool-1"]
         );
     }
 
