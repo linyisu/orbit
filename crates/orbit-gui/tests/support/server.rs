@@ -829,7 +829,47 @@ fn main() -> anyhow::Result<()> {
                 let now = SystemTime::now()
                     .duration_since(UNIX_EPOCH)?
                     .as_secs();
-                if request["session"] == "quota" {
+                if request["session"] == "balance"
+                    || std::path::Path::new(&workspace)
+                        .join(".fixture-balance")
+                        .is_file()
+                {
+                    let limits = [
+                        ("CNY", "8.1250", "2.0500", "6.0750"),
+                        ("USD", "0.00", "0.00", "0.00"),
+                    ]
+                    .into_iter()
+                    .flat_map(|(currency, total, granted, topped)| {
+                        [
+                            ("Total", "总余额", total),
+                            ("Granted", "赠送余额", granted),
+                            ("ToppedUp", "充值余额", topped),
+                        ]
+                        .map(|(kind, label, amount)| {
+                            json!({
+                                "label": format!("{currency} · {label}"),
+                                "kind": { "Balance": kind },
+                                "remaining": amount,
+                                "unit": currency
+                            })
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                    json!({
+                        "type": "usage",
+                        "value": {
+                            "model": model,
+                            "account": {
+                                "identity": "synthetic-balance",
+                                "provider": "DeepSeek",
+                                "name": "演示余额账号",
+                                "fetched_at": now,
+                                "limits": limits
+                            },
+                            "session": { "runs": 0, "requests": 0, "runs_with_usage": 0 }
+                        }
+                    })
+                } else if request["session"] == "quota" {
                     let model = std::fs::read_to_string(
                         std::path::Path::new(&workspace).join(".fixture-quota-model"),
                     )?;

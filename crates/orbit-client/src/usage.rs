@@ -4,11 +4,108 @@ use crate::{
     transport::Connection,
 };
 use anyhow::{Result, bail};
-use orbit_protocol::usage::Snapshot;
+use orbit_protocol::usage::{Account, BalanceKind, Limit, LimitKind, Scope, Snapshot};
 use std::time::Duration;
 
 pub const REFRESH_INTERVAL: Duration = Duration::from_secs(5 * 60);
 pub const CACHE_AGE: Duration = Duration::from_secs(60);
+const DISPLAY_BALANCE_CURRENCY: &str = "CNY";
+
+/// Present DeepSeek's CNY evidence while retaining all currencies in the source snapshot.
+fn visible_limit(account: &Account, limit: &Limit) -> bool {
+    !account
+        .provider
+        .eq_ignore_ascii_case("deepseek")
+        || limit
+            .unit
+            .as_deref()
+            .is_some_and(|unit| unit.eq_ignore_ascii_case(DISPLAY_BALANCE_CURRENCY))
+}
+
+/// Account details use the same currency policy in both frontends.
+pub fn account_limits(account: &Account, scope: Scope) -> impl Iterator<Item = &Limit> {
+    account
+        .limits
+        .iter()
+        .filter(move |limit| limit.scope == scope && visible_limit(account, limit))
+}
+
+/// Summarize independent quota windows and currency totals without their balance components.
+pub fn summary_limits(snapshot: &Snapshot) -> Vec<&Limit> {
+    snapshot
+        .summary_limits()
+        .filter(|limit| {
+            visible_limit(&snapshot.account, limit)
+                && matches!(
+                    limit.kind,
+                    LimitKind::Quota | LimitKind::Balance(BalanceKind::Total)
+                )
+        })
+        .collect()
+}
+
+/// Keep exact provider decimals and their currency or count unit together.
+pub fn amount(limit: &Limit) -> String {
+    format!(
+        "{} {}",
+        limit
+            .remaining
+            .as_deref()
+            .unwrap_or("—"),
+        limit.unit.as_deref().unwrap_or("")
+    )
+    .trim()
+    .into()
+}
+
+/// Use one readable quota vocabulary in both clients without dropping unfamiliar labels.
+pub fn quota_label(label: &str) -> String {
+    let mut parts = label
+        .split('·')
+        .map(|part| {
+            match part
+                .trim()
+                .to_ascii_lowercase()
+                .as_str()
+            {
+                "weekly limit remaining" | "weekly" | "week" | "每周" | "周" => "周".to_owned(),
+                "five hour limit remaining" | "five_hour" | "5h" | "5小时" => "5h".to_owned(),
+                _ => part
+                    .trim()
+                    .replace("Gemini Models", "Gemini")
+                    .replace("Claude and GPT models", "Claude / GPT"),
+            }
+        })
+        .collect::<Vec<_>>();
+    parts.dedup();
+    parts.join(" · ")
+}
+
+/// Compact recurring windows, retaining a meaningful label for other quota evidence.
+pub fn summary_label(limit: &Limit) -> String {
+    if let LimitKind::Balance(kind) = limit.kind {
+        return match kind {
+            BalanceKind::Total => "总余额",
+            BalanceKind::Granted => "赠送余额",
+            BalanceKind::ToppedUp => "充值余额",
+        }
+        .into();
+    }
+    let label = quota_label(&limit.label);
+    if label
+        .split('·')
+        .any(|part| part.trim() == "周")
+    {
+        "周".into()
+    } else if label
+        .split('·')
+        .any(|part| part.trim() == "5h")
+    {
+        "5h".into()
+    } else {
+        label
+    }
+}
 
 /// Query on an independent connection so quota latency cannot block approvals or cancellation.
 pub async fn fetch(connection: &Connection, session: String) -> Result<Snapshot> {
@@ -125,6 +222,52 @@ pub fn context_percent(used: usize, input_budget: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn balance_summary_keeps_currency_totals_without_counting_their_components() {
+        let mut snapshot = Snapshot::default();
+        snapshot.account.provider = "DeepSeek".into();
+        snapshot.account.limits = [("USD", "8.1250"), ("CNY", "0.00")]
+            .into_iter()
+            .flat_map(|(unit, total)| {
+                [
+                    BalanceKind::Total,
+                    BalanceKind::Granted,
+                    BalanceKind::ToppedUp,
+                ]
+                .map(|kind| Limit {
+                    label: format!("{unit} · {kind:?}"),
+                    kind: LimitKind::Balance(kind),
+                    remaining: Some(total.into()),
+                    unit: Some(unit.into()),
+                    ..Default::default()
+                })
+            })
+            .collect();
+        let limits = summary_limits(&snapshot);
+        assert_eq!(limits.len(), 1);
+        assert_eq!(amount(limits[0]), "0.00 CNY");
+        assert_eq!(account_limits(&snapshot.account, Scope::Account).count(), 3);
+        assert_eq!(summary_label(limits[0]), "总余额");
+        assert_eq!(summary_label(&snapshot.account.limits[4]), "赠送余额");
+        assert_eq!(summary_label(&snapshot.account.limits[5]), "充值余额");
+        assert_eq!(snapshot.account.limits.len(), 6);
+        snapshot.account.limits[3].remaining = Some("6.0400".into());
+        assert_eq!(amount(summary_limits(&snapshot)[0]), "6.0400 CNY");
+        assert_eq!(summary_limits(&snapshot).len(), 1);
+        for limit in &mut snapshot.account.limits {
+            limit.remaining = Some("0.00".into());
+        }
+        assert_eq!(summary_limits(&snapshot).len(), 1);
+        let other = Limit {
+            label: "每日请求".into(),
+            remaining: Some("15".into()),
+            unit: Some("次".into()),
+            ..Default::default()
+        };
+        assert_eq!(summary_label(&other), "每日请求");
+        assert_eq!(amount(&other), "15 次");
+    }
 
     #[test]
     fn context_evidence_is_calibrated_per_profile_and_compaction_updates_the_same_count() {

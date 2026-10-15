@@ -108,6 +108,7 @@ impl Usage {
                         )
                         .child(format!("{percent:.0}%"))
                     })
+                    .when(row.percent.is_none(), |view| view.child(row.amount.clone()))
                     .when_some(
                         row.reset
                             .and_then(|at| remaining(at, now())),
@@ -215,45 +216,24 @@ impl Render for Usage {
 }
 
 fn quota_rows(snapshot: &Snapshot) -> Vec<Quota> {
-    let selected = snapshot
-        .summary_limits()
-        .collect::<Vec<_>>();
-    snapshot
-        .account
-        .limits
-        .iter()
-        .filter(|limit| limit.scope == Scope::Account)
+    let selected = orbit_client::usage::summary_limits(snapshot);
+    orbit_client::usage::account_limits(&snapshot.account, Scope::Account)
         .map(|limit| {
-            let short = if limit
-                .label
-                .to_ascii_lowercase()
-                .contains("week")
-            {
-                "周"
-            } else if limit
-                .label
-                .to_ascii_lowercase()
-                .contains("five")
-                || limit.label.contains("5h")
-            {
-                "5h"
-            } else {
-                "额度"
-            };
+            let short = orbit_client::usage::summary_label(limit);
             let label = quota_label(&limit.label);
             Quota {
-                id: format!("{}:{}", snapshot.account.identity, limit.label).into(),
+                id: format!(
+                    "{}:{}:{:?}:{:?}",
+                    snapshot.account.identity, limit.label, limit.kind, limit.unit
+                )
+                .into(),
                 label: label.into(),
                 short: short.into(),
                 percent: limit
                     .remaining_fraction
                     .filter(|v| v.is_finite())
                     .map(|v| (v.clamp(0., 1.) * 100.) as f32),
-                amount: limit
-                    .remaining
-                    .clone()
-                    .unwrap_or_else(|| "—".into())
-                    .into(),
+                amount: orbit_client::usage::amount(limit).into(),
                 reset: limit
                     .resets_at
                     .as_deref()
@@ -266,27 +246,7 @@ fn quota_rows(snapshot: &Snapshot) -> Vec<Quota> {
         .collect()
 }
 
-fn quota_label(label: &str) -> String {
-    let mut parts = label
-        .split('·')
-        .map(|part| {
-            match part
-                .trim()
-                .to_ascii_lowercase()
-                .as_str()
-            {
-                "weekly limit remaining" | "weekly" | "week" => "周".to_owned(),
-                "five hour limit remaining" | "five_hour" | "5h" => "5h".to_owned(),
-                _ => part
-                    .trim()
-                    .replace("Gemini Models", "Gemini")
-                    .replace("Claude and GPT models", "Claude / GPT"),
-            }
-        })
-        .collect::<Vec<_>>();
-    parts.dedup();
-    parts.join(" · ")
-}
+use orbit_client::usage::quota_label;
 
 fn now() -> i64 {
     SystemTime::now()

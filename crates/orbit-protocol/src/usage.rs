@@ -68,6 +68,8 @@ pub struct Account {
 pub struct Limit {
     pub label: String,
     #[serde(default)]
+    pub kind: LimitKind,
+    #[serde(default)]
     pub scope: Scope,
     /// Fraction remaining. Missing is distinct from exhausted.
     pub remaining_fraction: Option<f64>,
@@ -78,6 +80,22 @@ pub struct Limit {
     pub unit: Option<String>,
     /// Server's absolute timestamp (Unix seconds or ISO 8601).
     pub resets_at: Option<String>,
+}
+
+/// Identifies monetary evidence without inferring its meaning from display labels.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LimitKind {
+    #[default]
+    Quota,
+    Balance(BalanceKind),
+}
+
+/// Provider-reported balance components; the total includes granted and topped-up funds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BalanceKind {
+    Total,
+    Granted,
+    ToppedUp,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

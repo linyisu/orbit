@@ -1,6 +1,6 @@
 use anyhow::{Result, ensure};
 use orbit_auth::UsageProvider;
-use orbit_protocol::usage::{Account, Limit, Scope};
+use orbit_protocol::usage::{Account, BalanceKind, Limit, LimitKind, Scope};
 use serde_json::Value;
 
 const MAX_LIMITS: usize = 128;
@@ -199,14 +199,18 @@ pub(super) fn parse(provider: UsageProvider, payload: &Value, account: &mut Acco
             if let Some(balances) = payload["balance_infos"].as_array() {
                 for balance in balances {
                     let unit = text(&balance["currency"]);
-                    for (key, label) in [
-                        ("total_balance", "总余额"),
-                        ("granted_balance", "赠送余额"),
-                        ("topped_up_balance", "充值余额"),
+                    for (key, label, kind) in [
+                        ("total_balance", "总余额", BalanceKind::Total),
+                        ("granted_balance", "赠送余额", BalanceKind::Granted),
+                        ("topped_up_balance", "充值余额", BalanceKind::ToppedUp),
                     ] {
                         if let Some(remaining) = text(&balance[key]) {
                             account.limits.push(Limit {
-                                label: label.into(),
+                                label: format!(
+                                    "{} · {label}",
+                                    unit.as_deref().unwrap_or("未提供币种")
+                                ),
+                                kind: LimitKind::Balance(kind),
                                 remaining: Some(remaining),
                                 unit: unit.clone(),
                                 ..Default::default()
@@ -458,6 +462,19 @@ mod tests {
         );
         assert_eq!(account.limits[0].remaining.as_deref(), Some("0.000123"));
         assert_eq!(account.limits[0].unit.as_deref(), Some("CNY"));
+        assert_eq!(account.limits[0].label, "CNY · 总余额");
+        assert_eq!(
+            account
+                .limits
+                .iter()
+                .map(|limit| limit.kind)
+                .collect::<Vec<_>>(),
+            [
+                LimitKind::Balance(BalanceKind::Total),
+                LimitKind::Balance(BalanceKind::Granted),
+                LimitKind::Balance(BalanceKind::ToppedUp),
+            ]
+        );
         assert!(
             account.limits[0]
                 .remaining_fraction

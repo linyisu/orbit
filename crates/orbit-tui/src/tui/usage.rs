@@ -165,10 +165,10 @@ impl State {
         let Some(snapshot) = &self.snapshot else {
             return fallback();
         };
-        let limits: Vec<_> = snapshot
-            .summary_limits()
+        let limits = orbit_client::usage::summary_limits(snapshot)
+            .into_iter()
             .take(2)
-            .collect();
+            .collect::<Vec<_>>();
         if limits.is_empty() {
             return fallback();
         }
@@ -196,7 +196,7 @@ impl State {
 
 fn footer_limit(limit: &Limit, width: usize, time: u64) -> Line<'static> {
     let mut line = Line::from(vec![Span::styled(
-        format!("{} ", compact_label(&limit.label)),
+        format!("{} ", orbit_client::usage::summary_label(limit)),
         super::components::accent(),
     )]);
     if let Some(fraction) = limit.remaining_fraction {
@@ -205,15 +205,7 @@ fn footer_limit(limit: &Limit, width: usize, time: u64) -> Line<'static> {
     } else {
         line.spans
             .push(Span::raw(super::render::safe_output(
-                format!(
-                    "{} {}",
-                    limit
-                        .remaining
-                        .as_deref()
-                        .unwrap_or("—"),
-                    limit.unit.as_deref().unwrap_or(""),
-                )
-                .trim(),
+                &orbit_client::usage::amount(limit),
             )));
     }
     if let Some(reset) = limit
@@ -236,45 +228,7 @@ fn compact_reset(reset: &str) -> String {
         .replace("分钟", "分")
 }
 
-fn quota_label(label: &str) -> String {
-    let window = compact_label(label);
-    if window == "额度" {
-        return label.to_owned();
-    }
-    let group = label
-        .split(" · ")
-        .filter(|part| compact_label(part) == "额度")
-        .map(|part| {
-            let part = part.trim();
-            let part = if part
-                .to_ascii_lowercase()
-                .ends_with(" models")
-            {
-                &part[..part.len() - " models".len()]
-            } else {
-                part
-            };
-            part.replace(" and ", " / ")
-        })
-        .collect::<Vec<_>>()
-        .join(" · ");
-    if group.is_empty() {
-        window.into()
-    } else {
-        format!("{group} {window}")
-    }
-}
-
-fn compact_label(label: &str) -> &str {
-    let label = label.to_lowercase();
-    if label.contains("week") || label.contains('周') {
-        "周"
-    } else if label.contains("five hour") || label.contains("5h") || label.contains("5小时") {
-        "5h"
-    } else {
-        "额度"
-    }
-}
+use orbit_client::usage::quota_label;
 
 fn quota_bar(fraction: f64, width: usize) -> Line<'static> {
     use super::theme::THEME;
@@ -368,11 +322,7 @@ fn account_content(account: &Account, scope: Scope) -> Text<'static> {
     {
         rows.push("服务未提供共享套餐总额度；供应商返回的数据见「模型额度」。".into());
     }
-    let limits = account
-        .limits
-        .iter()
-        .filter(|limit| limit.scope == scope)
-        .collect::<Vec<_>>();
+    let limits = orbit_client::usage::account_limits(account, scope).collect::<Vec<_>>();
     let label_width = limits
         .iter()
         .map(|limit| quota_label(&limit.label).width())
@@ -590,7 +540,7 @@ mod tests {
         let mut dialog = InfoDialog::new("用量", String::new());
         state.update_dialog(&mut dialog);
         assert!(!dialog.content.contains("Gemini Pro"));
-        assert!(dialog.content.contains("Gemini 周"));
+        assert!(dialog.content.contains("Gemini · 周"));
         assert!(
             !dialog
                 .content
@@ -679,7 +629,7 @@ mod tests {
         assert!(!indicator.contains("后重置"));
         assert_eq!(
             quota_label("Claude and GPT models · Weekly Limit Remaining · weekly"),
-            "Claude / GPT 周"
+            "Claude / GPT · 周"
         );
         assert_eq!(quota_label("每周"), "周");
         assert_eq!(quota_label("附加 Credits"), "附加 Credits");
