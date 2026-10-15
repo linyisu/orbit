@@ -4,12 +4,13 @@ mod model_parameters;
 
 use crate::backend::Options;
 use gpui_kit::component::{
-    ActiveTheme, Disableable, IconName, Sizable, WindowExt,
+    ActiveTheme, Disableable, IconName, IndexPath, Sizable, WindowExt,
     button::{Button, ButtonVariant, ButtonVariants},
     dialog::DialogButtonProps,
     h_flex,
     input::{Input, InputState},
-    menu::{DropdownMenu, PopupMenuItem},
+    searchable_list::SearchableListItem,
+    select::{Select, SelectState},
     v_flex,
 };
 use gpui_kit::prelude::FluentBuilder;
@@ -41,7 +42,7 @@ pub(crate) struct Accounts {
     login_stage: Option<LoginStage>,
     task: Task<()>,
     operation: Option<tokio::task::JoinHandle<()>>,
-    format: ApiFormat,
+    protocol: Entity<SelectState<Vec<ProtocolChoice>>>,
     project: Entity<InputState>,
     pending_project: Option<PendingAccountSetup>,
     adding: bool,
@@ -62,6 +63,37 @@ enum AccountEvent {
 enum LoginStage {
     Browser,
     Project,
+}
+
+#[derive(Clone)]
+struct ProtocolChoice(ApiFormat);
+
+impl SearchableListItem for ProtocolChoice {
+    type Value = ApiFormat;
+
+    fn title(&self) -> SharedString {
+        format_label(self.0).into()
+    }
+
+    fn value(&self) -> &Self::Value {
+        &self.0
+    }
+}
+
+/// Keep the configured protocol visible even for a managed account connection.
+fn protocol_choices(current: ApiFormat) -> Vec<ProtocolChoice> {
+    let mut formats = vec![
+        ApiFormat::OpenaiChatCompletions,
+        ApiFormat::OpenaiResponses,
+        ApiFormat::AnthropicMessages,
+    ];
+    if !formats.contains(&current) {
+        formats.push(current);
+    }
+    formats
+        .into_iter()
+        .map(ProtocolChoice)
+        .collect()
 }
 
 impl Accounts {
@@ -110,7 +142,14 @@ impl Accounts {
             login_stage: None,
             task: Task::ready(()),
             operation: None,
-            format: ApiFormat::OpenaiChatCompletions,
+            protocol: cx.new(|cx| {
+                SelectState::new(
+                    protocol_choices(ApiFormat::OpenaiChatCompletions),
+                    Some(IndexPath::default()),
+                    window,
+                    cx,
+                )
+            }),
             project: cx
                 .new(|cx| InputState::new(window, cx).placeholder("Google Cloud 项目 ID（可选）")),
             pending_project: None,
@@ -260,7 +299,10 @@ impl Accounts {
                 view.loading = false;
                 match result {
                     Ok(Ok(draft)) => {
-                        view.format = draft.format;
+                        view.protocol.update(cx, |picker, cx| {
+                            picker.set_items(protocol_choices(draft.format), window, cx);
+                            picker.set_selected_value(&draft.format, window, cx);
+                        });
                         let values = [
                             draft.name.clone(),
                             draft.endpoint.clone(),
@@ -523,7 +565,9 @@ impl Accounts {
         }
         draft.name = values[0].clone();
         draft.endpoint = values[1].clone();
-        draft.format = self.format;
+        if let Some(format) = self.protocol.read(cx).selected_value() {
+            draft.format = *format;
+        }
         draft.models =
             match orbit_config::config::connections::models::profiles(&values[3], &draft.models) {
                 Ok(profiles) => profiles,
@@ -644,7 +688,6 @@ impl Render for Accounts {
                 .draft
                 .as_ref()
                 .is_some_and(ConnectionDraft::account);
-        let owner = cx.weak_entity();
         let mut content = v_flex()
             .w_full()
             .gap_4()
@@ -901,27 +944,11 @@ impl Render for Accounts {
                     )
                 });
         } else {
-            let protocol = Button::new("api-format")
-                .label(format_label(self.format))
-                .disabled(self.busy || managed)
-                .dropdown_menu(move |mut menu, _, _| {
-                    for format in [
-                        ApiFormat::OpenaiChatCompletions,
-                        ApiFormat::OpenaiResponses,
-                        ApiFormat::AnthropicMessages,
-                    ] {
-                        let owner = owner.clone();
-                        menu = menu.item(PopupMenuItem::new(format_label(format)).on_click(
-                            move |_, _, cx| {
-                                let _ = owner.update(cx, |view, cx| {
-                                    view.format = format;
-                                    cx.notify();
-                                });
-                            },
-                        ));
-                    }
-                    menu
-                });
+            let protocol = div().w_full().h_8().child(
+                Select::new(&self.protocol)
+                    .accessibility_label("API 协议")
+                    .disabled(self.busy || managed),
+            );
             let fields = ["连接名称", "API 地址", "API Key", "模型 ID，逗号分隔"]
                 .into_iter()
                 .enumerate()
