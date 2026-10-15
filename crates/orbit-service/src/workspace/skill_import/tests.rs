@@ -1,5 +1,11 @@
 use super::*;
 
+fn isolated_workspace(root: &Path) -> PathBuf {
+    let workspace = root.join("workspace");
+    fs::create_dir_all(workspace.join(".git")).unwrap();
+    workspace
+}
+
 fn skill(root: &Path, relative: &str, name: &str) {
     let directory = root.join(relative);
     fs::create_dir_all(&directory).unwrap();
@@ -26,8 +32,7 @@ async fn scan(source: &Path, workspace: &Path) -> Scan {
 async fn discovery_freezes_complete_packages_and_installs_without_executing_scripts() {
     let root = tempfile::tempdir().unwrap();
     let source = root.path().join("source");
-    let workspace = root.path().join("workspace");
-    fs::create_dir(&workspace).unwrap();
+    let workspace = isolated_workspace(root.path());
     skill(&source, "skills/review", "review");
     for (path, content) in [
         ("scripts/check.sh", "#!/bin/sh\nexit 99"),
@@ -110,9 +115,8 @@ async fn discovery_freezes_complete_packages_and_installs_without_executing_scri
 async fn conflicts_preflight_whole_selection_and_snapshot_identity_is_bound() {
     let root = tempfile::tempdir().unwrap();
     let source = root.path().join("source");
-    let workspace = root.path().join("workspace");
+    let workspace = isolated_workspace(root.path());
     let other = root.path().join("other");
-    fs::create_dir(&workspace).unwrap();
     fs::create_dir(&other).unwrap();
     skill(&source, "first", "first");
     skill(&source, "second", "second");
@@ -193,8 +197,7 @@ async fn conflicts_preflight_whole_selection_and_snapshot_identity_is_bound() {
 async fn duplicate_names_and_installed_user_skills_are_reported_as_conflicts() {
     let root = tempfile::tempdir().unwrap();
     let source = root.path().join("source");
-    let workspace = root.path().join("workspace");
-    fs::create_dir(&workspace).unwrap();
+    let workspace = isolated_workspace(root.path());
     skill(&source, "alpha", "duplicate");
     skill(&source, "beta", "duplicate");
     skill(&source, "user", "personal");
@@ -228,6 +231,7 @@ async fn duplicate_names_and_installed_user_skills_are_reported_as_conflicts() {
 #[tokio::test]
 async fn direct_skill_file_and_relative_workspace_source_are_supported() {
     let root = tempfile::tempdir().unwrap();
+    fs::create_dir(root.path().join(".git")).unwrap();
     skill(root.path(), "incoming/review", "review");
     let scan = Scan::acquire(
         "session".into(),
@@ -261,8 +265,7 @@ async fn symlink_sources_resources_and_destinations_are_rejected() {
     use std::os::unix::fs::symlink;
     let root = tempfile::tempdir().unwrap();
     let source = root.path().join("source");
-    let workspace = root.path().join("workspace");
-    fs::create_dir(&workspace).unwrap();
+    let workspace = isolated_workspace(root.path());
     skill(&source, "review", "review");
     let link = source.join("review/link");
     symlink("/etc/passwd", &link).unwrap();
@@ -312,8 +315,7 @@ async fn symlink_sources_resources_and_destinations_are_rejected() {
 async fn oversized_resources_fail_discovery_without_installing_anything() {
     let root = tempfile::tempdir().unwrap();
     let source = root.path().join("source");
-    let workspace = root.path().join("workspace");
-    fs::create_dir(&workspace).unwrap();
+    let workspace = isolated_workspace(root.path());
     skill(&source, "review", "review");
     fs::File::create(source.join("review/large.bin"))
         .unwrap()
@@ -337,9 +339,8 @@ async fn oversized_resources_fail_discovery_without_installing_anything() {
 async fn empty_or_heading_only_skills_are_rejected_before_selection() {
     let root = tempfile::tempdir().unwrap();
     let source = root.path().join("source/review");
-    let workspace = root.path().join("workspace");
+    let workspace = isolated_workspace(root.path());
     fs::create_dir_all(&source).unwrap();
-    fs::create_dir(&workspace).unwrap();
     for content in ["", "# Heading", "---\nname: review\n---\n# Heading"] {
         fs::write(source.join("SKILL.md"), content).unwrap();
         let error = Scan::acquire(
