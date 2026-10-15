@@ -1,6 +1,6 @@
 # Orbit 维护约定
 
-Orbit 是 Rust workspace，包含 CLI、TUI、GPUI Kit 桌面客户端和工作区服务。
+Orbit 是 Rust workspace，包含 TUI、GPUI Kit 桌面客户端和工作区服务。
 先读根 README 和所改 crate 的 README；依赖边界以 `orbit-xtask` 的检查为准。
 
 ## 开始修改

@@ -85,20 +85,11 @@ const DEPENDENCIES: &[(&str, &[&str])] = &[
             "orbit-protocol",
         ],
     ),
-    (
-        "orbit-cli",
-        &[
-            "orbit-build",
-            "orbit-protocol",
-            "orbit-config",
-            "orbit-client",
-            "orbit-agent",
-            "orbit-auth",
-            "orbit-model",
-        ],
-    ),
     ("orbit-server", &["orbit-service"]),
-    ("orbit-xtask", &["orbit-build", "orbit-protocol"]),
+    (
+        "orbit-xtask",
+        &["orbit-build", "orbit-client", "orbit-protocol"],
+    ),
 ];
 const DATABASE: &[&str] = &["sea-orm", "sea-orm-migration", "sqlx", "diesel", "rusqlite"];
 const PRESENTATION: &[&str] = &[
@@ -270,7 +261,7 @@ pub fn check(root: &Path) -> Result<Vec<String>> {
     }
     let execution =
         Regex::new(r"\b(?:Agent::new|run_with_agent_events|compact_configured|workspace_tools)\b")?;
-    for package in ["orbit-cli", "orbit-tui", "orbit-gui"] {
+    for package in ["orbit-tui", "orbit-gui"] {
         for source in sources(
             &root
                 .join("crates")

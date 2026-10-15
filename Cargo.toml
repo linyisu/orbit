@@ -7,7 +7,6 @@ members = [
     "crates/orbit-model",
     "crates/orbit-agent",
     "crates/orbit-runtime",
-    "crates/orbit-cli",
     "crates/orbit-service",
     "crates/orbit-client",
     "crates/orbit-config",

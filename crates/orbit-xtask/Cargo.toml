@@ -8,6 +8,7 @@ publish = false
 anyhow.workspace = true
 clap.workspace = true
 orbit-build.workspace = true
+orbit-client.workspace = true
 orbit-protocol.workspace = true
 regex.workspace = true
 serde_json.workspace = true

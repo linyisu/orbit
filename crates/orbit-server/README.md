@@ -14,4 +14,12 @@ cargo build -p orbit-server --locked
 
 标准输入输出传输协议，标准错误记录日志。静态发布构建由 [orbit-build](../orbit-build/README.md) 处理，部署验收见 [orbit-xtask](../orbit-xtask/README.md)。
 
+## 验证
+
+```sh
+cargo test -p orbit-server --locked
+```
+
+集成测试通过实际服务进程验证共享客户端、SSH/WSL 传输、会话持久化和文档工作进程，使用临时工作区与模拟模型。
+
 [项目总览](../../README.md)

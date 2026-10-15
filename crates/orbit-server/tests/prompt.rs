@@ -6,11 +6,10 @@ use serde_json::{Value, json};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpListener,
-    process::Command,
 };
 
 #[tokio::test]
-async fn headless_chat_uses_the_service_policy_and_persists_the_answer() {
+async fn shared_prompt_uses_the_service_policy_and_persists_the_answer() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     let listener = TcpListener::bind("127.0.0.1:0")
@@ -97,45 +96,62 @@ async fn headless_chat_uses_the_service_policy_and_persists_the_answer() {
             .unwrap(),
     )
     .unwrap();
-    let output = tokio::time::timeout(
+    use orbit_client::{
+        configuration::Local,
+        transport::{Connection, Target},
+    };
+    use orbit_protocol::{Capability, Mode, Request, Response, SessionPolicy};
+    let connection = Connection {
+        local_configuration: Some(Local {
+            config: root.join("config.toml"),
+            auth: root.join("auth"),
+            model: None,
+        }),
+        target: Target::Local,
+        workspace: root.to_string_lossy().into_owned(),
+        executable: env!("CARGO_BIN_EXE_orbit-workspace-server").into(),
+        config: root.join("config.toml"),
+        database: Some(root.join("sessions.db")),
+        auth_dir: Some(root.join("auth")),
+        allow_mcp_start: false,
+        unattended: true,
+        interactive: None,
+    };
+    let mut client = connection.connect().await.unwrap();
+    let Response::Opened(info) = client
+        .request(Request::Open {
+            resume: None,
+            model: Some("test::second".into()),
+            policy: SessionPolicy {
+                read_only: true,
+                disabled: vec![Capability::All],
+            },
+            configuration: None,
+        })
+        .await
+        .unwrap()
+    else {
+        panic!("session did not open");
+    };
+    let result = tokio::time::timeout(
         Duration::from_secs(30),
-        Command::new(env!("CARGO_BIN_EXE_orbit-cli"))
-            .current_dir(root)
-            .env("HOME", root)
-            .env("XDG_CACHE_HOME", root.join("cache"))
-            .args([
-                "--config",
-                "config.toml",
-                "--database",
-                "sessions.db",
-                "--auth-dir",
-                "auth",
-                "chat",
-                "--mode",
-                "read-only",
-                "--disable",
-                "all",
-                "--model",
-                "second",
-                "test prompt",
-            ])
-            .kill_on_drop(true)
-            .output(),
+        orbit_client::prompt::execute(
+            &mut client,
+            &info.id,
+            orbit_client::prompt::PromptOptions {
+                prompt: "test prompt".into(),
+                images: Vec::new(),
+                mode: Mode::Auto,
+                model: None,
+            },
+            tokio_util::sync::CancellationToken::new(),
+            |_| Ok(()),
+        ),
     )
     .await
     .unwrap()
     .unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert_eq!(
-        String::from_utf8(output.stdout)
-            .unwrap()
-            .trim(),
-        "Service answer"
-    );
+    assert_eq!(result.answer, "Service answer");
     let store = orbit_store::store::Store::open(root.join("sessions.db"))
         .await
         .unwrap();
@@ -151,28 +167,12 @@ async fn headless_chat_uses_the_service_policy_and_persists_the_answer() {
             .unwrap()
             .contains("Service answer")
     );
-    let stop = Command::new(env!("CARGO_BIN_EXE_orbit-cli"))
-        .current_dir(root)
-        .env("HOME", root)
-        .env("XDG_CACHE_HOME", root.join("cache"))
-        .args([
-            "--config",
-            "config.toml",
-            "--database",
-            "sessions.db",
-            "--auth-dir",
-            "auth",
-            "connect",
-            "--stop",
-        ])
-        .kill_on_drop(true)
-        .output()
-        .await
-        .unwrap();
-    assert!(
-        stop.status.success(),
-        "{}",
-        String::from_utf8_lossy(&stop.stderr)
-    );
+    assert!(matches!(
+        client
+            .request(Request::Shutdown)
+            .await
+            .unwrap(),
+        Response::Ok
+    ));
     drop(model);
 }

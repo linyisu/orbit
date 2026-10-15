@@ -4,7 +4,7 @@
   <img src="assets/branding/orbit.svg" width="160" height="160" alt="Orbit 图标">
 </p>
 
-Rust 编写的编码 Agent，提供终端界面、命令行和实验性桌面客户端。支持多供应商模型、文件编辑、命令执行、持久化会话和子 Agent，可连接本地、SSH 与 WSL 工作区。
+Rust 编写的编码 Agent，提供终端界面和实验性桌面客户端。支持多供应商模型、文件编辑、命令执行、持久化会话和子 Agent，可连接本地、SSH 与 WSL 工作区。
 
 ## 快速开始
 
@@ -12,17 +12,12 @@ Rust 编写的编码 Agent，提供终端界面、命令行和实验性桌面客
 
 ```sh
 rustup target add x86_64-unknown-linux-musl
-cargo build --release -p orbit-tui -p orbit-cli --locked
+cargo build --release -p orbit-tui --locked
 cp config.example.toml config.toml
 ./target/release/orbit
 ```
 
 修改 [配置示例](config.example.toml) 中的连接，或在 TUI 用 `/connect` 登录和管理模型。客户端会记住模型选择，历史会话可用 `orbit --resume SESSION_ID` 恢复。
-
-```sh
-./target/release/orbit-cli chat --model provider::model "检查当前项目的测试失败"
-./target/release/orbit-cli sessions list
-```
 
 客户端内置同架构的静态工作区服务，首次构建较慢，使用时无需额外安装服务。桌面客户端的依赖与启动方式见 [GUI README](crates/orbit-gui/README.md)。
 
@@ -38,12 +33,11 @@ cp config.example.toml config.toml
 ## 工作区
 
 ```text
-CLI / TUI / GUI → client → server → service → agent / tools / store
+TUI / GUI → client → server → service → agent / tools / store
 ```
 
 | Crate | 用途 |
 | --- | --- |
-| [orbit-cli](crates/orbit-cli/README.md) | 命令行入口与单次任务 |
 | [orbit-tui](crates/orbit-tui/README.md) | 终端界面与交互 |
 | [orbit-gui](crates/orbit-gui/README.md) | GPUI Kit 桌面客户端 |
 | [orbit-client](crates/orbit-client/README.md) | 工作区连接与服务部署 |

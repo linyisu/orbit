@@ -171,7 +171,7 @@ async fn auto_local_mkdir_creates_nested_and_quoted_directories_in_the_requested
     });
 
     let request = receiver.recv().await.unwrap();
-    // The shared CLI/TUI policy answers this request without showing a dialog.
+    // The shared execution policy answers this request without showing a dialog.
     assert!(approval::auto_allows(&request.preview, root.path()));
     request.decision.send(true).unwrap();
     let output = task.await.unwrap().unwrap();

@@ -10,18 +10,13 @@
 - [migrations/](src/migrations/)：SeaORM Rust 迁移；已发布迁移保持稳定，后续变更追加版本。
 
 会话、检查点和子任务结果按事务提交；运行终态区分成功历史、失败和取消。
-运行投影由 store 维护证据和游标，调用方只更新会话元数据；恢复不会自动重跑中断命令。项目身份跟踪同文件系统的移动与改名，跨盘移动可用 `orbit-cli projects link ID` 显式关联。
+运行投影由 store 维护证据和游标，调用方只更新会话元数据；恢复不会自动重跑中断命令。项目身份跟踪同文件系统的移动与改名，跨盘移动需通过项目关联接口显式处理。
 
 ## 存储位置
 
 Linux 默认为 `$XDG_DATA_HOME/orbit/orbit.db`，未设置时使用 `~/.local/share/orbit/orbit.db`，可用 `--database` 覆盖。Unix 数据库权限为 `0600`。
 
 持久图片按内容去重并记录会话归属，删除最后一个引用会话后回收。文档页图和命令原始日志使用临时存储，旁路提问只保存在内存中。
-
-```sh
-orbit-cli sessions list
-orbit-cli sessions diagnostics SESSION_ID
-```
 
 ## 验证
 

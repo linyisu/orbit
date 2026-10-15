@@ -205,8 +205,8 @@ where
         .await
     }
 
-    /// Run the Agent with the canonical lifecycle event stream used by the TUI
-    /// and CLI. A closed receiver aborts with `EventChannelClosed`, preserving
+    /// Run the Agent with the canonical lifecycle event stream used by the service.
+    /// A closed receiver aborts with `EventChannelClosed`, preserving
     /// the previous channel contract.
     pub async fn run_with_agent_events(
         &self,

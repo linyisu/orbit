@@ -175,7 +175,7 @@ fn grouping_compares_operation_targets_and_ignores_only_read_pagination() {
         (
             "list_files",
             json!({
-                "path": "crates/orbit-cli"
+                "path": "crates/orbit-runtime"
             }),
             json!({
                 "path": "crates/orbit-tools"
@@ -432,7 +432,7 @@ fn grouping_compares_operation_targets_and_ignores_only_read_pagination() {
             "run_command",
             json!({
                 "command": "cargo check",
-                "cwd": "crates/orbit-cli"
+                "cwd": "crates/orbit-runtime"
             }),
             json!({
                 "command": "cargo check",

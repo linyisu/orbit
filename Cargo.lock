@@ -7247,31 +7247,6 @@ name = "orbit-build"
 version = "0.1.0"
 
 [[package]]
-name = "orbit-cli"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "crossterm",
- "orbit-agent",
- "orbit-auth",
- "orbit-build",
- "orbit-client",
- "orbit-config",
- "orbit-model",
- "orbit-protocol",
- "orbit-runtime",
- "orbit-store",
- "orbit-tools",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "tokio-util",
- "toml 0.9.12+spec-1.1.0",
-]
-
-[[package]]
 name = "orbit-client"
 version = "0.1.0"
 dependencies = [
@@ -7407,9 +7382,20 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "orbit-agent",
+ "orbit-auth",
+ "orbit-client",
+ "orbit-config",
+ "orbit-model",
+ "orbit-protocol",
+ "orbit-runtime",
  "orbit-service",
+ "orbit-store",
+ "orbit-tools",
+ "serde_json",
  "tempfile",
  "tokio",
+ "tokio-util",
 ]
 
 [[package]]
@@ -7575,6 +7561,7 @@ dependencies = [
  "anyhow",
  "clap",
  "orbit-build",
+ "orbit-client",
  "orbit-protocol",
  "regex",
  "serde_json",

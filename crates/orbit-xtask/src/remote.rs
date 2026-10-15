@@ -202,42 +202,88 @@ fn sha256(path: &Path) -> Result<String> {
         .collect())
 }
 
+/// Exercise the production deployment path in a subprocess with an isolated SSH transport.
+pub async fn probe(server: &Path) -> Result<()> {
+    let mut options = orbit_client::ConnectionOptions::local("/tmp".into());
+    options.ssh = Some("isolated-test".into());
+    options.upload_server = Some(server.into());
+    let connection = orbit_client::prepare_connection(
+        &options,
+        "missing.toml".into(),
+        Some("/tmp/sessions.db".into()),
+        Some(std::env::current_dir()?.join("auth")),
+        None,
+    )
+    .await?;
+    let mut client = connection.connect().await?;
+    ensure!(
+        matches!(
+            client
+                .request(Request::Sessions)
+                .await?,
+            Response::Sessions(_)
+        ),
+        "server session list failed"
+    );
+    ensure!(
+        matches!(
+            client
+                .request(Request::Shutdown)
+                .await?,
+            Response::Ok
+        ),
+        "server shutdown failed"
+    );
+    Ok(())
+}
+
+/// Check the complete server payload, rather than accepting a separate matching file alone.
+fn embedded_server(client: &Path, server: &Path) -> Result<()> {
+    let client = fs::read(client)?;
+    let server = fs::read(server)?;
+    ensure!(!server.is_empty(), "embedded server is empty");
+    ensure!(
+        client
+            .windows(server.len())
+            .any(|bytes| bytes == server),
+        "terminal client does not contain the verification server"
+    );
+    Ok(())
+}
+
 async fn in_container(bundle: &Path, container: &str) -> Result<()> {
     let directory = tempfile::Builder::new()
         .prefix("orbit-bundle-test-")
         .tempdir()?;
-    let client = directory.path().join("orbit-cli");
-    fs::copy(bundle.join("orbit-cli"), &client)?;
+    let client = directory.path().join("orbit");
+    fs::copy(bundle.join("orbit"), &client)?;
+    let server = bundle.join("orbit-workspace-server");
+    orbit_build::verify_static_server(&server).map_err(anyhow::Error::msg)?;
+    embedded_server(&client, &server)?;
     ensure!(
         fs::read_dir(directory.path())?.count() == 1,
         "client has unexpected companion files"
     );
     let wrapper = directory.path().join("ssh");
     // Copy this Rust tool as the transport shim. No interpreter or generated script is required.
-    fs::copy(std::env::current_exe()?, &wrapper)?;
+    let verifier = std::env::current_exe()?;
+    fs::copy(&verifier, &wrapper)?;
     let mut paths = vec![directory.path().to_owned()];
     paths.extend(std::env::split_paths(
         &std::env::var_os("PATH").unwrap_or_default(),
     ));
     let paths = std::env::join_paths(paths)?;
     let connect = || {
-        let mut command = Command::new(&client);
+        let mut command = Command::new(&verifier);
         command
             .current_dir(directory.path())
             .env("PATH", &paths)
             .env("ORBIT_TEST_CONTAINER", container)
-            .args([
-                "connect",
-                "--ssh",
-                "isolated-test",
-                "--workspace",
-                "/tmp",
-                "--database",
-                "/tmp/sessions.db",
-                "--auth-dir",
-                "/tmp/auth",
-                "--list",
-            ]);
+            .env("HOME", directory.path())
+            .env("XDG_CONFIG_HOME", directory.path().join("config"))
+            .env("XDG_CACHE_HOME", directory.path().join("cache"))
+            .arg("probe-bundle")
+            .arg(&server);
         command
     };
     process::run(&mut connect()).await?;
@@ -271,7 +317,7 @@ async fn in_container(bundle: &Path, container: &str) -> Result<()> {
     );
     unconfigured_workspace(container, executable).await?;
     println!(
-        "PASS: standalone client, static deployment, local configuration, session opening and \
+        "PASS: embedded terminal asset, static deployment, local configuration, session opening and \
             cache reuse on Ubuntu 20.04"
     );
     Ok(())
@@ -280,8 +326,11 @@ async fn in_container(bundle: &Path, container: &str) -> Result<()> {
 pub async fn verify(bundle: &Path) -> Result<()> {
     let bundle = bundle.canonicalize()?;
     ensure!(
-        bundle.join("orbit-cli").is_file(),
-        "bundle is missing orbit-cli"
+        bundle.join("orbit").is_file()
+            && bundle
+                .join("orbit-workspace-server")
+                .is_file(),
+        "bundle is missing the terminal client or verification server"
     );
     let certificates = find_certificates(
         std::env::var_os("SSL_CERT_FILE").map(PathBuf::from),
@@ -329,6 +378,20 @@ pub async fn verify(bundle: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn verification_requires_the_complete_embedded_server() {
+        let directory = tempfile::tempdir().unwrap();
+        let client = directory.path().join("terminal");
+        let server = directory.path().join("server");
+        fs::write(&server, b"synthetic-service-payload").unwrap();
+        fs::write(&client, b"prefix-synthetic-service-payload-suffix").unwrap();
+        embedded_server(&client, &server).unwrap();
+        fs::write(&client, b"prefix-synthetic-service-payloaX-suffix").unwrap();
+        assert!(embedded_server(&client, &server).is_err());
+        fs::write(&server, b"").unwrap();
+        assert!(embedded_server(&client, &server).is_err());
+    }
 
     #[test]
     fn certificate_selection_prefers_explicit_valid_file_and_skips_missing_or_empty_candidates() {

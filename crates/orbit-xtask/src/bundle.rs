@@ -46,14 +46,25 @@ fn artifacts(output: &[u8]) -> Result<BTreeMap<String, PathBuf>> {
                 message["target"]["name"].as_str(),
                 message["executable"].as_str(),
             )
-            && ["orbit", "orbit-cli"].contains(&name)
+            && name == "orbit"
         {
             files.insert(name.to_owned(), executable.into());
         }
+        if message["reason"] == "build-script-executed"
+            && let Some(environment) = message["env"].as_array()
+        {
+            for variable in environment {
+                if variable[0] == "ORBIT_EMBEDDED_SERVER"
+                    && let Some(path) = variable[1].as_str()
+                {
+                    files.insert("orbit-workspace-server".into(), path.into());
+                }
+            }
+        }
     }
     ensure!(
-        files.len() == 2,
-        "Cargo did not report both client executables"
+        files.contains_key("orbit") && files.contains_key("orbit-workspace-server"),
+        "Cargo did not report the terminal client and its embedded server"
     );
     Ok(files)
 }
@@ -76,8 +87,6 @@ pub async fn build(root: &Path, profile: Profile) -> Result<()> {
         "--message-format=json-render-diagnostics",
         "-p",
         "orbit-tui",
-        "-p",
-        "orbit-cli",
     ]);
     if matches!(profile, Profile::Release) {
         command.arg("--release");
@@ -101,6 +110,7 @@ pub async fn build(root: &Path, profile: Profile) -> Result<()> {
     for obsolete in [
         "orbit-server-x86_64-linux-musl",
         "orbit-server-aarch64-linux-musl",
+        "orbit-cli",
     ] {
         match fs::remove_file(output.join(obsolete)) {
             Ok(()) => (),
@@ -117,9 +127,7 @@ pub async fn build(root: &Path, profile: Profile) -> Result<()> {
 
 pub async fn archive(directory: &Path, output: &Path) -> Result<()> {
     let directory = directory.canonicalize()?;
-    for name in ["orbit", "orbit-cli"] {
-        ensure!(directory.join(name).is_file(), "missing bundled {name}");
-    }
+    ensure!(directory.join("orbit").is_file(), "missing bundled orbit");
     if let Some(parent) = output.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -129,7 +137,7 @@ pub async fn archive(directory: &Path, output: &Path) -> Result<()> {
             .arg(output)
             .arg("-C")
             .arg(directory)
-            .args(["orbit", "orbit-cli"]),
+            .arg("orbit"),
     )
     .await?;
     println!("Archive: {}", output.display());
@@ -139,6 +147,57 @@ pub async fn archive(directory: &Path, output: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn archive_contains_only_the_terminal_and_preserves_executable_permissions() {
+        let directory = tempfile::tempdir().unwrap();
+        let bundle = directory.path().join("bundle");
+        let source = directory.path().join("terminal");
+        fs::create_dir(&bundle).unwrap();
+        fs::write(&source, b"synthetic terminal").unwrap();
+        install(&source, &bundle.join("orbit")).unwrap();
+        fs::write(bundle.join("orbit-workspace-server"), b"verification asset").unwrap();
+        let output = directory.path().join("release.tar.gz");
+        archive(&bundle, &output).await.unwrap();
+        let listing = process::stdout(
+            process::run(
+                Command::new("tar")
+                    .arg("-tzf")
+                    .arg(&output),
+            )
+            .await
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(listing, "orbit");
+        let extracted = directory.path().join("extracted");
+        fs::create_dir(&extracted).unwrap();
+        process::run(
+            Command::new("tar")
+                .arg("-xzf")
+                .arg(&output)
+                .arg("-C")
+                .arg(&extracted),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            fs::read(extracted.join("orbit")).unwrap(),
+            b"synthetic terminal"
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(extracted.join("orbit"))
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o755
+            );
+        }
+    }
 
     #[test]
     fn uses_cargo_artifacts_instead_of_assuming_a_target_layout() {
@@ -158,11 +217,8 @@ mod tests {
                 "executable": "/custom-target/triple/release/orbit"
             }),
             serde_json::json!({
-                "reason": "compiler-artifact",
-                "target": {
-                    "name": "orbit-cli"
-                },
-                "executable": "/custom-target/triple/release/orbit-cli"
+                "reason": "build-script-executed",
+                "env": [["ORBIT_EMBEDDED_SERVER", "/static-target/orbit-workspace-server"]]
             }),
             serde_json::json!({
                 "reason": "build-finished",
@@ -175,6 +231,10 @@ mod tests {
         assert_eq!(
             files["orbit"],
             Path::new("/custom-target/triple/release/orbit")
+        );
+        assert_eq!(
+            files["orbit-workspace-server"],
+            Path::new("/static-target/orbit-workspace-server")
         );
         assert!(artifacts(b"{\"reason\":\"build-finished\",\"success\":true}").is_err());
     }

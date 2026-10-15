@@ -4,13 +4,7 @@ API Key、OAuth 登录、凭据存储和令牌刷新。支持 Google、Antigravi
 
 ## 使用
 
-```sh
-orbit-cli auth login antigravity
-orbit-cli auth set-key my-provider --base-url https://api.example.com/v1
-orbit-cli auth list
-```
-
-TUI 用 `/connect`，GUI 用账号设置。无浏览器环境可用 `--no-browser` 或 `--manual`；完整参数见 `orbit-cli auth --help`。
+TUI 用 `/connect`，GUI 用账号设置，完成登录、API Key 管理和账号查看。
 
 配置用 `credential` 引用保存的凭据，模型 ID 按账号实际目录填写：
 

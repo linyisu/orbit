@@ -1,4 +1,4 @@
-//! Native transport stand-in for the CLI's SSH/WSL integration tests.
+//! Native transport stand-in for shared-client SSH/WSL integration tests.
 use std::{
     io::{self, Write},
     os::unix::process::CommandExt,

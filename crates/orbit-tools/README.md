@@ -32,7 +32,7 @@ MCP 的 `isError` 映射为失败结果，保留原始内容及可用连接，�
 
 ## MCP
 
-配置位于 `[mcp.servers.<名称>]`，当前支持 stdio。启动需显式允许：CLI/TUI 使用 `--allow-mcp-start`，GUI 使用 MCP 设置开关。
+配置位于 `[mcp.servers.<名称>]`，当前支持 stdio。启动需显式允许：TUI 使用 `--allow-mcp-start`，GUI 使用 MCP 设置开关。
 
 GUI 保存后点击“应用到当前会话”重新连接；当前任务保留原工具，下一次发送使用更新结果。导入先识别配置和启动参数，确认后安装依赖；失败显示完整错误链与有界 stderr。
 

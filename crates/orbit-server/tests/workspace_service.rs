@@ -1,7 +1,11 @@
+#[path = "support/client_probe.rs"]
+mod client_probe;
+
 #[cfg(test)]
 use orbit_config::test_support::{TestConfig, TestModel, TestProvider};
 use std::{path::Path, process::Stdio, time::Duration};
 
+use orbit_client::transport::{SshOptions, Target};
 use serde_json::{Value, json};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -19,7 +23,7 @@ impl Client {
     async fn connect(root: &Path) -> Self {
         Self::connect_with(
             root,
-            Path::new(env!("ORBIT_EMBEDDED_SERVER")),
+            Path::new(env!("CARGO_BIN_EXE_orbit-workspace-server")),
             &root.join("config.toml"),
             &root.join("sessions.db"),
         )
@@ -41,7 +45,7 @@ impl Client {
             .env("XDG_CONFIG_HOME", root.join("config-home"))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
+            .stderr(Stdio::inherit())
             .kill_on_drop(true)
             .spawn()
             .unwrap();
@@ -435,8 +439,7 @@ async fn disconnect_preserves_approval_and_run_duplicate_submission_does_not_rep
             .await["type"],
         "error"
     );
-    let upgraded = root.join("upgraded-server");
-    std::fs::copy(env!("ORBIT_EMBEDDED_SERVER"), &upgraded).unwrap();
+    let upgraded = server_alias(root);
     let mut observer = Client::connect_with(
         root,
         &upgraded,
@@ -774,30 +777,32 @@ async fn ssh_and_wsl_launchers_use_the_same_service_and_ignore_shell_banners() {
     let bin = transport_launchers(root);
     let workspace = root.join("project 'quoted' $(touch unexpected)");
     std::fs::create_dir(&workspace).unwrap();
-    let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
     for target in [
-        vec![],
-        vec!["--ssh", "test-alias"],
-        vec!["--wsl", "Test Distro", "--wsl-user", "dev"],
+        Target::Local,
+        Target::Ssh {
+            host: "test-alias".into(),
+            options: SshOptions::default(),
+        },
+        Target::Wsl {
+            distribution: "Test Distro".into(),
+            user: Some("dev".into()),
+        },
     ] {
-        for operation in ["--list", "--stop"] {
-            let output = Command::new(env!("CARGO_BIN_EXE_orbit-cli"))
-                .arg("connect")
-                .args(&target)
-                .arg("--server")
-                .arg(env!("ORBIT_EMBEDDED_SERVER"))
-                .arg("--workspace")
-                .arg(&workspace)
-                .arg("--database")
-                .arg(root.join("test.db"))
-                .arg("--auth-dir")
-                .arg(root.join("auth"))
-                .arg(operation)
-                .env("PATH", &path)
-                .env("HOME", root)
-                .output()
-                .await
-                .unwrap();
+        for operation in ["list", "shutdown"] {
+            let output = client_probe::command(
+                root,
+                &bin,
+                json!({
+                    "target": target,
+                    "workspace": workspace,
+                    "database": root.join("test.db"),
+                    "auth": root.join("auth"),
+                    "operation": operation
+                }),
+            )
+            .output()
+            .await
+            .unwrap();
             assert!(
                 output.status.success(),
                 "{}",
@@ -939,6 +944,14 @@ async fn cancelling_a_disconnected_pending_approval_does_not_write_the_file() {
     );
 }
 
+/// Exercise a second launch path without hashing a full debug binary during the handshake.
+/// Content identity between separate copies is covered by the service lifecycle tests.
+fn server_alias(root: &Path) -> std::path::PathBuf {
+    let alias = root.join("server-alias");
+    std::os::unix::fs::symlink(env!("CARGO_BIN_EXE_orbit-workspace-server"), &alias).unwrap();
+    alias
+}
+
 fn transport_launchers(root: &Path) -> std::path::PathBuf {
     let bin = root.join("bin");
     std::fs::create_dir(&bin).unwrap();
@@ -965,7 +978,16 @@ async fn remote_prompt_uses_local_configuration_and_credentials_in_an_unconfigur
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();
     let bin = transport_launchers(root);
-    for target in [vec!["--ssh", "test-alias"], vec!["--wsl", "Test Distro"]] {
+    for target in [
+        Target::Ssh {
+            host: "test-alias".into(),
+            options: SshOptions::default(),
+        },
+        Target::Wsl {
+            distribution: "Test Distro".into(),
+            user: None,
+        },
+    ] {
         let project = tempfile::tempdir_in(root).unwrap();
         let local = tempfile::tempdir_in(root).unwrap();
         let (url, model) = mock_model().await;
@@ -991,28 +1013,21 @@ async fn remote_prompt_uses_local_configuration_and_credentials_in_an_unconfigur
         .unwrap();
         let output = tokio::time::timeout(
             Duration::from_secs(30),
-            Command::new(env!("CARGO_BIN_EXE_orbit-cli"))
-                .arg("connect")
-                .args(&target)
-                .arg("--server")
-                .arg(env!("ORBIT_EMBEDDED_SERVER"))
-                .arg("--workspace")
-                .arg(project.path())
-                .arg("--config")
-                .arg(&config)
-                .arg("--auth-dir")
-                .arg(&auth)
-                .arg("--database")
-                .arg(project.path().join("sessions.db"))
-                .args(["--model", "test::mock"])
-                .args(["--prompt", "write a file"])
-                .env(
-                    "PATH",
-                    format!("{}:{}", bin.display(), std::env::var("PATH").unwrap()),
-                )
-                .env("HOME", root)
-                .kill_on_drop(true)
-                .output(),
+            client_probe::command(
+                root,
+                &bin,
+                json!({
+                    "target": target,
+                    "workspace": project.path(),
+                    "config": config,
+                    "auth": auth,
+                    "database": project.path().join("sessions.db"),
+                    "operation": "prompt",
+                    "model": "test::mock",
+                    "prompt": "write a file"
+                }),
+            )
+            .output(),
         )
         .await
         .unwrap()
@@ -1035,24 +1050,19 @@ async fn remote_prompt_uses_local_configuration_and_credentials_in_an_unconfigur
         assert!(!project.path().join("auth").exists());
         assert!(!String::from_utf8_lossy(&output.stderr).contains("test-only"));
         model.await.unwrap();
-        Command::new(env!("CARGO_BIN_EXE_orbit-cli"))
-            .arg("connect")
-            .args(&target)
-            .arg("--server")
-            .arg(env!("ORBIT_EMBEDDED_SERVER"))
-            .arg("--workspace")
-            .arg(project.path())
-            .arg("--database")
-            .arg(project.path().join("sessions.db"))
-            .arg("--stop")
-            .env(
-                "PATH",
-                format!("{}:{}", bin.display(), std::env::var("PATH").unwrap()),
-            )
-            .env("HOME", root)
-            .output()
-            .await
-            .unwrap();
+        client_probe::command(
+            root,
+            &bin,
+            json!({
+                "target": target,
+                "workspace": project.path(),
+                "database": project.path().join("sessions.db"),
+                "operation": "shutdown"
+            }),
+        )
+        .output()
+        .await
+        .unwrap();
     }
 }
 
@@ -1436,7 +1446,7 @@ async fn native_execution_and_model_inheritance_use_the_packaged_local_service()
         }),
         target: Target::Local,
         workspace: root.to_string_lossy().into(),
-        executable: env!("ORBIT_EMBEDDED_SERVER").into(),
+        executable: env!("CARGO_BIN_EXE_orbit-workspace-server").into(),
         config,
         database: Some(root.join("sessions.db")),
         auth_dir: Some(auth),
@@ -1736,7 +1746,7 @@ async fn model_selection_is_explicit_and_catalog_refresh_never_switches_it() {
 }
 
 #[tokio::test]
-async fn two_sessions_share_a_service_across_executables_configs_and_database_aliases() {
+async fn two_sessions_share_a_service_across_executable_paths_configs_and_database_aliases() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();
     for name in ["first", "second"] {
@@ -1749,14 +1759,13 @@ async fn two_sessions_share_a_service_across_executables_configs_and_database_al
             .write(root.join(format!("{name}.toml")))
             .unwrap();
     }
-    let upgraded = root.join("upgraded-server");
-    std::fs::copy(env!("ORBIT_EMBEDDED_SERVER"), &upgraded).unwrap();
+    let upgraded = server_alias(root);
     let database = root.join("sessions.db");
     let alias = root.join("alias.db");
     std::os::unix::fs::symlink(&database, &alias).unwrap();
     let mut first = Client::connect_with(
         root,
-        Path::new(env!("ORBIT_EMBEDDED_SERVER")),
+        Path::new(env!("CARGO_BIN_EXE_orbit-workspace-server")),
         &root.join("first.toml"),
         &database,
     )

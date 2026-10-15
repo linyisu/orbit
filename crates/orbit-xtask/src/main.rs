@@ -20,13 +20,15 @@ struct Arguments {
 enum Task {
     /// Check workspace dependency and source ownership boundaries.
     Check,
-    /// Build and collect clients with their embedded static workspace server.
+    /// Build the terminal client and collect its embedded static server for verification.
     Bundle {
         #[arg(value_enum, default_value_t = Profile::Release)]
         profile: Profile,
     },
     /// Verify standalone deployment, protocol and cache reuse in Ubuntu 20.04.
     VerifyBundle { directory: Option<PathBuf> },
+    #[command(hide = true)]
+    ProbeBundle { server: PathBuf },
     /// Archive a prepared bundle, preserving executable permissions.
     Archive {
         directory: Option<PathBuf>,
@@ -82,6 +84,7 @@ async fn main() -> Result<()> {
             };
             remote::verify(&directory).await?;
         }
+        Task::ProbeBundle { server } => remote::probe(&server).await?,
         Task::Archive { directory, output } => {
             let target = bundle::target_directory(root()).await?;
             bundle::archive(
