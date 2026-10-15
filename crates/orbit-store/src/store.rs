@@ -50,6 +50,13 @@ pub struct SessionWriter {
     active_run: Option<ActiveRun>,
 }
 
+impl Drop for SessionWriter {
+    /// Release the owner's lease even if a concurrent fork temporarily retains its descriptor.
+    fn drop(&mut self) {
+        let _ = self._lock.unlock();
+    }
+}
+
 struct ActiveRun {
     id: i64,
     timing: RunTiming,
@@ -741,6 +748,30 @@ pub(crate) fn now_millis() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn retained_file_descriptors_cannot_prolong_a_dropped_writer_lease() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::open(directory.path().join("sessions.db"))
+            .await
+            .unwrap();
+        let writer = store
+            .create(
+                directory.path().display().to_string(),
+                "generated-model".into(),
+            )
+            .await
+            .unwrap();
+        let id = writer.id().to_owned();
+        let inherited = writer._lock.try_clone().unwrap();
+        drop(writer);
+        let successor = store.acquire(&id).await.unwrap();
+        drop(inherited);
+        assert!(store.acquire(&id).await.is_err());
+        drop(successor);
+        assert!(store.acquire(&id).await.is_ok());
+    }
 
     #[tokio::test]
     async fn a_long_history_reader_does_not_block_the_writer_connection() {
