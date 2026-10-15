@@ -299,6 +299,39 @@ pub fn check(root: &Path) -> Result<Vec<String>> {
         }
     }
     let presentation = Regex::new(r"\b(?:orbit_tui|crate::tui)::")?;
+    let provider_module =
+        Regex::new(r"\bmod\s+(?:anthropic|antigravity|chatgpt|deepseek|google)\s*;")?;
+    for source in sources(&root.join("crates/orbit-config/src"), "rs")? {
+        inspect(
+            root,
+            &source,
+            &provider_module,
+            "provider wire adapters belong to orbit-model, not configuration",
+            &mut errors,
+        )?;
+    }
+    let model_discovery =
+        Regex::new(r"\b(?:fn\s+(?:model_ids|discover_models)|mod\s+(?:catalog|discovery))\b")?;
+    for source in sources(&root.join("crates/orbit-auth/src"), "rs")? {
+        inspect(
+            root,
+            &source,
+            &model_discovery,
+            "model discovery belongs to orbit-model, not credential acquisition",
+            &mut errors,
+        )?;
+    }
+    for provider in ["anthropic", "antigravity", "chatgpt", "google", "api_key"] {
+        if root
+            .join("crates/orbit-auth/src")
+            .join(format!("{provider}.rs"))
+            .exists()
+        {
+            errors.push(format!(
+                "orbit-auth: {provider} authentication belongs under providers/"
+            ));
+        }
+    }
     for source in sources(&root.join("crates/orbit-service/src"), "rs")? {
         inspect(
             root,
@@ -374,6 +407,36 @@ mod tests {
             .unwrap();
         }
         dir
+    }
+
+    #[test]
+    fn provider_protocols_cannot_spread_into_configuration_or_generic_authentication() {
+        let dir = workspace();
+        let config = dir
+            .path()
+            .join("crates/orbit-config/src");
+        let auth = dir.path().join("crates/orbit-auth/src");
+        fs::create_dir_all(&config).unwrap();
+        fs::create_dir_all(&auth).unwrap();
+        fs::write(config.join("models.rs"), "mod antigravity;\n").unwrap();
+        fs::write(auth.join("models.rs"), "fn model_ids() {}\n").unwrap();
+        fs::write(auth.join("google.rs"), "// misplaced provider\n").unwrap();
+        let errors = check(dir.path()).unwrap();
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("wire adapters"))
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("model discovery"))
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("providers/"))
+        );
     }
 
     #[test]
