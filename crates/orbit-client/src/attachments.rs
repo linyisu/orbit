@@ -53,6 +53,27 @@ pub fn uploads(attachments: &[Attachment]) -> Result<Vec<orbit_protocol::ImageUp
         .collect()
 }
 
+/// Encode a composer containing both images and ordinary files, preserving attachment names.
+pub fn composer_uploads(
+    attachments: &[Attachment],
+) -> Result<(
+    Vec<orbit_protocol::ImageUpload>,
+    Vec<orbit_protocol::FileUpload>,
+)> {
+    let mut images = Vec::new();
+    let mut files = Vec::new();
+    for attachment in attachments {
+        if attachment.is_image() {
+            images.extend(uploads(std::slice::from_ref(attachment))?);
+        } else {
+            let mut file = file_upload(attachment.path())?;
+            file.name = attachment.name().into();
+            files.push(file);
+        }
+    }
+    Ok((images, files))
+}
+
 /// Read a bounded regular file before transporting it to the session host.
 pub fn file_upload(path: &Path) -> Result<orbit_protocol::FileUpload> {
     use base64::Engine;

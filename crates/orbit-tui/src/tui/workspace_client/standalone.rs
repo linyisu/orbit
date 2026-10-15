@@ -7,29 +7,32 @@ use crate::tui::{
 };
 
 pub(super) async fn run(mut opened: Opened) -> Result<()> {
-    let settings = opened
-        .connection
-        .local_configuration
-        .as_ref()
-        .ok_or_else(|| anyhow::anyhow!("本地连接配置缺失"))?;
-    let directory = settings
-        .auth
-        .parent()
-        .unwrap_or(&settings.auth)
-        .join("windows");
-    let window = workspace::windows::TuiWindow::open_for_connection(
-        directory,
-        &mut opened.client,
-        &opened.connection,
-    )
-    .await?;
+    let window =
+        workspace::windows::ClientWindow::for_connection(&mut opened.client, &opened.connection)
+            .await?;
     let previous = window.previous().to_vec();
-    let mut remembered = Vec::new();
+    let mut remembered = None;
+    let mut save_error = None;
     let mut persisted = std::time::Instant::now();
     let (_guard, mut terminal) = terminal::TerminalGuard::enter()?;
     let first = Tab::ready(opened, media::Context::detect(Arc::default()));
     let mut tabs = Tabs::default();
-    tabs.add_remote(first);
+    let restore_active = !first.persisted;
+    let initial = tabs.add_remote(first);
+    if !previous.is_empty() {
+        tabs.restore_tabs(&initial, &previous.iter().collect::<Vec<_>>());
+        tabs.sync_remote_ui();
+        if restore_active && let Some(index) = window.active() {
+            tabs.active_remote = tabs.remote[&tabs.active_remote.clone().unwrap()]
+                .state
+                .tabs
+                .get(index)
+                .map(|entry| entry.id.clone())
+                .or(tabs.active_remote);
+        } else if !restore_active {
+            tabs.active_remote = Some(initial);
+        }
+    }
     let mut events = EventStream::new();
     let mut pending_event = None;
     let mut frames = Frames::default();
@@ -176,9 +179,23 @@ pub(super) async fn run(mut opened: Opened) -> Result<()> {
                     persisted = std::time::Instant::now();
                     tabs.sync_remote_ui();
                     let saved = saved_tabs(&tabs);
-                    if saved != remembered {
-                        window.update(saved.clone()).await?;
-                        remembered = saved;
+                    let active = active_index(&tabs, &saved);
+                    if remembered.as_ref().is_none_or(|(tabs, selected)| tabs != &saved || *selected != active) {
+                        match window.update_active(saved.clone(), active).await {
+                            Ok(()) => {
+                                remembered = Some((saved, active));
+                                save_error = None;
+                            }
+                            Err(error) => {
+                                let message = format!("窗口和草稿尚未保存：{error:#}");
+                                if save_error.as_ref() != Some(&message) {
+                                    let tab = tabs.remote.get_mut(tabs.active_remote.as_ref().unwrap()).unwrap();
+                                    tab.state.report_local(TranscriptItem::Error(message.clone()));
+                                    frames.request(time::Instant::now());
+                                    save_error = Some(message);
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -203,12 +220,29 @@ pub(super) async fn run(mut opened: Opened) -> Result<()> {
         }
     }
     tabs.sync_remote_ui();
-    window.update(saved_tabs(&tabs)).await?;
+    let saved = saved_tabs(&tabs);
+    let active = active_index(&tabs, &saved);
+    window
+        .update_active(saved, active)
+        .await?;
     window.close().await?;
     Ok(())
 }
 
-fn saved_tabs(tabs: &Tabs) -> Vec<workspace::windows::SavedTab> {
+fn active_index(tabs: &Tabs, saved: &[workspace::windows::SavedTab]) -> Option<usize> {
+    let id = tabs.active_remote.as_ref()?;
+    let key = tabs
+        .remote
+        .get(id)?
+        .restore_key
+        .as_ref()
+        .unwrap_or(id);
+    saved
+        .iter()
+        .position(|saved| &saved.key == key)
+}
+
+pub(super) fn saved_tabs(tabs: &Tabs) -> Vec<workspace::windows::SavedTab> {
     let Some(active) = tabs
         .active_remote
         .as_ref()
@@ -222,14 +256,45 @@ fn saved_tabs(tabs: &Tabs) -> Vec<workspace::windows::SavedTab> {
         .iter()
         .filter_map(|entry| {
             let tab = tabs.remote.get(&entry.id)?;
-            if !tab.persisted || (tab.state.is_home() && !tab.state.btw.has_records()) {
-                return None;
-            }
-            workspace::windows::SavedTab::from_connection(
-                tab.connection.as_ref()?,
-                tab.id.clone()?,
-                tab.title.clone(),
-            )
+            let draft = workspace::windows::Draft {
+                text: tab.state.input.text.clone(),
+                attachments: tab
+                    .state
+                    .attachments
+                    .iter()
+                    .map(|attachment| workspace::windows::DraftAttachment {
+                        name: attachment.name().into(),
+                        path: attachment.path().into(),
+                    })
+                    .collect(),
+                leases: tab.state.attachments.clone(),
+            };
+            let mut saved = if let Some(connection) = tab.connection.as_ref() {
+                let mut saved = workspace::windows::SavedTab::from_connection(
+                    connection,
+                    tab.id.clone()?,
+                    tab.title.clone(),
+                )?;
+                if !tab.persisted {
+                    saved.id = None;
+                }
+                saved
+            } else {
+                tab.spec
+                    .as_ref()?
+                    .saved_tab(entry.id.clone(), tab.title.clone(), draft.clone())?
+            };
+            saved.key = tab
+                .restore_key
+                .clone()
+                .unwrap_or_else(|| entry.id.clone());
+            saved.server = tab
+                .spec
+                .as_ref()
+                .and_then(|spec| spec.server())
+                .map(str::to_owned);
+            saved.draft = draft;
+            Some(saved)
         })
         .collect()
 }

@@ -1150,7 +1150,10 @@ pub(in crate::tui) fn connected_tab(target: workspace::transport::Target) -> Tab
 
 fn saved_local(id: &str) -> workspace::windows::SavedTab {
     workspace::windows::SavedTab {
-        id: id.into(),
+        id: Some(id.into()),
+        key: String::new(),
+        draft: Default::default(),
+        server: None,
         title: format!("本地 · {id}"),
         target: workspace::transport::Target::Local,
         workspace: "/project".into(),
@@ -1188,7 +1191,7 @@ async fn restore_reuses_home_immediately_and_preserves_the_other_restored_tabs()
             .collect();
 
         let mut restored = connected_tab(Target::Local);
-        restored.id = Some(first.id);
+        restored.id = first.id;
         restored
             .state
             .transcript
@@ -1240,7 +1243,7 @@ async fn restore_failures_can_retry_in_the_same_tab() {
     assert_eq!(tabs.remote[&restored].state.workspace, saved.workspace);
 
     let mut retried = connected_tab(Target::Local);
-    retried.id = Some(saved.id);
+    retried.id = saved.id;
     tabs.remote
         .insert(restored.clone(), retried);
     tabs.poll_remote().await;
@@ -1267,7 +1270,7 @@ async fn restore_keeps_drafts_and_reuses_already_open_sessions() {
         assert_eq!(tabs.remote.len(), if has_draft { 2 } else { 1 });
         assert_eq!(restored == source, !has_draft);
         let mut ready = connected_tab(Target::Local);
-        ready.id = Some(saved.id.clone());
+        ready.id = saved.id.clone();
         let connection = Arc::make_mut(ready.connection.as_mut().unwrap());
         connection.config = saved.config.clone();
         connection.local_configuration = Some(workspace::configuration::Local {
@@ -1602,7 +1605,10 @@ async fn restoring_local_tabs_and_reconnecting_never_opens_remote_configuration(
     let mut tabs = crate::tui::tabs::live::Tabs::default();
     for id in ["first", "second"] {
         let saved = SavedTab {
-            id: id.into(),
+            id: Some(id.into()),
+            key: String::new(),
+            draft: Default::default(),
+            server: None,
             title: id.into(),
             target: Target::Local,
             workspace: "/project".into(),
@@ -2120,4 +2126,68 @@ fn compact_run_presentation_sets_activity_before_any_model_event() {
                 .contains("正在压缩上下文")
         );
     }
+}
+
+#[tokio::test]
+async fn shared_restore_populates_unsent_drafts_without_submitting_or_losing_pending_tabs() {
+    let mut tabs = crate::tui::tabs::live::Tabs::default();
+    let source = tabs.add_remote(connected_tab(workspace::transport::Target::Local));
+    let mut saved = saved_local("generated-session");
+    saved.draft.text = "Generated draft remains unsent".into();
+    saved
+        .draft
+        .attachments
+        .push(workspace::windows::DraftAttachment {
+            path: "/synthetic/document.txt".into(),
+            name: "document.txt".into(),
+        });
+    tabs.restore_tabs(&source, &[&saved]);
+    let active = tabs.active_remote.clone().unwrap();
+    let tab = &tabs.remote[&active];
+    assert_eq!(tab.state.input.text, saved.draft.text);
+    assert_eq!(tab.state.attachments[0].name(), "document.txt");
+    assert!(tab.starting.is_none());
+    assert!(tab.commands.is_none());
+    assert!(tab.connecting.is_some());
+    assert!(
+        render_screen(
+            &mut tabs
+                .remote
+                .get_mut(&active)
+                .unwrap()
+                .state
+        )
+        .contains("document.txt")
+    );
+    tabs.sync_remote_ui();
+    let retained = super::standalone::saved_tabs(&tabs);
+    assert_eq!(retained.len(), 1);
+    assert_eq!(retained[0].id, saved.id);
+    assert_eq!(retained[0].draft.text, saved.draft.text);
+}
+
+#[test]
+fn restored_document_drafts_use_the_shared_attachment_request_without_vision() {
+    let root = tempfile::tempdir().unwrap();
+    let file = root.path().join("generated-notes.txt");
+    std::fs::write(&file, b"generated document material").unwrap();
+    let (mut tab, mut requests) = tab("local");
+    tab.state.supports_vision = false;
+    tab.state.attachments = workspace::windows::Draft {
+        attachments: vec![workspace::windows::DraftAttachment {
+            name: "original-notes.txt".into(),
+            path: file,
+        }],
+        ..Default::default()
+    }
+    .attachment_handles();
+    tab.submit("Inspect the generated document".into())
+        .unwrap();
+    let request = requests.try_recv().unwrap().request;
+    assert!(
+        matches!(request, Request::SubmitAttachments { images, files, steer: false, .. }
+        if images.is_empty() && files.len() == 1 && files[0].name == "original-notes.txt")
+    );
+    assert!(tab.state.attachments.is_empty());
+    assert_eq!(tab.starting_attachments.len(), 1);
 }

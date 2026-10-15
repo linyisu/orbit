@@ -795,14 +795,21 @@ impl Tab {
             }
             _ => {
                 let compact = command == "/compact";
-                if !compact && !self.state.supports_vision && !self.state.attachments.is_empty() {
+                if !compact
+                    && !self.state.supports_vision
+                    && self
+                        .state
+                        .attachments
+                        .iter()
+                        .any(|asset| asset.is_image())
+                {
                     self.state.input.set(prompt);
                     self.state.report_local(TranscriptItem::Error(
                         "当前模型不支持图片输入，文字和图片草稿已保留。请切换支持图片的模型，或移除图片后发送。".into(),
                     ));
                     return Ok(Action::None);
                 }
-                let images = match workspace::attachments::uploads(if compact {
+                let (images, files) = match workspace::attachments::composer_uploads(if compact {
                     &[]
                 } else {
                     &self.state.attachments
@@ -815,14 +822,26 @@ impl Tab {
                         return Ok(Action::None);
                     }
                 };
-                if self.send(Request::Start {
-                    images,
-                    compact,
-                    session,
-                    request_id: workspace::request_id(),
-                    prompt: prompt.clone(),
-                    model: None,
-                }) {
+                let request = if files.is_empty() {
+                    Request::Start {
+                        images,
+                        compact,
+                        session,
+                        request_id: workspace::request_id(),
+                        prompt: prompt.clone(),
+                        model: None,
+                    }
+                } else {
+                    Request::SubmitAttachments {
+                        session,
+                        request_id: workspace::request_id(),
+                        prompt: prompt.clone(),
+                        images,
+                        files,
+                        steer: false,
+                    }
+                };
+                if self.send(request) {
                     self.starting = Some(prompt);
                     if !compact {
                         self.starting_attachments = std::mem::take(&mut self.state.attachments);

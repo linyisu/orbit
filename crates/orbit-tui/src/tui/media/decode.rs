@@ -47,6 +47,7 @@ impl Decoder {
         let mut baseline = None;
         let mut pan_extent = (0.0, 0.0);
         let image = match &key.source {
+            Source::File(_) => anyhow::bail!("普通附件没有图片预览"),
             Source::Image(source) => {
                 let bytes = if super::is_remote(source) {
                     let network = key

@@ -57,6 +57,7 @@ fn terminal_query_options() -> ratatui_image::picker::cap_parser::QueryStdioOpti
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(super) enum Source {
     Image(String),
+    File(String),
     Math { tex: String, display: bool },
 }
 
@@ -462,6 +463,9 @@ impl Context {
     }
 
     fn lookup(&self, key: Key, request: bool, ticket: Option<Ticket>) -> Option<Arc<Prepared>> {
+        if matches!(key.source, Source::File(_)) {
+            return None;
+        }
         let shared = self.shared.as_ref()?;
         // Pixel math is illegible in halfblocks. Keep selectable TeX in that case.
         if matches!(key.source, Source::Math { .. })

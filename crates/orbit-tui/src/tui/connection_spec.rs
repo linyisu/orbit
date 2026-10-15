@@ -130,12 +130,42 @@ impl Spec {
             }
         }
         spec.args.workspace = tab.workspace.clone();
-        spec.args.resume = Some(tab.id.clone());
-        spec.args.allow_mcp_start = tab.allow_mcp_start;
+        spec.args.resume = tab.id.clone();
+        spec.args.server = tab.server.clone();
+        spec.args.allow_mcp_start = false;
         spec.config = Some(tab.config.clone());
         spec.auth_dir = Some(tab.auth.clone());
         spec.database = tab.database.clone();
         spec
+    }
+
+    pub fn saved_tab(
+        &self,
+        key: String,
+        title: String,
+        draft: crate::workspace::windows::Draft,
+    ) -> Option<crate::workspace::windows::SavedTab> {
+        Some(crate::workspace::windows::SavedTab {
+            id: self.args.resume.clone(),
+            key,
+            draft,
+            title,
+            target: self.args.options().target().ok()?,
+            workspace: self.args.workspace.clone(),
+            config: self.config.clone()?,
+            auth: self.auth_dir.clone()?,
+            database: self.database.clone(),
+            server: self.args.server.clone(),
+            allow_mcp_start: false,
+        })
+    }
+
+    pub fn set_mcp_start(&mut self, allowed: bool) {
+        self.args.allow_mcp_start = allowed;
+    }
+
+    pub fn server(&self) -> Option<&str> {
+        self.args.server.as_deref()
     }
 
     pub fn local() -> Self {
@@ -359,5 +389,31 @@ mod tests {
         ] {
             assert!(Spec::parse(command).is_err(), "{command}");
         }
+    }
+    #[test]
+    fn restoration_uses_only_the_current_invocations_mcp_start_permission() {
+        let saved = crate::workspace::windows::SavedTab {
+            id: Some("generated-session".into()),
+            key: "generated-tab".into(),
+            draft: Default::default(),
+            title: "Generated task".into(),
+            target: crate::workspace::transport::Target::Local,
+            workspace: "/synthetic/project".into(),
+            config: "/synthetic/settings.toml".into(),
+            auth: "/synthetic/auth".into(),
+            database: None,
+            server: None,
+            allow_mcp_start: true,
+        };
+        let mut spec = Spec::restored(&saved);
+        assert!(!spec.args.allow_mcp_start);
+        spec.set_mcp_start(true);
+        assert!(spec.args.allow_mcp_start);
+        assert!(
+            !spec
+                .saved_tab(saved.key, saved.title, saved.draft)
+                .unwrap()
+                .allow_mcp_start
+        );
     }
 }

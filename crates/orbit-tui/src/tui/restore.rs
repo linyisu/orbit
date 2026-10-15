@@ -892,7 +892,10 @@ mod tests {
         ] {
             let title = format!("{} · 会话标题", target.label());
             let saved = SavedTab {
-                id: "id".into(),
+                id: Some("id".into()),
+                key: String::new(),
+                draft: Default::default(),
+                server: None,
                 title: title.clone(),
                 target,
                 workspace: "/workspace".into(),

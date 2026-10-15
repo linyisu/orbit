@@ -2,6 +2,7 @@
 //! clipboard files until their private, durable copies have been written.
 use crate::backend::Options;
 use anyhow::{Context, Result};
+use orbit_client::windows::{ClientWindow, Draft, DraftAttachment, LegacyTabs, Profile, SavedTab};
 use serde::{Deserialize, Serialize};
 use std::{
     io::Write,
@@ -23,6 +24,114 @@ pub(crate) struct SavedTask {
     pub(crate) retry: Option<SavedSend>,
     #[serde(skip)]
     pub(crate) clipboard_files: Vec<Arc<tempfile::NamedTempFile>>,
+}
+
+impl SavedTask {
+    fn tab(&self) -> Result<SavedTab> {
+        Ok(SavedTab {
+            id: self.options.resume.clone(),
+            key: self.key.clone(),
+            title: self.title.clone(),
+            target: self
+                .options
+                .connection_options()?
+                .target()?,
+            workspace: self
+                .options
+                .connection_options()?
+                .workspace,
+            config: self.options.config.clone(),
+            auth: orbit_client::configuration::auth_directory(self.options.auth_dir.clone())?,
+            database: self.options.database.clone(),
+            allow_mcp_start: false,
+            server: self.options.server.clone(),
+            draft: Draft {
+                text: self.text.clone(),
+                attachments: self
+                    .paths
+                    .iter()
+                    .map(|path| DraftAttachment {
+                        path: path.clone(),
+                        name: self
+                            .attachment_names
+                            .get(path)
+                            .cloned()
+                            .unwrap_or_else(|| {
+                                path.file_name()
+                                    .unwrap_or_default()
+                                    .to_string_lossy()
+                                    .into_owned()
+                            }),
+                    })
+                    .collect(),
+                leases: Vec::new(),
+            },
+        })
+    }
+
+    fn restored(origin: &Options, tab: &SavedTab, local: Option<Self>) -> Result<Self> {
+        let mut options = origin.clone();
+        let mut connection = options.connection_options()?;
+        connection.set_target(tab.target.clone())?;
+        options.ssh = connection.ssh;
+        options.ssh_user = connection.ssh_user;
+        options.ssh_port = connection.ssh_port;
+        options.identity = connection.identity;
+        options.wsl = connection.wsl;
+        options.wsl_user = connection.wsl_user;
+        options.workspace = Some(PathBuf::from(&tab.workspace));
+        options.resume = tab.id.clone();
+        options.config = tab.config.clone();
+        options.auth_dir = Some(tab.auth.clone());
+        options.database = tab.database.clone();
+        options.server = tab.server.clone();
+        options.model = local
+            .as_ref()
+            .and_then(|task| task.options.model.clone());
+        options.recover_draft = local
+            .as_ref()
+            .is_some_and(|task| task.options.recover_draft);
+        options.relink_on_resume = false;
+        let mut retry = local
+            .as_ref()
+            .and_then(|task| task.retry.clone());
+        if let (Some(retry), Some(local)) = (&mut retry, &local) {
+            for path in &mut retry.paths {
+                if let Some(index) = local
+                    .paths
+                    .iter()
+                    .position(|source| source == path)
+                    && let Some(asset) = tab.draft.attachments.get(index)
+                {
+                    *path = asset.path.clone();
+                }
+            }
+        }
+        Ok(Self {
+            key: if tab.key.is_empty() {
+                orbit_client::request_id()
+            } else {
+                tab.key.clone()
+            },
+            options,
+            title: tab.title.clone(),
+            text: tab.draft.text.clone(),
+            paths: tab
+                .draft
+                .attachments
+                .iter()
+                .map(|asset| asset.path.clone())
+                .collect(),
+            attachment_names: tab
+                .draft
+                .attachments
+                .iter()
+                .map(|asset| (asset.path.clone(), asset.name.clone()))
+                .collect(),
+            retry,
+            clipboard_files: Vec::new(),
+        })
+    }
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -132,6 +241,48 @@ impl Storage {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
             Err(error) => return Err(error.into()),
         };
+        let profile = Profile {
+            config: std::path::absolute(&options.config)?,
+            auth: orbit_client::configuration::auth_directory(options.auth_dir.clone())?,
+            database: options.database.clone(),
+        };
+        let legacy = saved
+            .as_ref()
+            .map(|snapshot| -> Result<_> {
+                Ok(LegacyTabs {
+                    source: path.clone(),
+                    active: snapshot
+                        .tasks
+                        .iter()
+                        .position(|task| task.key == snapshot.active),
+                    tabs: snapshot
+                        .tasks
+                        .iter()
+                        .map(SavedTask::tab)
+                        .collect::<Result<_>>()?,
+                })
+            })
+            .transpose()?;
+        let window = ClientWindow::open_profile(&profile, legacy)?;
+        let mut local = saved.map_or_else(Vec::new, |snapshot| snapshot.tasks);
+        let mut tasks = Vec::new();
+        for tab in window.previous() {
+            let index = local.iter().position(|task| {
+                task.key == tab.key
+                    || task
+                        .tab()
+                        .is_ok_and(|other| tab.same_session(&other))
+            });
+            let view = index.map(|index| local.remove(index));
+            tasks.push(SavedTask::restored(options, tab, view)?);
+        }
+        let active = window
+            .active()
+            .and_then(|index| tasks.get(index))
+            .or_else(|| tasks.first())
+            .map(|task| task.key.clone())
+            .unwrap_or_default();
+        let saved = (!tasks.is_empty()).then(|| Snapshot::new(options.clone(), active, tasks));
         let (sender, receiver) = mpsc::channel();
         let (failures, errors) = tokio::sync::watch::channel(None);
         let thread = std::thread::Builder::new()
@@ -154,7 +305,24 @@ impl Storage {
                             }
                         }
                     }
-                    let result = save(&path, *snapshot, &mut previous);
+                    let result = (|| -> Result<()> {
+                        let active = snapshot
+                            .tasks
+                            .iter()
+                            .position(|task| task.key == snapshot.active);
+                        let tabs = snapshot
+                            .tasks
+                            .iter()
+                            .map(SavedTask::tab)
+                            .collect::<Result<_>>()?;
+                        let _files = snapshot
+                            .tasks
+                            .iter()
+                            .flat_map(|task| task.clipboard_files.iter().cloned())
+                            .collect::<Vec<_>>();
+                        save(&path, *snapshot, &mut previous)?;
+                        window.update_blocking(tabs, active)
+                    })();
                     failures.send_if_modified(|current| {
                         let next = result
                             .err()
@@ -193,14 +361,7 @@ impl Storage {
 }
 
 fn state_path(options: &Options) -> Result<PathBuf> {
-    if let Some(preferences) = &options.preferences {
-        return Ok(preferences.with_extension("tasks.json"));
-    }
-    Ok(std::env::var_os("XDG_STATE_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/state")))
-        .context("找不到任务保存目录，请指定 --preferences")?
-        .join("orbit/gui-tasks.json"))
+    orbit_client::windows::desktop_state_path(options.preferences.as_deref())
 }
 
 fn save(path: &Path, mut snapshot: Snapshot, previous: &mut Option<Vec<u8>>) -> Result<()> {
@@ -272,6 +433,8 @@ mod tests {
     fn options(directory: &Path) -> Options {
         let mut options = Options::parse_from(["orbit-gui"]);
         options.preferences = Some(directory.join("gui.json"));
+        options.config = directory.join("config.toml");
+        options.auth_dir = Some(directory.join("auth"));
         options.workspace = Some(directory.join("project"));
         options
     }
@@ -488,5 +651,55 @@ mod tests {
                 .contains("无法保存")
         );
         assert_eq!(std::fs::read(path).unwrap(), previous);
+    }
+    #[test]
+    fn desktop_and_terminal_use_the_same_tabs_drafts_and_active_selection() {
+        let directory = tempfile::tempdir().unwrap();
+        let options = options(directory.path());
+        let profile = Profile {
+            config: options.config.clone(),
+            auth: options.auth_dir.clone().unwrap(),
+            database: None,
+        };
+        let (loaded, writer) = Storage::load(&options).unwrap();
+        let mut first = task(options.clone(), "alpha");
+        first.options.resume = Some("generated-alpha".into());
+        let mut second = task(options.clone(), "beta");
+        second.options.resume = Some("generated-beta".into());
+        loaded.storage.save(Snapshot::new(
+            options.clone(),
+            "beta".into(),
+            vec![first, second],
+        ));
+        drop(writer);
+        let terminal = ClientWindow::open_profile(&profile, None).unwrap();
+        assert_eq!(terminal.active(), Some(1));
+        assert_eq!(
+            terminal
+                .previous()
+                .iter()
+                .map(|tab| tab.id.as_deref())
+                .collect::<Vec<_>>(),
+            [Some("generated-alpha"), Some("generated-beta")]
+        );
+        let mut retained = terminal.previous()[1].clone();
+        retained.draft.text = "An independently generated terminal draft".into();
+        terminal
+            .update_blocking(vec![retained], Some(0))
+            .unwrap();
+        drop(terminal);
+        let (loaded, writer) = Storage::load(&options).unwrap();
+        let saved = loaded.saved.unwrap();
+        assert_eq!(saved.tasks.len(), 1);
+        assert_eq!(saved.active, "beta");
+        assert_eq!(
+            saved.tasks[0].options.resume.as_deref(),
+            Some("generated-beta")
+        );
+        assert_eq!(
+            saved.tasks[0].text,
+            "An independently generated terminal draft"
+        );
+        drop(writer);
     }
 }

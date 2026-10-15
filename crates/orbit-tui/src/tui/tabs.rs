@@ -24,33 +24,44 @@ pub(super) mod live {
             saved: &[&crate::workspace::windows::SavedTab],
         ) {
             let media = self.remote[source].state.media.clone();
+            let allow_mcp_start = self.remote[source]
+                .connection
+                .as_ref()
+                .is_some_and(|connection| connection.allow_mcp_start);
             let mut replace = self.remote[source].can_replace_with_resumed();
             for saved in saved {
                 let existing = self
                     .remote
                     .iter()
                     .find_map(|(id, tab)| {
-                        (tab.id.as_ref() == Some(&saved.id)
-                            && tab
-                                .connection
-                                .as_ref()
-                                .is_some_and(|connection| {
-                                    let source = crate::workspace::transport::DataSource {
-                                        target: saved.target.clone(),
-                                        server: Some(&connection.executable),
-                                        config: &saved.config,
-                                        auth: Some(&saved.auth),
-                                        database: saved.database.as_deref(),
-                                        workspace: std::path::Path::new(&saved.workspace),
-                                    };
-                                    connection
-                                        .local_configuration
-                                        .as_ref()
-                                        .is_some_and(|local| local.auth == saved.auth)
-                                        && connection
-                                            .data_source()
-                                            .matches(&source)
-                                }))
+                        ((saved.id.is_none()
+                            && !saved.key.is_empty()
+                            && tab.restore_key.as_deref() == Some(&saved.key))
+                            || (saved.id.is_some()
+                                && tab.id == saved.id
+                                && tab
+                                    .connection
+                                    .as_ref()
+                                    .is_some_and(|connection| {
+                                        let source = crate::workspace::transport::DataSource {
+                                            target: saved.target.clone(),
+                                            server: saved
+                                                .server
+                                                .as_deref()
+                                                .or(Some(&connection.executable)),
+                                            config: &saved.config,
+                                            auth: Some(&saved.auth),
+                                            database: saved.database.as_deref(),
+                                            workspace: std::path::Path::new(&saved.workspace),
+                                        };
+                                        connection
+                                            .local_configuration
+                                            .as_ref()
+                                            .is_some_and(|local| local.auth == saved.auth)
+                                            && connection
+                                                .data_source()
+                                                .matches(&source)
+                                    })))
                         .then(|| id.clone())
                     });
                 let restored = if let Some(id) = existing {
@@ -59,10 +70,16 @@ pub(super) mod live {
                     }
                     id
                 } else {
-                    let next = super::super::workspace_client::Tab::connecting(
-                        super::super::connection_spec::Spec::restored(saved),
-                        media.clone(),
-                    );
+                    let mut spec = super::super::connection_spec::Spec::restored(saved);
+                    spec.set_mcp_start(allow_mcp_start);
+                    let mut next =
+                        super::super::workspace_client::Tab::connecting(spec, media.clone());
+                    next.state
+                        .input
+                        .set(saved.draft.text.clone());
+                    next.state.attachments = saved.draft.attachment_handles();
+                    next.title = saved.title.clone();
+                    next.restore_key = (!saved.key.is_empty()).then(|| saved.key.clone());
                     if replace {
                         self.remote.insert(source.into(), next);
                         source.into()

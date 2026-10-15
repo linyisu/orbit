@@ -55,6 +55,25 @@ impl Strip {
         let mut next_x: u16 = 0;
         let mut next_y = 0;
         for (source, label) in images {
+            if matches!(source, Source::File(_)) {
+                if next_x > 0 {
+                    next_y += usize::from(size.height + ROW_GAP);
+                }
+                let area = Rect::new(0, next_y as u16, width, 2);
+                strip
+                    .rows
+                    .resize_with(next_y + 2, || LinkedLine::chrome(Line::default()));
+                let text = super::super::render::fit_label(
+                    &format!("{} {label}", icons::FILE),
+                    usize::from(width),
+                    false,
+                );
+                strip.rows[next_y] = LinkedLine::chrome(Line::from(text));
+                strip.areas.push(area);
+                next_y += usize::from(area.height + ROW_GAP);
+                next_x = 0;
+                continue;
+            }
             let picture = context.cached_picture(&source, bounds.width, bounds.height);
             let item_width = picture
                 .as_ref()
@@ -123,12 +142,13 @@ impl Strip {
                     .char_indices()
                     .nth(1)
                     .map_or(content.len(), |(i, _)| start + i);
-                content.replace_range(start..end, icons::IMAGE_OUTLINE);
+                let icon = icons::IMAGE_OUTLINE;
+                content.replace_range(start..end, icon);
                 line.line = Line::from(Span::raw(content));
                 // The icon is one terminal cell, but its UTF-8 byte range is larger.
                 let text = line.text();
                 line.media.push(Target {
-                    range: start..start + icons::IMAGE_OUTLINE.len(),
+                    range: start..start + icon.len(),
                     source,
                 });
                 line.copy.push(CopyText {

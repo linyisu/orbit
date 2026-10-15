@@ -175,7 +175,11 @@ impl DataSource<'_> {
         self.target == other.target
             && self.server == other.server
             && self.config == other.config
-            && self.auth == other.auth
+            && (self.auth == other.auth
+                || super::configuration::auth_directory(self.auth.map(PathBuf::from))
+                    .ok()
+                    .zip(super::configuration::auth_directory(other.auth.map(PathBuf::from)).ok())
+                    .is_some_and(|(left, right)| left == right))
             && self.database == other.database
             && (!workspace_scoped || self.workspace == other.workspace)
     }

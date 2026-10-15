@@ -86,7 +86,7 @@ fn layout_with_margin(
                     format!("{delimiter}{tex}{delimiter}")
                 }
 
-                Source::Image(_) => source[target.range.clone()].to_owned(),
+                Source::Image(_) | Source::File(_) => source[target.range.clone()].to_owned(),
             };
             let url = linked
                 .links

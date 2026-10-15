@@ -18,7 +18,7 @@
 
 关闭标签视图不等于停止任务，计划批准和未确认请求重发需显式操作。GUI 支持图文暂存，编辑时撤回到输入框；TUI 使用 `/queue` 管理队列。
 
-GUI 提供原生字体、图片灯箱和编辑器；TUI 的字体与图片协议由终端决定，`/editor` 使用外部编辑器。GUI 自动恢复标签草稿，TUI 使用 `/restore`。
+GUI 提供原生字体、图片灯箱和编辑器；TUI 的字体与图片协议由终端决定，`/editor` 使用外部编辑器。两端启动时通过 `orbit-client::windows` 自动恢复标签和草稿，TUI 的 `/restore` 是手动补充入口。
 
 构建与操作见 [TUI](crates/orbit-tui/README.md) 和 [GUI](crates/orbit-gui/README.md)。
 
@@ -28,6 +28,7 @@ GUI 提供原生字体、图片灯箱和编辑器；TUI 的字体与图片协议
 | --- | --- |
 | 账号授权、连接准备与恢复 | `orbit-client::accounts`、`connect`、`transport` |
 | 会话轮询、后台请求分流与回执 | `orbit-client::pump` |
+| 窗口恢复、草稿与附件副本 | `orbit-client::windows` |
 | 附件识别、上传、下载与队列资产恢复 | `orbit-client::attachments`、`pump` |
 | 模型发现、预算与连接编辑校验 | `orbit-config::config::connections` |
 | Agent 设置与 MCP 表单解析 | `orbit-config::config::advanced`、`connections::mcp` |

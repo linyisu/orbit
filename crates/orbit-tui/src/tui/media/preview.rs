@@ -121,7 +121,7 @@ impl Preview {
         self.controls
             .push((self.close, Control::Close));
         let title = match &self.source {
-            Source::Image(path) => path.as_str(),
+            Source::Image(path) | Source::File(path) => path.as_str(),
             Source::Math { tex, .. } => tex.as_str(),
         };
         frame.render_widget(

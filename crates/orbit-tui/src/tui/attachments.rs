@@ -11,7 +11,7 @@ pub(super) fn queue_attachment(
     state: &mut UiState,
     attachment: orbit_client::protocol::model::Attachment,
 ) -> bool {
-    if !state.supports_vision {
+    if attachment.is_image() && !state.supports_vision {
         return false;
     }
     if state
@@ -58,7 +58,11 @@ pub(super) fn thumbnails(state: &UiState, width: u16) -> super::media::thumbnail
                     .path()
                     .to_string_lossy()
                     .into_owned();
-                (super::media::Source::Image(path), String::new())
+                if attachment.is_image() {
+                    (super::media::Source::Image(path), String::new())
+                } else {
+                    (super::media::Source::File(path), attachment.name().into())
+                }
             }),
         width,
     )

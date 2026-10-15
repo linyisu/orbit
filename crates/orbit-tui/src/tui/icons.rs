@@ -24,6 +24,7 @@ pub(super) const PACKAGE_VARIANT_CLOSED: &str = "󰏗";
 pub(super) const TARGET: &str = "󰓾";
 pub(super) const LINK_VARIANT: &str = "󰌹";
 pub(super) const MAGNIFY: &str = "󰍉";
+pub(super) const FILE: &str = "󰈙";
 pub(super) const IMAGE_OUTLINE: &str = "󰥶";
 pub(super) const CHECKBOX_MARKED_OUTLINE: &str = "󰄵";
 pub(super) const CHECKBOX_BLANK_OUTLINE: &str = "󰄱";

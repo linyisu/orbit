@@ -25,6 +25,9 @@ cargo run --release -p orbit-tui --locked
 
 ## 工作区连接
 
+启动时自动恢复与 GUI 共用的标签、选中项、未发送文字和附件；`/restore` 保留为手动补充入口。
+恢复不会发送草稿或重跑中断任务。
+
 `/ssh HOST PATH`、`/wsl DISTRO PATH` 打开远端标签，`/local` 新建本地标签。省略连接参数会打开向导；切换或关闭标签不会停止后台任务，Ctrl+C 取消当前运行。
 
 连接、部署和恢复规则见 [orbit-client](../orbit-client/README.md)，GUI 对应入口见 [功能对照](../../FRONTEND_PARITY.md)。
