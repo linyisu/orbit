@@ -991,10 +991,18 @@ impl Actor {
                 ensure!(
                     !request_id.is_empty()
                         && request_id.len() <= 128
-                        && (!prompt.is_empty() || !images.is_empty() || !files.is_empty())
+                        && (compact
+                            || !prompt.is_empty()
+                            || !images.is_empty()
+                            || !files.is_empty())
                         && prompt.len() <= 1_024 * 1_024,
                     "invalid workspace request"
                 );
+                let prompt = if compact {
+                    "/compact".to_owned()
+                } else {
+                    prompt
+                };
                 let identity = request_fingerprint(&prompt, &images, &files, compact, &model);
                 if self.busy() {
                     ensure!(

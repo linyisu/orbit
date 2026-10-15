@@ -318,15 +318,12 @@ async fn remembered_file_grant_survives_reopen_and_matches_changed_content() {
     assert!(!granted.contains(&approval_key(&other, root).unwrap()));
 }
 
-#[tokio::test]
-async fn switching_to_a_smaller_context_starts_compaction_in_the_service() {
-    let directory = tempfile::tempdir().unwrap();
-    let root = directory.path();
+async fn smaller_context_setup(root: &Path, auto_compact: bool) -> crate::PreparedWorkspace {
+    std::fs::create_dir(root.join(".git")).unwrap();
     std::fs::write(
         root.join("config.toml"),
         format!(
-            "{}{}",
-            "auto_compact=true\n",
+            "auto_compact={auto_compact}\n{}",
             TestConfig::new()
                 .provider(
                     TestProvider::new("test")
@@ -337,7 +334,7 @@ async fn switching_to_a_smaller_context_starts_compaction_in_the_service() {
                                 .input_context(64_000)
                                 .output(512),
                             TestModel::new("small")
-                                .input_context(8_192)
+                                .input_context(32_768)
                                 .output(512)
                         ])
                 )
@@ -353,21 +350,33 @@ async fn switching_to_a_smaller_context_starts_compaction_in_the_service() {
         config: root.join("config.toml"),
         database: root.join("sessions.db"),
         allow_mcp_start: false,
-        home: None,
-        config_home: None,
-        instruction_dir: None,
+        home: Some(root.into()),
+        config_home: Some(root.into()),
+        instruction_dir: Some(root.join("instructions")),
         editor_command: "vi".into(),
     };
     let mut setup = crate::workspace::setup::prepare_workspace(&options, root, None)
         .await
         .unwrap();
+    for message in [
+        orbit_model::types::ChatMessage::user("Inspect the generated subsystem."),
+        orbit_model::types::ChatMessage::assistant("archived evidence ".repeat(6_000)),
+        orbit_model::types::ChatMessage::user("Continue from the recorded findings."),
+    ] {
+        setup
+            .session
+            .append_context(message)
+            .await
+            .unwrap();
+    }
     setup
-        .session
-        .append_context(orbit_model::types::ChatMessage::user(
-            "earlier context ".repeat(6_000),
-        ))
-        .await
-        .unwrap();
+}
+
+#[tokio::test]
+async fn switching_to_a_smaller_context_starts_compaction_in_the_service() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let setup = smaller_context_setup(root, true).await;
     assert!(setup.resources.budget.auto_compact);
     let handle = Handle::spawn(setup, None)
         .await
@@ -411,6 +420,122 @@ async fn switching_to_a_smaller_context_starts_compaction_in_the_service() {
     .unwrap();
     handle
         .command(Command::Cancel)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn manual_compaction_after_a_smaller_model_switch_preserves_history_and_fits_the_budget() {
+    use orbit_agent::{memory::TaskSummary, model::MockModel};
+    use orbit_model::types::{ChatCompletion, ChatMessage};
+
+    let directory = tempfile::tempdir().unwrap();
+    let mut setup = smaller_context_setup(directory.path(), false).await;
+    let summary = serde_json::to_string(&TaskSummary {
+        goal: "Continue the generated investigation using archived evidence.".into(),
+        constraints: vec![],
+        decisions: vec![],
+        completed: vec![],
+        remaining: vec![],
+        verification: vec![],
+        uncertainty: vec![],
+    })
+    .unwrap();
+    let backend = MockModel::new((0..64).map(|_| ChatCompletion {
+        id: None,
+        model: None,
+        message: ChatMessage::assistant(summary.clone()),
+        finish_reason: Some("stop".into()),
+        usage: None,
+    }));
+    let compaction = &mut setup.resources.budget.compaction;
+    compaction.backend = Some(Arc::new(backend.clone()));
+    compaction.settings.max_input_tokens = 2_048;
+    compaction.settings.max_output_tokens = 512;
+    let store = setup.session.store.clone();
+    let original = setup.session.snapshot.history.clone();
+    let tools = setup.resources.tools.definitions();
+    assert!(
+        orbit_agent::context::estimate_tokens(&original, &tools)
+            < setup
+                .resources
+                .budget
+                .input_context_tokens
+    );
+    let handle = Handle::spawn(setup, None)
+        .await
+        .unwrap();
+    handle
+        .command(Command::SetModel {
+            model: "test::small".into(),
+            effort: None,
+        })
+        .await
+        .unwrap();
+    let info = handle.current_info().await;
+    assert!(orbit_agent::context::estimate_tokens(&original, &tools) > info.input_context_tokens);
+    handle
+        .command(Command::Start {
+            request_id: orbit_protocol::request_id(),
+            prompt: String::new(),
+            images: vec![],
+            files: vec![],
+            compact: true,
+            model: None,
+        })
+        .await
+        .unwrap();
+    let page = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            let page = handle
+                .view
+                .lock()
+                .await
+                .page(0)
+                .unwrap();
+            if !page.busy {
+                break page;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(
+        page.updates
+            .iter()
+            .any(|update| matches!(update,
+                Update::Agent(event) if matches!(event.as_ref(), AgentEvent::ContextCompacted {
+                    before_tokens, after_tokens, ..
+                } if after_tokens < before_tokens)
+            )),
+        "{:#?}",
+        page.updates
+    );
+    let snapshot = store.load(&info.id).await.unwrap();
+    let run = snapshot.runs.last().unwrap();
+    assert_eq!(run.prompt, "/compact");
+    assert_eq!(run.status, "completed");
+    assert!(presentation(run).compact);
+    assert!(
+        orbit_agent::context::estimate_tokens(&snapshot.history, &tools)
+            <= info.input_context_tokens
+    );
+    assert!(backend.requests().len() > 1);
+    for request in backend.requests() {
+        assert!(orbit_agent::context::estimate_tokens(&request.messages, &[]) <= 2_048);
+    }
+    let archived = store
+        .load_context_archive(&info.id, 1)
+        .await
+        .unwrap();
+    assert!(
+        original
+            .iter()
+            .all(|message| archived.contains(message))
+    );
+    handle
+        .command(Command::Close)
         .await
         .unwrap();
 }

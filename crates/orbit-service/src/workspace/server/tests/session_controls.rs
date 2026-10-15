@@ -2,6 +2,44 @@ use super::*;
 use orbit_protocol::admin::Action;
 
 #[tokio::test]
+async fn compaction_accepts_empty_prompts_without_allowing_empty_chat_requests() {
+    let fixture = Fixture::new("http://127.0.0.1:1/v1").await;
+    let session = fixture.handle.info.id.clone();
+    let request = |prompt: &str, compact| Request::Start {
+        session: session.clone(),
+        request_id: orbit_protocol::request_id(),
+        prompt: prompt.into(),
+        images: vec![],
+        compact,
+        model: None,
+    };
+    assert!(
+        fixture
+            .request(request("  ", false))
+            .await
+            .is_err()
+    );
+    for prompt in ["", " \n ", "/compact"] {
+        fixture
+            .request(request(prompt, true))
+            .await
+            .unwrap();
+        let page = fixture.wait(|page| !page.busy).await;
+        assert!(page.updates.iter().any(|update| {
+            matches!(update, protocol::Update::Started { prompt, presentation, .. }
+                if prompt == "/compact" && presentation.compact)
+        }));
+        let snapshot = fixture
+            .handle
+            .store
+            .load(&session)
+            .await
+            .unwrap();
+        assert_eq!(snapshot.runs.last().unwrap().prompt, "/compact");
+    }
+}
+
+#[tokio::test]
 async fn saved_session_rename_keeps_history_and_rejects_another_writer() {
     let fixture = Fixture::new("http://127.0.0.1:1/v1").await;
     let store = &fixture.handle.store;

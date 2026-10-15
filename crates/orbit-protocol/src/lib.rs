@@ -148,6 +148,7 @@ pub enum Request {
         prompt: String,
         #[serde(default)]
         images: Vec<ImageUpload>,
+        /// Compact existing history instead of submitting a prompt; empty text is valid.
         #[serde(default)]
         compact: bool,
         model: Option<String>,
