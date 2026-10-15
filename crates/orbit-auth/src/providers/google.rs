@@ -1,3 +1,4 @@
+use reqwest::header::HeaderValue;
 use std::time::Duration;
 
 use serde_json::{Value, json};
@@ -15,6 +16,19 @@ pub(crate) const CLIENT_ID: &str =
 const CLIENT_SECRET: &str = "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";
 pub(crate) const API_BASE: &str = "https://cloudcode-pa.googleapis.com/";
 const TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
+
+pub(crate) fn authorization_url(grant: &crate::oauth::pkce::Pkce) -> Url {
+    let mut url = grant.authorization_url(
+        "https://accounts.google.com/o/oauth2/v2/auth",
+        CLIENT_ID,
+        "https://www.googleapis.com/auth/cloud-platform \
+        https://www.googleapis.com/auth/userinfo.email \
+        https://www.googleapis.com/auth/userinfo.profile",
+    );
+    url.query_pairs_mut()
+        .extend_pairs([("access_type", "offline"), ("prompt", "consent")]);
+    url
+}
 
 pub(crate) async fn exchange(code: &str, verifier: &str, redirect: &Url) -> Result<Credential> {
     exchange_using(
@@ -61,6 +75,7 @@ pub(crate) async fn exchange_using(
         account: None,
         account_id: None,
         project_id: None,
+        chatgpt: None,
     };
 
     tokens.apply(&mut credential)?;
@@ -242,6 +257,27 @@ async fn discover_project(base: &str, token: &str, project: Option<&str>) -> Res
     }
 
     Err(AuthError::Timeout)
+}
+
+/// Add provider authentication metadata after the common endpoint scope check.
+pub(crate) fn authorize(
+    credential: &crate::credential::Credential,
+    headers: &mut reqwest::header::HeaderMap,
+) -> crate::Result<()> {
+    crate::providers::google::validate_project(
+        credential
+            .project_id
+            .as_deref()
+            .ok_or(AuthError::InvalidToken)?,
+    )?;
+    headers.insert(
+        "client-metadata",
+        HeaderValue::from_static(
+            "ideType=IDE_UNSPECIFIED,platform=PLATFORM_UNSPECIFIED,pluginType=GEMINI",
+        ),
+    );
+
+    Ok(())
 }
 
 #[cfg(test)]

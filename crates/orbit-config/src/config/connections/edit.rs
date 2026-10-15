@@ -92,10 +92,7 @@ impl ConnectionDraft {
     }
 
     pub fn account(&self) -> bool {
-        matches!(
-            self.format,
-            ApiFormat::GoogleCodeAssist | ApiFormat::ChatgptCodex
-        )
+        self.format.requires_saved_credential()
     }
 
     /// Read provider-independent defaults from this reviewed snapshot, without network discovery.
@@ -119,10 +116,10 @@ impl ConnectionDraft {
         );
 
         if let Some(provider) = &self.provider {
-            if matches!(
-                provider.api_format,
-                ApiFormat::GoogleCodeAssist | ApiFormat::ChatgptCodex
-            ) {
+            if provider
+                .api_format
+                .requires_saved_credential()
+            {
                 ensure!(
                     self.format == provider.api_format
                         && self.endpoint == provider.base_url

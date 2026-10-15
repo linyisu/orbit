@@ -166,15 +166,7 @@ impl AuthStore {
                 .expires_at
                 .is_none_or(|expires| expires <= now().saturating_add(60))
         {
-            credential = match credential.kind {
-                CredentialKind::AnthropicOAuth => crate::anthropic::refresh(&credential).await?,
-                CredentialKind::AntigravityOAuth => {
-                    crate::antigravity::refresh(&credential).await?
-                }
-                CredentialKind::GoogleOAuth => crate::google::refresh(&credential).await?,
-                CredentialKind::ChatgptOAuth => crate::chatgpt::refresh(&credential).await?,
-                CredentialKind::ApiKey => unreachable!(),
-            };
+            credential = crate::providers::refresh(&credential).await?;
             self.write(name, &credential)?;
             return credential.request_auth(endpoint, target);
         }
@@ -185,6 +177,18 @@ impl AuthStore {
     pub(crate) async fn save(&self, name: &str, credential: &Credential) -> Result<()> {
         let _lock = self.lock(name).await?;
         self.write(name, credential)
+    }
+
+    /// New account registrations must never replace another completed login under the same name.
+    pub(crate) async fn save_new(&self, name: &str, credential: &Credential) -> Result<()> {
+        let _lock = self.lock(name).await?;
+        match self.load(name) {
+            Err(AuthError::Missing) => self.write(name, credential),
+            Ok(_) => Err(AuthError::Configuration(
+                "credential name was claimed by another login",
+            )),
+            Err(error) => Err(error),
+        }
     }
 
     pub async fn resolve_usage(&self, name: &str) -> Result<Option<crate::UsageAuthorization>> {
@@ -216,7 +220,7 @@ impl AuthStore {
             .join(format!("{name}.json"))
     }
 
-    async fn lock(&self, name: &str) -> Result<File> {
+    pub(crate) async fn lock(&self, name: &str) -> Result<File> {
         validate_name(name)?;
         self.create_directory()?;
         let file = private_file(
@@ -324,10 +328,11 @@ fn api_key_credential(key: String, base_url: &str) -> Result<Credential> {
         account: None,
         account_id: None,
         project_id: None,
+        chatgpt: None,
     })
 }
 
-fn private_file(path: &Path, create: bool) -> std::io::Result<File> {
+pub(crate) fn private_file(path: &Path, create: bool) -> std::io::Result<File> {
     let mut options = OpenOptions::new();
     options
         .read(true)
@@ -397,6 +402,35 @@ pub(crate) fn validate_name(name: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn new_login_cannot_replace_an_account_created_by_another_process() {
+        let root = tempfile::tempdir().unwrap();
+        let store = AuthStore::new(root.path().join("auth")).unwrap();
+        let first =
+            api_key_credential("generated-first-key".into(), "https://service.example/v1").unwrap();
+        let second =
+            api_key_credential("generated-second-key".into(), "https://service.example/v1")
+                .unwrap();
+        store
+            .save_new("generated-account", &first)
+            .await
+            .unwrap();
+        assert!(
+            store
+                .save_new("generated-account", &second)
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            store
+                .load("generated-account")
+                .unwrap()
+                .access
+                .0,
+            "generated-first-key"
+        );
+    }
 
     #[tokio::test]
     async fn keys_are_scoped_rotated_and_removed_without_exposing_secrets() {

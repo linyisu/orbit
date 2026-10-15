@@ -44,7 +44,7 @@ timeout_seconds = 1800 # 进度提醒间隔；提醒父代理先查看或沟通�
 models = ["deepseek-chat", "deepseek-reasoner"]
 api_format = "openai_chat_completions" # 可选: openai_chat_completions, openai_responses, anthropic_messages
 base_url = "https://api.deepseek.com/v1"
-api_key = "replace-with-deepseek-key"  # 也可用 credential = "凭据名" 引用 orbit auth 保存的凭据
+api_key = "replace-with-deepseek-key"  # 也可用 credential = "凭据名" 引用 /connect 保存的凭据
 
 [providers.deepseek.model_overrides]
 deepseek-reasoner = { reasoning = { efforts = ["high"], default = "high" } }

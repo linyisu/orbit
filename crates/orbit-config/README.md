@@ -20,13 +20,15 @@ models = "auto"
 
 ## 模型目录
 
-`/model refresh` 手动更新目录；自动刷新由 `auto_refresh_models` 控制。各连接独立刷新，失败保留缓存，结果不回写配置。
+`/model refresh` 手动更新目录；自动刷新由 `auto_refresh_models` 控制。各连接独立刷新，缓存绑定凭据、注册身份和地址，结果不回写配置。失败时保留身份匹配的缓存或显式声明；没有目录时不补造可用模型。
+
+完整目录替换旧条目，部分结果只更新已观测项。Google Code Assist 的额度接口仅提供部分模型观测，刷新诊断会说明此限制。目录获取成功但缓存写入失败时，当前结果仍生效并附带诊断。
 
 能力优先级为显式配置、账号或 API 返回值、公共规格。公共规格来自 models.dev，仅补充能力，不授予模型访问权限；Antigravity 的可用项以账号 Agent 列表为准，禁用或下线模型不会由内置规格恢复。
 
 ## 入口与验证
 
-[config/](src/config/) 解析配置，[config/connections/](src/config/connections/) 保存连接，[models/](src/models/) 管理目录、缓存和刷新。
+[config/](src/config/) 解析配置，[config/connections/](src/config/connections/) 保存连接，[models/](src/models/) 管理目录、缓存和刷新；供应商响应由 orbit-model 解码。
 
 ```sh
 cargo test -p orbit-config

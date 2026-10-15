@@ -2,6 +2,7 @@
 //! Credential acquisition and persistence belong to orbit-auth.
 
 pub mod anthropic;
+pub mod catalog;
 pub mod client;
 pub mod error;
 pub mod openai;

@@ -110,7 +110,11 @@ fn provider(base: &str, format: ApiFormat) -> ProviderConfig {
 #[test]
 fn exact_endpoint_and_model_metadata_fills_missing_fields_without_adding_models() {
     let mut provider = provider("https://api.openai.com/v1/", ApiFormat::OpenaiResponses);
-    fixture().supplement(&mut provider);
+    fixture().supplement(
+        provider.api_format,
+        &provider.spec.base_url,
+        &mut provider.models,
+    );
     assert_eq!(provider.models.len(), 2);
     let model = &provider.models[0];
     assert_eq!(model.context_tokens, Some(200_000));
@@ -137,7 +141,11 @@ fn exact_endpoint_and_model_metadata_fills_missing_fields_without_adding_models(
         "http://api.openai.com/v1",
     ] {
         let mut unknown = self::provider(base, ApiFormat::OpenaiResponses);
-        fixture().supplement(&mut unknown);
+        fixture().supplement(
+            unknown.api_format,
+            &unknown.spec.base_url,
+            &mut unknown.models,
+        );
         assert!(
             unknown.models[0]
                 .context_tokens
@@ -162,19 +170,34 @@ fn explicit_and_discovered_fields_take_precedence_and_unknown_protocols_are_not_
         extra: toml::Table::new(),
     });
     let before = serde_json::to_value(&*profile).unwrap();
-    fixture().supplement(&mut provider);
+    fixture().supplement(
+        provider.api_format,
+        &provider.spec.base_url,
+        &mut provider.models,
+    );
     assert_eq!(serde_json::to_value(&provider.models[0]).unwrap(), before);
 
     let mut other = self::provider("https://other.example/v1", ApiFormat::OpenaiChatCompletions);
-    fixture().supplement(&mut other);
+    fixture().supplement(other.api_format, &other.spec.base_url, &mut other.models);
     assert_eq!(other.models[0].context_tokens, Some(120_000));
     assert_eq!(other.models[0].supports_vision, Some(false));
     assert!(other.models[0].reasoning.is_none());
 
     let mut account = self::provider("https://api.openai.com/v1", ApiFormat::ChatgptCodex);
-    fixture().supplement(&mut account);
+    fixture().supplement(
+        account.api_format,
+        &account.spec.base_url,
+        &mut account.models,
+    );
+    assert_eq!(account.models[0].context_tokens, Some(200_000));
+
+    let mut legacy = self::provider(
+        "https://chatgpt.com/backend-api/codex",
+        ApiFormat::ChatgptCodex,
+    );
+    fixture().supplement(legacy.api_format, &legacy.spec.base_url, &mut legacy.models);
     assert!(
-        account.models[0]
+        legacy.models[0]
             .context_tokens
             .is_none()
     );
@@ -194,7 +217,11 @@ fn shared_endpoint_conflicts_and_invalid_limits_do_not_supply_ambiguous_specs() 
         .providers
         .insert("other-plan".into(), conflicting);
     let mut provider = provider("https://other.example/v1", ApiFormat::AnthropicMessages);
-    catalog.supplement(&mut provider);
+    catalog.supplement(
+        provider.api_format,
+        &provider.spec.base_url,
+        &mut provider.models,
+    );
     assert!(
         provider.models[0]
             .context_tokens

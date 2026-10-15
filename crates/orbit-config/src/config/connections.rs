@@ -206,28 +206,55 @@ pub async fn save_account(
     path: &std::path::Path,
     auth_directory: &std::path::Path,
     provider: orbit_auth::OAuthProvider,
+    credential: &str,
 ) -> Result<SaveOutcome> {
-    use orbit_auth::OAuthProvider;
-    let format = match provider {
-        OAuthProvider::Antigravity | OAuthProvider::Google => ApiFormat::GoogleCodeAssist,
-        OAuthProvider::Chatgpt => ApiFormat::ChatgptCodex,
-        OAuthProvider::Anthropic => ApiFormat::AnthropicMessages,
-    };
-    let endpoint = match provider {
-        OAuthProvider::Antigravity => "https://daily-cloudcode-pa.googleapis.com/",
-        OAuthProvider::Google => "https://cloudcode-pa.googleapis.com/",
-        OAuthProvider::Chatgpt => "https://chatgpt.com/backend-api/codex/",
-        OAuthProvider::Anthropic => "https://api.anthropic.com/",
-    };
+    let format = ApiFormat::for_oauth(provider);
+    let endpoint = provider.endpoint();
 
-    let models = append_profile(path, auth_directory, provider.name(), format, endpoint)?;
-    if provider == OAuthProvider::Anthropic {
-        return Ok(SaveOutcome {
-            models,
-            diagnostics: Vec::new(),
-        });
-    }
+    let models = append_profile(path, auth_directory, credential, format, endpoint)?;
     Ok(refresh_saved(path, auth_directory, models).await)
+}
+
+/// Rebind saved account connections after explicit reauthorization changes the issued route.
+/// Catalog failures remain diagnostics after a successful configuration commit.
+pub async fn refresh_account(
+    path: &std::path::Path,
+    auth_directory: &std::path::Path,
+    credential: &str,
+) -> Result<SaveOutcome> {
+    let models = rebind_account(path, auth_directory, credential)?;
+    Ok(refresh_saved(path, auth_directory, models).await)
+}
+
+fn rebind_account(
+    path: &std::path::Path,
+    auth_directory: &std::path::Path,
+    credential: &str,
+) -> Result<Vec<ModelOption>> {
+    let info = orbit_auth::AuthStore::new(auth_directory)?
+        .list()?
+        .into_iter()
+        .find(|entry| entry.name == credential)
+        .context("账号尚未登录")?;
+    let provider = info
+        .kind
+        .oauth_provider()
+        .context("该账号不是 OAuth 连接")?;
+    let format = ApiFormat::for_oauth(provider);
+    let original = read_config(path)?;
+    let config = crate::config::FileConfig::parse(&original, auth_directory)?;
+    let mut document = original.parse::<toml_edit::DocumentMut>()?;
+    let mut matched = false;
+    for (name, connection) in &config.providers {
+        if connection.credential.as_deref() == Some(credential) {
+            matched = true;
+            ensure!(connection.api_format == format, "账号协议与现有连接不匹配");
+            document["providers"][name]["base_url"] = toml_edit::value(info.endpoint.clone());
+        }
+    }
+    ensure!(matched, "账号对应的连接已不存在");
+    PreparedConnectionChange::validate(path, original, document.to_string(), auth_directory)?
+        .commit()
 }
 
 /// Refresh a committed configuration without turning catalog failure into a failed save.
@@ -261,31 +288,87 @@ pub async fn refresh_saved(
     }
 }
 
+/// Commit a verified key and cache its live catalog without pinning discovered IDs in config.
+/// Cache persistence failures are diagnostics after the credential/configuration commit.
 pub async fn save_api_key(
     path: &std::path::Path,
     auth_directory: &std::path::Path,
     provider: orbit_auth::ApiKeyProvider,
     secret: String,
     ids: Vec<String>,
-) -> Result<Vec<ModelOption>> {
+) -> Result<SaveOutcome> {
     let models = ids
         .into_iter()
         .map(ModelProfile::new)
         .collect::<Vec<_>>();
+    let catalog = orbit_model::catalog::ModelCatalog {
+        models: models.clone(),
+        unavailable: Vec::new(),
+        coverage: orbit_model::catalog::CatalogCoverage::Complete,
+    };
+    catalog.validate(ApiFormat::OpenaiChatCompletions)?;
     let mut spec = ProviderSpec::new(
         ApiFormat::OpenaiChatCompletions,
         provider.base_url(),
-        ModelSelection::Explicit(Vec::new()),
+        ModelSelection::auto(),
     );
     spec.credential = Some(provider.name().into());
-    spec.set_models(&models);
     let prepared = prepare_account(path, auth_directory, provider.name(), &spec)?;
+    let mut config = crate::config::FileConfig::parse(&prepared.updated, auth_directory)?;
+    for connection in config.providers.values_mut() {
+        if connection.credential.as_deref() == Some(provider.name())
+            && connection
+                .spec
+                .base_url
+                .trim_end_matches('/')
+                == provider
+                    .base_url()
+                    .trim_end_matches('/')
+        {
+            connection.set_discovered(models.clone());
+        }
+    }
+    let verified_models = config.model_options()?;
     orbit_auth::AuthStore::new(auth_directory.to_path_buf())?
         .commit_api_key(provider.name(), secret, provider.base_url(), || {
             prepared.commit()
         })
         .await
-        .map_err(anyhow::Error::new)
+        .map_err(anyhow::Error::new)?;
+    let mut diagnostics = crate::models::updater::load_cached(&mut config)
+        .await
+        .diagnostics;
+    for (name, connection) in &mut config.providers {
+        if connection.credential.as_deref() == Some(provider.name())
+            && connection
+                .base_url
+                .trim_end_matches('/')
+                == provider
+                    .base_url()
+                    .trim_end_matches('/')
+        {
+            connection.set_discovered(models.clone());
+            if let Err(error) = crate::models::account_models::remember(
+                name,
+                connection,
+                auth_directory,
+                models.clone(),
+            ) {
+                diagnostics.push(format!("{name}：连接已保存，模型缓存写入失败：{error}"));
+            }
+        }
+    }
+    let models = match config.model_options() {
+        Ok(models) => models,
+        Err(error) => {
+            diagnostics.push(format!("连接已保存，模型投影更新失败：{error:#}"));
+            verified_models
+        }
+    };
+    Ok(SaveOutcome {
+        models,
+        diagnostics,
+    })
 }
 
 #[cfg(test)]

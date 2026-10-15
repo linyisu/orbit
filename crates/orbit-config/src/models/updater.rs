@@ -24,10 +24,10 @@ pub async fn load_cached(config: &mut FileConfig) -> UpdateReport {
         provider.resolve();
     }
     let mut report = UpdateReport::default();
-    for (_, diagnostics) in
-        super::account_models::refresh_connections(config, false, false, false).await
-    {
-        report.diagnostics.extend(diagnostics);
+    for refreshed in super::account_models::refresh_connections(config, false, false, false).await {
+        report
+            .diagnostics
+            .extend(refreshed.diagnostics);
     }
     report.diagnostics.extend(
         super::model_metadata::update(config, false, false)
@@ -65,19 +65,30 @@ pub async fn refresh(config: &mut FileConfig, force: bool) -> UpdateReport {
         provider.resolve();
     }
     let mut report = UpdateReport::default();
-    for (name, diagnostics) in
+    for refreshed in
         super::account_models::refresh_connections(config, force, force_download, true).await
     {
         if force {
+            use super::account_models::RefreshState;
+            use orbit_model::catalog::CatalogCoverage;
+            let message = match refreshed.state {
+                RefreshState::Fetched(CatalogCoverage::Complete) => "模型目录已更新",
+                RefreshState::Fetched(CatalogCoverage::Partial) => {
+                    "已更新已知模型；服务仅提供部分目录"
+                }
+                RefreshState::Cached(CatalogCoverage::Complete) => "使用已缓存的完整目录",
+                RefreshState::Cached(CatalogCoverage::Partial) => "使用已缓存的部分目录",
+                RefreshState::Fallback => "刷新失败，沿用身份匹配的缓存",
+                RefreshState::Unavailable => "更新未完成，仅保留显式配置",
+                RefreshState::Skipped => "未请求远端目录",
+            };
             report
                 .notices
-                .push(if diagnostics.is_empty() {
-                    format!("{name}：模型目录已更新")
-                } else {
-                    format!("{name}：更新未完成，沿用可用缓存或配置")
-                });
+                .push(format!("{}：{message}", refreshed.name));
         }
-        report.diagnostics.extend(diagnostics);
+        report
+            .diagnostics
+            .extend(refreshed.diagnostics);
     }
     let metadata = super::model_metadata::update(config, force_download, true).await;
     if force {

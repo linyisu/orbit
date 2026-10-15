@@ -1,6 +1,139 @@
 use super::*;
 
 #[tokio::test]
+async fn verified_key_catalog_is_cached_without_becoming_an_explicit_selection() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("config.toml");
+    let auth = root.path().join("auth");
+    let ids = (0..11)
+        .map(|index| format!("generated-api-model-{index}"))
+        .collect::<Vec<_>>();
+    let saved = save_api_key(
+        &path,
+        &auth,
+        orbit_auth::ApiKeyProvider::Deepseek,
+        "generated-api-fixture-key".into(),
+        ids.clone(),
+    )
+    .await
+    .unwrap();
+    assert!(saved.diagnostics.is_empty());
+    assert_eq!(saved.models.len(), ids.len());
+    let source = std::fs::read_to_string(&path).unwrap();
+    assert!(!source.contains("generated-api-fixture-key"));
+    assert!(!source.contains("generated-api-model"));
+    let mut config = crate::config::FileConfig::load(&path, &auth).unwrap();
+    assert!(
+        config.providers["deepseek-account"]
+            .spec()
+            .models
+            .is_auto()
+    );
+    let report = crate::models::updater::load_cached(&mut config).await;
+    assert!(report.diagnostics.is_empty());
+    assert_eq!(
+        config.providers["deepseek-account"]
+            .models()
+            .iter()
+            .map(|model| &model.id)
+            .collect::<Vec<_>>(),
+        ids.iter().collect::<Vec<_>>()
+    );
+}
+
+#[tokio::test]
+async fn a_cache_write_failure_keeps_the_committed_connection_and_verified_models() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("config.toml");
+    let auth = root.path().join("auth");
+    let store = orbit_auth::AuthStore::new(&auth).unwrap();
+    store
+        .set_api_key(
+            "previous",
+            "generated-previous-key".into(),
+            "https://example.com/v1",
+        )
+        .await
+        .unwrap();
+    std::fs::write(auth.join("model-catalog"), "generated cache obstruction").unwrap();
+    let saved = save_api_key(
+        &path,
+        &auth,
+        orbit_auth::ApiKeyProvider::Deepseek,
+        "generated-current-key".into(),
+        vec!["generated-verified-model".into()],
+    )
+    .await
+    .unwrap();
+    assert!(!saved.diagnostics.is_empty());
+    assert_eq!(saved.models.len(), 1);
+    assert!(path.is_file());
+    assert!(
+        store
+            .list()
+            .unwrap()
+            .iter()
+            .any(|entry| entry.name == "deepseek")
+    );
+    let config = crate::config::FileConfig::load(&path, &auth).unwrap();
+    assert!(
+        config.providers["deepseek-account"]
+            .spec()
+            .models
+            .is_auto()
+    );
+}
+
+#[tokio::test]
+async fn reauthorization_rebinds_only_the_matching_connection_and_keeps_declared_choices() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("config.toml");
+    let auth = root.path().join("auth");
+    let store = orbit_auth::AuthStore::new(&auth).unwrap();
+    let snapshot: orbit_auth::CredentialSnapshot = serde_json::from_value(serde_json::json!({
+        "version": 1, "kind": "chatgpt_plan_o_auth", "endpoint": "https://api.openai.com/v1/",
+        "access": "generated-access", "refresh": "generated-refresh", "expires_at": u64::MAX,
+        "account": "generated-account", "account_id": "generated-subject", "project_id": null,
+        "chatgpt": {
+            "client_id": "generated-client",
+            "subject": "generated-subject",
+            "id_token": "generated-id-token",
+            "scopes": ["chatgpt.tokens.use.direct"]
+        },
+    }))
+    .unwrap();
+    store
+        .import_snapshot("registration-fixture", &snapshot)
+        .await
+        .unwrap();
+    std::fs::write(
+        &path,
+        concat!(
+            "[providers.selected]\napi_format = 'chatgpt_codex'\n",
+            "base_url = 'https://chatgpt.com/backend-api/codex/'\n",
+            "credential = 'registration-fixture'\nmodels = ['generated-selected-model']\n",
+            "[providers.other]\nbase_url = 'https://gateway.example/v1'\n",
+            "models = ['other-model']\n",
+        ),
+    )
+    .unwrap();
+    rebind_account(&path, &auth, "registration-fixture").unwrap();
+    let config = crate::config::FileConfig::load(&path, &auth).unwrap();
+    assert_eq!(
+        config.providers["selected"].base_url,
+        "https://api.openai.com/v1/"
+    );
+    assert_eq!(
+        config.providers["selected"].models()[0].id,
+        "generated-selected-model"
+    );
+    assert_eq!(
+        config.providers["other"].base_url,
+        "https://gateway.example/v1"
+    );
+}
+
+#[tokio::test]
 async fn editing_an_automatic_connection_preserves_unavailable_model_overrides() {
     use crate::test_support::{TestConfig, TestModel, TestProvider};
     let directory = tempfile::tempdir().unwrap();
@@ -247,29 +380,15 @@ fn connection_preserves_config_and_reloads_both_account_protocols() {
         ),
     ] {
         let models = append_profile(&path, &auth, credential, format, endpoint).unwrap();
-        let connected = models
-            .iter()
-            .find(|entry| entry.provider == format!("{credential}-account"))
-            .unwrap();
-
-        assert_eq!(
-            connected
-                .config
-                .credential
-                .as_ref()
-                .unwrap()
-                .directory,
-            auth
-        );
-        assert_eq!(
-            connected
-                .config
-                .credential
-                .as_ref()
-                .unwrap()
-                .name,
-            credential
-        );
+        let parsed = crate::config::FileConfig::load(&path, &auth).unwrap();
+        let connected = &parsed.providers[&format!("{credential}-account")];
+        assert_eq!(connected.credential.as_deref(), Some(credential));
+        assert_eq!(connected.base_url, endpoint);
+        assert!(connected.models().is_empty());
+        assert!(matches!(
+            connected.spec().models,
+            ModelSelection::Automatic(_)
+        ));
         assert!(
             std::fs::read_to_string(&path)
                 .unwrap()
@@ -337,7 +456,7 @@ fn explicit_account_selection_is_preserved_when_connecting_another_account() {
     )
     .unwrap();
 
-    assert_eq!(connected.len(), 3);
+    assert_eq!(connected.len(), options.len());
     assert!(
         connected
             .iter()
@@ -346,7 +465,7 @@ fn explicit_account_selection_is_preserved_when_connecting_another_account() {
     assert!(
         connected
             .iter()
-            .any(|model| model.model == "gpt-5.5")
+            .all(|model| model.provider != "chatgpt-account")
     );
     assert_eq!(
         crate::config::FileConfig::load(&path, &auth)
@@ -382,10 +501,16 @@ fn connection_keeps_existing_provider_and_rejects_invalid_config_without_writing
             .iter()
             .any(|model| model.qualified_name() == "google-account::existing")
     );
+    let parsed = crate::config::FileConfig::load(&path, &auth).unwrap();
     assert!(
-        models
-            .iter()
-            .any(|model| model.provider == "google-account-2")
+        parsed
+            .providers
+            .contains_key("google-account-2")
+    );
+    assert!(
+        parsed.providers["google-account-2"]
+            .models()
+            .is_empty()
     );
     assert!(
         std::fs::read_to_string(&path)

@@ -23,6 +23,39 @@ pub enum ApiFormat {
 }
 
 impl ApiFormat {
+    /// Authentication protocol required by this wire format, independent of model names.
+    pub fn auth_target(self) -> orbit_auth::AuthTarget {
+        match self {
+            Self::AnthropicMessages => orbit_auth::AuthTarget::Anthropic,
+            Self::GoogleCodeAssist => orbit_auth::AuthTarget::GoogleCodeAssist,
+            Self::ChatgptCodex => orbit_auth::AuthTarget::ChatgptCodex,
+            Self::OpenaiChatCompletions | Self::OpenaiResponses => orbit_auth::AuthTarget::Openai,
+        }
+    }
+
+    pub fn reasoning_adapter(self) -> ReasoningAdapter {
+        match self {
+            Self::OpenaiChatCompletions => ReasoningAdapter::OpenaiChat,
+            Self::OpenaiResponses | Self::ChatgptCodex => ReasoningAdapter::OpenaiResponses,
+            Self::AnthropicMessages => ReasoningAdapter::AnthropicMessages,
+            Self::GoogleCodeAssist => ReasoningAdapter::Google,
+        }
+    }
+
+    pub fn requires_saved_credential(self) -> bool {
+        matches!(self, Self::GoogleCodeAssist | Self::ChatgptCodex)
+    }
+
+    pub fn for_oauth(provider: orbit_auth::OAuthProvider) -> Self {
+        match provider {
+            orbit_auth::OAuthProvider::Anthropic => Self::AnthropicMessages,
+            orbit_auth::OAuthProvider::Google | orbit_auth::OAuthProvider::Antigravity => {
+                Self::GoogleCodeAssist
+            }
+            orbit_auth::OAuthProvider::Chatgpt => Self::ChatgptCodex,
+        }
+    }
+
     pub fn parse(value: &str) -> Result<Self, ModelError> {
         match value {
             "openai_chat_completions" => Ok(Self::OpenaiChatCompletions),
@@ -57,7 +90,7 @@ impl std::fmt::Debug for ModelClient {
 
 impl ModelClient {
     pub fn new(config: ModelConfig) -> Result<Self, ModelError> {
-        if config.model.trim().is_empty() {
+        if !crate::catalog::valid_model_id(&config.model) {
             return Err(ModelError::InvalidModel);
         }
         if config.max_retries > 5 {
@@ -258,8 +291,10 @@ impl ModelClient {
 
         // ChatGPT can omit Content-Type on a successful SSE response. Let the
         // event decoder validate that body, including its terminal event.
-        let codex_without_type =
-            self.config.api_format == ApiFormat::ChatgptCodex && content_type.is_empty();
+        let codex_without_type = self.config.api_format == ApiFormat::ChatgptCodex
+            && content_type.is_empty()
+            && crate::openai::codex::Route::for_endpoint(&self.endpoint)?
+                == crate::openai::codex::Route::LegacyCodex;
         if !content_type.contains("text/event-stream") && !codex_without_type {
             return Err(ModelError::Protocol(format!(
                 "streaming endpoint returned HTTP {} with Content-Type {:?}; expected \
@@ -309,6 +344,7 @@ impl ModelClient {
                 request,
                 self.config.reasoning_adapter,
                 &self.config.reasoning_extra,
+                crate::openai::codex::Route::for_endpoint(&self.endpoint)?,
             ),
 
             ApiFormat::OpenaiChatCompletions => crate::openai::chat_completions::encode(
@@ -389,14 +425,7 @@ impl ModelClient {
                     store.resolve(
                         &reference.name,
                         &self.endpoint,
-                        match format {
-                            ApiFormat::AnthropicMessages => orbit_auth::AuthTarget::Anthropic,
-                            ApiFormat::GoogleCodeAssist => {
-                                orbit_auth::AuthTarget::GoogleCodeAssist
-                            }
-                            ApiFormat::ChatgptCodex => orbit_auth::AuthTarget::ChatgptCodex,
-                            _ => orbit_auth::AuthTarget::Openai,
-                        },
+                        format.auth_target(),
                     ),
                 ) => result.map_err(|_| orbit_auth::AuthError::Timeout)??,
             };

@@ -1,9 +1,10 @@
 use super::*;
+use orbit_model::types::{ReasoningAdapter, ReasoningEffort};
 async fn refresh(config: &mut FileConfig, force: bool) -> Vec<String> {
     refresh_connections(config, force, force, true)
         .await
         .into_iter()
-        .flat_map(|(_, errors)| errors)
+        .flat_map(|refreshed| refreshed.diagnostics)
         .collect()
 }
 
@@ -235,7 +236,7 @@ fn refresh_updates_remote_capabilities_but_preserves_explicit_fields_and_choices
 }
 
 #[test]
-fn bundled_defaults_yield_to_discovered_capacity() {
+fn automatic_catalog_uses_discovered_capacity() {
     let mut config = FileConfig::parse(
         r#"[providers.orbit]
 api_format = "google_code_assist"
@@ -250,7 +251,8 @@ models = "auto"
         .providers
         .get_mut("orbit")
         .unwrap();
-    let id = provider.models[0].id.clone();
+    assert!(provider.models.is_empty());
+    let id = "discovered-capacity-model";
     let model = crate::test_support::TestModel::new(id)
         .context(4_000_000)
         .vision(false)
@@ -366,7 +368,14 @@ fn google_quota_models_do_not_retire_unlisted_or_exhausted_models() {
             .iter()
             .all(|model| model.reasoning.is_none())
     );
-    merge_discovered_models(&mut provider, models);
+    merge_catalog(
+        &mut provider,
+        orbit_model::catalog::ModelCatalog {
+            models,
+            unavailable: Vec::new(),
+            coverage: orbit_model::catalog::CatalogCoverage::Partial,
+        },
+    );
     assert_eq!(provider.models.len(), 3);
     assert_eq!(provider.models[0].id, "orbit-live");
     assert_eq!(provider.models[1].id, "orbit-retired");
@@ -682,12 +691,11 @@ fn antigravity_discovery_removes_retired_models_and_preserves_available_settings
         .find(|m| m.id == "claude-sonnet-4-6")
         .unwrap();
     assert_eq!(sonnet.context_tokens, Some(123_456));
-    assert!(sonnet.reasoning.is_some());
     assert!(
         provider
             .models
             .iter()
-            .any(|m| m.id == "claude-opus-4-6")
+            .any(|m| m.id == "claude-opus-4-6-thinking")
     );
 }
 
@@ -738,7 +746,7 @@ fn codex_discovery_preserves_new_models_and_advertised_efforts() {
 }
 
 #[test]
-fn antigravity_keeps_unknown_models_and_collapses_known_routes() {
+fn antigravity_preserves_server_model_ids_without_collapsing_routes() {
     let payload = json!({
         "models": {
             "gemini-3.8-flash-low": {
@@ -760,7 +768,7 @@ fn antigravity_keeps_unknown_models_and_collapses_known_routes() {
 
     let (models, _) = normalize(ApiFormat::GoogleCodeAssist, &payload).unwrap();
 
-    assert_eq!(models.len(), 2);
+    assert_eq!(models.len(), 3);
     assert!(
         models
             .iter()
@@ -769,7 +777,7 @@ fn antigravity_keeps_unknown_models_and_collapses_known_routes() {
     assert!(
         models
             .iter()
-            .any(|model| model.id == "gemini-3.8-flash")
+            .any(|model| model.id == "gemini-3.8-flash-high")
     );
     assert!(normalize(ApiFormat::GoogleCodeAssist, &json!({})).is_err());
     assert!(
@@ -844,7 +852,7 @@ fn antigravity_refresh_uses_agent_selectors_instead_of_the_full_definition_table
             .unwrap()
             .0,
     );
-    assert_eq!(provider.models.len(), 5);
+    assert_eq!(provider.models.len(), 7);
     // Retired models remain defined for other workflows, but disappear from
     // the account's Agent selectors. A successful refresh must remove them.
     payload["agentModelSorts"][0]["groups"][0]["modelIds"]
@@ -863,10 +871,12 @@ fn antigravity_refresh_uses_agent_selectors_instead_of_the_full_definition_table
     assert_eq!(
         ids,
         [
-            "claude-opus-4-6",
+            "claude-opus-4-6-thinking",
             "claude-sonnet-4-6",
-            "gemini-3.8-flash",
-            "gpt-oss-120b"
+            "gemini-3.8-flash-high",
+            "gemini-3.8-flash-medium",
+            "gemini-3.8-flash-low",
+            "gpt-oss-120b-medium"
         ]
         .into_iter()
         .collect()
@@ -881,7 +891,7 @@ fn antigravity_refresh_uses_agent_selectors_instead_of_the_full_definition_table
         Some(123_456)
     );
     provider.resolve();
-    assert_eq!(provider.models.len(), 4);
+    assert_eq!(provider.models.len(), 6);
 }
 
 #[test]
@@ -1071,13 +1081,14 @@ fn cache_never_crosses_accounts() {
     )
     .unwrap();
 
-    assert!(read_cache(&path, &binding).is_some());
+    assert!(read_cache(&path, &binding, ApiFormat::ChatgptCodex).is_some());
     assert!(
         read_cache(
             &path,
             &json!({
                 "account_id": "second"
-            })
+            }),
+            ApiFormat::ChatgptCodex,
         )
         .is_none()
     );

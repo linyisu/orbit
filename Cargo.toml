@@ -67,6 +67,7 @@ html5ever = "0.39.0"
 httpdate = "1.0.3"
 hyper-util = { version = "0.1.20", features = ["client-proxy"] }
 ignore = "0.4.33"
+jsonwebtoken = { version = "11.1.0", default-features = false, features = ["aws_lc_rs"] }
 image = { version = "0.25.9", default-features = false, features = ["gif", "jpeg", "png", "webp"] }
 libc = "0.2.189"
 pulldown-cmark = { version = "0.13.4", default-features = false }

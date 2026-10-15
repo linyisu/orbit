@@ -1,6 +1,7 @@
 //! Antigravity account provisioning; distinct from Gemini CLI's project selection.
 //! Protocol reference: oh-my-pi v18.2.8 (5e0fc867f8a58dfe8812b5e99b2e7b6a0313da6c),
 //! packages/ai/src/registry/oauth/google-antigravity.ts (MIT, LICENSE-REFERENCE).
+use reqwest::header::HeaderValue;
 use std::time::Duration;
 
 use serde_json::{Value, json};
@@ -72,8 +73,23 @@ pub(crate) fn user_agent() -> String {
     format!("antigravity/hub/{version} (aidev_client; os_type=darwin; arch=arm64; cl=963137146)")
 }
 
+pub(crate) fn authorization_url(grant: &crate::oauth::pkce::Pkce) -> Url {
+    let mut url = grant.authorization_url(
+        "https://accounts.google.com/o/oauth2/v2/auth",
+        CLIENT_ID,
+        "https://www.googleapis.com/auth/cloud-platform \
+        https://www.googleapis.com/auth/userinfo.email \
+        https://www.googleapis.com/auth/userinfo.profile \
+        https://www.googleapis.com/auth/cclog \
+        https://www.googleapis.com/auth/experimentsandconfigs",
+    );
+    url.query_pairs_mut()
+        .extend_pairs([("access_type", "offline"), ("prompt", "consent")]);
+    url
+}
+
 pub(crate) async fn exchange(code: &str, verifier: &str, redirect: &Url) -> Result<Credential> {
-    let mut credential = crate::google::exchange_using(
+    let mut credential = crate::providers::google::exchange_using(
         code,
         verifier,
         redirect,
@@ -97,7 +113,7 @@ pub(crate) async fn refresh(previous: &Credential) -> Result<Credential> {
         .filter(|id| !id.is_empty())
         .ok_or(AuthError::LoginRequired)?;
 
-    crate::google::refresh_using(previous, CLIENT_ID, CLIENT_SECRET).await
+    crate::providers::google::refresh_using(previous, CLIENT_ID, CLIENT_SECRET).await
 }
 
 async fn post(base: &str, action: &str, token: &str, body: Value) -> Result<Value> {
@@ -289,8 +305,28 @@ async fn discover_project(base: &str, token: &str) -> Result<String> {
             "Antigravity did not return a managed project; retry account initialization",
         ))?;
 
-    crate::google::validate_project(project)?;
+    crate::providers::google::validate_project(project)?;
     Ok(project.into())
+}
+
+/// Add provider authentication metadata after the common endpoint scope check.
+pub(crate) fn authorize(
+    credential: &crate::credential::Credential,
+    headers: &mut reqwest::header::HeaderMap,
+) -> crate::Result<()> {
+    crate::providers::google::validate_project(
+        credential
+            .project_id
+            .as_deref()
+            .ok_or(AuthError::InvalidToken)?,
+    )?;
+    headers.insert(
+        "user-agent",
+        HeaderValue::from_str(&crate::providers::antigravity::user_agent())
+            .map_err(|_| AuthError::InvalidToken)?,
+    );
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -299,7 +335,7 @@ mod tests {
     // Expected wire header transcribed from OMP v18.2.8 gemini-headers.ts,
     // independently of Orbit's user_agent() implementation.
     async fn server(responses: Vec<Value>) -> (String, tokio::task::JoinHandle<Vec<Value>>) {
-        crate::google::tests::server_with_headers(
+        crate::providers::google::tests::server_with_headers(
             responses,
             &[
                 "user-agent: antigravity/hub/2.8.0 (aidev_client; os_type=darwin; arch=arm64; \
@@ -526,6 +562,7 @@ mod tests {
             account: None,
             account_id: None,
             project_id: Some("managed-project".into()),
+            chatgpt: None,
         };
 
         let auth = credential
@@ -541,7 +578,7 @@ mod tests {
         assert!(
             credential
                 .request_auth(
-                    &Url::parse(crate::google::API_BASE).unwrap(),
+                    &Url::parse(crate::providers::google::API_BASE).unwrap(),
                     crate::AuthTarget::GoogleCodeAssist
                 )
                 .is_err()

@@ -10,15 +10,17 @@ pub enum AuthError {
     Storage,
     #[error("invalid authentication configuration: {0}")]
     Configuration(&'static str),
-    #[error(
-        "Google Cloud Code Assist requires a project ID; use --project <id> or continue in /connect"
-    )]
+    #[error("Google Cloud Code Assist 需要项目 ID，请在账号连接界面选择项目")]
     GoogleProjectRequired,
     #[error("Antigravity 账号初始化未通过：{0}")]
     AntigravityAccount(String),
     #[error("Antigravity 需要账号验证：{reason}\n验证入口：{url}")]
     AntigravityVerification { reason: String, url: String },
-    #[error("credential not found; run orbit auth login or orbit auth set-key")]
+    #[error("ChatGPT 账号未授权套餐使用，请在账号设置中重新授权")]
+    PlanUsageDisabled,
+    #[error("此账号使用旧版认证接入，请在账号设置中重新登录后刷新模型目录")]
+    ReauthorizationRequired,
+    #[error("账号凭据不存在，请使用 /connect 或账号设置重新连接")]
     Missing,
     #[error("credential is not authorized for this endpoint or API format")]
     Scope,
@@ -26,7 +28,7 @@ pub enum AuthError {
     Transport,
     #[error("authentication server returned HTTP {0}")]
     Http(u16),
-    #[error("login expired or revoked; run orbit auth login again")]
+    #[error("账号登录已过期或已撤销，请使用 /connect 或账号设置重新登录")]
     LoginRequired,
     #[error("authentication server returned an invalid token response")]
     InvalidToken,

@@ -1,4 +1,5 @@
 use super::*;
+use orbit_model::types::{ReasoningAdapter, ReasoningEffort};
 
 #[test]
 fn compact_declarations_are_strict_and_only_explicit_overrides_are_persisted() {
@@ -76,7 +77,10 @@ fn authoritative_empty_catalog_does_not_restore_bootstrap_models() {
         "https://chatgpt.com/backend-api/codex",
         ModelSelection::auto(),
     ));
-    assert!(!provider.models.is_empty());
+    assert!(provider.models.is_empty());
+    provider.discovered = Some(vec![ModelProfile::new("catalog-test")]);
+    provider.resolve();
+    assert_eq!(provider.models.len(), 1);
     provider.discovered = Some(Vec::new());
     provider.resolve();
     assert!(provider.models.is_empty());
@@ -393,22 +397,28 @@ fn account_configuration_example_connects_both_provider_protocols() {
     fs::write(&path, example).unwrap();
 
     let config = FileConfig::load(&path, &directory.path().join("auth")).unwrap();
-    let models = config.model_options().unwrap();
-
-    assert_eq!(models.len(), 2);
     assert!(
-        models
-            .iter()
-            .any(|model| model.config.api_format == ApiFormat::GoogleCodeAssist)
+        config
+            .model_options()
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(config.providers.len(), 2);
+    assert!(
+        config
+            .providers
+            .values()
+            .any(|provider| provider.api_format == ApiFormat::GoogleCodeAssist)
     );
     assert!(
-        models
-            .iter()
-            .any(|model| model.config.api_format == ApiFormat::ChatgptCodex)
+        config
+            .providers
+            .values()
+            .any(|provider| provider.api_format == ApiFormat::ChatgptCodex)
     );
-    for model in models {
-        assert!(model.config.credential.is_some());
-        ModelClient::new(model.config).unwrap();
+    for provider in config.providers.values() {
+        assert!(provider.credential.is_some());
+        assert!(provider.spec().models.is_auto());
     }
 }
 

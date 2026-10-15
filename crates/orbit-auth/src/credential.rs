@@ -26,6 +26,19 @@ pub enum CredentialKind {
     GoogleOAuth,
     AntigravityOAuth,
     ChatgptOAuth,
+    ChatgptPlanOAuth,
+}
+
+impl CredentialKind {
+    pub fn oauth_provider(self) -> Option<crate::OAuthProvider> {
+        match self {
+            Self::ApiKey => None,
+            Self::AnthropicOAuth => Some(crate::OAuthProvider::Anthropic),
+            Self::GoogleOAuth => Some(crate::OAuthProvider::Google),
+            Self::AntigravityOAuth => Some(crate::OAuthProvider::Antigravity),
+            Self::ChatgptOAuth | Self::ChatgptPlanOAuth => Some(crate::OAuthProvider::Chatgpt),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -47,6 +60,8 @@ pub struct CredentialInfo {
     pub account_id: Option<String>,
     #[serde(default)]
     pub project_id: Option<String>,
+    #[serde(default)]
+    pub registration_id: Option<String>,
 }
 
 #[derive(Debug)]
@@ -80,6 +95,8 @@ pub(crate) struct Credential {
     pub account_id: Option<String>,
     #[serde(default)]
     pub project_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chatgpt: Option<Box<crate::providers::chatgpt::Registration>>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -101,25 +118,15 @@ impl Credential {
             account: self.account.clone(),
             account_id: self.account_id.clone(),
             project_id: self.project_id.clone(),
+            registration_id: self
+                .chatgpt
+                .as_ref()
+                .map(|registration| registration.client_id.clone()),
         }
     }
 
     pub fn request_auth(&self, endpoint: &Url, target: AuthTarget) -> Result<RequestAuth> {
-        let required = match self.kind {
-            CredentialKind::ApiKey => None,
-            CredentialKind::AnthropicOAuth => {
-                Some(("https://api.anthropic.com/v1/", AuthTarget::Anthropic))
-            }
-            CredentialKind::AntigravityOAuth => {
-                Some((crate::antigravity::API_BASE, AuthTarget::GoogleCodeAssist))
-            }
-            CredentialKind::GoogleOAuth => {
-                Some((crate::google::API_BASE, AuthTarget::GoogleCodeAssist))
-            }
-            CredentialKind::ChatgptOAuth => {
-                Some((crate::chatgpt::API_BASE, AuthTarget::ChatgptCodex))
-            }
-        };
+        let required = crate::providers::binding(self.kind);
 
         if let Some((base, required_target)) = required {
             if self.endpoint != base || target != required_target {
@@ -148,52 +155,7 @@ impl Credential {
         value.set_sensitive(true);
         headers.insert(name, value);
 
-        if self.kind == CredentialKind::AnthropicOAuth {
-            headers.insert(
-                "anthropic-beta",
-                HeaderValue::from_static("oauth-2025-04-20"),
-            );
-            headers.insert("anthropic-version", HeaderValue::from_static("2023-06-01"));
-            headers.insert("x-app", HeaderValue::from_static("cli"));
-        }
-
-        if self.kind == CredentialKind::ChatgptOAuth {
-            let account = self
-                .account_id
-                .as_deref()
-                .ok_or(AuthError::InvalidToken)?;
-            let mut value = HeaderValue::from_str(account).map_err(|_| AuthError::InvalidToken)?;
-            value.set_sensitive(true);
-            headers.insert("chatgpt-account-id", value);
-            headers.insert("originator", HeaderValue::from_static("orbit"));
-        }
-
-        if self.kind == CredentialKind::AntigravityOAuth {
-            crate::google::validate_project(
-                self.project_id
-                    .as_deref()
-                    .ok_or(AuthError::InvalidToken)?,
-            )?;
-            headers.insert(
-                "user-agent",
-                HeaderValue::from_str(&crate::antigravity::user_agent())
-                    .map_err(|_| AuthError::InvalidToken)?,
-            );
-        }
-
-        if self.kind == CredentialKind::GoogleOAuth {
-            crate::google::validate_project(
-                self.project_id
-                    .as_deref()
-                    .ok_or(AuthError::InvalidToken)?,
-            )?;
-            headers.insert(
-                "client-metadata",
-                HeaderValue::from_static(
-                    "ideType=IDE_UNSPECIFIED,platform=PLATFORM_UNSPECIFIED,pluginType=GEMINI",
-                ),
-            );
-        }
+        crate::providers::authorize(self, &mut headers)?;
 
         Ok(RequestAuth {
             kind: self.kind,
@@ -234,6 +196,58 @@ mod tests {
     use super::*;
 
     #[test]
+    fn chatgpt_plan_tokens_cannot_be_reused_for_legacy_or_api_key_routes() {
+        let mut credential = Credential {
+            version: 1,
+            kind: CredentialKind::ChatgptPlanOAuth,
+            endpoint: crate::providers::chatgpt::API_BASE.into(),
+            access: Secret("generated-access".into()),
+            refresh: Some(Secret("generated-refresh".into())),
+            expires_at: None,
+            account: None,
+            account_id: Some("generated-subject".into()),
+            project_id: None,
+            chatgpt: Some(Box::new(crate::providers::chatgpt::Registration {
+                client_id: "generated-client".into(),
+                subject: "generated-subject".into(),
+                id_token: Secret("generated-identity-token".into()),
+                scopes: vec!["chatgpt.tokens.use.direct".into()],
+            })),
+        };
+        let endpoint = Url::parse("https://api.openai.com/v1/responses").unwrap();
+        let auth = credential
+            .request_auth(&endpoint, AuthTarget::ChatgptCodex)
+            .unwrap();
+        assert!(
+            !auth
+                .headers
+                .contains_key("chatgpt-account-id")
+        );
+        assert!(!auth.headers.contains_key("originator"));
+        assert!(matches!(
+            credential.request_auth(&endpoint, AuthTarget::Openai),
+            Err(AuthError::Scope)
+        ));
+        assert!(matches!(
+            credential.request_auth(
+                &Url::parse("https://chatgpt.com/backend-api/codex/responses").unwrap(),
+                AuthTarget::ChatgptCodex
+            ),
+            Err(AuthError::Scope)
+        ));
+        credential
+            .chatgpt
+            .as_mut()
+            .unwrap()
+            .scopes
+            .clear();
+        assert!(matches!(
+            credential.request_auth(&endpoint, AuthTarget::ChatgptCodex),
+            Err(AuthError::PlanUsageDisabled)
+        ));
+    }
+
+    #[test]
     fn oauth_is_bound_to_anthropic_messages_even_if_storage_is_edited() {
         let mut credential = Credential {
             version: 1,
@@ -245,6 +259,7 @@ mod tests {
             account: None,
             account_id: None,
             project_id: None,
+            chatgpt: None,
         };
         let endpoint = Url::parse("https://api.anthropic.com/v1/messages").unwrap();
 

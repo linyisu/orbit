@@ -40,6 +40,7 @@ impl UsageProvider {
     pub(crate) fn select(kind: CredentialKind, base: &str) -> Result<Option<(Self, AuthTarget)>> {
         let base = endpoint_scope(base)?;
         Ok(match kind {
+            CredentialKind::ChatgptPlanOAuth => None,
             CredentialKind::ChatgptOAuth => Some((Self::Chatgpt, AuthTarget::ChatgptCodex)),
             CredentialKind::AnthropicOAuth => Some((Self::Claude, AuthTarget::Anthropic)),
             CredentialKind::GoogleOAuth => Some((Self::Gemini, AuthTarget::GoogleCodeAssist)),
@@ -77,6 +78,7 @@ pub fn usage_api_key(base: &str, key: &str) -> Result<Option<UsageAuthorization>
         account: None,
         account_id: None,
         project_id: None,
+        chatgpt: None,
     };
     Ok(Some(UsageAuthorization {
         provider,
@@ -135,6 +137,7 @@ mod tests {
                 account: Some("test-account".into()),
                 account_id: Some("test-id".into()),
                 project_id: None,
+                chatgpt: None,
             };
             store
                 .save("test", &credential)

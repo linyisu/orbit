@@ -106,12 +106,7 @@ impl ModelOverrides {
 }
 
 pub fn adapter(format: ApiFormat) -> ReasoningAdapter {
-    match format {
-        ApiFormat::OpenaiChatCompletions => ReasoningAdapter::OpenaiChat,
-        ApiFormat::OpenaiResponses | ApiFormat::ChatgptCodex => ReasoningAdapter::OpenaiResponses,
-        ApiFormat::AnthropicMessages => ReasoningAdapter::AnthropicMessages,
-        ApiFormat::GoogleCodeAssist => ReasoningAdapter::Google,
-    }
+    format.reasoning_adapter()
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -169,9 +164,7 @@ impl ProviderSpec {
             ensure!(unique.len() == ids.len(), "duplicate model ID in provider");
             ensure!(
                 ids.iter()
-                    .all(|id| !id.trim().is_empty()
-                        && id.len() <= 256
-                        && !id.chars().any(char::is_control)),
+                    .all(|id| orbit_model::catalog::valid_model_id(id)),
                 "models must contain nonempty IDs"
             );
             for id in self.model_overrides.keys() {
@@ -182,7 +175,10 @@ impl ProviderSpec {
             }
         }
         for (id, settings) in &self.model_overrides {
-            ensure!(!id.trim().is_empty(), "model override ID must not be empty");
+            ensure!(
+                orbit_model::catalog::valid_model_id(id),
+                "model override ID is invalid"
+            );
             ensure!(
                 settings.max_output_tokens != Some(0),
                 "model {id:?}: output limit must be positive"
@@ -288,11 +284,16 @@ impl ProviderConfig {
         self.resolve();
     }
 
+    pub(crate) fn discard_discovery(&mut self) {
+        self.discovered = None;
+        self.resolve();
+    }
+
     pub fn resolve(&mut self) {
         let base = self
             .discovered
             .clone()
-            .unwrap_or_else(|| self.bootstrap());
+            .unwrap_or_default();
         self.models = match &self.spec.models {
             ModelSelection::Explicit(ids) => ids
                 .iter()
@@ -309,49 +310,6 @@ impl ProviderConfig {
             if let Some(settings) = self.spec.model_overrides.get(&model.id) {
                 settings.apply(model, self.spec.api_format);
             }
-        }
-    }
-
-    pub(crate) fn bootstrap(&self) -> Vec<ModelProfile> {
-        match (self.api_format, self.base_url.trim_end_matches('/')) {
-            (ApiFormat::GoogleCodeAssist, "https://daily-cloudcode-pa.googleapis.com") => {
-                super::antigravity_profiles().unwrap_or_default()
-            }
-            (ApiFormat::ChatgptCodex, "https://chatgpt.com/backend-api/codex")
-            | (ApiFormat::GoogleCodeAssist, "https://cloudcode-pa.googleapis.com") => {
-                let name = if self.api_format == ApiFormat::ChatgptCodex {
-                    "chatgpt"
-                } else {
-                    "google"
-                };
-                #[derive(Deserialize)]
-                struct Accounts {
-                    google: Vec<ModelProfile>,
-                    chatgpt: Vec<ModelProfile>,
-                }
-                let catalog: Accounts =
-                    serde_json::from_str(include_str!("../models/account_models/bootstrap.json"))
-                        .expect("validated account bootstrap catalog");
-                if name == "chatgpt" {
-                    catalog.chatgpt
-                } else {
-                    catalog.google
-                }
-            }
-            _ => Vec::new(),
-        }
-    }
-}
-
-impl ModelProfile {
-    pub fn new(id: impl Into<String>) -> Self {
-        Self {
-            id: id.into(),
-            max_output_tokens: None,
-            context_tokens: None,
-            input_context_tokens: None,
-            reasoning: None,
-            supports_vision: None,
         }
     }
 }

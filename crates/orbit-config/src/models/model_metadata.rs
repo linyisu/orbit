@@ -1,122 +1,38 @@
 //! Public serving specifications supplement discovery without granting model access.
 use std::{
-    collections::BTreeMap,
     fs,
     io::Write,
     path::Path,
-    sync::LazyLock,
     time::{Duration, SystemTime},
 };
 
-use anyhow::{Context, Result, ensure};
+use anyhow::Result;
+use orbit_model::catalog::public_metadata::{Catalog, bundled, supports as api_format};
+#[cfg(test)]
 use orbit_model::{
+    catalog::public_metadata::Spec,
     client::ApiFormat,
     types::{ReasoningAdapter, ReasoningEffort},
 };
 use orbit_tools::web_fetch::{WebClient, WebConfig};
-use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::config::{
-    FileConfig, MIN_CONTEXT_TOKENS, ModelProfile, ProviderConfig, ReasoningProfile,
-};
+use crate::config::FileConfig;
+#[cfg(test)]
+use crate::config::{ModelProfile, ProviderConfig, ReasoningProfile};
 
 const SOURCE_URL: &str = "https://models.dev/api.json";
 const CACHE_LIFETIME: Duration = Duration::from_secs(86_400);
 const REFRESH_TIMEOUT: Duration = Duration::from_secs(3);
 const MAX_CATALOG_BYTES: usize = 20 * 1_024 * 1_024;
 
-#[derive(Clone, Deserialize, Serialize)]
-struct Catalog {
-    source: Value,
-    providers: BTreeMap<String, Provider>,
-}
-
-#[derive(Clone, Deserialize, Serialize)]
-struct Provider {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    api: Option<String>,
-    models: BTreeMap<String, Spec>,
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize)]
-struct Spec {
-    #[serde(default)]
-    limit: Limits,
-    #[serde(default)]
-    modalities: Modalities,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    reasoning_options: Vec<Value>,
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize)]
-struct Limits {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    context: Option<usize>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    input: Option<usize>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    output: Option<u32>,
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize)]
-struct Modalities {
-    #[serde(default)]
-    input: Vec<String>,
-}
-
-fn bundled() -> &'static Catalog {
-    static CATALOG: LazyLock<Catalog> = LazyLock::new(|| {
-        serde_json::from_str(include_str!("model_metadata.json"))
-            .expect("validated model metadata snapshot")
-    });
-    &CATALOG
-}
-
 fn normalize(payload: Value) -> Result<Catalog> {
-    let entries = payload
-        .as_object()
-        .context("model metadata is not a provider catalog")?;
-    let mut providers = BTreeMap::new();
-    for (id, entry) in entries {
-        let Some(models) = entry["models"].as_object() else {
-            continue;
-        };
-        let models = models
-            .iter()
-            .filter_map(|(id, spec)| {
-                if id.is_empty() || id.len() > 256 || id.chars().any(char::is_control) {
-                    return None;
-                }
-                serde_json::from_value(spec.clone())
-                    .ok()
-                    .map(|spec| (id.clone(), spec))
-            })
-            .collect::<BTreeMap<_, Spec>>();
-        if !models.is_empty() {
-            providers.insert(
-                id.clone(),
-                Provider {
-                    api: entry["api"].as_str().map(str::to_owned),
-                    models,
-                },
-            );
-        }
-    }
-    ensure!(
-        !providers.is_empty(),
-        "model metadata contains no usable providers"
-    );
-    Ok(Catalog {
-        source: json!({
-            "url": SOURCE_URL,
-            "retrieved_at": SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)?
-                .as_secs(),
-            "license": "MIT"
-        }),
-        providers,
-    })
+    let source = json!({
+        "url": SOURCE_URL,
+        "retrieved_at": SystemTime::now().duration_since(SystemTime::UNIX_EPOCH)?.as_secs(),
+        "license": "MIT"
+    });
+    orbit_model::catalog::public_metadata::normalize(payload, source)
 }
 
 fn read_cache(path: &Path) -> Option<Catalog> {
@@ -251,7 +167,11 @@ pub(crate) async fn update(config: &mut FileConfig, force: bool, network: bool) 
         .as_ref()
         .unwrap_or_else(|| bundled());
     for provider in config.providers.values_mut() {
-        catalog.supplement(provider);
+        catalog.supplement(
+            provider.spec.api_format,
+            &provider.spec.base_url,
+            &mut provider.models,
+        );
     }
     let status = if error.is_some() {
         "公共规格：更新失败，沿用缓存或内置快照"
@@ -267,142 +187,6 @@ pub(crate) async fn update(config: &mut FileConfig, force: bool, network: bool) 
     MetadataUpdate {
         status: format!("{status} · models.dev"),
         error,
-    }
-}
-
-fn api_format(format: ApiFormat) -> bool {
-    matches!(
-        format,
-        ApiFormat::OpenaiChatCompletions
-            | ApiFormat::OpenaiResponses
-            | ApiFormat::AnthropicMessages
-    )
-}
-
-fn endpoint(value: &str) -> Option<String> {
-    let url = url::Url::parse(value).ok()?;
-    if url.scheme() != "https"
-        || !url.username().is_empty()
-        || url.password().is_some()
-        || url.query().is_some()
-        || url.fragment().is_some()
-    {
-        return None;
-    }
-    let path = url.path().trim_end_matches('/');
-    let path = path.strip_suffix("/v1").unwrap_or(path);
-    Some(format!("{}{path}", url.origin().ascii_serialization()))
-}
-
-impl Catalog {
-    fn supplement(&self, provider: &mut ProviderConfig) {
-        if !api_format(provider.api_format) {
-            return;
-        }
-        let Some(base) = endpoint(&provider.base_url) else {
-            return;
-        };
-        let catalogs = self
-            .providers
-            .iter()
-            .filter(|(id, entry)| {
-                let api = entry
-                    .api
-                    .as_deref()
-                    .or(match id.as_str() {
-                        "openai" => Some("https://api.openai.com/v1"),
-                        "anthropic" => Some("https://api.anthropic.com/v1"),
-                        _ => None,
-                    });
-                api.and_then(endpoint).as_ref() == Some(&base)
-            })
-            .collect::<Vec<_>>();
-        if catalogs.is_empty() {
-            return;
-        }
-        let format = provider.spec.api_format;
-        for model in &mut provider.models {
-            let mut specs = catalogs
-                .iter()
-                .filter_map(|(id, catalog)| {
-                    catalog
-                        .models
-                        .get(&model.id)
-                        .map(|spec| (id.as_str(), spec))
-                });
-            let Some((id, spec)) = specs.next() else {
-                continue;
-            };
-            if specs.any(|(_, other)| other != spec) {
-                continue;
-            }
-            spec.supplement(model, id, format);
-        }
-    }
-}
-
-impl Spec {
-    // Explicit profiles and live serving metadata have already been applied.
-    // Unknown endpoints and IDs never borrow limits from a similarly named model.
-    fn supplement(&self, model: &mut ModelProfile, provider: &str, format: ApiFormat) {
-        model.context_tokens = model.context_tokens.or(self
-            .limit
-            .context
-            .filter(|n| *n >= MIN_CONTEXT_TOKENS));
-        model.input_context_tokens = model
-            .input_context_tokens
-            .or(self.limit.input.filter(|n| {
-                *n >= MIN_CONTEXT_TOKENS
-                    && model
-                        .context_tokens
-                        .is_none_or(|context| *n <= context)
-            }));
-        model.max_output_tokens = model
-            .max_output_tokens
-            .or(self.limit.output.filter(|n| *n > 0));
-        if model.supports_vision.is_none() && !self.modalities.input.is_empty() {
-            model.supports_vision = Some(
-                self.modalities
-                    .input
-                    .iter()
-                    .any(|kind| kind == "image"),
-            );
-        }
-        if model.reasoning.is_none() {
-            let adapter = match (provider, format) {
-                ("openai", ApiFormat::OpenaiChatCompletions) => Some(ReasoningAdapter::OpenaiChat),
-                ("openai", ApiFormat::OpenaiResponses) => Some(ReasoningAdapter::OpenaiResponses),
-                ("anthropic", ApiFormat::AnthropicMessages) => {
-                    Some(ReasoningAdapter::AnthropicMessages)
-                }
-                _ => None,
-            };
-            if let Some(adapter) = adapter {
-                let efforts = self
-                    .reasoning_options
-                    .iter()
-                    .filter(|option| option["type"] == "effort")
-                    .filter_map(|option| option["values"].as_array())
-                    .flatten()
-                    .filter_map(|value| {
-                        serde_json::from_value::<ReasoningEffort>(value.clone()).ok()
-                    })
-                    .collect::<Vec<_>>();
-                if let Some(default) = efforts
-                    .iter()
-                    .find(|e| **e == ReasoningEffort::High)
-                    .or_else(|| efforts.last())
-                    .copied()
-                {
-                    model.reasoning = Some(ReasoningProfile {
-                        adapter,
-                        efforts,
-                        default,
-                        extra: toml::Table::new(),
-                    });
-                }
-            }
-        }
     }
 }
 

@@ -6,7 +6,7 @@ use thiserror::Error;
 pub enum ModelError {
     #[error("authentication failed: {0}")]
     Authentication(#[from] orbit_auth::AuthError),
-    #[error("model name cannot be empty")]
+    #[error("model identifier is empty, too long, or contains control characters")]
     InvalidModel,
     #[error("unsupported API format: {0}")]
     UnsupportedApiFormat(String),

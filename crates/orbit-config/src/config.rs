@@ -13,14 +13,14 @@ use anyhow::{Context, Result, bail};
 use orbit_agent::{agent::AgentConfig, model::ModelClientBackend};
 use orbit_model::{
     client::{ApiFormat, ModelClient},
-    types::{ModelConfig, ReasoningAdapter, ReasoningEffort},
+    types::ModelConfig,
 };
 use serde::Deserialize;
 
 use crate::models as catalog;
 
 /// Minimum declared context window accepted for a configured model.
-pub const MIN_CONTEXT_TOKENS: usize = 8_192;
+pub use orbit_model::catalog::MIN_CONTEXT_TOKENS;
 
 #[derive(Clone, Debug, Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]
@@ -78,34 +78,7 @@ pub use provider::{
     adapter as reasoning_adapter,
 };
 
-#[derive(Clone, Debug, Deserialize, serde::Serialize)]
-pub struct ModelProfile {
-    pub id: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub max_output_tokens: Option<u32>,
-    /// Overrides the top-level context window for this model only.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub context_tokens: Option<usize>,
-    /// Full usable input window for providers that allow output outside this
-    /// input limit. When omitted, `context_tokens` keeps its total-budget
-    /// meaning and Orbit reserves the configured output upper bound from it.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub input_context_tokens: Option<usize>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub reasoning: Option<ReasoningProfile>,
-    #[serde(default)]
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub supports_vision: Option<bool>,
-}
-
-#[derive(Clone, Debug, Deserialize, serde::Serialize)]
-pub struct ReasoningProfile {
-    pub adapter: ReasoningAdapter,
-    pub efforts: Vec<ReasoningEffort>,
-    pub default: ReasoningEffort,
-    #[serde(default)]
-    pub extra: toml::Table,
-}
+pub use orbit_model::catalog::{ModelProfile, ReasoningProfile};
 
 fn default_max_output_tokens() -> u32 {
     32_000
@@ -131,52 +104,7 @@ fn default_max_tool_calls() -> usize {
     AgentConfig::default().max_tool_calls
 }
 
-/// `extra` is for provider extensions. These fields are owned by Orbit's request encoder; accepting
-/// them here would silently replace the model, transport shape, output budget, or tool contract.
-pub fn validate_reasoning_extra(
-    model: &str,
-    api_format: ApiFormat,
-    extra: &toml::Table,
-) -> Result<()> {
-    for key in [
-        "model",
-        "messages",
-        "input",
-        "stream",
-        "tools",
-        "tool_choice",
-        "max_tokens",
-        "max_output_tokens",
-        "temperature",
-    ] {
-        if extra.contains_key(key) {
-            bail!(
-                "model {model:?}: reasoning.extra may not override the standard request field \
-                    {key:?}"
-            );
-        }
-    }
-
-    let conflicts_effort = match api_format {
-        ApiFormat::OpenaiChatCompletions => extra.contains_key("reasoning_effort"),
-        ApiFormat::OpenaiResponses | ApiFormat::ChatgptCodex => extra
-            .get("reasoning")
-            .and_then(toml::Value::as_table)
-            .is_some_and(|reasoning| reasoning.contains_key("effort")),
-
-        ApiFormat::GoogleCodeAssist => !extra.is_empty(),
-        ApiFormat::AnthropicMessages => extra
-            .get("output_config")
-            .and_then(toml::Value::as_table)
-            .is_some_and(|output| output.contains_key("effort")),
-    };
-
-    if conflicts_effort {
-        bail!("model {model:?}: reasoning.extra may not override the configured reasoning effort");
-    }
-
-    Ok(())
-}
+pub use orbit_model::catalog::validate_reasoning_extra;
 
 fn default_timeout_seconds() -> u64 {
     600
@@ -184,33 +112,6 @@ fn default_timeout_seconds() -> u64 {
 
 fn default_api_format() -> ApiFormat {
     ApiFormat::OpenaiChatCompletions
-}
-
-pub fn antigravity_profiles() -> Result<Vec<ModelProfile>> {
-    orbit_model::account_catalog::antigravity_models()
-        .iter()
-        .map(|(id, model)| {
-            let reasoning = model.thinking.as_ref().map(|thinking| {
-                serde_json::json!({
-                    "adapter": "google",
-                    "efforts": thinking["efforts"],
-                    "default": "high"
-                })
-            });
-
-            Ok(serde_json::from_value(serde_json::json!(
-                {
-                    "id": id,
-                    "context_tokens": model.context_window,
-                    "supports_vision": model
-                        .input
-                        .iter()
-                        .any(|kind| kind == "image"),
-                    "reasoning": reasoning
-                }
-            ))?)
-        })
-        .collect()
 }
 
 impl FileConfig {
@@ -286,14 +187,7 @@ impl FileConfig {
                 }
 
                 if let Some(reasoning) = &model.reasoning {
-                    let expected = match provider.api_format {
-                        ApiFormat::OpenaiChatCompletions => ReasoningAdapter::OpenaiChat,
-                        ApiFormat::OpenaiResponses | ApiFormat::ChatgptCodex => {
-                            ReasoningAdapter::OpenaiResponses
-                        }
-                        ApiFormat::GoogleCodeAssist => ReasoningAdapter::Google,
-                        ApiFormat::AnthropicMessages => ReasoningAdapter::AnthropicMessages,
-                    };
+                    let expected = provider.api_format.reasoning_adapter();
 
                     if reasoning.adapter != expected {
                         bail!(

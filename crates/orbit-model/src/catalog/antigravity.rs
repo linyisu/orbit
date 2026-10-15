@@ -1,6 +1,6 @@
 //! Antigravity returns model definitions separately from its Agent selectors.
+use super::ModelProfile;
 use super::profile;
-use crate::config::ModelProfile;
 use anyhow::{Context, Result};
 use serde_json::{Value, json};
 use std::collections::HashSet;
@@ -11,48 +11,34 @@ pub(super) fn normalize(payload: &Value) -> Result<(Vec<ModelProfile>, Vec<Strin
     let entries = payload["models"]
         .as_object()
         .context("模型目录缺少 models 对象")?;
-    let selectable = agent_ids(payload)?;
-    let bundled = orbit_model::account_catalog::antigravity_models();
-    for (wire, entry) in entries {
+    let ids = agent_ids(payload)?.unwrap_or_else(|| {
+        entries
+            .keys()
+            .map(String::as_str)
+            .collect()
+    });
+    let bundled = crate::account_catalog::antigravity_models();
+    for wire in ids {
+        let entry = entries
+            .get(wire)
+            .unwrap_or(&Value::Null);
         if entry["isInternal"] == true
             || entry["disabled"] == true
-            || matches!(wire.as_str(), "chat_20706" | "chat_23310")
             || payload["deprecatedModelIds"]
                 .get(wire)
                 .is_some()
-            || selectable
-                .as_ref()
-                .is_some_and(|ids| !ids.contains(wire.as_str()))
         {
             continue;
         }
         if payload["imageGenerationModelIds"]
             .as_array()
             .is_some_and(|ids| ids.contains(&json!(wire)))
-            || wire.contains("-image")
-            || wire.starts_with("tab_")
         {
-            unavailable.push(wire.clone());
+            unavailable.push(wire.to_owned());
             continue;
         }
-        // OMP taxonomy/_collapse.kdl: tiered selectors are aliases;
-        // gemini-3.1-pro-high was retired in favor of gemini-pro-agent.
-        let alias = if wire == "gemini-3.1-pro-high" {
-            "gemini-3.1-pro"
-        } else {
-            wire.strip_suffix("-tiered")
-                .unwrap_or(wire)
-        };
-        let logical = bundled.iter().find(|(id, spec)| {
-            *id == alias
-                || spec.request_model_id.as_ref() == Some(wire)
-                || spec
-                    .thinking
-                    .as_ref()
-                    .and_then(|t| t["effortRouting"].as_object())
-                    .is_some_and(|routes| routes.values().any(|v| v == wire))
-        });
-        let id = logical.map_or(wire.as_str(), |(id, _)| id.as_str());
+        let logical = bundled.get(wire);
+        let id = wire;
         if models
             .iter()
             .any(|model| model.id == id)
@@ -60,7 +46,7 @@ pub(super) fn normalize(payload: &Value) -> Result<(Vec<ModelProfile>, Vec<Strin
             continue;
         }
         let reasoning = logical
-            .and_then(|(_, spec)| spec.thinking.as_ref())
+            .and_then(|spec| spec.thinking.as_ref())
             .map(|thinking| {
                 json!({
                     "adapter": "google",
@@ -72,20 +58,23 @@ pub(super) fn normalize(payload: &Value) -> Result<(Vec<ModelProfile>, Vec<Strin
             id,
             entry["maxTokens"]
                 .as_u64()
-                .unwrap_or(200_000) as usize,
-            entry["supportsImages"] == true,
+                .map(usize::try_from)
+                .transpose()?
+                .or_else(|| logical.map(|model| model.context_window)),
+            entry["supportsImages"].as_bool(),
             reasoning,
         )?);
     }
     Ok((models, unavailable))
 }
 
-fn agent_ids(payload: &Value) -> Result<Option<HashSet<&str>>> {
+fn agent_ids(payload: &Value) -> Result<Option<Vec<&str>>> {
     let Some(sorts) = payload.get("agentModelSorts") else {
         // Older discovery responses contain only model definitions.
         return Ok(None);
     };
-    let mut ids = HashSet::new();
+    let mut ids = Vec::new();
+    let mut seen = HashSet::new();
     for sort in sorts
         .as_array()
         .context("agentModelSorts 必须是数组")?
@@ -98,10 +87,12 @@ fn agent_ids(payload: &Value) -> Result<Option<HashSet<&str>>> {
                 .as_array()
                 .context("模型分组缺少 modelIds 数组")?
             {
-                ids.insert(
-                    id.as_str()
-                        .context("modelIds 必须包含模型 ID 字符串")?,
-                );
+                let id = id
+                    .as_str()
+                    .context("modelIds 必须包含模型 ID 字符串")?;
+                if seen.insert(id) {
+                    ids.push(id);
+                }
             }
         }
     }

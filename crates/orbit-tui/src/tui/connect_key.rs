@@ -12,7 +12,7 @@ use tokio_util::task::AbortOnDropHandle;
 use super::connect_custom::form;
 use super::{ModelOption, input::InputState, terminal};
 
-type VerificationTask = AbortOnDropHandle<Result<(String, Vec<String>)>>;
+type VerificationTask = AbortOnDropHandle<Result<orbit_client::accounts::SaveOutcome>>;
 
 pub(super) async fn run(
     terminal: &mut terminal::AppTerminal,
@@ -22,6 +22,7 @@ pub(super) async fn run(
 ) -> Result<Option<Vec<ModelOption>>> {
     let mut key = InputState::default();
     let mut message = String::new();
+    let mut saved_models = None;
     let mut task: Option<VerificationTask> = None;
 
     loop {
@@ -84,16 +85,15 @@ pub(super) async fn run(
                 result = handle => {
                     task = None;
                     match result? {
-                        Ok((secret, ids)) => {
-                            return crate::connections::save_api_key(
-                                &options.config,
-                                &options.auth_directory,
-                                provider,
-                                secret,
-                                ids,
-                            )
-                            .await
-                            .map(Some);
+                        Ok(outcome) if outcome.diagnostics.is_empty() => {
+                            return Ok(Some(outcome.models));
+                        }
+                        Ok(outcome) => {
+                            saved_models = Some(outcome.models);
+                            message = format!(
+                                "连接已保存：{}。按 Enter 继续。",
+                                outcome.diagnostics.join("；")
+                            );
                         }
                         Err(error) => message = format!("连接失败：{error}"),
                     }
@@ -117,13 +117,16 @@ pub(super) async fn run(
                 {
                     return Ok(None);
                 }
+                KeyCode::Enter if saved_models.is_some() => return Ok(saved_models.take()),
                 KeyCode::Enter if task.is_none() && !key.text.trim().is_empty() => {
                     let secret = key.text.trim().to_owned();
                     key.clear();
                     message = "正在验证密钥并读取模型…".into();
+                    let config = options.config.clone();
+                    let auth = options.auth_directory.clone();
                     task = Some(AbortOnDropHandle::new(tokio::spawn(async move {
-                        let ids = provider.verify(&secret).await?;
-                        Ok((secret, ids))
+                        orbit_client::accounts::connect_api_key(&config, &auth, provider, secret)
+                            .await
                     })));
                 }
 

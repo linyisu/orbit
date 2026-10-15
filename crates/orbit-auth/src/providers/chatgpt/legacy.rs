@@ -1,6 +1,7 @@
+//! Legacy Codex credentials remain confined to their original backend.
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+use reqwest::header::HeaderValue;
 use serde_json::Value;
-use url::Url;
 
 use crate::{
     AuthError, CredentialKind, Result,
@@ -11,22 +12,6 @@ use crate::{
 pub(crate) const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 pub(crate) const API_BASE: &str = "https://chatgpt.com/backend-api/codex/";
 const TOKEN_URL: &str = "https://auth.openai.com/oauth/token";
-
-pub(crate) async fn exchange(code: &str, verifier: &str, redirect: &Url) -> Result<Credential> {
-    let value = form_token(
-        TOKEN_URL,
-        &[
-            ("grant_type", "authorization_code"),
-            ("client_id", CLIENT_ID),
-            ("code", code),
-            ("code_verifier", verifier),
-            ("redirect_uri", redirect.as_str()),
-        ],
-    )
-    .await?;
-
-    parse_tokens(value, None)
-}
 
 pub(crate) async fn refresh(previous: &Credential) -> Result<Credential> {
     let token = previous
@@ -92,6 +77,7 @@ fn parse_tokens(value: Value, previous: Option<&Credential>) -> Result<Credentia
         account: email,
         account_id: Some(account_id),
         project_id: None,
+        chatgpt: None,
     };
 
     tokens.apply(&mut credential)?;
@@ -112,6 +98,23 @@ fn claims(token: &str) -> Value {
         .ok()
         .and_then(|bytes| serde_json::from_slice(&bytes).ok())
         .unwrap_or(Value::Null)
+}
+
+/// Add provider authentication metadata after the common endpoint scope check.
+pub(crate) fn authorize(
+    credential: &crate::credential::Credential,
+    headers: &mut reqwest::header::HeaderMap,
+) -> crate::Result<()> {
+    let account = credential
+        .account_id
+        .as_deref()
+        .ok_or(AuthError::InvalidToken)?;
+    let mut value = HeaderValue::from_str(account).map_err(|_| AuthError::InvalidToken)?;
+    value.set_sensitive(true);
+    headers.insert("chatgpt-account-id", value);
+    headers.insert("originator", HeaderValue::from_static("orbit"));
+
+    Ok(())
 }
 
 #[cfg(test)]

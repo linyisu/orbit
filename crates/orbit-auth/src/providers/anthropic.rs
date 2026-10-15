@@ -1,5 +1,6 @@
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use reqwest::Client;
+use reqwest::header::HeaderValue;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -14,7 +15,7 @@ use crate::{
 const CLIENT_ID: &str = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
 const AUTHORIZE_URL: &str = "https://claude.ai/oauth/authorize";
 const TOKEN_URL: &str = "https://api.anthropic.com/v1/oauth/token";
-const API_BASE: &str = "https://api.anthropic.com/v1/";
+pub(crate) const API_BASE: &str = "https://api.anthropic.com/v1/";
 const SCOPES: &str = "org:create_api_key user:profile user:inference user:sessions:claude_code \
     user:mcp_servers user:file_upload";
 
@@ -72,11 +73,16 @@ impl AnthropicLogin {
     }
 
     pub(crate) fn callback_code(&self, callback: &str) -> Result<String> {
-        crate::callback::authorization_code(callback, &self.redirect, &self.state)
+        crate::oauth::callback::authorization_code(callback, &self.redirect, &self.state)
     }
 
     pub async fn finish(self, callback: &str, store: &AuthStore, name: &str) -> Result<()> {
         crate::store::validate_name(name)?;
+        let credential = self.exchange_grant(callback).await?;
+        store.save(name, &credential).await
+    }
+
+    pub(crate) async fn exchange_grant(self, callback: &str) -> Result<Credential> {
         let code = self.callback_code(callback)?;
         let body = json!({
             "grant_type": "authorization_code",
@@ -86,9 +92,7 @@ impl AnthropicLogin {
             "code_verifier": self.verifier.0,
             "redirect_uri": self.redirect.as_str()
         });
-        let credential = exchange(TOKEN_URL, body, None).await?;
-
-        store.save(name, &credential).await
+        exchange(TOKEN_URL, body, None).await
     }
 }
 
@@ -197,6 +201,7 @@ fn token_response(bytes: &[u8], previous: Option<&Credential>) -> Result<Credent
         account,
         account_id: None,
         project_id: None,
+        chatgpt: None,
     })
 }
 
@@ -205,6 +210,21 @@ fn random(size: usize) -> Result<String> {
     getrandom::fill(&mut bytes)
         .map_err(|_| AuthError::Configuration("secure randomness unavailable"))?;
     Ok(URL_SAFE_NO_PAD.encode(bytes))
+}
+
+/// Add provider authentication metadata after the common endpoint scope check.
+pub(crate) fn authorize(
+    _credential: &crate::credential::Credential,
+    headers: &mut reqwest::header::HeaderMap,
+) -> crate::Result<()> {
+    headers.insert(
+        "anthropic-beta",
+        HeaderValue::from_static("oauth-2025-04-20"),
+    );
+    headers.insert("anthropic-version", HeaderValue::from_static("2023-06-01"));
+    headers.insert("x-app", HeaderValue::from_static("cli"));
+
+    Ok(())
 }
 
 #[cfg(test)]
