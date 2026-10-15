@@ -9,7 +9,7 @@ use super::actions::WorkspaceCommand;
 use super::*;
 use crate::preferences::{ColorMode, Preferences};
 use gpui_kit::component::{
-    StyledExt,
+    InteractiveElementExt, StyledExt,
     input::{Input, InputState, NumberInput},
     radio::{Radio, RadioGroup},
     scroll::ScrollableElement,
@@ -579,32 +579,39 @@ impl Render for SettingsPage {
                     "settings-page:{}",
                     PAGES[self.initial_page].0
                 )))
+                .relative()
                 .size_full()
                 .min_h_0()
                 .min_w_0()
-                .overflow_y_scroll()
-                .track_scroll(scroll)
                 .child(
-                    content_column()
-                        .p_6()
-                        .gap_6()
+                    div()
+                        .id("settings-page-content")
+                        .size_full()
+                        .overflow_y_scroll()
+                        .lock_scroll_axis()
+                        .track_scroll(scroll)
                         .child(
-                            v_flex()
-                                .gap_2()
+                            content_column()
+                                .p_6()
+                                .gap_6()
                                 .child(
-                                    div()
-                                        .text_xl()
-                                        .font_semibold()
-                                        .child(title),
+                                    v_flex()
+                                        .gap_2()
+                                        .child(
+                                            div()
+                                                .text_xl()
+                                                .font_semibold()
+                                                .child(title),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_sm()
+                                                .text_color(cx.theme().muted_foreground)
+                                                .child(description),
+                                        ),
                                 )
-                                .child(
-                                    div()
-                                        .text_sm()
-                                        .text_color(cx.theme().muted_foreground)
-                                        .child(description),
-                                ),
-                        )
-                        .child(content),
+                                .child(content),
+                        ),
                 )
                 .vertical_scrollbar(scroll)
                 .into_any_element()

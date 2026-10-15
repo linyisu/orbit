@@ -1,7 +1,7 @@
 //! Project plugin catalogue and source management share one retained request owner.
 use super::super::*;
 use gpui_kit::component::{
-    StyledExt, VirtualListScrollHandle,
+    InteractiveElementExt, StyledExt, VirtualListScrollHandle,
     input::{Input, InputState},
     scroll::{ScrollableElement, Scrollbar},
     spinner::Spinner,
@@ -148,6 +148,7 @@ impl Plugins {
         cx.notify();
     }
 
+    /// Let the dialog own scrolling for the entire source-management form.
     fn sources(&mut self, adding: bool, window: &mut Window, cx: &mut Context<Self>) {
         self.error = None;
         let owner = cx.entity();
@@ -585,37 +586,43 @@ impl Plugins {
                     .when(self.enabled_expanded, |view| {
                         view.child(
                             div()
-                                .id("enabled-plugins")
-                                .max_h(rems(6.))
-                                .overflow_y_scroll()
-                                .track_scroll(&self.enabled_scroll)
-                                .vertical_scrollbar(&self.enabled_scroll)
-                                .child(h_flex().flex_wrap().gap_2().children(
-                                    catalog.enabled.iter().map(|plugin| {
-                                        let name = plugin.plugin_name.clone();
-                                        let source = plugin.marketplace_source.clone();
-                                        Button::new(SharedString::from(format!(
-                                            "enabled:{source}:{name}"
-                                        )))
-                                        .outline()
-                                        .small()
-                                        .icon(IconName::X)
-                                        .label(name.clone())
-                                        .accessibility_label(format!("停用插件 {name}"))
-                                        .tooltip(format!("{source} · 点击停用 {name}"))
-                                        .disabled(self.busy)
-                                        .on_click(cx.listener(move |v, _, _, cx| {
-                                            v.request(
-                                                protocol::Action::Disable {
-                                                    marketplace_source: source.clone(),
-                                                    plugin_name: name.clone(),
-                                                },
-                                                None,
-                                                cx,
-                                            )
-                                        }))
-                                    }),
-                                )),
+                                .relative()
+                                .w_full()
+                                .child(
+                                    div()
+                                        .id("enabled-plugins")
+                                        .max_h(rems(6.))
+                                        .overflow_y_scroll()
+                                        .lock_scroll_axis()
+                                        .track_scroll(&self.enabled_scroll)
+                                        .child(h_flex().flex_wrap().gap_2().children(
+                                            catalog.enabled.iter().map(|plugin| {
+                                                let name = plugin.plugin_name.clone();
+                                                let source = plugin.marketplace_source.clone();
+                                                Button::new(SharedString::from(format!(
+                                                    "enabled:{source}:{name}"
+                                                )))
+                                                .outline()
+                                                .small()
+                                                .icon(IconName::X)
+                                                .label(name.clone())
+                                                .accessibility_label(format!("停用插件 {name}"))
+                                                .tooltip(format!("{source} · 点击停用 {name}"))
+                                                .disabled(self.busy)
+                                                .on_click(cx.listener(move |v, _, _, cx| {
+                                                    v.request(
+                                                        protocol::Action::Disable {
+                                                            marketplace_source: source.clone(),
+                                                            plugin_name: name.clone(),
+                                                        },
+                                                        None,
+                                                        cx,
+                                                    )
+                                                }))
+                                            }),
+                                        )),
+                                )
+                                .vertical_scrollbar(&self.enabled_scroll),
                         )
                     }),
             );
@@ -914,8 +921,6 @@ impl Render for Sources {
                 .child(
                     v_flex()
                         .id("plugin-market-sources")
-                        .max_h(rems(24.))
-                        .overflow_y_scroll()
                         .gap_3()
                         .children(markets.into_iter().map(|market| {
                             let source = market.source.clone();
