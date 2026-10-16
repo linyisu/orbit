@@ -14,9 +14,6 @@ pub(super) enum Action {
 }
 
 pub(super) fn keyboard_action(state: &mut UiState, event: Event, busy: bool) -> Action {
-    if handle_tool_scroll(state, &event) {
-        return Action::Redraw;
-    }
     if let Event::Mouse(mouse) = event {
         match mouse.kind {
             MouseEventKind::ScrollUp => state.scroll_up(wheel::LINES),
@@ -47,6 +44,32 @@ pub(super) fn keyboard_action(state: &mut UiState, event: Event, busy: bool) -> 
     };
     if key.kind == KeyEventKind::Release {
         return Action::None;
+    }
+    if key
+        .modifiers
+        .contains(KeyModifiers::ALT)
+    {
+        match key.code {
+            KeyCode::Char('p') => {
+                state.open_process_log();
+                return Action::None;
+            }
+            KeyCode::Char('o') => {
+                if let Some(row) = state
+                    .transcript
+                    .iter()
+                    .rev()
+                    .find_map(|item| match item {
+                        app::TranscriptItem::Tool(row) => Some(row),
+                        _ => None,
+                    })
+                {
+                    state.info_dialog = Some(dialogs::InfoDialog::tool(&row.record()));
+                }
+                return Action::None;
+            }
+            _ => {}
+        }
     }
 
     let was_history = state.input.browsing_history();

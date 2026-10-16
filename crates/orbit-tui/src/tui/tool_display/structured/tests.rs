@@ -4,6 +4,8 @@ use super::*;
 
 fn tool(name: &str, value: Value) -> ToolRow {
     ToolRow {
+        changes: Vec::new(),
+        purpose: None,
         id: "test".into(),
         name: name.into(),
         arguments: "{}".into(),

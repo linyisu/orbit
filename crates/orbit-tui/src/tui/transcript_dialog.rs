@@ -272,7 +272,8 @@ impl TranscriptDialog {
             preview.draw(frame);
             self.ui.ime_cursor = None;
         }
-        if self.ui.info_dialog.is_some() {
+        if let Some(dialog) = &mut self.ui.info_dialog {
+            dialog.disable_navigation();
             super::dialogs::draw(frame, &mut self.ui);
             self.ui.ime_cursor = None;
         }
@@ -283,7 +284,8 @@ impl TranscriptDialog {
         if self.ui.handle_feedback(event) {
             return Ok(Action::Redraw);
         }
-        if self.ui.info_dialog.is_some() {
+        if let Some(dialog) = &mut self.ui.info_dialog {
+            dialog.disable_navigation();
             super::dialogs::handle(&mut self.ui, event.clone());
             return Ok(Action::Redraw);
         }
@@ -467,9 +469,6 @@ impl TranscriptDialog {
             return Ok(Action::Redraw);
         }
 
-        if super::handle_tool_scroll(&mut self.ui, event) {
-            return Ok(Action::Redraw);
-        }
         if self.ui.selection.handle(event)? {
             if self.ui.selection.transcript_drag() {
                 self.ui.follow_bottom = false;
@@ -540,54 +539,21 @@ mod tests {
     }
 
     #[test]
-    fn expanded_tool_output_scrolls_inside_the_dialog() {
-        let mut view = TranscriptDialog::new("orbit-model");
-        view.ui.transcript = vec![super::super::app::TranscriptItem::Tool(
-            super::super::app::ToolRow {
-                id: "output".into(),
-                name: "run_command".into(),
-                arguments: serde_json::json!({
-                    "command": "example"
-                })
-                .to_string(),
-                status: super::super::app::ToolStatus::Finished,
-                output: (0..30)
-                    .map(|i| format!("https://orbit.example/{i:02}\n"))
-                    .collect(),
-            },
-        )];
-        view.ui.expanded.insert(0);
-        render(&mut view, 90, 35);
-        let area = view.ui.selection.viewport;
-        let point = (area.y..area.bottom())
-            .find_map(|y| {
-                (area.x..area.right()).find_map(|x| {
-                    (view
-                        .ui
-                        .transcript_layout
-                        .link_at(area, 0, (x, y))
-                        == Some("https://orbit.example/00"))
-                    .then_some((x, y))
-                })
-            })
-            .unwrap();
-        assert!(matches!(
-            view.handle(&mouse(MouseEventKind::ScrollDown, point.0, point.1))
-                .unwrap(),
-            Action::Redraw
-        ));
-        render(&mut view, 90, 35);
-        assert_eq!(view.ui.scroll, 0);
-        let expected = format!(
-            "https://orbit.example/{:02}",
-            super::super::wheel::TOOL_LINES
-        );
-        assert_eq!(
-            view.ui
-                .transcript_layout
-                .link_at(area, 0, point),
-            Some(expected.as_str())
-        );
+    fn embedded_tool_details_do_not_navigate_through_the_outer_session() {
+        use orbit_client::{execution::ToolRun, protocol::model::ToolCall};
+        use serde_json::json;
+
+        let mut view = TranscriptDialog::new("fixture");
+        let mut tool = ToolRun::new(&ToolCall::function("generated", "spawn_agent", json!({})));
+        tool.output = Some(json!({"agent_id": "b".repeat(32)}).to_string());
+        view.ui.info_dialog = Some(super::super::dialogs::InfoDialog::tool(&tool));
+        view.handle(&Event::Key(KeyEvent::new(
+            KeyCode::Char('a'),
+            KeyModifiers::NONE,
+        )))
+        .unwrap();
+        assert!(view.ui.info_dialog.is_some());
+        assert!(view.ui.subagent_dialog.is_none());
     }
 
     #[test]

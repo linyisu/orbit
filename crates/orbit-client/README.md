@@ -26,6 +26,9 @@ GUI 与 TUI 使用同一路由。全局保存成功不依赖远程会话在线�
 
 ## 入口
 
+- [conversation.rs](src/conversation.rs)、[activity.rs](src/activity.rs)、[execution.rs](src/execution.rs)：
+  共享会话分段、进度状态、调用记录与详情页数据。两端不自行解释工具结果。
+
 - [lib.rs](src/lib.rs)、[connect.rs](src/connect.rs)：准备连接与打开会话。
 - [library.rs](src/library.rs)：本机全局库访问、所选扩展快照同步与会话应用。
 - [transport.rs](src/transport.rs)、[bootstrap.rs](src/bootstrap.rs)：传输、部署与握手。

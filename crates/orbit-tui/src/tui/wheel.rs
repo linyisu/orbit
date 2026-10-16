@@ -4,7 +4,6 @@ use std::time::{Duration, Instant};
 use crossterm::event::{Event, MouseEventKind};
 
 pub(super) const LINES: usize = 8;
-pub(super) const TOOL_LINES: usize = 3;
 const INTERVAL: Duration = Duration::from_millis(40);
 
 #[derive(Default)]

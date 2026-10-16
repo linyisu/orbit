@@ -344,22 +344,19 @@ async fn restored_read_image_results_upload_complete_rgba_with_selection_and_row
             )
         })
         .unwrap();
-    state.expanded.insert(index);
-    let rendered = assert_ui_graphics(state);
-    let picture = state
-        .media
-        .shared
+    crate::tui::toggle_transcript_item(state, index);
+    crate::tui::dialogs::handle(
+        state,
+        Event::Key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE)),
+    );
+    let preview = state
+        .media_preview
         .as_ref()
-        .unwrap()
-        .cache
-        .lock()
-        .unwrap()
-        .values()
-        .find_map(|entry| match &entry.value {
-            Value::Ready(picture) => Some(picture.clone()),
-            _ => None,
-        })
-        .unwrap();
+        .expect("image action opens the viewer");
+    let picture = wait_for(&preview.context, &preview.source, 70, 20);
+    let area = Rect::new(0, 0, picture.size.width, 1);
+    let mut rendered = Buffer::empty(area);
+    SlicedImage::new(&picture.protocol, (0, -1).into()).render(area, &mut rendered);
 
     let cell = state
         .media
@@ -504,26 +501,14 @@ fn multiline_math_fallback_keeps_line_breaks_click_targets_and_copyable_tex() {
 }
 
 #[test]
-fn framed_tool_and_finished_thinking_keep_formula_targets_and_fallback_lines() {
-    use crate::tui::app::{ThinkingRow, ToolRow, ToolStatus};
+fn finished_thinking_keep_formula_targets_and_fallback_lines() {
+    use crate::tui::app::ThinkingRow;
     let source = "$$\n\\frac{a}{b}\n\\sqrt{x}\n$$\n\n行内 $\\frac{1}{2} + \\frac{3}{4} + \
         \\frac{5}{6} + \\frac{7}{8}$";
     let mut thought = ThinkingRow::from(source.to_owned());
     thought.finished = true;
-    for item in [
-        TranscriptItem::Thinking(thought),
-        TranscriptItem::Tool(ToolRow {
-            id: "math".into(),
-            name: "web_fetch".into(),
-            arguments: r#"{"url":"https://orbit.example/math"}"#.into(),
-            status: ToolStatus::Finished,
-            output: serde_json::json!({
-                "url": "https://orbit.example/math",
-                "content": source
-            })
-            .to_string(),
-        }),
-    ] {
+    {
+        let item = TranscriptItem::Thinking(thought);
         let mut state = UiState::new("mock");
         state.media = context(ProtocolType::Kitty);
         state.transcript.push(item.clone());
@@ -1805,8 +1790,6 @@ fn remote_images_keep_the_source_or_outer_link_on_every_picture_row() {
 
 #[test]
 fn images_render_without_clicking_and_only_wrapped_links_show_navigation_hints() {
-    use crate::tui::app::{ToolRow, ToolStatus};
-
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("image.png");
     image::RgbaImage::from_pixel(400, 600, image::Rgba([230, 100, 50, 255]))
@@ -1860,23 +1843,6 @@ fn images_render_without_clicking_and_only_wrapped_links_show_navigation_hints()
             false,
         ),
         (TranscriptItem::Thinking(thinking), false, true),
-        (
-            TranscriptItem::Tool(ToolRow {
-                id: "read-image".into(),
-                name: "read_image".into(),
-                arguments: serde_json::json!({
-                    "path": path
-                })
-                .to_string(),
-                output: serde_json::json!({
-                    "path": path
-                })
-                .to_string(),
-                status: ToolStatus::Finished,
-            }),
-            false,
-            true,
-        ),
     ] {
         let thumbnail = matches!(&item, TranscriptItem::UserWithImages { .. });
         let mut state = UiState::new("mock");
@@ -1994,27 +1960,6 @@ fn images_render_without_clicking_and_only_wrapped_links_show_navigation_hints()
         assert_eq!(state.link_hovered, linked.then_some(point));
         assert_eq!(state.input.text, "未发送的草稿");
         if expanded {
-            if matches!(state.transcript[0], TranscriptItem::Tool(_)) {
-                crate::tui::handle_tool_scroll(
-                    &mut state,
-                    &mouse(MouseEventKind::ScrollDown, point.0, point.1),
-                );
-                draw_ui(&mut state, &mut terminal);
-                assert!(
-                    state
-                        .transcript_layout
-                        .media_at(area, state.max_scroll, point)
-                        .is_some()
-                );
-                assert!(
-                    state
-                        .transcript_layout
-                        .picture_area_at(area, state.max_scroll, point)
-                        .unwrap()
-                        .height
-                        <= crate::tui::transcript::MAX_TOOL_BODY_ROWS as u16
-                );
-            }
             let bounds = state
                 .transcript_layout
                 .picture_area_at(area, state.max_scroll, point)

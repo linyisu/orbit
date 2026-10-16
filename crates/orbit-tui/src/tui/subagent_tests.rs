@@ -1,27 +1,16 @@
 use super::app::TranscriptItem;
 use super::*;
+use crossterm::event::KeyEvent;
 
 #[test]
 fn nested_html_clicks_do_not_collapse_the_enclosing_tool_or_thinking_item() {
     let source = "<details><summary>内容</summary>\n[正文](https://orbit.example)\n</details>";
     let mut thought = app::ThinkingRow::from(source.to_owned());
     thought.finished = true;
-    let tool = app::ToolRow {
-        id: "html".into(),
-        name: "web_fetch".into(),
-        arguments: "{}".into(),
-        status: app::ToolStatus::Finished,
-        output: serde_json::json!({
-            "url": "https://orbit.example/page",
-            "content": source
-        })
-        .to_string(),
-    };
 
     for item in [
         TranscriptItem::Assistant(source.into()),
         TranscriptItem::Thinking(thought),
-        TranscriptItem::Tool(tool),
     ] {
         let mut state = UiState::new("orbit::model");
         state.transcript.push(item);
@@ -93,6 +82,8 @@ fn child_session_links_open_a_dialog_without_switching_tabs() {
     state
         .transcript
         .push(TranscriptItem::Tool(app::ToolRow {
+            changes: Vec::new(),
+            purpose: None,
             id: "child".into(),
             name: "spawn_agent".into(),
             arguments: "{\"task\":\"inspect\"}".into(),
@@ -109,20 +100,11 @@ fn child_session_links_open_a_dialog_without_switching_tabs() {
     terminal
         .draw(|frame| render::draw(frame, &mut state))
         .unwrap();
-    let area = state.selection.viewport;
-    let point = (area.y..area.bottom())
-        .find_map(|y| {
-            (area.x..area.right()).find_map(|x| {
-                state
-                    .transcript_layout
-                    .link_at(area, state.max_scroll, (x, y))
-                    .is_some_and(|url| subagent_link_id(url) == Some(id))
-                    .then_some((x, y))
-            })
-        })
-        .expect("live child view link is visible");
-
-    assert!(open_subagent_at(&mut state, point));
+    toggle_transcript_item(&mut state, 1);
+    dialogs::handle(
+        &mut state,
+        Event::Key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE)),
+    );
     assert!(state.resume_request.is_none());
     assert!(state.subagent_dialog.is_some());
     assert!(state.expanded.is_empty());

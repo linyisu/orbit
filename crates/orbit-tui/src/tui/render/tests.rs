@@ -5,44 +5,48 @@ use crate::tui::app::SessionTab;
 use crate::tui::theme::desaturate_for_thinking;
 
 #[test]
-fn tools_expand_independently_and_commands_expand_in_full() {
-    let mut state = UiState::new("mock");
-    for i in 0..2 {
+fn tool_inspectors_switch_calls_without_mutating_the_transcript() {
+    use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+    let mut state = UiState::new("fixture");
+    for index in 0..2 {
         state
             .transcript
             .push(TranscriptItem::Tool(super::super::app::ToolRow {
-                id: i.to_string(),
-                name: "run_command".into(),
-                status: ToolStatus::Finished,
-                arguments: serde_json::json!({
-                    "command": format!("echo {} end-{i}", "long ".repeat(30))
-                })
-                .to_string(),
-                output: "one\ntwo\nthree\nfour".into(),
-            }));
+            id: index.to_string(),
+            name: "run_command".into(),
+            purpose: None,
+            arguments:
+                serde_json::json!({"command": format!("echo {} end-{index}", "long ".repeat(30))})
+                    .to_string(),
+            output: "first\nsecond".into(),
+            status: ToolStatus::Finished,
+            changes: vec![],
+        }));
     }
-
-    render(&mut state, 100, 40);
-
     super::super::toggle_transcript_item(&mut state, 0);
-    super::super::toggle_transcript_item(&mut state, 1);
-    assert_eq!(state.expanded, [0, 1].into_iter().collect());
-    let TranscriptItem::Tool(row) = &state.transcript[0] else {
-        unreachable!()
-    };
-    let full = tool_card(row, true, 80)
-        .iter()
-        .map(ToString::to_string)
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    assert!(full.contains("run_command"));
-    assert!(full.contains('╭') && full.contains('╰'));
-    assert!(full.contains("end-0"));
-    assert_eq!(full.matches("end-0").count(), 1);
-
-    super::super::toggle_transcript_item(&mut state, 0);
-    assert_eq!(state.expanded, [1].into_iter().collect());
+    for _ in 0..2 {
+        super::super::dialogs::handle(
+            &mut state,
+            Event::Key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)),
+        );
+    }
+    assert!(
+        state
+            .info_dialog
+            .as_ref()
+            .unwrap()
+            .content
+            .contains("end-0")
+    );
+    super::super::dialogs::handle(
+        &mut state,
+        Event::Key(KeyEvent::new(KeyCode::Right, KeyModifiers::ALT)),
+    );
+    assert!(
+        matches!(&state.info_dialog.as_ref().unwrap().source, Some(super::super::dialogs::ReportSource::Tool(id)) if id == "1")
+    );
+    assert!(state.expanded.is_empty());
+    assert_eq!(state.transcript.len(), 2);
 }
 
 #[test]
@@ -219,6 +223,8 @@ fn collapsed_tool_cards_fit_width_and_bound_the_preview() {
         ToolStatus::Failed,
     ] {
         let item = TranscriptItem::Tool(ToolRow {
+            changes: Vec::new(),
+            purpose: None,
             id: "call".into(),
             name: "run_command".into(),
             status,
@@ -592,6 +598,8 @@ fn tool_previews_bound_single_line_payloads_without_changing_results() {
 
     let output = "中文".repeat(20_000);
     let item = TranscriptItem::Tool(ToolRow {
+        changes: Vec::new(),
+        purpose: None,
         id: "write".into(),
         name: "write_file".into(),
         arguments: serde_json::json!({
@@ -644,6 +652,8 @@ fn tool_previews_bound_single_line_payloads_without_changing_results() {
 #[test]
 fn incomplete_command_logs_are_not_presented_as_complete() {
     let row = super::super::app::ToolRow {
+        changes: Vec::new(),
+        purpose: None,
         id: "command".into(),
         name: "run_command".into(),
         arguments: serde_json::json!({
@@ -675,6 +685,8 @@ fn command_cards_show_all_returned_output_without_internal_log_instructions() {
         .map(|n| format!("output line {n}\n"))
         .collect::<String>();
     let row = super::super::app::ToolRow {
+        changes: Vec::new(),
+        purpose: None,
         id: "command".into(),
         name: "run_command".into(),
         arguments: serde_json::json!({
@@ -706,9 +718,9 @@ fn command_cards_show_all_returned_output_without_internal_log_instructions() {
 #[test]
 fn tool_card_collapsed_single_line_and_expanded_box_click_behavior() {
     use super::super::app::ToolRow;
-    use ratatui::layout::Rect;
-
     let row = ToolRow {
+        changes: Vec::new(),
+        purpose: None,
         id: "write_1".into(),
         name: "write_file".into(),
         arguments: serde_json::json!({
@@ -772,36 +784,6 @@ fn tool_card_collapsed_single_line_and_expanded_box_click_behavior() {
     for line in &expanded {
         assert_eq!(line.width(), 80);
     }
-
-    let items = vec![TranscriptItem::Tool(row)];
-    let mut layout = super::super::transcript::TranscriptLayout::default();
-    let area = Rect::new(0, 0, 80, 40);
-
-    layout.update(&items, Some(0), 80);
-    let card_height = layout.height() - 1;
-    for y in 0..card_height {
-        assert_eq!(
-            layout.disclosure_at(&items, area, 0, (0, y as u16)),
-            Some(0)
-        );
-        assert_eq!(
-            layout.disclosure_at(&items, area, 0, (2, y as u16)),
-            Some(0)
-        );
-        assert_eq!(
-            layout.disclosure_at(&items, area, 0, (30, y as u16)),
-            Some(0)
-        );
-        assert_eq!(
-            layout.disclosure_at(&items, area, 0, (70, y as u16)),
-            Some(0)
-        );
-        assert_eq!(
-            layout.disclosure_at(&items, area, 0, (79, y as u16)),
-            Some(0)
-        );
-        assert_eq!(layout.disclosure_at(&items, area, 0, (80, y as u16)), None);
-    }
 }
 
 #[test]
@@ -809,6 +791,8 @@ fn tool_card_edit_file_renders_diff_backgrounds_across_row() {
     use super::super::app::ToolRow;
 
     let row = ToolRow {
+        changes: Vec::new(),
+        purpose: None,
         id: "edit_1".into(),
         name: "edit_file".into(),
         arguments: serde_json::json!({
@@ -872,6 +856,8 @@ fn file_previews_keep_markdown_source_while_fetched_documents_render_structure()
 
     for name in ["read_file", "write_file", "web_fetch", "read_document"] {
         let row = ToolRow {
+            changes: Vec::new(),
+            purpose: None,
             id: "orbit-preview".into(),
             name: name.into(),
             arguments: serde_json::json!({
@@ -976,6 +962,8 @@ fn web_fetch_resolves_relative_and_paginated_reference_links_against_final_url()
         [不安全](javascript:alert)\n";
     for definitions in ["", "\n[1]: /docs/\n"] {
         let row = ToolRow {
+            changes: Vec::new(),
+            purpose: None,
             id: "fetch".into(),
             name: "web_fetch".into(),
             arguments: serde_json::json!({
@@ -1021,6 +1009,8 @@ fn web_fetch_title_is_not_a_link_but_wrapped_body_urls_keep_the_full_target() {
     use super::super::app::ToolRow;
     let url = "https://orbit.example/docs/rendering/";
     let row = ToolRow {
+        changes: Vec::new(),
+        purpose: None,
         id: "orbit-fetch".into(),
         name: "web_fetch".into(),
         arguments: serde_json::json!({
@@ -1095,6 +1085,8 @@ fn source_colors_and_multiline_state_match_across_code_previews() {
     let tools: Vec<_> = ["read_file", "write_file", "edit_file"]
         .into_iter()
         .map(|name| ToolRow {
+            changes: Vec::new(),
+            purpose: None,
             id: "orbit-code".into(),
             name: name.into(),
             arguments: serde_json::json!({
@@ -1181,6 +1173,8 @@ fn collapsed_tools_keep_one_blank_line_between_them() {
     use super::super::app::ToolRow;
 
     let row1 = ToolRow {
+        changes: Vec::new(),
+        purpose: None,
         id: "1".into(),
         name: "run_command".into(),
         arguments: serde_json::json!({
@@ -1191,6 +1185,8 @@ fn collapsed_tools_keep_one_blank_line_between_them() {
         output: "clean".into(),
     };
     let row2 = ToolRow {
+        changes: Vec::new(),
+        purpose: None,
         id: "2".into(),
         name: "read_file".into(),
         arguments: serde_json::json!({
@@ -1218,7 +1214,7 @@ fn collapsed_tools_keep_one_blank_line_between_them() {
 
     let mut layout = super::super::transcript::TranscriptLayout::default();
     layout.update(&items, None, 80);
-    assert_eq!(layout.height(), 4);
+    assert_eq!(layout.height(), 2);
 }
 
 #[test]
@@ -1267,147 +1263,34 @@ fn hovering_expanded_thinking_content_preserves_its_syntax_style() {
 }
 
 #[test]
-fn hovering_wrapped_tool_titles_highlights_all_title_rows_without_changing_bodies() {
-    use super::super::app::ToolRow;
-
-    for (name, arguments) in [
-        (
-            "run_command",
-            serde_json::json!({
-                "command": format!(
-                    "cat <<'PYEOF' > /tmp/demo.py\n{}\nPYEOF",
-                    "中文 e\u{301} print('test') ".repeat(20)
-                )
-            }),
-        ),
-        (
-            "read_file",
-            serde_json::json!({
-                "path": format!("crates/{}/source.rs", "unicode-中文/".repeat(25))
-            }),
-        ),
-        (
-            "search_text",
-            serde_json::json!({
-                "query": "长搜索词 e\u{301} ".repeat(25)
-            }),
-        ),
-    ] {
-        for width in [28, 70] {
-            let mut state = UiState::new("model");
+fn tool_rows_remain_compact_at_narrow_widths() {
+    for width in [28, 70] {
+        let mut state = UiState::new("fixture");
+        state
+            .transcript
+            .push(TranscriptItem::Tool(super::super::app::ToolRow {
+                id: "compact".into(),
+                name: "read_file".into(),
+                purpose: Some("Inspect generated source ".repeat(30)),
+                arguments: "{}".into(),
+                output: "RESULT_MARKER".into(),
+                status: ToolStatus::Finished,
+                changes: vec![],
+            }));
+        state.expanded_tool_groups.insert(0);
+        let screen = render(&mut state, width, 30);
+        assert!(screen.contains("read_file"));
+        assert!(!screen.contains("RESULT_MARKER"));
+        assert_eq!(state.transcript_layout.height(), 3);
+        super::super::toggle_transcript_item(&mut state, 0);
+        assert!(
             state
-                .transcript
-                .push(TranscriptItem::Tool(ToolRow {
-                    id: "wrapped-title".into(),
-                    name: name.into(),
-                    arguments: arguments.to_string(),
-                    status: ToolStatus::Finished,
-                    output: "RESULT_MARKER\nlast output".into(),
-                }));
-            state.expanded.insert(0);
-            state.follow_bottom = false;
-            state.scroll = usize::MAX;
-            let area = Rect::new(2, 1, width, 50);
-            let mut terminal = Terminal::new(TestBackend::new(width + 4, 52)).unwrap();
-            let mut painted = None;
-            terminal
-                .draw(|frame| {
-                    draw_transcript_in(frame, &mut state, area, false);
-                    painted = Some(frame.buffer_mut().clone());
-                })
-                .unwrap();
-            let before = painted.unwrap();
-            let text = |y| {
-                (area.x..area.right())
-                    .map(|x| before[(x, y)].symbol())
-                    .collect::<String>()
-            };
-            let start = (area.y..area.bottom())
-                .find(|&y| text(y).contains(name))
-                .unwrap();
-            let end = (start + 1..area.bottom())
-                .find(|&y| {
-                    text(y)
-                        .trim_matches(|c: char| c == '│' || c.is_whitespace())
-                        .is_empty()
-                })
-                .unwrap();
-            assert!(end - start > 2, "{name} at {width}");
-
-            let title_start = usize::from(start - area.y);
-            let title_end = usize::from(end - area.y);
-            for scrolled in [false, true] {
-                let viewport = if scrolled {
-                    Rect { height: 6, ..area }
-                } else {
-                    area
-                };
-                state.transcript_pointer = None;
-                state.scroll = usize::MAX;
-                terminal
-                    .draw(|frame| draw_transcript_in(frame, &mut state, viewport, false))
-                    .unwrap();
-                if scrolled {
-                    state.scroll = state.max_scroll.saturating_sub(2);
-                    terminal
-                        .draw(|frame| draw_transcript_in(frame, &mut state, viewport, false))
-                        .unwrap();
-                    assert_eq!(state.selection.offset, 2);
-                }
-                let offset = state.selection.offset;
-                let start = viewport.y + title_start.saturating_sub(offset) as u16;
-                let end =
-                    (viewport.y + title_end.saturating_sub(offset) as u16).min(viewport.bottom());
-                assert!(start < end);
-                // Terminal diffs skip cells covered by wide glyphs; inspect the frame.
-                let mut painted = None;
-                terminal
-                    .draw(|frame| {
-                        draw_transcript_in(frame, &mut state, viewport, false);
-                        painted = Some(frame.buffer_mut().clone());
-                    })
-                    .unwrap();
-                let before = painted.unwrap();
-                for hover_y in [start, end - 1] {
-                    state.transcript_pointer = Some((area.x + 3, hover_y));
-                    let mut painted = None;
-                    terminal
-                        .draw(|frame| {
-                            draw_transcript_in(frame, &mut state, viewport, false);
-                            painted = Some(frame.buffer_mut().clone());
-                        })
-                        .unwrap();
-                    let after = painted.unwrap();
-                    for y in viewport.y..viewport.bottom() {
-                        for x in viewport.x..viewport.right() {
-                            let cell = &after[(x, y)];
-                            let original = &before[(x, y)];
-                            if (start..end).contains(&y)
-                                && x > viewport.x
-                                && x < viewport.right() - 1
-                            {
-                                if !original.symbol().trim().is_empty() {
-                                    assert!(
-                                        cell.modifier.contains(Modifier::BOLD),
-                                        "{name} at {width}, scrolled {scrolled}: ({x}, {y}) from \
-                                            {hover_y}"
-                                    );
-                                    if original.fg == TOOL_FINISHED {
-                                        assert_eq!(cell.fg, THEME.tool_hover);
-                                    }
-                                }
-                            } else {
-                                assert_eq!(
-                                    cell, original,
-                                    "{name} at {width}, scrolled {scrolled}: ({x}, {y}) from \
-                                        {hover_y}"
-                                );
-                            }
-                        }
-                    }
-                }
-            }
-        }
+                .info_dialog
+                .as_ref()
+                .unwrap()
+                .content
+                .contains("RESULT_MARKER")
+        );
     }
 }
 
@@ -1423,6 +1306,8 @@ fn collapsed_multiline_command_titles_fill_the_row_instead_of_stopping_at_quotes
     })
     .to_string();
     let row = ToolRow {
+        changes: Vec::new(),
+        purpose: None,
         id: "multiline".into(),
         name: "run_command".into(),
         arguments: arguments.clone(),
@@ -1431,18 +1316,9 @@ fn collapsed_multiline_command_titles_fill_the_row_instead_of_stopping_at_quotes
     };
     for width in [48, 240] {
         let standalone = super::tool_cards::tool_title_with_links(&row, false, width);
-        let child = tool_group_title_with_links(&row, width);
-        let parent = super::super::tool_groups::header(
-            &[
-                TranscriptItem::Tool(row.clone()),
-                TranscriptItem::Tool(row.clone()),
-            ],
-            width,
-            false,
-        );
         assert_eq!(standalone.len(), 1);
-        assert_eq!(child.len(), 1);
-        for header in [&standalone[0], &child[0], &parent] {
+        {
+            let header = &standalone[0];
             let text = header.text();
             assert!(text.contains("import"), "{text}");
             assert!(!text.contains("\\n") && !text.contains('\n'));
@@ -1562,144 +1438,87 @@ fn render(state: &mut UiState, width: u16, height: u16) -> String {
 }
 
 #[test]
-fn reasoning_is_visible_and_expansion_only_affects_one_visible_collapsible() {
-    use super::super::app::ToolRow;
-
-    use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
-
-    let mut state = UiState::new("model");
-    state.apply(orbit_client::protocol::events::AgentEvent::Model(
-        orbit_client::protocol::model::StreamEvent::ReasoningDelta("reasoning visible now".into()),
-    ));
-
-    assert!(render(&mut state, 100, 30).contains("reasoning visible now"));
-
-    for (id, name) in [("older", "read_file"), ("latest", "search_text")] {
+fn opening_details_does_not_change_reasoning_or_composer() {
+    use orbit_client::protocol::{
+        events::AgentEvent,
+        model::{StreamEvent, ToolCall},
+    };
+    let mut state = UiState::new("fixture");
+    state
+        .input
+        .set("unfinished draft".into());
+    state.apply(AgentEvent::Model(StreamEvent::ReasoningDelta(
+        "generated reasoning".into(),
+    )));
+    let call = ToolCall::function(
+        "call",
+        "read_file",
+        serde_json::json!({"path": "sample.rs"}),
+    );
+    state.apply(AgentEvent::ToolStarted { call: call.clone() });
+    state.apply(AgentEvent::ToolFinished {
+        call,
+        content: "generated output".into(),
+        changes: vec![],
+        files: None,
+    });
+    super::super::toggle_transcript_item(&mut state, 0);
+    assert!(render(&mut state, 100, 30).contains("generated reasoning"));
+    super::super::toggle_transcript_item(&mut state, 1);
+    assert!(
         state
-            .transcript
-            .push(TranscriptItem::Tool(ToolRow {
-                id: id.into(),
-                name: name.into(),
-                arguments: "{}".into(),
-                status: ToolStatus::Finished,
-                output: format!("first\nsecond\nthird\n{id}-detail"),
-            }));
-    }
-
-    let collapsed = render(&mut state, 100, 30);
-
-    assert!(!collapsed.contains("latest-detail"));
-    assert!(!collapsed.contains("ctrl+o"));
-
-    super::super::keyboard_action(
-        &mut state,
-        Event::Key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL)),
-        false,
+            .info_dialog
+            .as_ref()
+            .unwrap()
+            .content
+            .contains("generated output")
     );
-    let expanded = render(&mut state, 100, 30);
-
-    assert!(expanded.contains("latest-detail"));
-    assert!(!expanded.contains("older-detail"));
-    assert!(expanded.contains("reasoning visible now"));
-
-    super::super::keyboard_action(
-        &mut state,
-        Event::Key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL)),
-        false,
-    );
-
-    assert!(!render(&mut state, 100, 30).contains("latest-detail"));
-
-    let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
-    terminal
-        .draw(|frame| draw(frame, &mut state))
-        .unwrap();
-    let buffer = terminal.backend().buffer();
-    let footer: String = (0..100)
-        .map(|x| buffer[(x, 29)].symbol())
-        .collect();
-
-    assert!(footer.contains("/96k"));
-    assert!(!footer.contains("model") && !footer.contains("auto"));
-    assert!(!footer.contains("Shift") && !footer.contains("恢复"));
+    assert!(state.expanded.contains(&0));
+    assert_eq!(state.input.text, "unfinished draft");
 }
 
 #[test]
-fn clicking_memory_hint_toggles_that_memory_instead_of_the_last_tool() {
-    use super::super::app::ToolRow;
-
-    use crossterm::event::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
-
-    let mut state = UiState::new("model");
-    state
-        .transcript
-        .push(TranscriptItem::Tool(ToolRow {
-            id: "memory".into(),
-            name: "memory_save".into(),
-            status: ToolStatus::Finished,
-            arguments: r#"{"title":"审查记录"}"#.into(),
-            output: serde_json::json!({
-                "memory": {
-                    "category": "fact",
-                    "content": "long text ".repeat(40)
-                }
-            })
-            .to_string(),
-        }));
-    state
-        .transcript
-        .push(TranscriptItem::Tool(ToolRow {
-            id: "later".into(),
-            name: "other_tool".into(),
-            status: ToolStatus::Finished,
-            arguments: "{}".into(),
-            output: "first\nsecond\nthird".into(),
-        }));
-    let mut terminal = Terminal::new(TestBackend::new(100, 40)).unwrap();
-
-    for expected in [Some(0), None] {
-        terminal
-            .draw(|frame| draw(frame, &mut state))
-            .unwrap();
-        let point = (0..40)
-            .find_map(|y| {
-                (0..100).find_map(|x| {
-                    state
-                        .transcript_layout
-                        .disclosure_at(
-                            &state.transcript,
-                            state.selection.viewport,
-                            state
-                                .max_scroll
-                                .saturating_sub(state.scroll),
-                            (x, y),
-                        )
-                        .filter(|index| *index == 0)
-                        .map(|_| (x, y))
-                })
-            })
-            .expect("memory toggle is visible");
-        let down = Event::Mouse(MouseEvent {
-            kind: MouseEventKind::Down(MouseButton::Left),
-            column: point.0,
-            row: point.1,
-            modifiers: KeyModifiers::NONE,
-        });
-        let up = Event::Mouse(MouseEvent {
-            kind: MouseEventKind::Up(MouseButton::Left),
-            column: point.0,
-            row: point.1,
-            modifiers: KeyModifiers::NONE,
-        });
-
-        state.selection.handle(&down).unwrap();
-
-        assert_eq!(state.selection.click(&up), Some(point));
-        assert!(super::super::toggle_transcript_at(&mut state, point));
-        assert_eq!(state.expanded, expected.into_iter().collect());
+fn clicking_a_tool_row_opens_that_call_instead_of_the_last_one() {
+    let mut state = UiState::new("fixture");
+    for index in 0..2 {
+        state
+            .transcript
+            .push(TranscriptItem::Tool(super::super::app::ToolRow {
+                id: format!("call-{index}"),
+                name: "memory_save".into(),
+                purpose: None,
+                arguments: "{}".into(),
+                output: format!("generated result {index}"),
+                status: ToolStatus::Finished,
+                changes: vec![],
+            }));
     }
-
-    assert!(!super::super::toggle_transcript_at(&mut state, (0, 0)));
+    state.expanded_tool_groups.insert(0);
+    render(&mut state, 100, 40);
+    let area = state.selection.viewport;
+    let offset = state
+        .max_scroll
+        .saturating_sub(state.scroll);
+    let point = (area.y..area.bottom())
+        .find_map(|y| {
+            (area.x..area.right()).find_map(|x| {
+                (state
+                    .transcript_layout
+                    .disclosure_at(&state.transcript, area, offset, (x, y))
+                    == Some(0))
+                .then_some((x, y))
+            })
+        })
+        .unwrap();
+    assert!(super::super::toggle_transcript_at(&mut state, point));
+    assert!(
+        state
+            .info_dialog
+            .as_ref()
+            .unwrap()
+            .content
+            .contains("generated result 0")
+    );
 }
 
 #[test]
@@ -1752,6 +1571,8 @@ fn tool_controls_expand_read_search_and_generic_outputs_and_keep_the_draft() {
         state
             .transcript
             .push(TranscriptItem::Tool(ToolRow {
+                changes: Vec::new(),
+                purpose: None,
                 id: "first".into(),
                 name: name.into(),
                 arguments: "{}".into(),
@@ -1763,104 +1584,74 @@ fn tool_controls_expand_read_search_and_generic_outputs_and_keep_the_draft() {
                 output: output.clone(),
             }));
 
-        for expected in [Some(0), None] {
-            render(&mut state, 90, 32);
-            let area = state.selection.viewport;
-            let offset = state
-                .max_scroll
-                .saturating_sub(state.scroll);
-            let point = (area.y..area.bottom())
-                .find_map(|y| {
-                    (area.x..area.right()).find_map(|x| {
-                        state
-                            .transcript_layout
-                            .disclosure_at(&state.transcript, area, offset, (x, y))
-                            .map(|_| (x, y))
-                    })
-                })
-                .unwrap_or_else(|| panic!("missing control for {name}"));
-
-            assert!(super::super::toggle_transcript_at(&mut state, point));
-            assert_eq!(state.expanded, expected.into_iter().collect());
-            assert_eq!(state.input.text, "unfinished draft");
-
-            let TranscriptItem::Tool(row) = &state.transcript[0] else {
-                unreachable!()
-            };
-
-            assert_eq!(row.output, output);
-        }
+        state.expanded_tool_groups.insert(0);
+        render(&mut state, 90, 32);
+        super::super::toggle_transcript_item(&mut state, 0);
+        let dialog = state
+            .info_dialog
+            .as_ref()
+            .expect("tool inspector opened");
+        assert!(
+            dialog
+                .content
+                .contains(&orbit_client::execution::details::content(
+                    &match &state.transcript[0] {
+                        TranscriptItem::Tool(row) => row.record(),
+                        _ => unreachable!(),
+                    },
+                    orbit_client::execution::details::Stream::Result,
+                ))
+                || name == "run_command"
+        );
+        assert_eq!(state.input.text, "unfinished draft");
+        let TranscriptItem::Tool(row) = &state.transcript[0] else {
+            unreachable!()
+        };
+        assert_eq!(row.output, output);
     }
 }
 
 #[test]
-fn shortcut_collapses_scrolled_tool_with_clickable_output() {
-    use super::super::app::ToolRow;
-
+fn tool_modal_scroll_is_independent_of_transcript_and_draft() {
     use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
-
-    let mut state = UiState::new("model");
-
-    for index in 0..3 {
-        state
-            .transcript
-            .push(TranscriptItem::Tool(ToolRow {
-                id: index.to_string(),
-                name: format!("tool_{index}"),
-                arguments: "{}".into(),
-                status: ToolStatus::Finished,
-                output: (0..100)
-                    .map(|line| format!("detail {line}\n"))
-                    .collect(),
-            }));
-    }
+    let mut state = UiState::new("fixture");
+    state.input.set("retained draft".into());
     state
         .transcript
-        .push(TranscriptItem::Assistant("tail\n".repeat(100)));
-
+        .push(TranscriptItem::Tool(super::super::app::ToolRow {
+            id: "scroll".into(),
+            name: "external_tool".into(),
+            purpose: None,
+            arguments: "{}".into(),
+            output: (0..200)
+                .map(|i| format!("generated row {i}\n"))
+                .collect(),
+            status: ToolStatus::Finished,
+            changes: vec![],
+        }));
+    state
+        .transcript
+        .push(TranscriptItem::Assistant("answer\n".repeat(100)));
     render(&mut state, 90, 24);
-    super::super::toggle_transcript_item(&mut state, 1);
-    let after_tool = state
-        .transcript_layout
-        .item_offset(2)
-        .unwrap();
-    state.scroll = state
-        .max_scroll
-        .saturating_sub(after_tool - 5);
-    render(&mut state, 90, 24);
-    let area = state.selection.viewport;
-    let offset = state
-        .max_scroll
-        .saturating_sub(state.scroll);
-    assert_eq!(offset, after_tool - 5);
-    assert!((area.y..area.bottom()).any(|y| {
-        state
-            .transcript_layout
-            .disclosure_at(&state.transcript, area, offset, (area.x + 4, y))
-            == Some(1)
-    }));
+    let scroll = state.scroll;
     super::super::keyboard_action(
         &mut state,
-        Event::Key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL)),
+        Event::Key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::ALT)),
         false,
     );
-    assert!(state.expanded.is_empty());
-    assert!(render(&mut state, 90, 24).contains("tool_1"));
-
-    super::super::toggle_transcript_item(&mut state, 1);
-    state.scroll = 0;
     render(&mut state, 90, 24);
-    super::super::keyboard_action(
+    super::super::dialogs::handle(
         &mut state,
-        Event::Key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL)),
-        true,
+        Event::Key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE)),
     );
-
-    assert_eq!(
-        state.expanded,
-        Default::default(),
-        "must collapse tool_1 instead of expanding tool_2"
+    assert!(render(&mut state, 90, 24).contains("generated row 199"));
+    super::super::dialogs::handle(
+        &mut state,
+        Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
     );
+    assert!(state.info_dialog.is_none());
+    assert_eq!(state.input.text, "retained draft");
+    assert_eq!(state.scroll, scroll);
 }
 
 #[test]
@@ -3228,14 +3019,14 @@ fn activity_stays_readable_and_in_place_while_colors_animate() {
     let mut state = UiState::new("mock");
     state.submit("work".into());
     state.started_at = None;
-    let first = footer(&state, 100);
+    let first = Line::from(activity_spans(&state, 100));
     assert!(
         first
             .to_string()
             .contains("等待模型响应")
     );
     state.elapsed = std::time::Duration::from_millis(800);
-    let second = footer(&state, 100);
+    let second = Line::from(activity_spans(&state, 100));
     assert_eq!(first.to_string(), second.to_string());
     assert_ne!(first.spans, second.spans);
     state.apply(orbit_client::protocol::events::AgentEvent::CompactionStarted);
@@ -3245,20 +3036,16 @@ fn activity_stays_readable_and_in_place_while_colors_animate() {
             .contains("正在压缩上下文")
     );
     for width in [12, 24, 40, 80] {
-        assert!(footer(&state, width).width() <= width);
+        assert!(Line::from(activity_spans(&state, width)).width() <= width);
     }
     state.status = RunStatus::Cancelling;
     assert!(
-        footer(&state, 100)
+        Line::from(activity_spans(&state, 100))
             .to_string()
             .contains("正在取消")
     );
     state.apply(orbit_client::protocol::events::AgentEvent::Cancelled);
-    assert!(
-        !footer(&state, 100)
-            .to_string()
-            .contains("正在")
-    );
+    assert!(!render(&mut state, 100, 24).contains("正在取消"));
 }
 
 #[test]
@@ -3282,7 +3069,7 @@ fn activity_animates_only_in_footer_and_stops_when_completed() {
         .draw(|frame| draw(frame, &mut state))
         .unwrap();
     let second = terminal.backend().buffer();
-    let footer_start = usize::from(state.selection.footer.y) * 100;
+    let footer_start = usize::from(state.progress_area.y) * 100;
     assert_eq!(
         first.content[..footer_start],
         second.content[..footer_start]
@@ -3292,7 +3079,7 @@ fn activity_animates_only_in_footer_and_stops_when_completed() {
         second.content[footer_start..]
     );
     assert!(
-        footer(&state, 100)
+        Line::from(activity_spans(&state, 100))
             .to_string()
             .contains("正在思考")
     );
@@ -3301,6 +3088,7 @@ fn activity_animates_only_in_footer_and_stops_when_completed() {
         id: "command".into(),
         kind: "function".into(),
         metadata: None,
+        purpose: None,
         function: FunctionCall {
             name: "run_command".into(),
             arguments: r#"{"command":"echo stable"}"#.into(),
@@ -3318,7 +3106,7 @@ fn activity_animates_only_in_footer_and_stops_when_completed() {
         .draw(|frame| draw(frame, &mut state))
         .unwrap();
     let second = terminal.backend().buffer();
-    let footer_start = usize::from(state.selection.footer.y) * 100;
+    let footer_start = usize::from(state.progress_area.y) * 100;
     assert_eq!(
         first.content[..footer_start],
         second.content[..footer_start]
@@ -3328,7 +3116,7 @@ fn activity_animates_only_in_footer_and_stops_when_completed() {
         second.content[footer_start..]
     );
     assert!(
-        footer(&state, 100)
+        Line::from(activity_spans(&state, 100))
             .to_string()
             .contains("正在调用工具")
     );
@@ -3378,7 +3166,7 @@ fn execution_footer_shows_stable_status_labels_for_commands_and_tasks() {
             let mut hint_offset = None;
             for millis in (0..2_000).step_by(130) {
                 state.elapsed = std::time::Duration::from_millis(millis);
-                let line = footer(&state, 100).to_string();
+                let line = Line::from(activity_spans(&state, 100)).to_string();
                 assert!(line.contains(expected));
                 assert!(!line.contains('█'));
                 let offset = line[..line.find("Ctrl+C 取消").unwrap()].width();
@@ -3387,24 +3175,24 @@ fn execution_footer_shows_stable_status_labels_for_commands_and_tasks() {
             }
             assert_eq!(frames.len(), 1);
             for width in [12, 24, 40, 80] {
-                assert!(footer(&state, width).width() <= width);
+                assert!(Line::from(activity_spans(&state, width)).width() <= width);
             }
         }
 
         state.status = RunStatus::Cancelling;
         assert!(
-            footer(&state, 100)
+            Line::from(activity_spans(&state, 100))
                 .to_string()
                 .contains("正在取消")
         );
         assert!(
-            !footer(&state, 100)
+            !Line::from(activity_spans(&state, 100))
                 .to_string()
                 .contains('█')
         );
         state.apply(AgentEvent::Cancelled);
         assert!(
-            !footer(&state, 100)
+            !Line::from(activity_spans(&state, 100))
                 .to_string()
                 .contains('█')
         );

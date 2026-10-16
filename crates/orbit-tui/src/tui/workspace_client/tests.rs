@@ -354,7 +354,6 @@ fn target_completions_apply_only_to_the_input_that_requested_them() {
 #[test]
 fn remote_subagent_view_links_open_a_modal_and_keep_parent_input_isolated() {
     use crate::tui::app::{ToolRow, ToolStatus};
-    use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
     use ratatui::{Terminal, backend::TestBackend};
 
     let (mut tab, mut requests) = tab("SSH dev");
@@ -366,6 +365,8 @@ fn remote_subagent_view_links_open_a_modal_and_keep_parent_input_isolated() {
     tab.state
         .transcript
         .push(TranscriptItem::Tool(ToolRow {
+            changes: Vec::new(),
+            purpose: None,
             id: "spawn".into(),
             name: "spawn_agent".into(),
             status: ToolStatus::Finished,
@@ -383,30 +384,12 @@ fn remote_subagent_view_links_open_a_modal_and_keep_parent_input_isolated() {
     terminal
         .draw(|frame| crate::tui::render::draw(frame, &mut tab.state))
         .unwrap();
-    let area = tab.state.selection.viewport;
-    let point = (area.y..area.bottom())
-        .find_map(|y| {
-            (area.x..area.right()).find_map(|x| {
-                tab.state
-                    .transcript_layout
-                    .link_at(area, tab.state.max_scroll, (x, y))
-                    .filter(|link| link.starts_with("orbit://session/"))
-                    .map(|_| (x, y))
-            })
-        })
-        .unwrap();
-    for kind in [
-        MouseEventKind::Down(MouseButton::Left),
-        MouseEventKind::Up(MouseButton::Left),
-    ] {
-        tab.handle(Event::Mouse(MouseEvent {
-            kind,
-            column: point.0,
-            row: point.1,
-            modifiers: KeyModifiers::NONE,
-        }))
-        .unwrap();
-    }
+    crate::tui::toggle_transcript_item(&mut tab.state, 1);
+    tab.handle(Event::Key(KeyEvent::new(
+        KeyCode::Char('a'),
+        KeyModifiers::NONE,
+    )))
+    .unwrap();
     assert!(tab.state.subagent_dialog.is_some());
     assert!(tab.state.expanded.is_empty());
     tab.poll_subagent();

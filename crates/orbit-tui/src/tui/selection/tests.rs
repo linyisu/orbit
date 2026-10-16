@@ -180,27 +180,27 @@ fn copying_message_and_tool_frames_keeps_literal_borders_and_body_blank_lines() 
     let user = select_transcript(&[TranscriptItem::User(source.into())], 60, &[]);
     assert_eq!(user.text().trim_end_matches('\n'), source);
 
-    let tool = select_transcript(
-        &[TranscriptItem::Tool(ToolRow {
-            id: "read".into(),
-            name: "read_file".into(),
-            arguments: json!({
-                "path": "example.txt"
-            })
-            .to_string(),
-            status: ToolStatus::Finished,
-            output: json!({
-                "path": "example.txt",
-                "content": "1:     first │─╭╮\n2: \n3:     second 你好\n"
-            })
-            .to_string(),
-        })],
-        60,
-        &[0],
+    let row = ToolRow {
+        changes: Vec::new(),
+        purpose: None,
+        id: "read".into(),
+        name: "read_file".into(),
+        arguments: json!({
+            "path": "example.txt"
+        })
+        .to_string(),
+        status: ToolStatus::Finished,
+        output: json!({
+            "path": "example.txt",
+            "content": "1:     first │─╭╮\n2: \n3:     second 你好\n"
+        })
+        .to_string(),
+    };
+    let copied = orbit_client::execution::details::content(
+        &row.record(),
+        orbit_client::execution::details::Stream::Result,
     );
-    let copied = tool.text();
-    assert!(copied.starts_with("read_file example.txt"), "{copied:?}");
-    assert!(copied.contains(source), "{copied:?}");
+    assert!(copied.contains("first │─╭╮") && copied.contains("second 你好"));
     assert!(!copied.contains('╰'));
 }
 
@@ -337,12 +337,12 @@ fn selection_leaves_frames_table_grid_and_padding_unchanged() {
         state
             .transcript
             .push(TranscriptItem::User("Orbit 框选 👩‍💻".into()));
-        state
-            .transcript
-            .push(TranscriptItem::Assistant(format!("{source}\n\n---\n")));
+
         state
             .transcript
             .push(TranscriptItem::Tool(ToolRow {
+                changes: Vec::new(),
+                purpose: None,
                 id: "orbit-read".into(),
                 name: "read_file".into(),
                 arguments: json!({
@@ -365,7 +365,10 @@ fn selection_leaves_frames_table_grid_and_padding_unchanged() {
         state
             .transcript
             .push(TranscriptItem::Thinking(thinking));
-        state.expanded.extend([2, 3]);
+        state
+            .transcript
+            .push(TranscriptItem::Assistant(format!("{source}\n\n---\n")));
+        state.expanded.insert(2);
         state.follow_bottom = false;
         let mut terminal = Terminal::new(TestBackend::new(width, 70)).unwrap();
         draw(&mut state, &mut terminal);
@@ -570,125 +573,94 @@ fn press_does_not_select_until_pointer_moves() {
 }
 
 #[test]
-fn dismissing_a_selection_keeps_blocks_open_and_the_next_content_click_folds_them() {
-    use crate::tui::app::{ThinkingRow, ToolRow, ToolStatus};
+fn dismissing_a_selection_keeps_reasoning_open_until_the_next_click() {
+    use crate::tui::app::ThinkingRow;
+    let mut state = UiState::new("fixture");
+    let mut thinking = ThinkingRow::from("Orbit output\nsecond line".to_owned());
+    thinking.finished = true;
+    state
+        .transcript
+        .push(TranscriptItem::Thinking(thinking));
+    state.expanded.insert(0);
+    state.follow_bottom = false;
+    let mut terminal = Terminal::new(TestBackend::new(70, 24)).unwrap();
+    draw(&mut state, &mut terminal);
+    let area = state.selection.viewport;
+    let output_y = (area.top()..area.bottom())
+        .find(|&y| {
+            (area.left()..area.right())
+                .map(|x| terminal.backend().buffer()[(x, y)].symbol())
+                .collect::<String>()
+                .contains("Orbit output")
+        })
+        .unwrap();
+    let point = (area.x + 4, output_y);
 
-    for kind in ["tool", "group", "thinking"] {
-        let mut state = UiState::new("orbit-model");
-        let tool = ToolRow {
-            id: "orbit-tool".into(),
-            name: "run_command".into(),
-            arguments: serde_json::json!({
-                "command": "orbit --version"
-            })
-            .to_string(),
-            status: ToolStatus::Finished,
-            output: "Orbit output\nsecond line".into(),
-        };
-
-        if kind == "thinking" {
-            let mut thinking = ThinkingRow::from(tool.output);
-            thinking.finished = true;
-            state
-                .transcript
-                .push(TranscriptItem::Thinking(thinking));
-        } else {
-            state
-                .transcript
-                .push(TranscriptItem::Tool(tool.clone()));
-            if kind == "group" {
-                state
-                    .transcript
-                    .push(TranscriptItem::Tool(ToolRow {
-                        id: "orbit-other".into(),
-                        output: "Orbit other output".into(),
-                        ..tool
-                    }));
-                state.expanded_tool_groups.insert(0);
-            }
-        }
-
-        state.expanded.insert(0);
-        state.follow_bottom = false;
-        let mut terminal = Terminal::new(TestBackend::new(70, 24)).unwrap();
-        draw(&mut state, &mut terminal);
-        let area = state.selection.viewport;
-        let output_y = (area.top()..area.bottom())
-            .find(|&y| {
-                (area.left()..area.right())
-                    .map(|x| terminal.backend().buffer()[(x, y)].symbol())
-                    .collect::<String>()
-                    .contains("Orbit output")
-            })
-            .unwrap();
-        let point = (area.x + 4, output_y);
-
+    state
+        .selection
+        .handle(&mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            point.0,
+            point.1,
+        ))
+        .unwrap();
+    state
+        .selection
+        .handle(&mouse(
+            MouseEventKind::Drag(MouseButton::Left),
+            point.0 + 8,
+            point.1,
+        ))
+        .unwrap();
+    let release = mouse(MouseEventKind::Up(MouseButton::Left), point.0 + 8, point.1);
+    assert!(
         state
             .selection
-            .handle(&mouse(
-                MouseEventKind::Down(MouseButton::Left),
-                point.0,
-                point.1,
-            ))
-            .unwrap();
-        state
-            .selection
-            .handle(&mouse(
-                MouseEventKind::Drag(MouseButton::Left),
-                point.0 + 8,
-                point.1,
-            ))
-            .unwrap();
-        let release = mouse(MouseEventKind::Up(MouseButton::Left), point.0 + 8, point.1);
-        assert!(
-            state
-                .selection
-                .click(&release)
-                .is_none()
-        );
-        state
-            .selection
-            .handle(&release)
-            .unwrap();
-        draw(&mut state, &mut terminal);
-        assert!(!state.selection.text().is_empty());
+            .click(&release)
+            .is_none()
+    );
+    state
+        .selection
+        .handle(&release)
+        .unwrap();
+    draw(&mut state, &mut terminal);
+    assert!(!state.selection.text().is_empty());
 
-        let release = mouse(MouseEventKind::Up(MouseButton::Left), point.0, point.1);
-        state
-            .selection
-            .handle(&mouse(
-                MouseEventKind::Down(MouseButton::Left),
-                point.0,
-                point.1,
-            ))
-            .unwrap();
-        if let Some(point) = state.selection.click(&release) {
-            super::super::toggle_transcript_at(&mut state, point);
-        }
-        state
-            .selection
-            .handle(&release)
-            .unwrap();
-        draw(&mut state, &mut terminal);
-        assert!(
-            state.expanded.contains(&0),
-            "the dismissal click must not fold the tool"
-        );
-        assert!(!state.selection.active());
-
-        state
-            .selection
-            .handle(&mouse(
-                MouseEventKind::Down(MouseButton::Left),
-                point.0,
-                point.1,
-            ))
-            .unwrap();
-        let point = state.selection.click(&release).unwrap();
-        assert!(super::super::toggle_transcript_at(&mut state, point));
-        assert!(!state.expanded.contains(&0));
-        assert_eq!(state.expanded_tool_groups.contains(&0), kind == "group");
+    let release = mouse(MouseEventKind::Up(MouseButton::Left), point.0, point.1);
+    state
+        .selection
+        .handle(&mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            point.0,
+            point.1,
+        ))
+        .unwrap();
+    if let Some(point) = state.selection.click(&release) {
+        super::super::toggle_transcript_at(&mut state, point);
     }
+    state
+        .selection
+        .handle(&release)
+        .unwrap();
+    draw(&mut state, &mut terminal);
+    assert!(
+        state.expanded.contains(&0),
+        "the dismissal click must not fold the tool"
+    );
+    assert!(!state.selection.active());
+
+    state
+        .selection
+        .handle(&mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            point.0,
+            point.1,
+        ))
+        .unwrap();
+    let point = state.selection.click(&release).unwrap();
+    assert!(super::super::toggle_transcript_at(&mut state, point));
+    assert!(!state.expanded.contains(&0));
+    assert!(state.expanded_tool_groups.is_empty());
 }
 
 #[test]

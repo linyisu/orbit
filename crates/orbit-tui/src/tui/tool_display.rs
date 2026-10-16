@@ -322,46 +322,6 @@ fn is_shell_preamble(line: &str) -> bool {
             .all(|ch| ch.is_ascii_alphabetic() || ch == 'o')
 }
 
-pub(super) fn group_target_summary(row: &ToolRow, width: usize) -> String {
-    let args: Value = serde_json::from_str(&row.arguments).unwrap_or_default();
-    match row.name.as_str() {
-        "run_command" => command_preview(
-            args["command"]
-                .as_str()
-                .unwrap_or_default(),
-            width,
-        ),
-        "read_agent" if args["agent_id"].as_str().is_some() => {
-            agent_read_target(&serde_json::from_str(&row.output).unwrap_or_default())
-        }
-        "read_agent" => "子任务列表".into(),
-        "read_file" | "write_file" | "edit_file" | "read_image" | "read_document"
-        | "request_capability" => safe_output(
-            args["path"]
-                .as_str()
-                .unwrap_or_default(),
-        ),
-
-        "list_files" | "project_overview" | "code_symbols" => safe_output(
-            args["path"]
-                .as_str()
-                .unwrap_or("当前目录"),
-        ),
-        _ => tool_summary(&row.name, &row.arguments, &row.output),
-    }
-}
-
-pub(super) fn group_call_summary(row: &ToolRow) -> String {
-    if row.name == "read_agent" {
-        agent_read_detail(
-            &serde_json::from_str(&row.arguments).unwrap_or_default(),
-            &serde_json::from_str(&row.output).unwrap_or_default(),
-        )
-    } else {
-        tool_summary(&row.name, &row.arguments, &row.output)
-    }
-}
-
 pub(super) fn tool_summary(name: &str, arguments: &str, output: &str) -> String {
     match name {
         "enter_plan" | "update_plan" | "submit_plan" => {
@@ -1656,6 +1616,8 @@ mod subagent_tests {
         let id = "00000000000000000000000000000001";
         for status in [ToolStatus::Running, ToolStatus::Finished] {
             let row = ToolRow {
+                changes: Vec::new(),
+                purpose: None,
                 id: "orbit-child-call".into(),
                 name: "spawn_agent".into(),
                 arguments: json!({

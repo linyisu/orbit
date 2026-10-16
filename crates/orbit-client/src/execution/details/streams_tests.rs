@@ -4,6 +4,8 @@ fn tool(name: &str, arguments: serde_json::Value, output: Option<serde_json::Val
     ToolRun {
         id: "test-call".into(),
         name: name.into(),
+        purpose: None,
+        changes: Vec::new(),
         detail: String::new(),
         status: ToolStatus::Complete,
         output: output.map(|output| output.to_string()),

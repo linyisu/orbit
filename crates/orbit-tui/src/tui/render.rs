@@ -13,10 +13,10 @@ pub(super) use text::{
     sanitize_linked_line,
 };
 pub(super) use thinking::{thinking_card_at_width, thinking_linked};
-pub(super) use tool_cards::{
-    default_tool_summary, read_file_summary, tool_body_with_links, tool_border_line, tool_card,
-    tool_card_layout, tool_card_with_links, tool_frame_line, tool_group_title_with_links,
-};
+pub(super) use tool_cards::{default_tool_summary, read_file_summary, tool_card};
+
+#[cfg(test)]
+pub(super) use tool_cards::tool_card_with_links;
 
 #[cfg(test)]
 pub(super) use thinking::{assistant_line, thinking_line};
@@ -232,12 +232,13 @@ fn draw_contents(frame: &mut Frame<'_>, state: &mut UiState) {
         Constraint::Min(1),
         Constraint::Length(approval_height),
         Constraint::Length(u16::from(state.subagent_parent.is_some())),
+        Constraint::Length(u16::from(!home)),
         Constraint::Length(input_height + attachment_height + details_height + 3),
-        Constraint::Length(0),
         Constraint::Length(1),
     ])
     .split(area)
     .to_vec();
+    areas.swap(4, 5);
 
     let mut home_logo = Rect::default();
     if home {
@@ -488,11 +489,7 @@ fn footer_layout(state: &UiState, width: usize) -> FooterLayout {
         fit_label(&safe_output(project), path_width, false)
     };
 
-    let (left_spans, left_width) = if state.running() {
-        let spans = activity_spans(state, path_width);
-        let width = spans.iter().map(Span::width).sum();
-        (spans, width)
-    } else {
+    let (left_spans, left_width) = {
         let w = path.width();
         (
             vec![Span::styled(
@@ -1518,7 +1515,8 @@ pub(super) fn transcript_lines_at_width(
 }
 
 // Display budgets only: original arguments/results stay intact for execution and storage.
-fn draw_status(frame: &mut Frame<'_>, state: &UiState, area: Rect) {
+fn draw_status(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
+    state.progress_area = area;
     if let Some(message) = &state.resume_loading {
         frame.render_widget(
             Paragraph::new(Line::from(Span::styled(
@@ -1532,7 +1530,19 @@ fn draw_status(frame: &mut Frame<'_>, state: &UiState, area: Rect) {
 
     let spans = if state.running() {
         let mut spans = vec![Span::raw("  ")];
-        spans.extend(activity_spans(state, area.width.saturating_sub(4) as usize));
+        let progress = state.activity.progress();
+        if progress.is_empty() {
+            spans.extend(activity_spans(state, area.width.saturating_sub(4) as usize));
+        } else {
+            spans.push(Span::styled(
+                fit_label(
+                    &safe_output(&format!("{} · {progress}", state.activity.label())),
+                    area.width.saturating_sub(4) as usize,
+                    false,
+                ),
+                Style::default().fg(THEME.secondary),
+            ));
+        }
         spans
     } else if state.status == RunStatus::Failed {
         vec![Span::styled(
@@ -1540,7 +1550,10 @@ fn draw_status(frame: &mut Frame<'_>, state: &UiState, area: Rect) {
             Style::default().fg(ACCENT),
         )]
     } else {
-        Vec::new()
+        vec![Span::styled(
+            "  过程记录 · Alt+P",
+            Style::default().fg(THEME.secondary),
+        )]
     };
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }

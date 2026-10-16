@@ -694,6 +694,8 @@ fn fit_hit_rows(rows: &mut [(Rect, usize)], lines: &[Line<'_>], body: Rect) {
 #[derive(Debug)]
 pub(super) enum ReportSource {
     Usage,
+    Tool(String),
+    Process,
 }
 
 #[derive(Debug)]
@@ -714,9 +716,49 @@ pub struct InfoDialog {
     pages: Vec<ReportPage>,
     selected_page: usize,
     page_areas: Vec<(Rect, usize)>,
+    target: Option<orbit_client::execution::details::Target>,
 }
 
 impl InfoDialog {
+    pub(super) fn tool(record: &orbit_client::execution::ToolRun) -> Self {
+        let mut dialog = Self::new("工具详情", String::new());
+        dialog.source = Some(ReportSource::Tool(record.id.clone()));
+        dialog.update_tool(record);
+        let initial = orbit_client::execution::details::default_stream(record);
+        if let Some(index) = orbit_client::execution::details::streams(record)
+            .iter()
+            .position(|stream| *stream == initial)
+        {
+            dialog.select_page(index);
+        }
+        dialog
+    }
+
+    pub(super) fn update_tool(&mut self, record: &orbit_client::execution::ToolRun) {
+        use orbit_client::execution::details;
+        self.title = format!("{} · {}", record.name, details::status(record));
+        self.target = details::target(record);
+        self.pages(
+            details::streams(record)
+                .iter()
+                .map(|stream| ReportPage {
+                    label: stream.label().into(),
+                    content: Text::from(format!(
+                        "{}\n\n{}\n\n{}",
+                        record.summary(),
+                        details::content(record, *stream),
+                        details::note(record, *stream)
+                    )),
+                })
+                .collect(),
+        );
+    }
+
+    /// Embedded transcripts expose evidence without borrowing the outer session's actions.
+    pub(super) fn disable_navigation(&mut self) {
+        self.target = None;
+    }
+
     pub fn new(title: &str, content: String) -> Self {
         Self {
             title: title.into(),
@@ -729,6 +771,7 @@ impl InfoDialog {
             pages: Vec::new(),
             selected_page: 0,
             page_areas: Vec::new(),
+            target: None,
         }
     }
 
@@ -821,7 +864,98 @@ impl InfoDialog {
 }
 
 pub fn handle(state: &mut UiState, event: Event) -> Option<String> {
+    let current_tool = state
+        .info_dialog
+        .as_ref()
+        .and_then(|dialog| match &dialog.source {
+            Some(ReportSource::Tool(id)) => Some(id.clone()),
+            _ => None,
+        });
+    if let Some(id) = current_tool {
+        if let Event::Key(key) = &event
+            && key.kind != KeyEventKind::Release
+            && key.code == KeyCode::Char('a')
+            && let Some(target) = state
+                .info_dialog
+                .as_ref()
+                .and_then(|dialog| dialog.target.clone())
+        {
+            use orbit_client::execution::details::Target;
+            match target {
+                Target::Agent(agent) => {
+                    state.info_dialog = None;
+                    super::subagents::open(state, agent);
+                }
+                Target::Image(path) => {
+                    let mut context = state.media.clone();
+                    context.workspace = state.workspace.clone().into();
+                    state.info_dialog = None;
+                    state.media_preview = Some(super::media::Preview::new(
+                        context,
+                        super::media::Source::Image(path),
+                    ));
+                }
+                Target::Question => {
+                    if let Some(row) = state
+                        .transcript
+                        .iter()
+                        .find_map(|item| match item {
+                            super::app::TranscriptItem::Tool(row) if row.id == id => Some(row),
+                            _ => None,
+                        })
+                        && state
+                            .user_input
+                            .open_tool(&row.id, &row.output)
+                    {
+                        state.info_dialog = None;
+                    }
+                }
+            }
+            return None;
+        }
+        if let Event::Key(key) = &event
+            && key.kind != KeyEventKind::Release
+            && key
+                .modifiers
+                .contains(KeyModifiers::ALT)
+            && matches!(key.code, KeyCode::Left | KeyCode::Right)
+        {
+            let records = state
+                .transcript
+                .iter()
+                .filter_map(|item| match item {
+                    super::app::TranscriptItem::Tool(row) => Some(row),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            if let Some(index) = records
+                .iter()
+                .position(|row| row.id == id)
+            {
+                let next = if key.code == KeyCode::Left {
+                    index.saturating_sub(1)
+                } else {
+                    (index + 1).min(records.len() - 1)
+                };
+                state.info_dialog = Some(InfoDialog::tool(&records[next].record()));
+            }
+            return None;
+        }
+    }
     if let Some(dialog) = &mut state.info_dialog {
+        if let Event::Key(key) = &event
+            && key.kind != KeyEventKind::Release
+            && key.code == KeyCode::Char('y')
+            && matches!(
+                dialog.source,
+                Some(ReportSource::Tool(_) | ReportSource::Process)
+            )
+        {
+            if let Err(error) = super::selection::copy_text(&dialog.content) {
+                state.feedback.error(error.to_string());
+            }
+            return None;
+        }
         if dialog.handle(&event) {
             state.info_dialog = None;
         }
@@ -1632,12 +1766,21 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
                 &mut scrollbar,
             );
         }
-        let actions = if dialog.source.is_some() {
+        let actions = if matches!(dialog.source, Some(ReportSource::Tool(_))) {
+            "Tab 切页 · Alt+←/→ 切换调用 · Y 复制 · Esc 关闭"
+        } else if matches!(dialog.source, Some(ReportSource::Process)) {
+            "PgUp/PgDn 翻页 · Y 复制 · Esc 关闭"
+        } else if dialog.source.is_some() {
             "Tab 切页 · R 刷新 · Esc 关闭"
         } else if dialog.max_scroll > 0 {
             "PgUp/PgDn 翻页 · Esc 关闭"
         } else {
             "Esc 关闭"
+        };
+        let actions = if let Some(target) = &dialog.target {
+            format!("A {} · {actions}", target.label())
+        } else {
+            actions.to_owned()
         };
         let hint = if dialog.max_scroll > 0 {
             format!(

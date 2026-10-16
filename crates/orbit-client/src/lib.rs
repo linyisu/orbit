@@ -2,8 +2,11 @@
 //! Protocol and service operations remain independent of the presentation layer.
 
 pub mod accounts;
+pub mod activity;
 pub mod attachments;
 mod bootstrap;
+pub mod conversation;
+pub mod execution;
 pub mod library;
 mod local_server;
 #[cfg(feature = "test-support")]

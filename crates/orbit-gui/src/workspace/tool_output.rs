@@ -1,5 +1,5 @@
-//! Native, read-only evidence received from the session service. This view
-//! never opens output paths, executes a command, or claims a PTY connection.
+//! Native, read-only evidence received from the session service. Explicit image
+//! and subtask navigation goes through the owning session; no command runs here.
 use super::*;
 use crate::execution::{ToolRun, ToolStatus};
 use gpui_kit::component::{
@@ -9,26 +9,9 @@ use gpui_kit::component::{
     tooltip::Tooltip,
 };
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Stream {
-    Stdout,
-    Stderr,
-    Command,
-    Result,
-    Arguments,
-}
-
-impl Stream {
-    fn label(self) -> &'static str {
-        match self {
-            Self::Stdout => "stdout",
-            Self::Stderr => "stderr",
-            Self::Command => "命令",
-            Self::Result => "结果",
-            Self::Arguments => "参数",
-        }
-    }
-}
+use orbit_client::execution::details::{
+    Stream, content, default_stream, note, request_directory, status,
+};
 
 pub(super) struct ToolOutput {
     owner: WeakEntity<Workspace>,
@@ -55,20 +38,9 @@ impl ToolOutput {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let stream = if tool.name == "run_command"
-            && tool.is_foreground_command()
-            && (tool.status != ToolStatus::Failed || tool.command_result().is_some())
-        {
-            Stream::Stdout
-        } else {
-            Stream::Result
-        };
+        let stream = default_stream(&tool);
         let displayed = content(&tool, stream);
-        let args = serde_json::from_str::<serde_json::Value>(&tool.arguments).ok();
-        let command = args
-            .as_ref()
-            .and_then(|args| args["command"].as_str());
-        let command = command.unwrap_or(&tool.name).to_owned();
+        let command = content(&tool, Stream::Command);
         Self {
             owner,
             options,
@@ -156,16 +128,96 @@ impl ToolOutput {
     }
 
     fn streams(&self) -> &'static [Stream] {
-        if self.tool.name == "run_command" {
-            &[
-                Stream::Stdout,
-                Stream::Stderr,
-                Stream::Command,
-                Stream::Result,
-                Stream::Arguments,
-            ]
-        } else {
-            &[Stream::Result, Stream::Arguments]
+        orbit_client::execution::details::streams(&self.tool)
+    }
+
+    fn inspect_target(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        use orbit_client::execution::details::{Target, target};
+        if self.disconnected {
+            return;
+        }
+        let Some(target) = target(&self.tool) else {
+            return;
+        };
+        let session = self.session.clone();
+        let current = self
+            .owner
+            .upgrade()
+            .is_some_and(|owner| {
+                let workspace = owner.read(cx);
+                workspace
+                    .options
+                    .same_host(&self.options)
+                    && workspace
+                        .info
+                        .as_ref()
+                        .is_some_and(|info| info.id == session)
+            });
+        if !current {
+            return;
+        }
+        match target {
+            Target::Agent(agent) => {
+                let _ = self.owner.update(cx, |workspace, cx| {
+                    workspace.command(
+                        Command::Request(Request::ReadSubagent {
+                            session,
+                            agent,
+                            after: 0,
+                        }),
+                        cx,
+                    );
+                });
+                window.close_dialog(cx);
+            }
+            Target::Image(path) => {
+                let (result, response) = tokio::sync::oneshot::channel();
+                let _ = self.owner.update(cx, |workspace, cx| {
+                    workspace.command(
+                        Command::Settings {
+                            request: Request::ReadFile {
+                                session,
+                                path,
+                                allow_missing: false,
+                            },
+                            result,
+                        },
+                        cx,
+                    );
+                });
+                cx.spawn_in(window, async move |panel, cx| {
+                    let result = response
+                        .await
+                        .map_err(|_| "图片读取已取消".to_owned())
+                        .and_then(|result| result);
+                    let image = cx
+                        .background_spawn(async move {
+                            let Response::File(encoded) = result? else {
+                                return Err("图片响应格式无效".to_owned());
+                            };
+                            let bytes = orbit_client::protocol::file_bytes(encoded)
+                                .map_err(|error| error.to_string())?;
+                            crate::image_preview::decode_image(bytes)
+                                .map_err(|error| error.to_string())
+                        })
+                        .await;
+                    let _ = panel.update_in(cx, |panel, window, cx| {
+                        if panel.closed {
+                            return;
+                        }
+                        match image {
+                            Ok((image, size)) => {
+                                crate::image_preview::open(Ok(Some(image)), Some(size), window, cx)
+                            }
+                            Err(error) => {
+                                crate::image_preview::open(Err(error.into()), None, window, cx)
+                            }
+                        }
+                    });
+                })
+                .detach();
+            }
+            Target::Question => self.select(Stream::Result, window, cx),
         }
     }
 }
@@ -175,12 +227,19 @@ pub(super) fn present(panel: Entity<ToolOutput>, window: &mut Window, cx: &mut A
         panel.closed = false;
         panel.refresh(window, cx);
     });
-    crate::dialog::open(window, cx, move |dialog, window, _| {
+    crate::dialog::open(window, cx, move |dialog, window, cx| {
         let close = panel.downgrade();
-        let height = window.viewport_size().height * 0.8;
+        let rows = panel
+            .read(cx)
+            .displayed
+            .lines()
+            .count()
+            .clamp(8, 28);
+        let height =
+            (window.rem_size() * (rows as f32 * 1.3 + 9.)).min(window.viewport_size().height * 0.8);
         let content = panel.clone();
         dialog
-            .title("工具输出")
+            .title("工具详情")
             .h(height)
             // The editor owns scrolling; Dialog's ordinary child slot adds
             // a second scroll viewport around the entire inspector.
@@ -212,6 +271,9 @@ impl Render for ToolOutput {
             note(&self.tool, self.stream)
         };
         let streams = self.streams();
+        let target = orbit_client::execution::details::target(&self.tool)
+            .filter(|_| !self.disconnected && has_owner)
+            .filter(|target| !matches!(target, orbit_client::execution::details::Target::Question));
         let selected = streams
             .iter()
             .position(|stream| *stream == self.stream)
@@ -237,6 +299,12 @@ impl Render for ToolOutput {
                     .flex_shrink_0()
                     .py_2()
                     .gap_1()
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_ellipsis()
+                            .child(self.tool.summary()),
+                    )
                     .child(
                         h_flex()
                             .gap_2()
@@ -303,6 +371,17 @@ impl Render for ToolOutput {
                     .flex_wrap()
                     .gap_2()
                     .pb_2()
+                    .when_some(target, |bar, target| {
+                        bar.child(
+                            Button::new("inspect-tool-target")
+                                .small()
+                                .outline()
+                                .label(target.label())
+                                .on_click(cx.listener(|view, _, window, cx| {
+                                    view.inspect_target(window, cx)
+                                })),
+                        )
+                    })
                     .child(
                         TabBar::new("tool-output-streams")
                             .small()
@@ -392,159 +471,3 @@ impl Render for ToolOutput {
             )
     }
 }
-
-fn content(tool: &ToolRun, stream: Stream) -> String {
-    if stream == Stream::Command {
-        return serde_json::from_str::<serde_json::Value>(&tool.arguments)
-            .ok()
-            .and_then(|args| {
-                args["command"]
-                    .as_str()
-                    .map(str::to_owned)
-            })
-            .unwrap_or_default();
-    }
-    if stream == Stream::Arguments {
-        return pretty(&tool.arguments);
-    }
-    if let Some(result) = tool.command_result() {
-        match stream {
-            Stream::Stdout => return result.stdout,
-            Stream::Stderr => return result.stderr,
-            _ => {}
-        }
-    }
-    if stream == Stream::Stdout {
-        return tool
-            .stdout_preview
-            .clone()
-            .unwrap_or_default();
-    }
-    if stream == Stream::Stderr {
-        return String::new();
-    }
-    let Some(output) = &tool.output else {
-        return String::new();
-    };
-    if tool.name == "read_command_output"
-        && let Ok(value) = serde_json::from_str::<serde_json::Value>(output)
-        && let Some(content) = value["content"].as_str()
-    {
-        return content.into();
-    }
-    pretty(output)
-}
-
-fn pretty(text: &str) -> String {
-    serde_json::from_str::<serde_json::Value>(text)
-        .ok()
-        .and_then(|value| serde_json::to_string_pretty(&value).ok())
-        .unwrap_or_else(|| text.into())
-}
-
-fn request_directory(tool: &ToolRun, workspace: &str) -> String {
-    let args = serde_json::from_str::<serde_json::Value>(&tool.arguments).ok();
-    args.as_ref()
-        .and_then(|args| args["cwd"].as_str())
-        .map_or_else(
-            || workspace.into(),
-            |cwd| {
-                PathBuf::from(workspace)
-                    .join(cwd)
-                    .to_string_lossy()
-                    .into_owned()
-            },
-        )
-}
-
-fn status(tool: &ToolRun) -> String {
-    if let Some(result) = tool.command_result() {
-        let label = if result.cancelled {
-            "已取消".into()
-        } else if result.timed_out {
-            "已超时".into()
-        } else {
-            result
-                .exit_code
-                .map_or_else(|| "进程已结束".into(), |code| format!("退出码 {code}"))
-        };
-        return format!("{label} · {} ms", result.elapsed.as_millis());
-    }
-    if tool.name == "run_command" && tool.status == ToolStatus::Background && tool.run_finished {
-        return "结果未确认".into();
-    }
-    tool.elapsed_ms.map_or_else(
-        || tool.status.label().into(),
-        |elapsed| format!("{} · {elapsed} ms", tool.status.label()),
-    )
-}
-
-fn note(tool: &ToolRun, stream: Stream) -> String {
-    if stream == Stream::Command {
-        return "完整请求命令，可选择和复制。".into();
-    }
-    if stream == Stream::Arguments {
-        return "工具调用的完整参数，可选择和复制。".into();
-    }
-    if tool.name == "read_command_output"
-        && let Some(output) = &tool.output
-        && let Ok(value) = serde_json::from_str::<serde_json::Value>(output)
-    {
-        return format!(
-            "{} 单页快照 · 字节 {}–{} / 已保留 {}{}",
-            value["stream"]
-                .as_str()
-                .unwrap_or("输出"),
-            value["offset"],
-            value["next_offset"],
-            value["total_retained_bytes"],
-            if value["truncated"] == true {
-                " · 仍有后页"
-            } else {
-                ""
-            },
-        );
-    }
-    if tool.name != "run_command" {
-        if tool.output.is_none() && tool.status == ToolStatus::Running {
-            return "工具调用正在进行，尚未收到结果。".into();
-        }
-        return "已接收的工具结果，可选择和复制。".into();
-    }
-    if let Some(result) = tool.command_result() {
-        let mut note = format!(
-            "工具返回的有界结果 · stdout {} 字节 · stderr {} 字节",
-            result.stdout_total_bytes, result.stderr_total_bytes,
-        );
-        if result.output_truncated {
-            note.push_str(" · 仅显示每路最多 32KiB 的尾部");
-        }
-        if result.retained_output_truncated {
-            note.push_str(" · 原始日志保留不完整");
-        }
-        if let Some(error) = result.retained_output_error {
-            note.push_str(&format!(" · {error}"));
-        }
-        return note;
-    }
-    if tool.status == ToolStatus::Background || !tool.is_foreground_command() {
-        if tool.run_finished {
-            return "当前任务已结束，未收到后台命令的完成结果；此处保留启动回执。".into();
-        }
-        return "后台启动回执；等待完成事件，此页不提供后台实时日志。".into();
-    }
-    if tool.status != ToolStatus::Running {
-        return "已接收的结果；未识别为命令结果结构，可在“结果”中查看原文。".into();
-    }
-    if stream == Stream::Stderr {
-        return "stderr 将在命令结束后显示工具返回的结果。".into();
-    }
-    if tool.live {
-        "实时 stdout 尾部 · 最多 16KiB · 由服务端提供".into()
-    } else {
-        "等待 stdout 预览；审批状态和停止任务操作位于主界面。".into()
-    }
-}
-
-#[cfg(test)]
-mod tests;

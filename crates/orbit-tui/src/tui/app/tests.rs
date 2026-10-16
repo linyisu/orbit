@@ -174,6 +174,7 @@ fn approval_wait_is_excluded_from_response_clock() {
 fn call(id: &str) -> ToolCall {
     ToolCall {
         metadata: None,
+        purpose: None,
         id: id.to_owned(),
         kind: "function".to_owned(),
         function: FunctionCall {

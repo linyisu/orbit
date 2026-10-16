@@ -14,11 +14,6 @@ use unicode_width::UnicodeWidthStr;
 
 use super::{app::TranscriptItem, render, theme::THEME};
 
-mod tool_viewport;
-#[cfg(test)]
-pub(super) use tool_viewport::MAX_TOOL_BODY_ROWS;
-use tool_viewport::ToolViewport;
-
 #[derive(Debug, Clone, Default)]
 pub(super) struct Decorations {
     // Terminal column ranges, after wrapping and adding repeated gutters.
@@ -453,7 +448,6 @@ struct Entry {
     tool_group: Option<Range<usize>>,
     group_header: Option<usize>,
     tool_header: Option<Range<usize>>,
-    tool_body: Option<ToolViewport>,
     height: usize,
     end: usize,
     spacing: bool,
@@ -1000,12 +994,13 @@ pub(super) struct TranscriptLayout {
     media: super::media::Context,
     media_revision: u64,
     entries: Vec<Entry>,
+    order: Vec<usize>,
+    positions: std::collections::BTreeMap<usize, usize>,
     width: u16,
     expanded: std::collections::BTreeSet<usize>,
     expanded_groups: std::collections::BTreeSet<usize>,
     dirty_from: usize,
     html_toggles: std::collections::BTreeMap<usize, std::collections::BTreeSet<String>>,
-    tool_scroll: std::collections::BTreeMap<usize, usize>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1076,20 +1071,11 @@ impl TranscriptLayout {
             .iter()
             .find(|f| column >= f.x && column < f.x + f.picture.size.width)?;
         let absolute = entry.end - entry.height + row.start;
-        let mut top = absolute
+        let top = absolute
             .saturating_sub(usize::from(fragment.row))
             .max(offset);
-        let mut bottom = (absolute + usize::from(fragment.picture.size.height - fragment.row))
+        let bottom = (absolute + usize::from(fragment.picture.size.height - fragment.row))
             .min(offset + usize::from(area.height));
-        if let Some(view) = &entry.tool_body {
-            let body_top = entry.end - entry.height + entry.rows[view.rows.start].start;
-            let body_height: usize = entry.rows[view.rows.clone()]
-                .iter()
-                .map(|row| row.height)
-                .sum();
-            top = top.max(body_top);
-            bottom = bottom.min(body_top + body_height);
-        }
         let x = area.x + gutter + fragment.x;
 
         Some(Rect::new(
@@ -1162,7 +1148,7 @@ impl TranscriptLayout {
                 .gutter
                 .as_ref()
                 .map_or(0, |gutter| gutter.width as usize);
-        (usize::from(point.0 - area.x) < width).then(|| (index, id.clone()))
+        (usize::from(point.0 - area.x) < width).then(|| (self.order[index], id.clone()))
     }
 
     pub(super) fn toggle_html(&mut self, index: usize, id: String) {
@@ -1193,18 +1179,20 @@ impl TranscriptLayout {
             .min(row.ranges.len().saturating_sub(1));
 
         Some(TranscriptAnchor {
-            entry: entry_index,
+            entry: self.order[entry_index],
             row: row_index,
             byte: row.ranges.get(wrapped)?.start,
         })
     }
 
     pub(super) fn offset_for_anchor(&self, anchor: TranscriptAnchor) -> Option<usize> {
-        let entry = self.entries.get(anchor.entry)?;
+        let entry = self
+            .entries
+            .get(*self.positions.get(&anchor.entry)?)?;
         if entry.height == 0
             && let Some(group) = &entry.tool_group
         {
-            return self.item_offset(group.start);
+            return self.item_offset(self.order[group.start]);
         }
 
         let row = entry.rows.get(anchor.row)?;
@@ -1218,19 +1206,27 @@ impl TranscriptLayout {
     }
 
     pub fn invalidate_from(&mut self, index: usize) {
-        self.dirty_from = self.dirty_from.min(index);
+        self.dirty_from = self.dirty_from.min(
+            self.positions
+                .get(&index)
+                .copied()
+                .unwrap_or(self.entries.len()),
+        );
     }
 
     /// Discard cached source offsets when text is edited or entries are removed.
     pub(super) fn reset_from(&mut self, index: usize) {
         self.html_toggles
             .retain(|item, _| *item < index);
-        self.tool_scroll
-            .retain(|item, _| *item < index);
         self.reset_rows_from(index);
     }
 
     fn reset_rows_from(&mut self, index: usize) {
+        let index = self
+            .positions
+            .get(&index)
+            .copied()
+            .unwrap_or(0);
         let index = self
             .entries
             .get(index)
@@ -1238,7 +1234,7 @@ impl TranscriptLayout {
             .map_or(index, |group| group.start);
 
         self.entries.truncate(index);
-        self.invalidate_from(index);
+        self.dirty_from = self.dirty_from.min(index);
     }
 
     #[cfg(test)]
@@ -1258,13 +1254,54 @@ impl TranscriptLayout {
         expanded_groups: &std::collections::BTreeSet<usize>,
         width: u16,
     ) {
+        let roles = items
+            .iter()
+            .map(|item| match item {
+                TranscriptItem::User(_) | TranscriptItem::UserWithImages { .. } => {
+                    orbit_client::conversation::layout::Role::User
+                }
+                TranscriptItem::Assistant(_) => orbit_client::conversation::layout::Role::Text,
+                TranscriptItem::Thinking(_) => orbit_client::conversation::layout::Role::Thought,
+                TranscriptItem::Tool(_) => orbit_client::conversation::layout::Role::Tool,
+                _ => orbit_client::conversation::layout::Role::Notice,
+            })
+            .collect::<Vec<_>>();
+        let layout = orbit_client::conversation::layout::partition(&roles);
+        if self.order != layout.order {
+            let preserved = self
+                .order
+                .iter()
+                .zip(&layout.order)
+                .take_while(|(a, b)| a == b)
+                .count();
+            self.entries.truncate(preserved);
+            self.dirty_from = self.dirty_from.min(preserved);
+            self.order = layout.order;
+            self.positions = self
+                .order
+                .iter()
+                .enumerate()
+                .map(|(position, source)| (*source, position))
+                .collect();
+        }
+        let items = self
+            .order
+            .iter()
+            .map(|index| &items[*index])
+            .collect::<Vec<_>>();
+        let expanded = &expanded
+            .iter()
+            .filter_map(|index| self.positions.get(index).copied())
+            .collect::<std::collections::BTreeSet<_>>();
+        let expanded_groups = &expanded_groups
+            .iter()
+            .filter_map(|index| self.positions.get(index).copied())
+            .collect::<std::collections::BTreeSet<_>>();
         if self.width != width || items.len() < self.entries.len() {
             self.entries.clear();
             self.dirty_from = 0;
             self.width = width;
         }
-        self.tool_scroll
-            .retain(|item, _| *item < items.len());
 
         if &self.expanded != expanded {
             if let Some(index) = self
@@ -1273,7 +1310,7 @@ impl TranscriptLayout {
                 .next()
                 .copied()
             {
-                self.invalidate_from(index);
+                self.dirty_from = self.dirty_from.min(index);
             }
             self.expanded = expanded.clone();
         }
@@ -1285,7 +1322,7 @@ impl TranscriptLayout {
                 .next()
                 .copied()
             {
-                self.invalidate_from(index);
+                self.dirty_from = self.dirty_from.min(index);
             }
 
             self.expanded_groups = expanded_groups.clone();
@@ -1307,7 +1344,7 @@ impl TranscriptLayout {
             .get(first)
             .and_then(|entry| entry.tool_group.as_ref())
             .map_or(first, |group| group.start);
-        let first = super::tool_groups::start(items, first);
+        let first = super::tool_groups::start(&items, first);
         self.entries
             .resize_with(items.len(), Entry::default);
         let mut end = first
@@ -1324,24 +1361,21 @@ impl TranscriptLayout {
             entry.media = self.media.clone();
             entry.html_toggles = self
                 .html_toggles
-                .get(&item_index)
+                .get(&self.order[item_index])
                 .cloned()
                 .unwrap_or_default();
             if item_index >= group.end {
-                group = super::tool_groups::range(items, item_index);
+                group = super::tool_groups::range(&items, item_index);
             }
             entry.remove_spacing();
-            let mut next = item_index + 1;
-            let mut framed = false;
             let mut block_end = true;
             match item {
                 TranscriptItem::Assistant(text) => entry.stream(text, false, width),
-                TranscriptItem::Thinking(row) if !row.finished => {
-                    entry.stream(row.content.trim_end(), true, width)
-                }
                 TranscriptItem::Thinking(row) => {
                     entry.clear();
-                    let is_expanded = expanded.contains(&(first + relative));
+                    let is_expanded = row
+                        .manual_expanded
+                        .unwrap_or(!row.finished || expanded.contains(&(first + relative)));
                     let mut lines = render::thinking_card_at_width(row, is_expanded, width);
                     if lines
                         .last()
@@ -1374,94 +1408,31 @@ impl TranscriptLayout {
 
                 TranscriptItem::Tool(row) => {
                     entry.clear();
-                    let is_expanded = expanded.contains(&item_index);
-                    let grouped = group.len() > 1;
                     let group_open = expanded_groups.contains(&group.start);
-                    if grouped {
-                        next = group.end;
-                        block_end = if group_open {
-                            item_index + 1 == group.end
-                        } else {
-                            item_index == group.start
-                        };
+                    block_end = if group_open {
+                        item_index + 1 == group.end
+                    } else {
+                        item_index == group.start
+                    };
+                    entry.tool_group = Some(group.clone());
+                    if item_index == group.start {
+                        entry.group_header = Some(entry.rows.len());
+                        entry.push_linked(
+                            super::tool_groups::header(&items[group.clone()], width, group_open),
+                            width,
+                        );
                     }
-
-                    framed = width >= 10 && if grouped { group_open } else { is_expanded };
-                    if grouped {
-                        entry.tool_group = Some(group.clone());
-                        if item_index == group.start {
-                            if framed {
-                                entry.push_linked(
-                                    render::tool_border_line(width, ('╭', '╮')),
-                                    width,
-                                );
-                            }
-
-                            entry.group_header = Some(entry.rows.len());
-                            entry.push_linked(
-                                super::tool_groups::header(&items[group.clone()], width, framed),
-                                width,
-                            );
-                        }
-                    }
-
-                    if !grouped || group_open {
-                        let (lines, header, body, title) = if grouped {
-                            let section = super::tool_groups::section(
-                                row,
-                                is_expanded,
-                                width,
-                                item_index == group.start,
-                                item_index + 1 == group.end,
-                            );
-                            (
-                                section.lines,
-                                Some(section.header),
-                                section.body,
-                                section.header..section.header + 1,
-                            )
-                        } else {
-                            let card = render::tool_card_layout(row, is_expanded, width);
-                            (card.lines, None, card.body, card.header)
-                        };
-
-                        let mut body_rows: Option<Range<usize>> = None;
-                        for (index, line) in lines.into_iter().enumerate() {
-                            let collapsible = header.map_or_else(
-                                || !line.line.to_string().is_empty(),
-                                |header| header == index || body.contains(&index),
-                            );
-
-                            let start = entry.height;
-                            let first_row = entry.rows.len();
+                    if group_open {
+                        let section = super::tool_groups::section(row, width);
+                        let start = entry.height;
+                        let first_row = entry.rows.len();
+                        for line in section {
                             entry.push_linked(line, width);
-                            if body.contains(&index) {
-                                body_rows
-                                    .get_or_insert(first_row..first_row)
-                                    .end = entry.rows.len();
-                            }
-                            if collapsible {
-                                entry
-                                    .disclosures
-                                    .extend(first_row..entry.rows.len());
-                            }
-                            if title.contains(&index) {
-                                entry
-                                    .tool_header
-                                    .get_or_insert(start..start)
-                                    .end = entry.height;
-                            }
                         }
-                        if let Some(body) = body_rows {
-                            entry.limit_tool_body(
-                                body,
-                                self.tool_scroll
-                                    .get(&item_index)
-                                    .copied()
-                                    .unwrap_or(0),
-                                width,
-                            );
-                        }
+                        entry
+                            .disclosures
+                            .extend(first_row..entry.rows.len());
+                        entry.tool_header = Some(start..entry.height);
                     }
                 }
 
@@ -1476,7 +1447,7 @@ impl TranscriptLayout {
                     });
 
                     let mut lines = render::transcript_lines_at_width(
-                        std::slice::from_ref(item),
+                        std::slice::from_ref(*item),
                         expanded.contains(&(first + relative)),
                         width,
                     );
@@ -1497,20 +1468,9 @@ impl TranscriptLayout {
                 }
             }
 
-            if entry.height > 0 && block_end && !framed {
-                let next_grouped = super::tool_groups::range(items, next).len() > 1;
-                let next_framed = width >= 10
-                    && matches!(items.get(next), Some(TranscriptItem::Tool(_)))
-                    && if next_grouped {
-                        expanded_groups.contains(&next)
-                    } else {
-                        expanded.contains(&next)
-                    };
-
-                if !next_framed {
-                    entry.push(Line::default(), width);
-                    entry.spacing = true;
-                }
+            if entry.height > 0 && block_end {
+                entry.push(Line::default(), width);
+                entry.spacing = true;
             }
 
             end += entry.height;
@@ -1534,23 +1494,25 @@ impl TranscriptLayout {
                 (entry.end > offset
                     && entry.end - entry.height < offset + height
                     && !entry.disclosures.is_empty()
-                    && (matches!(items.get(index), Some(TranscriptItem::Tool(_)))
+                    && (matches!(items.get(self.order[index]), Some(TranscriptItem::Tool(_)))
                         || matches!(
-                            items.get(index),
-                            Some(TranscriptItem::Thinking(row)) if row.finished
+                            items.get(self.order[index]),
+                            Some(TranscriptItem::Thinking(_))
                         )))
-                .then_some(index)
+                .then_some(self.order[index])
             })
     }
 
     pub(super) fn item_offset(&self, index: usize) -> Option<usize> {
         self.entries
-            .get(index)
+            .get(*self.positions.get(&index)?)
             .map(|entry| entry.end - entry.height)
     }
 
     pub(super) fn tool_offset(&self, index: usize) -> Option<usize> {
-        let entry = self.entries.get(index)?;
+        let entry = self
+            .entries
+            .get(*self.positions.get(&index)?)?;
         let row = entry
             .rows
             .get(*entry.disclosures.first()?)?;
@@ -1558,7 +1520,9 @@ impl TranscriptLayout {
     }
 
     pub(super) fn tool_header_range(&self, index: usize, group: bool) -> Option<Range<usize>> {
-        let entry = self.entries.get(index)?;
+        let entry = self
+            .entries
+            .get(*self.positions.get(&index)?)?;
         let header = if group {
             let row = entry.rows.get(entry.group_header?)?;
             row.start..row.start + row.height
@@ -1570,10 +1534,12 @@ impl TranscriptLayout {
     }
 
     pub(super) fn group_range(&self, index: usize) -> Option<Range<usize>> {
-        self.entries
-            .get(index)?
+        let group = self
+            .entries
+            .get(*self.positions.get(&index)?)?
             .tool_group
-            .clone()
+            .as_ref()?;
+        Some(self.order[group.start]..self.order[group.end - 1] + 1)
     }
 
     pub(super) fn visible_group(&self, offset: usize, height: usize) -> Option<usize> {
@@ -1585,7 +1551,7 @@ impl TranscriptLayout {
                 (entry.group_header.is_some()
                     && entry.end > offset
                     && entry.end - entry.height < offset + height)
-                    .then_some(index)
+                    .then_some(self.order[index])
             })
     }
 
@@ -1612,7 +1578,7 @@ impl TranscriptLayout {
                 .ranges
                 .iter()
                 .any(|range| range.contains(&column)))
-        .then_some(index)
+        .then_some(self.order[index])
     }
 
     pub(super) fn disclosure_at(
@@ -1633,12 +1599,8 @@ impl TranscriptLayout {
         let entry = self.entries.get(index)?;
 
         if !matches!(
-            items.get(index),
-            Some(TranscriptItem::Tool(_))
-                | Some(TranscriptItem::Thinking(super::app::ThinkingRow {
-                    finished: true,
-                    ..
-                }))
+            items.get(self.order[index]),
+            Some(TranscriptItem::Tool(_)) | Some(TranscriptItem::Thinking(_))
         ) {
             return None;
         }
@@ -1652,9 +1614,12 @@ impl TranscriptLayout {
             .find(|row| row.start <= relative && relative < row.start + row.height)?;
 
         if self.expanded.contains(&index)
-            && matches!(items.get(index), Some(TranscriptItem::Thinking(_)))
+            && matches!(
+                items.get(self.order[index]),
+                Some(TranscriptItem::Thinking(_))
+            )
         {
-            return Some(index);
+            return Some(self.order[index]);
         }
 
         let column = usize::from(point.0 - area.x);
@@ -1663,7 +1628,7 @@ impl TranscriptLayout {
             .as_ref()
             .map_or(0, |gutter| gutter.width as usize);
 
-        (column < gutter_width + row.line.width()).then_some(index)
+        (column < gutter_width + row.line.width()).then_some(self.order[index])
     }
 
     pub fn height(&self) -> usize {

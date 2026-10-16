@@ -28,6 +28,7 @@ use std::{cell::Cell, rc::Rc, sync::Arc};
 pub(crate) struct Conversation {
     _subscriptions: Vec<Subscription>,
     transcript: Transcript,
+    activity: orbit_client::activity::Activity,
     rows: Vec<Entity<TurnView>>,
     scroll: Entity<MessageScrollerState>,
     navigation: Entity<navigation::Navigation>,
@@ -35,12 +36,15 @@ pub(crate) struct Conversation {
     viewport_height: Rc<Cell<Pixels>>,
     viewport_bounds: Rc<Cell<Bounds<Pixels>>>,
 }
+#[derive(Clone)]
+pub(crate) struct ToolRequest(pub orbit_client::execution::ToolRun);
 struct TurnView {
     index: usize,
     user: Option<Entity<MessageRow>>,
     parts: Vec<Entity<MessageRow>>,
     process: Vec<usize>,
-    conclusion: Option<usize>,
+    thoughts: Vec<usize>,
+    conclusions: Vec<usize>,
     reply: SharedString,
     label: SharedString,
     disclosure: ProcessDisclosure,
@@ -73,6 +77,8 @@ struct MessageRow {
     images: Vec<MessageImage>,
     files: Vec<orbit_protocol::MessageImage>,
     expanded: bool,
+    manual: bool,
+    tool: Option<orbit_client::execution::ToolRun>,
 }
 struct MessageImage {
     path: SharedString,
@@ -85,6 +91,9 @@ impl EventEmitter<LayoutChanged> for MessageRow {}
 impl EventEmitter<ImageRequest> for MessageRow {}
 impl EventEmitter<ImageRequest> for TurnView {}
 impl EventEmitter<ImageRequest> for Conversation {}
+impl EventEmitter<ToolRequest> for MessageRow {}
+impl EventEmitter<ToolRequest> for TurnView {}
+impl EventEmitter<ToolRequest> for Conversation {}
 impl Conversation {
     pub(crate) fn new(cx: &mut Context<Self>) -> Self {
         let scroll = cx.new(|cx| MessageScrollerState::new(0, cx));
@@ -97,6 +106,7 @@ impl Conversation {
             navigation,
             navigation_controls,
             transcript: Transcript::default(),
+            activity: Default::default(),
             rows: vec![],
             scroll,
             viewport_height,
@@ -130,7 +140,11 @@ impl Conversation {
     }
 
     pub(crate) fn apply(&mut self, update: Update, cx: &mut Context<Self>) {
+        if let Update::Agent(event) = &update {
+            self.activity.apply(event);
+        }
         let Some(change) = self.transcript.apply(update) else {
+            cx.notify();
             return;
         };
         while self.rows.len() < self.transcript.turns.len() {
@@ -146,6 +160,10 @@ impl Conversation {
             });
             self._subscriptions
                 .push(cx.subscribe(&row, |_, _, request: &ImageRequest, cx| {
+                    cx.emit(request.clone());
+                }));
+            self._subscriptions
+                .push(cx.subscribe(&row, |_, _, request: &ToolRequest, cx| {
                     cx.emit(request.clone());
                 }));
             self.rows.push(row);
@@ -167,6 +185,31 @@ impl Conversation {
             scroll.remeasure_items(change.turn * 2 + 1..change.turn * 2 + 2, cx)
         });
         cx.notify();
+    }
+
+    pub(crate) fn activity_label(&self) -> String {
+        let progress = self.activity.progress();
+        if progress.is_empty() {
+            self.activity.label().into()
+        } else {
+            format!("{} · {progress}", self.activity.label())
+        }
+    }
+
+    pub(crate) fn process_log(&self) -> String {
+        self.transcript
+            .turns
+            .iter()
+            .flat_map(Turn::progress)
+            .collect::<Vec<_>>()
+            .join("\n\n")
+    }
+
+    pub(crate) fn has_progress(&self) -> bool {
+        self.transcript
+            .turns
+            .iter()
+            .any(|turn| turn.progress().next().is_some())
     }
 
     pub(crate) fn image(
@@ -260,7 +303,8 @@ impl TurnView {
             user: None,
             parts: vec![],
             process: vec![],
-            conclusion: None,
+            thoughts: vec![],
+            conclusions: Vec::new(),
             reply: "".into(),
             label: "".into(),
             disclosure: ProcessDisclosure::default(),
@@ -301,6 +345,10 @@ impl TurnView {
             let row = cx.new(|cx| {
                 MessageRow::new(index, &part.content, part.kind != Kind::Text, false, cx)
             });
+            self._subscriptions
+                .push(cx.subscribe(&row, |_, _, request: &ToolRequest, cx| {
+                    cx.emit(request.clone());
+                }));
             self._subscriptions
                 .push(cx.subscribe(&row, |_, _, request: &ImageRequest, cx| {
                     cx.emit(request.clone());
@@ -347,7 +395,8 @@ impl TurnView {
                 }));
             self.parts.push(row);
         }
-        let conclusion = turn.conclusion();
+        let conclusions = turn.conclusions().collect();
+        self.thoughts = turn.thoughts().collect();
         let process: Vec<_> = turn.process_indices().collect();
         let indices: Vec<_> = changed
             .map(|i| vec![i])
@@ -356,6 +405,19 @@ impl TurnView {
             let part = &turn.parts[index];
             self.parts[index].update(cx, |row, cx| {
                 row.title = part.title.clone().into();
+                row.tool = part.tool.clone();
+                if part.kind == Kind::Notice {
+                    row.expanded = true;
+                }
+                if part.kind == Kind::Thought && !row.manual {
+                    row.expanded = part.running;
+                    if row.expanded
+                        && let Some(source) = row.deferred_text.take()
+                    {
+                        row.text
+                            .update(cx, |text, cx| text.set_text(&markdown::prose(&source), cx));
+                    }
+                }
                 let delta = &part.content[row.source_len..];
                 if let Some(source) = &mut row.deferred_text {
                     source.push_str(delta);
@@ -403,8 +465,8 @@ impl TurnView {
         }
         self.process = process;
         self.disclosure
-            .sync(turn.completed && conclusion.is_some());
-        self.conclusion = conclusion;
+            .sync(!turn.tools_running());
+        self.conclusions = conclusions;
         self.label = turn.label().into();
         cx.notify();
     }
@@ -436,6 +498,11 @@ impl Render for TurnView {
             .min_w_0()
             .items_start()
             .gap_4()
+            .children(
+                self.thoughts
+                    .iter()
+                    .map(|index| self.parts[*index].clone()),
+            )
             .when(!self.process.is_empty(), |view| {
                 view.child(gpui_kit::base::ScrollContainment::new(
                     "process-heading-wheel-boundary",
@@ -535,10 +602,10 @@ impl Render for TurnView {
                     ))
                 },
             )
-            .when_some(
-                self.conclusion
-                    .and_then(|i| self.parts.get(i).cloned()),
-                |view, reply| view.child(reply),
+            .children(
+                self.conclusions
+                    .iter()
+                    .filter_map(|index| self.parts.get(*index).cloned()),
             )
             .when(!self.reply.is_empty(), |view| {
                 view.child(
@@ -745,6 +812,8 @@ impl MessageRow {
             images: vec![],
             files: vec![],
             expanded: !muted,
+            manual: false,
+            tool: None,
         }
     }
 }
@@ -753,6 +822,43 @@ impl Render for MessageRow {
     /// The title icon owns a column; expanded content starts at the title text, using the same
     /// inset rather than Button's internal padding.
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if let Some(tool) = &self.tool {
+            let tool = tool.clone();
+            return Button::new("open-tool-details")
+                .ghost()
+                .small()
+                .w_full()
+                .justify_start()
+                .icon(match tool.status {
+                    orbit_client::execution::ToolStatus::Running => IconName::LoaderCircle,
+                    orbit_client::execution::ToolStatus::Failed => IconName::CircleAlert,
+                    orbit_client::execution::ToolStatus::Stopped => IconName::Square,
+                    _ => IconName::Check,
+                })
+                .child(
+                    h_flex()
+                        .w_full()
+                        .min_w_0()
+                        .gap_2()
+                        .child(
+                            div()
+                                .max_w(rems(16.))
+                                .text_ellipsis()
+                                .child(tool.name.clone()),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .text_ellipsis()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(tool.summary()),
+                        ),
+                )
+                .tooltip(format!("{} · {}", tool.status.label(), tool.summary()))
+                .on_click(cx.listener(move |_, _, _, cx| cx.emit(ToolRequest(tool.clone()))))
+                .into_any_element();
+        }
         let disclosure_inset = rems(1.5);
         let message_group: SharedString = format!("user-message-{}", cx.entity_id()).into();
         let body = v_flex()
@@ -793,6 +899,7 @@ impl Render for MessageRow {
                         )
                         .on_click(cx.listener(|view, _, _, cx| {
                             view.expanded = !view.expanded;
+                            view.manual = true;
                             if view.expanded
                                 && let Some(source) = view.deferred_text.take()
                             {

@@ -48,6 +48,9 @@ pub(in crate::tui) fn thinking_card_at_width(
 
     if !row.finished {
         lines.push(thinking_header());
+        if !expanded {
+            return lines;
+        }
     }
 
     let text = row.content.trim_end();

@@ -176,6 +176,8 @@ fn collapsed_disclosures_use_text_width_and_expanded_thinking_uses_the_full_area
     row.elapsed = Some(std::time::Duration::from_secs(1));
     let thinking = TranscriptItem::Thinking(row);
     let tool = TranscriptItem::Tool(super::super::app::ToolRow {
+        changes: Vec::new(),
+        purpose: None,
         id: "tool_1".into(),
         name: "read_file".into(),
         arguments: serde_json::json!({
@@ -195,7 +197,7 @@ fn collapsed_disclosures_use_text_width_and_expanded_thinking_uses_the_full_area
     assert_eq!(layout.disclosure_at(&items, area, 0, (50, 0)), None);
 
     let tool_y = layout.entries[0].height as u16;
-    assert_eq!(layout.disclosure_at(&items, area, 0, (2, tool_y)), Some(1));
+    assert_eq!(layout.group_at(area, 0, (2, tool_y)), Some(1));
     assert_eq!(layout.disclosure_at(&items, area, 0, (50, tool_y)), None);
 
     for width in [24, 80] {
@@ -235,6 +237,8 @@ fn collapsed_disclosures_use_text_width_and_expanded_thinking_uses_the_full_area
 #[test]
 fn tool_title_and_output_are_clickable() {
     let items = vec![TranscriptItem::Tool(super::super::app::ToolRow {
+        changes: Vec::new(),
+        purpose: None,
         id: "web".into(),
         name: "web_search".into(),
         arguments: serde_json::json!({
@@ -248,19 +252,12 @@ fn tool_title_and_output_are_clickable() {
     let area = Rect::new(0, 0, 80, 40);
 
     layout.update(&items, None, 80);
-    assert_eq!(layout.disclosure_at(&items, area, 0, (0, 0)), Some(0));
-    for y in 1..layout.height() - 1 {
-        assert_eq!(
-            layout.disclosure_at(&items, area, 0, (0, y as u16)),
-            Some(0)
-        );
-    }
-
-    let collapsed = layout.height();
-    layout.update(&items, Some(0), 80);
-
-    assert!(layout.height() > collapsed);
-    assert_eq!(layout.disclosure_at(&items, area, 0, (80, 2)), None);
+    assert_eq!(layout.group_at(area, 0, (0, 0)), Some(0));
+    assert_eq!(layout.disclosure_at(&items, area, 0, (0, 0)), None);
+    layout.update_expanded(&items, &Default::default(), &[0].into(), 80);
+    assert_eq!(layout.height(), 3);
+    assert_eq!(layout.disclosure_at(&items, area, 0, (2, 1)), Some(0));
+    assert_eq!(layout.disclosure_at(&items, area, 0, (80, 1)), None);
 }
 
 #[test]
@@ -441,6 +438,8 @@ fn plain_output_and_wrapped_table_cells_keep_their_own_link_targets() {
         TranscriptItem::User("中文 https://example.com/user".into()),
         TranscriptItem::Notice("结果 https://example.com/command".into()),
         TranscriptItem::Tool(ToolRow {
+            changes: Vec::new(),
+            purpose: None,
             id: "tool".into(),
             name: "run_command".into(),
             arguments: "{}".into(),
@@ -467,86 +466,21 @@ fn plain_output_and_wrapped_table_cells_keep_their_own_link_targets() {
             }
         }
 
-        for suffix in ["user", "command", "tool", "one", "two"] {
+        for suffix in ["user", "command", "one", "two"] {
             assert!(
                 targets.contains(format!("https://example.com/{suffix}").as_str()),
                 "width {width}, missing {suffix}: {targets:?}"
             );
         }
 
-        for row in &layout.entries.last().unwrap().rows {
+        let answer = layout.positions[&3];
+        for row in &layout.entries[answer].rows {
             for link in &row.links {
                 let text = row.line.to_string();
                 assert!(text.get(link.start..link.end).is_some());
                 assert!(link.url.ends_with("/one") || link.url.ends_with("/two"));
             }
         }
-    }
-}
-
-#[test]
-fn markdown_file_links_remain_actionable_after_resize_and_scroll() {
-    use super::super::app::{ToolRow, ToolStatus};
-    let items = [TranscriptItem::Tool(ToolRow {
-        id: "orbit-doc".into(),
-        name: "read_file".into(),
-        arguments: r#"{"path":"docs/Orbit Guide.md"}"#.into(),
-        status: ToolStatus::Finished,
-        output: serde_json::json!({
-            "path": "docs/Orbit Guide.md",
-            "content": "1: # Orbit\n2: \n3: | 名称 | 链接 |\n4: | --- | --- |\n5: | \
-                [Orbit](https://orbit.example/first) | [Orbit](https://orbit.example/second) \
-                |\n6: \n7: ```markdown\n8: [Orbit](https://orbit.example/code)\n9: ```\n"
-        })
-        .to_string(),
-    })];
-    let mut layout = TranscriptLayout::default();
-    for width in [80, 16, 32, 10, 80] {
-        layout.update(&items, Some(0), width);
-        let area = Rect::new(3, 2, width, 7);
-        let mut targets = HashSet::new();
-        let full_area = Rect::new(0, 0, width, layout.height() as u16);
-        let body_point = (0..full_area.height).find_map(|y| {
-            layout
-                .scroll_tool_body(full_area, 0, (3, y), 0)
-                .then_some((3, y))
-        });
-        if let Some(point) = body_point {
-            layout.scroll_tool_body(full_area, 0, point, isize::MIN);
-        }
-        loop {
-            for offset in 0..layout.height() {
-                for y in area.y..area.bottom() {
-                    for x in area.x..area.right() {
-                        if let Some(url) = layout.link_at(area, offset, (x, y)) {
-                            targets.insert(url.to_owned());
-                        }
-                    }
-                }
-            }
-            let Some(point) = body_point else {
-                break;
-            };
-            let before = layout.tool_scroll.get(&0).copied();
-            layout.scroll_tool_body(full_area, 0, point, 1);
-            if before == layout.tool_scroll.get(&0).copied() {
-                break;
-            }
-        }
-
-        assert_eq!(
-            targets,
-            if width == 10 {
-                HashSet::new()
-            } else {
-                HashSet::from([
-                    "https://orbit.example/first".to_owned(),
-                    "https://orbit.example/second".to_owned(),
-                    "https://orbit.example/code".to_owned(),
-                ])
-            },
-            "width {width}"
-        );
     }
 }
 
@@ -807,6 +741,7 @@ fn batched_assistant_completion_matches_fresh_layout_after_trimming() {
                 AgentEvent::ToolStarted {
                     call: ToolCall {
                         metadata: None,
+                        purpose: None,
                         id: "orbit-check".into(),
                         kind: "function".into(),
                         function: FunctionCall {

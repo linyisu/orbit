@@ -1,32 +1,5 @@
 use super::*;
 
-pub(super) fn handle_tool_scroll(state: &mut UiState, event: &Event) -> bool {
-    let Event::Mouse(mouse) = event else {
-        return false;
-    };
-    let lines = match mouse.kind {
-        MouseEventKind::ScrollUp => -(wheel::TOOL_LINES as isize),
-        MouseEventKind::ScrollDown => wheel::TOOL_LINES as isize,
-        _ => return false,
-    };
-    if state
-        .transcript_layout
-        .scroll_tool_body(
-            state.selection.viewport,
-            state
-                .max_scroll
-                .saturating_sub(state.scroll),
-            (mouse.column, mouse.row),
-            lines,
-        )
-    {
-        state.selection.clear();
-        state.link_hovered = None;
-        return true;
-    }
-    false
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum TabAction {
     Select(String),
@@ -196,6 +169,13 @@ pub(super) fn advance_tab_hover(state: &mut UiState) -> bool {
 }
 
 pub(super) fn toggle_transcript_at(state: &mut UiState, point: (u16, u16)) -> bool {
+    if state
+        .progress_area
+        .contains(point.into())
+    {
+        state.open_process_log();
+        return true;
+    }
     let offset = if state.follow_bottom {
         state.max_scroll
     } else {
@@ -267,21 +247,8 @@ pub(super) fn toggle_transcript_at(state: &mut UiState, point: (u16, u16)) -> bo
 }
 
 pub(super) fn toggle_transcript_item(state: &mut UiState, index: usize) {
-    if let Some(super::app::TranscriptItem::Tool(row)) = state.transcript.get(index)
-        && matches!(
-            row.name.as_str(),
-            "enter_plan" | "update_plan" | "submit_plan"
-        )
-    {
-        state.planning.open();
-        return;
-    }
-    if let Some(super::app::TranscriptItem::Tool(row)) = state.transcript.get(index)
-        && row.name == "ask_user"
-        && state
-            .user_input
-            .open_tool(&row.id, &row.output)
-    {
+    if let Some(super::app::TranscriptItem::Tool(row)) = state.transcript.get(index) {
+        state.info_dialog = Some(super::dialogs::InfoDialog::tool(&row.record()));
         return;
     }
 
@@ -304,7 +271,12 @@ pub(super) fn toggle_transcript(state: &mut UiState, index: usize, group: bool) 
     } else {
         &mut state.expanded
     };
-    let collapsing = expanded.contains(&index);
+    let collapsing = match state.transcript.get(index) {
+        Some(app::TranscriptItem::Thinking(row)) if !group => row
+            .manual_expanded
+            .unwrap_or(!row.finished || expanded.contains(&index)),
+        _ => expanded.contains(&index),
+    };
     let viewport_height = usize::from(state.selection.viewport.height);
     let start = state
         .transcript_layout
@@ -330,15 +302,9 @@ pub(super) fn toggle_transcript(state: &mut UiState, index: usize, group: bool) 
         expanded.insert(index);
     }
 
-    if group
-        && collapsing
-        && let Some(range) = state
-            .transcript_layout
-            .group_range(index)
-    {
-        state
-            .expanded
-            .retain(|index| !range.contains(index));
+    state.manual_disclosures.insert(index);
+    if !group && let Some(app::TranscriptItem::Thinking(row)) = state.transcript.get_mut(index) {
+        row.manual_expanded = Some(!collapsing);
     }
 
     state.follow_bottom = false;

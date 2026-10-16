@@ -523,7 +523,6 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(info) = &self.info else { return };
         let Some(tool) = self
             .execution
             .tools()
@@ -533,6 +532,29 @@ impl Workspace {
         else {
             return;
         };
+        self.open_tool_record(tool, false, window, cx);
+    }
+
+    pub(super) fn open_tool_record(
+        &mut self,
+        tool: crate::execution::ToolRun,
+        snapshot: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(info) = &self.info else { return };
+        let tool = self
+            .execution
+            .tools()
+            .iter()
+            .find(|current| {
+                !snapshot
+                    && current.id == tool.id
+                    && current.name == tool.name
+                    && current.arguments == tool.arguments
+            })
+            .cloned()
+            .unwrap_or(tool);
         let existing = self
             .tool_output
             .as_ref()
@@ -552,7 +574,7 @@ impl Workspace {
                 tool_output::ToolOutput::new(owner, options, session, workspace, tool, window, cx)
             })
         };
-        if !self.connected {
+        if snapshot || !self.connected {
             panel.update(cx, |panel, cx| panel.disconnected(cx));
         }
         self.tool_output = Some(panel.clone());

@@ -30,6 +30,7 @@ pub struct SessionTab {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ToolStatus {
     Running,
+    Background,
     Finished,
     Failed,
 }
@@ -38,9 +39,48 @@ pub enum ToolStatus {
 pub struct ToolRow {
     pub id: String,
     pub name: String,
+    pub purpose: Option<String>,
     pub arguments: String,
     pub status: ToolStatus,
     pub output: String,
+    pub changes: Vec<orbit_client::execution::FileChange>,
+}
+
+impl ToolRow {
+    /// Compact transcript rows project only the request, without cloning output or diffs.
+    pub(super) fn request_record(&self) -> orbit_client::execution::ToolRun {
+        let mut call = ToolCall::function(&self.id, &self.name, serde_json::Value::Null);
+        call.function.arguments = self.arguments.clone();
+        call.purpose = self.purpose.clone();
+        let mut record = orbit_client::execution::ToolRun::new(&call);
+        record.status = self.shared_status();
+        record
+    }
+
+    pub(super) fn shared_status(&self) -> orbit_client::execution::ToolStatus {
+        match self.status {
+            ToolStatus::Running => orbit_client::execution::ToolStatus::Running,
+            ToolStatus::Background => orbit_client::execution::ToolStatus::Background,
+            ToolStatus::Finished => orbit_client::execution::ToolStatus::Complete,
+            ToolStatus::Failed => orbit_client::execution::ToolStatus::Failed,
+        }
+    }
+
+    pub(super) fn record(&self) -> orbit_client::execution::ToolRun {
+        let mut record = self.request_record();
+        if !self.output.is_empty() {
+            record.set_output(record.status, self.output.clone());
+        }
+        record.changes = self.changes.clone();
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(&self.output)
+            && value["running"] == true
+        {
+            record.stdout_preview = value["stdout"]
+                .as_str()
+                .map(str::to_owned);
+        }
+        record
+    }
 }
 
 /// A reasoning segment has its own lifetime, independent of the whole run.
@@ -49,6 +89,7 @@ pub struct ThinkingRow {
     pub content: String,
     pub finished: bool,
     pub elapsed: Option<std::time::Duration>,
+    pub manual_expanded: Option<bool>,
     started_at: Option<Instant>,
 }
 
@@ -58,6 +99,7 @@ impl From<String> for ThinkingRow {
             content,
             finished: false,
             elapsed: None,
+            manual_expanded: None,
             started_at: None,
         }
     }
@@ -198,6 +240,8 @@ pub struct UiState {
     pub directory_completions: super::completion::DirectoryCache,
     pub expanded: std::collections::BTreeSet<usize>,
     pub(super) expanded_tool_groups: std::collections::BTreeSet<usize>,
+    pub(super) manual_disclosures: std::collections::BTreeSet<usize>,
+    pub(super) progress_area: ratatui::layout::Rect,
     pub max_scroll: usize,
     pub(super) transcript_layout: super::transcript::TranscriptLayout,
     pub elapsed: std::time::Duration,
@@ -216,6 +260,33 @@ pub struct UiState {
 }
 
 impl UiState {
+    pub(super) fn open_process_log(&mut self) {
+        use orbit_client::conversation::layout::{Role, partition};
+        let roles = self
+            .transcript
+            .iter()
+            .map(|item| match item {
+                TranscriptItem::User(_) | TranscriptItem::UserWithImages { .. } => Role::User,
+                TranscriptItem::Assistant(_) => Role::Text,
+                TranscriptItem::Tool(_) => Role::Tool,
+                TranscriptItem::Thinking(_) => Role::Thought,
+                _ => Role::Notice,
+            })
+            .collect::<Vec<_>>();
+        let text = partition(&roles)
+            .progress
+            .into_iter()
+            .filter_map(|index| match &self.transcript[index] {
+                TranscriptItem::Assistant(text) => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        let mut dialog = super::dialogs::InfoDialog::new("过程记录", text);
+        dialog.source = Some(super::dialogs::ReportSource::Process);
+        self.info_dialog = Some(dialog);
+    }
+
     pub(super) fn is_home(&self) -> bool {
         !self.has_conversation() && self.subagent_parent.is_none() && self.resume_loading.is_none()
     }
@@ -401,6 +472,11 @@ impl UiState {
             let output = output.to_string();
             if output != tool.output {
                 tool.output = output;
+                if let Some(dialog) = &mut self.info_dialog
+                    && matches!(&dialog.source, Some(super::dialogs::ReportSource::Tool(id)) if id == &tool.id)
+                {
+                    dialog.update_tool(&tool.record());
+                }
                 self.transcript_layout
                     .invalidate_from(index);
             }
@@ -522,6 +598,8 @@ impl UiState {
             directory_completions: Default::default(),
             expanded: Default::default(),
             expanded_tool_groups: Default::default(),
+            manual_disclosures: Default::default(),
+            progress_area: Default::default(),
             max_scroll: 0,
             transcript_layout: Default::default(),
             elapsed: std::time::Duration::ZERO,
@@ -709,19 +787,42 @@ impl UiState {
                     .push(TranscriptItem::Tool(ToolRow {
                         id: call.id,
                         name: call.function.name,
+                        purpose: call.purpose,
+                        changes: Vec::new(),
                         arguments: call.function.arguments,
                         status: ToolStatus::Running,
                         output: String::new(),
                     }));
                 self.transcript_layout
                     .invalidate_from(self.transcript.len().saturating_sub(2));
+                let start =
+                    super::tool_groups::source_start(&self.transcript, self.transcript.len() - 1);
+                if !self.manual_disclosures.contains(&start) {
+                    self.expanded_tool_groups.insert(start);
+                }
             }
 
-            AgentEvent::ToolFinished { call, content, .. } => {
+            AgentEvent::ToolFinished {
+                call,
+                content,
+                changes,
+                ..
+            } => {
+                if let Some(row) = self
+                    .transcript
+                    .iter_mut()
+                    .rev()
+                    .find_map(|item| match item {
+                        TranscriptItem::Tool(row) if row.id == call.id => Some(row),
+                        _ => None,
+                    })
+                {
+                    row.changes = changes;
+                }
                 self.update_tool(&call, ToolStatus::Finished, content);
             }
             AgentEvent::ToolBackgrounded { call, content, .. } => {
-                self.update_tool(&call, ToolStatus::Running, content);
+                self.update_tool(&call, ToolStatus::Background, content);
             }
             AgentEvent::InputReceived {
                 message_id,
@@ -993,6 +1094,9 @@ impl UiState {
                 }
 
                 if let Some(index) = self.active_thinking {
+                    if !self.manual_disclosures.contains(&index) {
+                        self.expanded.insert(index);
+                    }
                     self.transcript_layout
                         .invalidate_from(index);
                 }
@@ -1011,6 +1115,9 @@ impl UiState {
         };
 
         row.finished = true;
+        if !self.manual_disclosures.contains(&index) {
+            self.expanded.remove(&index);
+        }
         row.elapsed = row
             .started_at
             .take()
@@ -1056,6 +1163,33 @@ impl UiState {
                 .invalidate_from(index);
             row.status = status;
             row.output = output;
+            if matches!(
+                row.record().status,
+                orbit_client::execution::ToolStatus::Failed
+                    | orbit_client::execution::ToolStatus::Stopped
+            ) {
+                row.status = ToolStatus::Failed;
+            }
+            if let Some(dialog) = &mut self.info_dialog
+                && matches!(&dialog.source, Some(super::dialogs::ReportSource::Tool(id)) if id == &row.id)
+            {
+                dialog.update_tool(&row.record());
+            }
+            let start = super::tool_groups::source_start(&self.transcript, index);
+            let end = self.transcript[start..]
+                .iter()
+                .position(|item| {
+                    matches!(
+                        item,
+                        TranscriptItem::User(_) | TranscriptItem::UserWithImages { .. }
+                    )
+                })
+                .map_or(self.transcript.len(), |offset| start + offset);
+            if !self.transcript[start..end].iter().any(|item| {
+                matches!(item, TranscriptItem::Tool(row) if row.status == ToolStatus::Running)
+            }) && !self.manual_disclosures.contains(&start) {
+                self.expanded_tool_groups.remove(&start);
+            }
         }
     }
 
@@ -1070,6 +1204,8 @@ impl UiState {
                     .invalidate_from(index);
             }
         }
+        self.expanded_tool_groups
+            .retain(|index| self.manual_disclosures.contains(index));
     }
 }
 

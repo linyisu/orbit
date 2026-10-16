@@ -230,7 +230,10 @@ pub(crate) struct Workspace {
 }
 
 impl Workspace {
-    fn new_conversation(cx: &mut Context<Self>) -> (Entity<Conversation>, Subscription) {
+    fn new_conversation(
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> (Entity<Conversation>, Subscription, Subscription) {
         let conversation = cx.new(Conversation::new);
         let subscription = cx.subscribe(
             &conversation,
@@ -254,7 +257,14 @@ impl Workspace {
                 }
             },
         );
-        (conversation, subscription)
+        let tools = cx.subscribe_in(
+            &conversation,
+            window,
+            |view, source, request: &crate::conversation::ToolRequest, window, cx| {
+                view.open_tool_record(request.0.clone(), *source != view.conversation, window, cx);
+            },
+        );
+        (conversation, subscription, tools)
     }
 
     pub(crate) fn new(
@@ -288,7 +298,8 @@ impl Workspace {
         let focus_lost = cx.on_focus_lost(window, |view, window, cx| {
             view.repair_hidden_focus(window, cx);
         });
-        let (conversation, image_subscription) = Self::new_conversation(cx);
+        let (conversation, image_subscription, tool_subscription) =
+            Self::new_conversation(window, cx);
         let location = options
             .workspace
             .clone()
@@ -322,6 +333,7 @@ impl Workspace {
                 bounds,
                 focus_lost,
                 image_subscription,
+                tool_subscription,
             ],
             focus: cx.focus_handle(),
             input,
@@ -525,9 +537,10 @@ impl Workspace {
             }
             Event::Subagent { agent, page, reset } => {
                 if reset {
-                    let (conversation, image_subscription) = Self::new_conversation(cx);
+                    let (conversation, image_subscription, tool_subscription) =
+                        Self::new_conversation(window, cx);
                     self._subscriptions
-                        .push(image_subscription);
+                        .extend([image_subscription, tool_subscription]);
                     self.subagent = Some((agent.clone(), conversation.clone()));
                     let owner = cx.weak_entity();
                     let title = format!("子 Agent · {agent}");
@@ -848,10 +861,11 @@ impl Workspace {
                 self.panel = None;
                 self.subagent = None;
                 self.usage = cx.new(crate::usage::Usage::new);
-                let (conversation, image_subscription) = Self::new_conversation(cx);
+                let (conversation, image_subscription, tool_subscription) =
+                    Self::new_conversation(window, cx);
                 self.conversation = conversation;
                 self._subscriptions
-                    .push(image_subscription);
+                    .extend([image_subscription, tool_subscription]);
                 self.execution = Default::default();
                 self.refresh_usage(cx);
                 self.command(Command::Request(Request::AllSessions), cx);
@@ -981,9 +995,10 @@ impl Workspace {
             Response::Plugins(catalog) => self.show_plugins(catalog, window, cx),
             Response::UserInputs(_) => self.open_question_history(window, cx),
             Response::Subagent(page) => {
-                let (conversation, image_subscription) = Self::new_conversation(cx);
+                let (conversation, image_subscription, tool_subscription) =
+                    Self::new_conversation(window, cx);
                 self._subscriptions
-                    .push(image_subscription);
+                    .extend([image_subscription, tool_subscription]);
                 conversation.update(cx, |view, cx| {
                     for update in page.updates {
                         view.apply(update, cx);

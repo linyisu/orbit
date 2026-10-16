@@ -24,6 +24,8 @@ fn task_cards_preserve_status_statistics_links_and_shared_markdown() {
         ("queued", "已排队"),
     ] {
         let row = ToolRow {
+            changes: Vec::new(),
+            purpose: None,
             id: "orbit-child".into(),
             name: "spawn_agent".into(),
             arguments: json!({"task":"审查中文边界 🦀 和长文件名","role":"review"}).to_string(),
@@ -158,6 +160,8 @@ fn subagent_results_and_rules_stay_inside_the_shared_tool_frame() {
         state
             .transcript
             .push(TranscriptItem::Tool(ToolRow {
+                changes: Vec::new(),
+                purpose: None,
                 id: "orbit-report".into(),
                 name: "spawn_agent".into(),
                 arguments: json!({"task":"检查 Orbit 报告"}).to_string(),
@@ -169,28 +173,14 @@ fn subagent_results_and_rules_stay_inside_the_shared_tool_frame() {
                 })
                 .to_string(),
             }));
-        state.expanded.insert(0);
+        super::super::toggle_transcript_item(&mut state, 0);
         let mut terminal = Terminal::new(TestBackend::new(width + 6, 50)).unwrap();
         terminal
             .draw(|frame| super::super::render::draw(frame, &mut state))
             .unwrap();
-        let viewport = state.selection.viewport;
-        let buffer = terminal.backend().buffer();
-        let mut found = false;
-        for y in viewport.y..viewport.bottom() {
-            for x in 0..buffer.area.width {
-                let cell = &buffer[(x, y)];
-                if cell.fg == THEME.md_rule && cell.symbol() == "─" {
-                    found = true;
-                    assert!(x >= viewport.x + 2 && x < viewport.right() - 2);
-                    assert_eq!(buffer[(viewport.x, y)].symbol(), "│");
-                    assert_eq!(buffer[(viewport.right() - 1, y)].symbol(), "│");
-                    assert_eq!(buffer[(viewport.x, y)].fg, THEME.tool_border);
-                }
-            }
-        }
-
-        assert!(found, "width {width}");
+        let dialog = state.info_dialog.as_ref().unwrap();
+        assert!(dialog.content.contains("fn orbit()"));
+        assert!(!dialog.content.contains('╭'));
     }
 }
 

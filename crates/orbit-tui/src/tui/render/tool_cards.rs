@@ -1,6 +1,4 @@
 //! Tool titles, result bodies and their shared frame.
-use std::ops::Range;
-
 use ratatui::{
     style::{Color, Style},
     text::{Line, Span},
@@ -57,7 +55,7 @@ pub(in crate::tui) fn read_file_summary(arguments: &str, output: &str) -> String
 fn tool_details(row: &ToolRow, expanded: bool, width: u16) -> Vec<LinkedLine> {
     let mut lines = Vec::new();
     let (marker, color) = match row.status {
-        ToolStatus::Running => (icons::LOADING, TOOL_RUNNING),
+        ToolStatus::Running | ToolStatus::Background => (icons::LOADING, TOOL_RUNNING),
         ToolStatus::Finished => (icons::CHECK, TOOL_FINISHED),
         ToolStatus::Failed => (icons::CLOSE, TOOL_FAILED),
     };
@@ -206,16 +204,6 @@ pub(in crate::tui) fn tool_card_with_links(
     expanded: bool,
     width: u16,
 ) -> Vec<LinkedLine> {
-    tool_card_layout(row, expanded, width).lines
-}
-
-pub(in crate::tui) struct ToolCard {
-    pub lines: Vec<LinkedLine>,
-    pub header: Range<usize>,
-    pub body: Range<usize>,
-}
-
-pub(in crate::tui) fn tool_card_layout(row: &ToolRow, expanded: bool, width: u16) -> ToolCard {
     let width = if width == u16::MAX { 120 } else { width };
 
     if !expanded || width < 10 {
@@ -228,36 +216,25 @@ pub(in crate::tui) fn tool_card_layout(row: &ToolRow, expanded: bool, width: u16
                 .map(|line| line.framed(vec![Span::raw("  ")], vec![]))
                 .collect()
         };
-        return ToolCard {
-            header: 0..lines.len(),
-            body: 0..0,
-            lines,
-        };
+        return lines;
     }
 
     let inner_width = width - 4;
     let mut lines = vec![tool_border_line(width, ('╭', '╮'))];
     let title = tool_title_with_links(row, true, inner_width);
-    let header = lines.len()..lines.len() + title.len();
     lines.extend(
         title
             .into_iter()
             .map(|line| tool_frame_line(line, width)),
     );
     lines.push(tool_frame_line(LinkedLine::chrome(Line::default()), width));
-    let start = lines.len();
     lines.extend(
         tool_body_with_links(row, inner_width)
             .into_iter()
             .map(|line| tool_frame_line(line, width)),
     );
-    let body = start..lines.len();
     lines.push(tool_border_line(width, ('╰', '╯')));
-    ToolCard {
-        lines,
-        header,
-        body,
-    }
+    lines
 }
 
 pub(in crate::tui) fn tool_title_with_links(
@@ -268,15 +245,6 @@ pub(in crate::tui) fn tool_title_with_links(
     tool_title_with_summary(row, expanded, width, None)
 }
 
-pub(in crate::tui) fn tool_group_title_with_links(row: &ToolRow, width: u16) -> Vec<LinkedLine> {
-    tool_title_with_summary(
-        row,
-        false,
-        width,
-        Some(tool_display::group_call_summary(row)),
-    )
-}
-
 fn tool_title_with_summary(
     row: &ToolRow,
     expanded: bool,
@@ -284,7 +252,7 @@ fn tool_title_with_summary(
     summary: Option<String>,
 ) -> Vec<LinkedLine> {
     let color = match row.status {
-        ToolStatus::Running => TOOL_RUNNING,
+        ToolStatus::Running | ToolStatus::Background => TOOL_RUNNING,
         ToolStatus::Finished => TOOL_FINISHED,
         ToolStatus::Failed => TOOL_FAILED,
     };

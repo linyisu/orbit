@@ -105,6 +105,8 @@ fn overview_preview_has_readable_evidence_and_expand_controls() {
 
 fn row(name: &str, output: Value) -> ToolRow {
     ToolRow {
+        changes: Vec::new(),
+        purpose: None,
         id: "display-test".into(),
         name: name.into(),
         arguments: "{}".into(),
@@ -139,8 +141,17 @@ fn agent_read_summaries_show_task_and_content_instead_of_internal_cursors() {
 
     tool.arguments = args.clone();
     let original = tool.output.clone();
-    assert_eq!(group_target_summary(&tool, 100), "审查 Orbit 渲染逻辑");
-    assert_eq!(group_call_summary(&tool), "最终结果 · ## 修复中文字符边界");
+    assert_eq!(
+        agent_read_target(&serde_json::from_str(&tool.output).unwrap()),
+        "审查 Orbit 渲染逻辑"
+    );
+    assert_eq!(
+        agent_read_detail(
+            &serde_json::from_str(&tool.arguments).unwrap(),
+            &serde_json::from_str(&tool.output).unwrap_or_default()
+        ),
+        "最终结果 · ## 修复中文字符边界"
+    );
     let summary = tool_summary(&tool.name, &tool.arguments, &tool.output);
     assert_eq!(
         summary,
@@ -210,7 +221,13 @@ fn agent_read_summaries_show_task_and_content_instead_of_internal_cursors() {
             "total_characters": content.chars().count()
         })
         .to_string();
-        assert_eq!(group_call_summary(&tool), expected);
+        assert_eq!(
+            agent_read_detail(
+                &serde_json::from_str(&tool.arguments).unwrap(),
+                &serde_json::from_str(&tool.output).unwrap_or_default()
+            ),
+            expected
+        );
     }
 
     tool.output = json!({
@@ -218,7 +235,10 @@ fn agent_read_summaries_show_task_and_content_instead_of_internal_cursors() {
         "message_id": 5_601
     })
     .to_string();
-    let summary = group_call_summary(&tool);
+    let summary = agent_read_detail(
+        &serde_json::from_str(&tool.arguments).unwrap(),
+        &serde_json::from_str(&tool.output).unwrap_or_default(),
+    );
     assert!(summary.starts_with("执行记录片段 · 读取了"));
     assert!(!summary.contains("tool_calls"));
     tool.output = json!({
@@ -227,9 +247,21 @@ fn agent_read_summaries_show_task_and_content_instead_of_internal_cursors() {
         "status": "running"
     })
     .to_string();
-    assert_eq!(group_call_summary(&tool), "结果尚未生成");
+    assert_eq!(
+        agent_read_detail(
+            &serde_json::from_str(&tool.arguments).unwrap(),
+            &serde_json::from_str(&tool.output).unwrap_or_default()
+        ),
+        "结果尚未生成"
+    );
     tool.output.clear();
-    assert_eq!(group_call_summary(&tool), "读取中");
+    assert_eq!(
+        agent_read_detail(
+            &serde_json::from_str(&tool.arguments).unwrap(),
+            &serde_json::from_str(&tool.output).unwrap_or_default()
+        ),
+        "读取中"
+    );
 }
 
 #[test]

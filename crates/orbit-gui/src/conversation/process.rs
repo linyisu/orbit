@@ -1,5 +1,4 @@
-//! Keep execution visible through intermediate prose and tool calls. Only a
-//! completed answer collapses it automatically; explicit inspection wins.
+//! Follow active tool batches unless the user explicitly chooses a disclosure state.
 pub(super) struct ProcessDisclosure {
     expanded: bool,
     manual: bool,
@@ -24,9 +23,9 @@ impl ProcessDisclosure {
         self.manual = true;
     }
 
-    pub(super) fn sync(&mut self, completed_answer: bool) {
+    pub(super) fn sync(&mut self, batch_finished: bool) {
         if !self.manual {
-            self.expanded = !completed_answer;
+            self.expanded = !batch_finished;
         }
     }
 }
@@ -43,7 +42,7 @@ mod tests {
             .is_some()
         {
             let turn = transcript.turns.last().unwrap();
-            disclosure.sync(turn.completed && turn.conclusion().is_some());
+            disclosure.sync(!turn.tools_running());
         }
     }
 
@@ -125,12 +124,19 @@ mod tests {
     }
 
     #[test]
-    fn commentary_never_collapses_execution_before_the_run_finishes() {
+    fn only_running_tools_expand_the_list_automatically() {
         let mut transcript = Transcript::default();
         let mut disclosure = ProcessDisclosure::default();
         for event in commentary_and_tools() {
             apply(&mut transcript, &mut disclosure, event);
-            assert!(disclosure.expanded());
+            assert_eq!(
+                disclosure.expanded(),
+                transcript
+                    .turns
+                    .last()
+                    .unwrap()
+                    .tools_running()
+            );
         }
         apply(
             &mut transcript,
@@ -172,7 +178,7 @@ mod tests {
     }
 
     #[test]
-    fn failed_or_cancelled_execution_keeps_partial_answers_and_details_visible() {
+    fn failed_or_cancelled_execution_closes_the_automatic_list() {
         for status in ["failed", "cancelled"] {
             let mut transcript = Transcript::default();
             let mut disclosure = ProcessDisclosure::default();
@@ -186,12 +192,12 @@ mod tests {
             {
                 apply(&mut transcript, &mut disclosure, event);
             }
-            assert!(disclosure.expanded());
+            assert!(!disclosure.expanded());
         }
     }
 
     #[test]
-    fn completed_execution_without_an_answer_keeps_its_details_visible() {
+    fn completed_execution_without_tools_keeps_the_list_closed() {
         let mut transcript = Transcript::default();
         let mut disclosure = ProcessDisclosure::default();
         for event in [
@@ -215,6 +221,6 @@ mod tests {
         ] {
             apply(&mut transcript, &mut disclosure, event);
         }
-        assert!(disclosure.expanded());
+        assert!(!disclosure.expanded());
     }
 }

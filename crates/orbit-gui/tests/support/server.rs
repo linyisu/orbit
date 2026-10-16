@@ -12,6 +12,7 @@ mod side_questions;
 mod skill_import;
 mod subagents;
 mod tool_output;
+mod tool_regions;
 mod user_input_history;
 use base64::Engine;
 use files::{execute as fixture_files, read_file as fixture_read_file};
@@ -796,12 +797,16 @@ fn main() -> anyhow::Result<()> {
                 let hold_inspector = pending
                     .front()
                     .is_some_and(|event| inspector::held(&workspace, event));
+                let hold_regions = pending
+                    .front()
+                    .is_some_and(|event| tool_regions::held(&workspace, event));
                 if approvals.is_empty()
                     && !(session == "plan-review" && planning["plan"]["status"] == "review")
                     && !hold_command
                     && !hold_disclosure
                     && !hold_disclosure_flow
                     && !hold_inspector
+                    && !hold_regions
                     && !std::path::Path::new(&workspace)
                         .join(".fixture-input-queue-hold")
                         .exists()
@@ -1101,6 +1106,9 @@ fn main() -> anyhow::Result<()> {
                     }
                     if prompt.lines().next() == Some("disclosure-flow") {
                         pending = disclosures::flow_events();
+                    }
+                    if prompt == "tool-regions" {
+                        pending = tool_regions::events();
                     }
                     if prompt == "sidebar" {
                         pending = (0..80)
