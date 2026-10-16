@@ -98,7 +98,7 @@ pub(crate) fn encode(
                         "type": "function_call",
                         "call_id": call.id,
                         "name": call.function.name,
-                        "arguments": call.function.arguments
+                        "arguments": call.model_arguments_text()
                     }));
                 }
             }

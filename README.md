@@ -46,6 +46,7 @@ TUI / GUI → client → server → service → agent / tools / store
 | [orbit-service](crates/orbit-service/README.md) | 会话与任务协调 |
 | [orbit-server](crates/orbit-server/README.md) | 无界面服务入口 |
 | [orbit-agent](crates/orbit-agent/README.md) | 模型与工具执行循环 |
+| [orbit-tool-macros](crates/orbit-tool-macros/README.md) | 具名参数工具的编译期适配 |
 | [orbit-model](crates/orbit-model/README.md) | 模型协议与流式适配 |
 | [orbit-auth](crates/orbit-auth/README.md) | 凭据与 OAuth |
 | [orbit-config](crates/orbit-config/README.md) | 配置与模型目录 |

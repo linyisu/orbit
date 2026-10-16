@@ -140,6 +140,22 @@ pub struct ToolContext {
     pub supports_vision: bool,
 }
 
+/// Builds the model contract from the same typed arguments used by the executor.
+/// Runtime validation still owns cross-field constraints and resource authorization.
+pub fn typed_definition<T: schemars::JsonSchema>(name: &str, description: &str) -> ToolDefinition {
+    let mut settings = schemars::generate::SchemaSettings::draft07();
+    settings.inline_subschemas = true;
+    let mut parameters = settings
+        .into_generator()
+        .into_root_schema_for::<T>()
+        .to_value();
+    if let Some(schema) = parameters.as_object_mut() {
+        schema.remove("$schema");
+        schema.remove("title");
+    }
+    ToolDefinition::function(name, description, parameters)
+}
+
 /// A tool validates its arguments and reports failures without panicking.
 /// Cancellation must not claim that an already committed operation was undone.
 /// The registry applies policy before calling this interface; direct callers own authorization.
@@ -295,7 +311,11 @@ impl ToolRegistry {
                     .as_ref()
                     .is_none_or(|p| p.visible(tool.capabilities()))
             })
-            .map(|tool| tool.definition())
+            .map(|tool| {
+                let mut definition = tool.definition();
+                orbit_model::tool_purpose::advertise(&mut definition);
+                definition
+            })
             .collect::<Vec<_>>();
 
         definitions.sort_by(|left, right| {
@@ -311,6 +331,15 @@ impl ToolRegistry {
         self.tools.contains_key(name)
     }
 
+    /// Separates model intent only for tools whose schema advertises this extension.
+    pub fn normalize_call(&self, call: &mut ToolCall) {
+        if let Some(tool) = self.tools.get(&call.function.name)
+            && orbit_model::tool_purpose::advertise(&mut tool.definition())
+        {
+            orbit_model::tool_purpose::extract(call);
+        }
+    }
+
     pub fn execute(&self, call: ToolCall, cancellation: CancellationToken) -> ToolFuture<'static> {
         self.execute_with_context(
             call,
@@ -323,10 +352,11 @@ impl ToolRegistry {
 
     pub fn execute_with_context(
         &self,
-        call: ToolCall,
+        mut call: ToolCall,
         cancellation: CancellationToken,
         context: ToolContext,
     ) -> ToolFuture<'static> {
+        self.normalize_call(&mut call);
         if call.id.trim().is_empty() {
             return Box::pin(async { Err(ToolError::EmptyCallId) });
         }
@@ -452,6 +482,7 @@ mod tests {
 
     fn call(id: &str, name: &str, arguments: &str) -> ToolCall {
         ToolCall {
+            purpose: None,
             metadata: None,
             id: id.to_owned(),
             kind: "function".to_owned(),

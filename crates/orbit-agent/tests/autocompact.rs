@@ -455,7 +455,7 @@ fn never_splits_pending_tool_batches_or_truncates_an_uncompressible_request() {
 async fn automatic_compaction_runs_between_tool_batches_in_both_execution_paths() {
     for streaming in [false, true] {
         let mut history = long_task();
-        history[3] = ChatMessage::tool("old", "x".repeat(12_000));
+        history[3] = ChatMessage::tool("old", "x".repeat(10_000));
         history.truncate(4);
         let first = ChatCompletion {
             message: call("new"),

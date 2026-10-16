@@ -18,3 +18,11 @@ pub mod runtime_state;
 pub mod tool;
 
 pub use agent::{Agent, AgentConfig, AgentResult, model_messages};
+pub use orbit_tool_macros::tool;
+
+/// Implementation dependencies of the tool attribute; not an application-facing API.
+#[doc(hidden)]
+pub mod __private {
+    pub use orbit_model::types::{ToolCall, ToolDefinition};
+    pub use serde_json::from_str;
+}

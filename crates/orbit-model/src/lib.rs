@@ -9,6 +9,7 @@ pub mod openai;
 mod reasoning;
 pub mod runtime_context;
 pub mod stream;
+pub mod tool_purpose;
 pub mod types;
 
 pub mod account_catalog;

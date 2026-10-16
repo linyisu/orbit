@@ -53,6 +53,7 @@ pub fn embed_workspace_server() {
         "orbit-runtime",
         "orbit-store",
         "orbit-tools",
+        "orbit-tool-macros",
     ] {
         println!(
             "cargo:rerun-if-changed={}",

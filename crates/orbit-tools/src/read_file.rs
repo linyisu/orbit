@@ -4,8 +4,7 @@ use std::{
     path::Path,
 };
 
-use orbit_agent::tool::{Tool, ToolError, ToolFuture, ToolOutput};
-use orbit_model::types::{ToolCall, ToolDefinition};
+use orbit_agent::tool::{Tool, ToolError, ToolOutput};
 use orbit_runtime::filesystem::Workspace;
 use serde::Deserialize;
 use serde_json::json;
@@ -16,25 +15,31 @@ use crate::limits::{DEFAULT_FILE_SCAN_BYTES, MAX_TEXT_OUTPUT_BYTES};
 const DEFAULT_PAGE_LINES: usize = 200;
 const MAX_PAGE_LINES: usize = 500;
 
-#[derive(Deserialize)]
+#[derive(Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct ReadArguments {
+    /// Path relative to the workspace root, or an outside path granted via request_capability.
     path: String,
     #[serde(default)]
+    /// Pass next_cursor unchanged to resume this file version.
+    #[schemars(with = "Cursor")]
     cursor: Option<Cursor>,
     #[serde(default = "first_line")]
+    #[schemars(range(min = 1))]
     start_line: usize,
     #[serde(default)]
     start_char: usize,
     #[serde(default = "default_limit")]
+    #[schemars(range(min = 1, max = MAX_PAGE_LINES))]
     max_lines: usize,
 }
 
-#[derive(serde::Serialize, Deserialize)]
+#[derive(serde::Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct Cursor {
     version: String,
     offset: u64,
+    #[schemars(range(min = 1))]
     line: usize,
     character: usize,
 }
@@ -84,105 +89,46 @@ impl Tool for ReadFile {
         orbit_agent::tool::ToolCapabilities::READ
     }
 
-    fn definition(&self) -> ToolDefinition {
-        ToolDefinition::function(
-            "read_file",
-            "Read a UTF-8 file inside the workspace (or outside path granted via \
-                request_capability). Use a relative path or granted outside path, and optional \
-                1-based start_line/max_lines. If a long line is truncated, resume with the \
-                returned next_start_line and next_start_char (Unicode character offset within \
-                that line). Returns JSON with numbered lines. Protected configuration files are \
-                rejected. Reads incrementally with a configurable scan budget per call (default \
-                64 MiB) and 32 KiB content limit. Resume using next_cursor to avoid rescanning; \
-                cursors are rejected if the file changed. total_lines is null until EOF is \
-                reached.",
-            json!({
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "Path relative to the workspace root, or an outside path \
-                            granted via request_capability"
-                    },
-                    "cursor": {
-                        "type": "object",
-                        "description": "Pass next_cursor unchanged to resume this file version",
-                        "properties": {
-                            "version": {
-                                "type": "string"
-                            },
-                            "offset": {
-                                "type": "integer",
-                                "minimum": 0
-                            },
-                            "line": {
-                                "type": "integer",
-                                "minimum": 1
-                            },
-                            "character": {
-                                "type": "integer",
-                                "minimum": 0
-                            }
-                        },
-                        "required": ["version", "offset", "line", "character"],
-                        "additionalProperties": false
-                    },
-                    "start_line": {
-                        "type": "integer",
-                        "minimum": 1,
-                        "default": 1
-                    },
-                    "start_char": {
-                        "type": "integer",
-                        "minimum": 0,
-                        "default": 0
-                    },
-                    "max_lines": {
-                        "type": "integer",
-                        "minimum": 1,
-                        "maximum": MAX_PAGE_LINES,
-                        "default": DEFAULT_PAGE_LINES
-                    }
-                },
-                "required": ["path"],
-                "additionalProperties": false
-            }),
-        )
-    }
+    /// Read a UTF-8 file inside the workspace (or outside path granted via request_capability).
+    /// Use a relative path or granted outside path, and optional 1-based start_line/max_lines.
+    /// If a long line is truncated, resume with the returned next_start_line and
+    /// next_start_char (Unicode character offset within that line). Returns JSON with numbered
+    /// lines. Protected configuration files are rejected. Reads incrementally with a
+    /// configurable scan budget per call (default 64 MiB) and 32 KiB content limit. Resume
+    /// using next_cursor to avoid rescanning; cursors are rejected if the file changed.
+    /// total_lines is null until EOF is reached.
+    #[orbit_agent::tool(name = "read_file")]
+    async fn execute(
+        &self,
+        arguments: ReadArguments,
+        cancellation: CancellationToken,
+    ) -> Result<ToolOutput, ToolError> {
+        if arguments.path.trim().is_empty()
+            || arguments.start_line == 0
+            || !(1..=MAX_PAGE_LINES).contains(&arguments.max_lines)
+        {
+            return Err(invalid(
+                "path must be nonempty, start_line >= 1, and max_lines between 1 and 500",
+            ));
+        }
 
-    fn execute<'a>(&'a self, call: ToolCall, cancellation: CancellationToken) -> ToolFuture<'a> {
-        Box::pin(async move {
-            let arguments: ReadArguments = serde_json::from_str(&call.function.arguments)
-                .map_err(|error| invalid(error.to_string()))?;
+        if cancellation.is_cancelled() {
+            return Err(ToolError::Cancelled);
+        }
 
-            if arguments.path.trim().is_empty()
-                || arguments.start_line == 0
-                || !(1..=MAX_PAGE_LINES).contains(&arguments.max_lines)
-            {
-                return Err(invalid(
-                    "path must be nonempty, start_line >= 1, and max_lines between 1 and 500",
-                ));
+        let workspace = self.workspace.clone();
+        let token = cancellation.clone();
+        let budget = self.scan_budget;
+        let path = arguments.path.clone();
+        let task = tokio::task::spawn_blocking(move || read(workspace, arguments, token, budget));
+
+        tokio::select! {
+            _ = cancellation.cancelled() => Err(ToolError::Cancelled),
+            result = task => {
+                result.map_err(|error| ToolError::ExecutionFailed(error.to_string()))?
             }
-
-            if cancellation.is_cancelled() {
-                return Err(ToolError::Cancelled);
-            }
-
-            let workspace = self.workspace.clone();
-            let token = cancellation.clone();
-            let budget = self.scan_budget;
-            let path = arguments.path.clone();
-            let task =
-                tokio::task::spawn_blocking(move || read(workspace, arguments, token, budget));
-
-            tokio::select! {
-                _ = cancellation.cancelled() => Err(ToolError::Cancelled),
-                result = task => {
-                    result.map_err(|error| ToolError::ExecutionFailed(error.to_string()))?
-                }
-            }
-            .map(|content| ToolOutput::text(content).with_read(path))
-        })
+        }
+        .map(|content| ToolOutput::text(content).with_read(path))
     }
 }
 

@@ -340,6 +340,9 @@ impl Attachment {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ToolCall {
+    /// Brief model-supplied intent, never execution or authorization evidence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub purpose: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metadata: Option<ToolCallMetadata>,
     pub id: String,
@@ -369,6 +372,7 @@ impl ToolCall {
     pub fn function(id: impl Into<String>, name: impl Into<String>, arguments: Value) -> Self {
         Self {
             metadata: None,
+            purpose: None,
             id: id.into(),
             kind: "function".to_owned(),
             function: FunctionCall {

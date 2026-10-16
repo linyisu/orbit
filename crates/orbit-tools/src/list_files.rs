@@ -3,8 +3,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use orbit_agent::tool::{Tool, ToolError, ToolFuture, ToolOutput};
-use orbit_model::types::{ToolCall, ToolDefinition};
+use orbit_agent::tool::{Tool, ToolError, ToolOutput};
 use orbit_runtime::filesystem::{Workspace, WorkspaceError};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -16,12 +15,16 @@ const DEFAULT_PAGE_ENTRIES: usize = 200;
 const MAX_PAGE_ENTRIES: usize = 1_000;
 const MAX_DEPTH: usize = 8;
 
-#[derive(Deserialize)]
+#[derive(Deserialize, schemars::JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 struct Arguments {
+    /// Directory path, relative to the workspace or explicitly granted outside it.
     path: String,
+    #[schemars(range(min = 1, max = MAX_DEPTH))]
     depth: usize,
+    #[schemars(range(max = MAX_DIRECTORY_ENTRIES))]
     offset: usize,
+    #[schemars(range(min = 1, max = MAX_PAGE_ENTRIES))]
     limit: usize,
     include_hidden: bool,
 }
@@ -53,86 +56,44 @@ impl Tool for ListFiles {
         orbit_agent::tool::ToolCapabilities::READ
     }
 
-    fn definition(&self) -> ToolDefinition {
-        ToolDefinition::function(
-            "list_files",
-            "Browse files and directories in the workspace (or outside paths granted via \
-                request_capability) without running a shell. Paths are relative to the workspace \
-                root, or absolute paths granted via request_capability. Defaults to one directory \
-                level; depth 1–8, deterministic breadth-first ordering, paginated with \
-                offset/next_offset. Hidden entries are omitted by default; include_hidden \
-                includes hidden entries but never protected paths. Generated directories are \
-                listed but not recursively traversed; select their path explicitly to browse \
-                them. Does not apply .gitignore. Symlinks and special files are omitted. Results \
-                are bounded to 32 KiB and 20000 examined entries; narrow path if scan_truncated \
-                is true.",
-            json!({
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "default": ".",
-                        "description": "Directory path (workspace-relative, or outside path \
-                            granted via request_capability)"
-                    },
-                    "depth": {
-                        "type": "integer",
-                        "minimum": 1,
-                        "maximum": MAX_DEPTH,
-                        "default": 1
-                    },
-                    "offset": {
-                        "type": "integer",
-                        "minimum": 0,
-                        "maximum": MAX_DIRECTORY_ENTRIES,
-                        "default": 0
-                    },
-                    "limit": {
-                        "type": "integer",
-                        "minimum": 1,
-                        "maximum": MAX_PAGE_ENTRIES,
-                        "default": DEFAULT_PAGE_ENTRIES
-                    },
-                    "include_hidden": {
-                        "type": "boolean",
-                        "default": false
-                    }
-                },
-                "required": [],
-                "additionalProperties": false
-            }),
-        )
-    }
+    /// Browse files and directories in the workspace (or outside paths granted via
+    /// request_capability) without running a shell. Paths are relative to the workspace root,
+    /// or absolute paths granted via request_capability. Defaults to one directory level; depth
+    /// 1–8, deterministic breadth-first ordering, paginated with offset/next_offset. Hidden
+    /// entries are omitted by default; include_hidden includes hidden entries but never
+    /// protected paths. Generated directories are listed but not recursively traversed; select
+    /// their path explicitly to browse them. Does not apply .gitignore. Symlinks and special
+    /// files are omitted. Results are bounded to 32 KiB and 20000 examined entries; narrow path
+    /// if scan_truncated is true.
+    #[orbit_agent::tool(name = "list_files")]
+    async fn execute(
+        &self,
+        arguments: Arguments,
+        cancellation: CancellationToken,
+    ) -> Result<ToolOutput, ToolError> {
+        if !(1..=MAX_DEPTH).contains(&arguments.depth)
+            || !(1..=MAX_PAGE_ENTRIES).contains(&arguments.limit)
+            || arguments.offset > MAX_DIRECTORY_ENTRIES
+            || arguments.path.trim().is_empty()
+        {
+            return Err(invalid(
+                "path must be nonempty; depth 1–8, limit 1–1000, offset 0–20000",
+            ));
+        }
 
-    fn execute<'a>(&'a self, call: ToolCall, cancellation: CancellationToken) -> ToolFuture<'a> {
-        Box::pin(async move {
-            let arguments: Arguments = serde_json::from_str(&call.function.arguments)
-                .map_err(|error| invalid(error.to_string()))?;
+        if cancellation.is_cancelled() {
+            return Err(ToolError::Cancelled);
+        }
 
-            if !(1..=MAX_DEPTH).contains(&arguments.depth)
-                || !(1..=MAX_PAGE_ENTRIES).contains(&arguments.limit)
-                || arguments.offset > MAX_DIRECTORY_ENTRIES
-                || arguments.path.trim().is_empty()
-            {
-                return Err(invalid(
-                    "path must be nonempty; depth 1–8, limit 1–1000, offset 0–20000",
-                ));
-            }
+        let workspace = self.workspace.clone();
+        let token = cancellation.clone();
+        let task = tokio::task::spawn_blocking(move || list(workspace, arguments, token));
 
-            if cancellation.is_cancelled() {
-                return Err(ToolError::Cancelled);
-            }
-
-            let workspace = self.workspace.clone();
-            let token = cancellation.clone();
-            let task = tokio::task::spawn_blocking(move || list(workspace, arguments, token));
-
-            tokio::select! {
-                _ = cancellation.cancelled() => Err(ToolError::Cancelled),
-                result = task => result.map_err(failed)?,
-            }
-            .map(ToolOutput::text)
-        })
+        tokio::select! {
+            _ = cancellation.cancelled() => Err(ToolError::Cancelled),
+            result = task => result.map_err(failed)?,
+        }
+        .map(ToolOutput::text)
     }
 }
 

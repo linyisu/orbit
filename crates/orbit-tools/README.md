@@ -4,6 +4,11 @@ Agent 的文件、命令、网络、文档与 MCP 工具。工具实现 `orbit-a
 
 ## 工具目录
 
+`read_file`、`list_files` 和 `read_command_output` 使用具名参数结构体及
+`#[orbit_agent::tool]`。schema 随类型生成，数值约束使用所属模块的常量；
+执行时仍校验跨字段条件和资源边界。其他工具及动态 MCP 沿用 `Tool` 接口，迁移时
+必须同时保留默认值、错误语义、能力声明与取消行为。
+
 | 类别 | 入口 |
 | --- | --- |
 | 文件浏览与搜索 | [read_file](src/read_file.rs)、[list_files](src/list_files.rs)、[search_text](src/search_text.rs) |

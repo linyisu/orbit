@@ -1,7 +1,6 @@
 use std::{io::Read, path::PathBuf};
 
-use orbit_agent::tool::{Tool, ToolError, ToolFuture, ToolOutput};
-use orbit_model::types::{ToolCall, ToolDefinition};
+use orbit_agent::tool::{Tool, ToolError, ToolOutput};
 use orbit_runtime::execution::{MAX_RETAINED_OUTPUT_PER_STREAM, output::CommandOutputs};
 use serde::Deserialize;
 use serde_json::json;
@@ -9,12 +8,17 @@ use tokio_util::sync::CancellationToken;
 
 use crate::limits::MAX_TEXT_OUTPUT_BYTES;
 
-#[derive(Deserialize)]
+#[derive(Deserialize, schemars::JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 struct Arguments {
+    /// Opaque output_id from run_command.
+    #[schemars(required)]
     output_id: String,
     stream: Stream,
+    /// Zero-based byte offset.
+    #[schemars(range(max = MAX_RETAINED_OUTPUT_PER_STREAM))]
     offset: u64,
+    #[schemars(range(min = 1, max = MAX_TEXT_OUTPUT_BYTES))]
     max_bytes: usize,
 }
 
@@ -29,7 +33,7 @@ impl Default for Arguments {
     }
 }
 
-#[derive(Clone, Copy, Deserialize)]
+#[derive(Clone, Copy, serde::Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "lowercase")]
 enum Stream {
     Stdout,
@@ -61,78 +65,42 @@ impl Tool for ReadCommandOutput {
         orbit_agent::tool::ToolCapabilities::READ
     }
 
-    fn definition(&self) -> ToolDefinition {
-        ToolDefinition::function(
-            "read_command_output",
-            "Read one page of a run_command stdout or stderr log from the CURRENT task. \
-                run_command returns an opaque output_id; never guess file paths. offset and \
-                max_bytes are byte counts; use next_offset to continue across UTF-8 boundaries. \
-                Logs are private temporary files under /tmp, capped at 16 MiB per stream and 128 \
-                MiB per task, and may be evicted when newer logs need space. They are deleted \
-                when the task finishes, fails or is cancelled, and are unavailable after restart \
-                or in a later task. Do not retry expired IDs; use the bounded result already in \
-                history or ask before rerunning a command.",
-            json!({
-                "type": "object",
-                "properties": {
-                    "output_id": {
-                        "type": "string",
-                        "description": "Opaque output_id from run_command"
-                    },
-                    "stream": {
-                        "type": "string",
-                        "enum": ["stdout", "stderr"],
-                        "default": "stdout"
-                    },
-                    "offset": {
-                        "type": "integer",
-                        "minimum": 0,
-                        "maximum": MAX_RETAINED_OUTPUT_PER_STREAM,
-                        "default": 0,
-                        "description": "Zero-based byte offset"
-                    },
-                    "max_bytes": {
-                        "type": "integer",
-                        "minimum": 1,
-                        "maximum": MAX_TEXT_OUTPUT_BYTES,
-                        "default": MAX_TEXT_OUTPUT_BYTES
-                    }
-                },
-                "required": ["output_id"],
-                "additionalProperties": false
-            }),
-        )
-    }
+    /// Read one page of a run_command stdout or stderr log from the CURRENT task. run_command
+    /// returns an opaque output_id; never guess file paths. offset and max_bytes are byte
+    /// counts; use next_offset to continue across UTF-8 boundaries. Logs are private temporary
+    /// files under /tmp, capped at 16 MiB per stream and 128 MiB per task, and may be evicted
+    /// when newer logs need space. They are deleted when the task finishes, fails or is
+    /// cancelled, and are unavailable after restart or in a later task. Do not retry expired
+    /// IDs; use the bounded result already in history or ask before rerunning a command.
+    #[orbit_agent::tool(name = "read_command_output")]
+    async fn execute(
+        &self,
+        arguments: Arguments,
+        cancellation: CancellationToken,
+    ) -> Result<ToolOutput, ToolError> {
+        validate(&arguments)?;
 
-    fn execute<'a>(&'a self, call: ToolCall, cancellation: CancellationToken) -> ToolFuture<'a> {
-        Box::pin(async move {
-            let arguments: Arguments = serde_json::from_str(&call.function.arguments)
-                .map_err(|error| invalid(error.to_string()))?;
-            validate(&arguments)?;
+        if cancellation.is_cancelled() {
+            return Err(ToolError::Cancelled);
+        }
 
-            if cancellation.is_cancelled() {
-                return Err(ToolError::Cancelled);
-            }
-
-            let lease = self.outputs.lease().ok_or_else(|| {
-                failed(
-                    "command output is unavailable or expired; raw logs exist only during their \
+        let lease = self.outputs.lease().ok_or_else(|| {
+            failed(
+                "command output is unavailable or expired; raw logs exist only during their \
                     originating task",
-                )
-            })?;
-            let token = cancellation.clone();
-            let task = tokio::task::spawn_blocking(move || {
-                read(lease.path().to_owned(), arguments, token)
-            });
+            )
+        })?;
+        let token = cancellation.clone();
+        let task =
+            tokio::task::spawn_blocking(move || read(lease.path().to_owned(), arguments, token));
 
-            tokio::select! {
-                _ = cancellation.cancelled() => Err(ToolError::Cancelled),
-                result = task => {
-                    result.map_err(|error| ToolError::ExecutionFailed(error.to_string()))?
-                }
+        tokio::select! {
+            _ = cancellation.cancelled() => Err(ToolError::Cancelled),
+            result = task => {
+                result.map_err(|error| ToolError::ExecutionFailed(error.to_string()))?
             }
-            .map(ToolOutput::text)
-        })
+        }
+        .map(ToolOutput::text)
     }
 }
 
@@ -270,6 +238,7 @@ fn failed(error: impl std::fmt::Display) -> ToolError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use orbit_model::types::ToolCall;
 
     #[tokio::test]
     async fn temporary_output_api_is_task_scoped_and_does_not_reopen_expired_ids() {

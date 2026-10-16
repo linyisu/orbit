@@ -122,9 +122,7 @@ pub(crate) fn encode(
                         "type": "tool_use",
                         "id": call.id,
                         "name": call.function.name,
-                        "input": serde_json::from_str::<Value>(
-                            &call.function.arguments
-                        )
+                        "input": call.model_arguments()
                         .unwrap_or_else(|_| json!({}))
                     })
                 }));

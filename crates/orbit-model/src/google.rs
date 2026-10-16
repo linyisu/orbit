@@ -71,7 +71,7 @@ pub(crate) fn encode(model: &str, request: ChatRequest) -> Result<(Value, Header
                     }));
                 }
                 for call in tool_calls {
-                    let arguments: Value = serde_json::from_str(&call.function.arguments)?;
+                    let arguments = call.model_arguments()?;
                     let metadata = call
                         .metadata
                         .as_ref()

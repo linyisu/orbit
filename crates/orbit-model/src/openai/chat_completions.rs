@@ -87,6 +87,8 @@ pub(crate) fn encode(
                 let calls = tool_calls
                     .into_iter()
                     .map(|mut call| {
+                        call.function.arguments = call.model_arguments_text();
+                        call.purpose = None;
                         call.metadata = None;
                         call
                     })

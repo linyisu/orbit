@@ -86,6 +86,7 @@ impl StreamAccumulator {
             .calls
             .entry(delta.index)
             .or_insert_with(|| ToolCall {
+                purpose: None,
                 metadata: None,
                 id: String::new(),
                 kind: "function".into(),

@@ -7232,6 +7232,8 @@ dependencies = [
  "futures-util",
  "orbit-model",
  "orbit-runtime",
+ "orbit-tool-macros",
+ "schemars",
  "serde",
  "serde_json",
  "sha2 0.11.0",
@@ -7485,6 +7487,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "orbit-tool-macros"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "orbit-tools"
 version = "0.1.0"
 dependencies = [
@@ -7508,6 +7519,7 @@ dependencies = [
  "regex",
  "reqwest",
  "rustix 1.1.4",
+ "schemars",
  "serde",
  "serde_json",
  "sha2 0.11.0",

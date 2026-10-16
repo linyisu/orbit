@@ -518,7 +518,12 @@ where
                 }
             }
             check_finish_reason(completion.finish_reason.as_deref())?;
-            let assistant = completion.message.clone();
+            let mut assistant = completion.message.clone();
+            if let ChatMessage::Assistant { tool_calls, .. } = &mut assistant {
+                for call in tool_calls {
+                    self.tools.normalize_call(call);
+                }
+            }
             let calls = match &assistant {
                 ChatMessage::Assistant { tool_calls, .. } => tool_calls.clone(),
                 _ => Vec::new(),

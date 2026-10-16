@@ -349,6 +349,7 @@ fn assistant_tool_call(id: &str, name: &str, arguments: &str) -> ChatCompletion 
         message: ChatMessage::Assistant {
             content: None,
             tool_calls: vec![ToolCall {
+                purpose: None,
                 metadata: None,
                 id: id.to_owned(),
                 kind: "function".to_owned(),
@@ -1464,6 +1465,7 @@ async fn max_turns_stops_an_unfinished_loop() {
 #[tokio::test]
 async fn max_tool_calls_stops_tool_execution() {
     let first = ToolCall {
+        purpose: None,
         metadata: None,
         id: "call-1".to_owned(),
         kind: "function".to_owned(),
