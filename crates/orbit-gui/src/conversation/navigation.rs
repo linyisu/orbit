@@ -88,6 +88,13 @@ impl Navigation {
         cx.notify();
     }
 
+    pub(super) fn update_rows(&mut self, rows: &[usize], cx: &mut Context<Self>) {
+        for (anchor, row) in self.anchors.iter_mut().zip(rows) {
+            anchor.row = *row;
+        }
+        cx.notify();
+    }
+
     fn set_active(&mut self, active: usize, cx: &mut Context<Self>) {
         if self.active == active {
             return;

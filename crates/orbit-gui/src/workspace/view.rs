@@ -2,7 +2,6 @@
 use super::*;
 use crate::preferences::Preferences;
 use crate::theme::{CONTENT_GUTTER_REM, CONTENT_WIDTH_REM};
-use gpui_kit::component::input::{Editor, EditorState};
 use orbit_client::protocol::Mode;
 
 impl Workspace {
@@ -62,75 +61,37 @@ impl Workspace {
             }))
             .w_full()
             .gap_2()
-            .when(
-                self.busy
-                    || self
-                        .conversation
-                        .read(cx)
-                        .has_progress(),
-                |view| {
-                    let label = if self.busy {
-                        self.conversation
-                            .read(cx)
-                            .activity_label()
-                    } else {
-                        "查看过程记录…".to_owned()
-                    };
-                    view.child(
-                        Button::new("conversation-progress")
-                            .ghost()
-                            .small()
-                            .w_full()
-                            .child(
-                                h_flex()
-                                    .w_full()
-                                    .min_w_0()
-                                    .gap_2()
-                                    .child(Icon::new(IconName::Clock).small())
-                                    .child(
-                                        div()
-                                            .flex_1()
-                                            .min_w_0()
-                                            .text_ellipsis()
-                                            .child(label),
-                                    ),
-                            )
-                            .on_click(cx.listener(|view, _, window, cx| {
-                                let log = view.conversation.read(cx).process_log();
-                                let log = if log.is_empty() {
-                                    "暂无过程说明".into()
-                                } else {
-                                    log
-                                };
-                                let rows = log.lines().count().clamp(6, 24);
-                                let editor = cx.new(|cx| {
-                                    EditorState::new(window, cx)
-                                        .language("plaintext")
-                                        .line_number(false)
-                                        .soft_wrap(true)
-                                        .default_value(log)
-                                });
-                                crate::dialog::open(window, cx, move |dialog, window, _| {
-                                    let editor = editor.clone();
-                                    dialog
-                                        .title("过程记录")
-                                        .h((window.rem_size() * (rows as f32 * 1.3 + 4.))
-                                            .min(window.viewport_size().height * 0.8))
-                                        .content(move |body, _, _| {
-                                            body.size_full()
-                                                .min_h_0()
-                                                .overflow_hidden()
-                                                .child(
-                                                    Editor::new(&editor)
-                                                        .readonly(true)
-                                                        .h_full(),
-                                                )
-                                        })
-                                });
-                            })),
-                    )
-                },
-            )
+            .when(self.busy, |view| {
+                view.child(
+                    Button::new("conversation-progress")
+                        .ghost()
+                        .small()
+                        .w_full()
+                        .child(
+                            h_flex()
+                                .w_full()
+                                .min_w_0()
+                                .gap_2()
+                                .child(Icon::new(IconName::Clock).small())
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .text_ellipsis()
+                                        .child(
+                                            self.conversation
+                                                .read(cx)
+                                                .activity_label(),
+                                        ),
+                                ),
+                        )
+                        .tooltip("定位当前输出")
+                        .on_click(cx.listener(|view, _, _, cx| {
+                            view.conversation
+                                .update(cx, |conversation, cx| conversation.reveal_activity(cx));
+                        })),
+                )
+            })
             .when(self.is_new_conversation(cx), |view| {
                 view.child(self.composer_target(cx))
             })

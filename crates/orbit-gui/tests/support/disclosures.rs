@@ -174,3 +174,67 @@ pub(super) fn flow_held(workspace: &str, event: &Value) -> bool {
         .join(format!(".fixture-disclosure-flow-{marker}"))
         .exists()
 }
+
+/// Alternating generated stages with long bodies and independent tool batches.
+pub(super) fn chronological_events() -> VecDeque<Value> {
+    let mut events = VecDeque::new();
+    for stage in 1..=3 {
+        let reasoning = (1..=24)
+            .map(|line| format!("阶段 {stage}，分析行 {line}：验证生成目录的缓存更新与排序。\n\n"))
+            .collect::<String>();
+        events.push_back(json!({
+            "Agent": {
+                "Model": {"ReasoningDelta": reasoning}
+            }
+        }));
+        events.push_back(json!({
+            "Agent": {
+                "ReasoningFinished": {"elapsed_ms": 29}
+            }
+        }));
+        events.push_back(json!({
+            "Agent": {
+                "Model": {
+                    "TextDelta": format!(
+                        "阶段 {stage}：检查 **生成目录**。\n\n\
+                         | 标记 | 值 |\n| --- | --- |\n| stage | {stage} |"
+                    )
+                }
+            }
+        }));
+        let calls = if stage == 1 { 48 } else { 3 };
+        for index in 1..=calls {
+            let call = json!({
+                "id": format!("timeline-{stage}-{index}"),
+                "purpose": format!("检查生成条目 {stage}-{index}"),
+                "function": {
+                    "name": "read_file",
+                    "arguments": json!({
+                        "path": format!("generated/item-{stage}-{index}.txt")
+                    })
+                    .to_string()
+                }
+            });
+            events.push_back(json!({
+                "Agent": {
+                    "ToolStarted": {"call": call}
+                }
+            }));
+            events.push_back(json!({
+                "Agent": {
+                    "ToolFinished": {
+                        "call": call,
+                        "content": format!("Generated result {stage}-{index}"),
+                        "changes": []
+                    }
+                }
+            }));
+        }
+    }
+    events.push_back(json!({
+        "Agent": {
+            "Model": {"TextDelta": "验收结束：三个阶段已完成。"}
+        }
+    }));
+    events
+}

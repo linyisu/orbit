@@ -695,7 +695,6 @@ fn fit_hit_rows(rows: &mut [(Rect, usize)], lines: &[Line<'_>], body: Rect) {
 pub(super) enum ReportSource {
     Usage,
     Tool(String),
-    Process,
 }
 
 #[derive(Debug)]
@@ -946,10 +945,7 @@ pub fn handle(state: &mut UiState, event: Event) -> Option<String> {
         if let Event::Key(key) = &event
             && key.kind != KeyEventKind::Release
             && key.code == KeyCode::Char('y')
-            && matches!(
-                dialog.source,
-                Some(ReportSource::Tool(_) | ReportSource::Process)
-            )
+            && matches!(dialog.source, Some(ReportSource::Tool(_)))
         {
             if let Err(error) = super::selection::copy_text(&dialog.content) {
                 state.feedback.error(error.to_string());
@@ -1768,8 +1764,6 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
         }
         let actions = if matches!(dialog.source, Some(ReportSource::Tool(_))) {
             "Tab 切页 · Alt+←/→ 切换调用 · Y 复制 · Esc 关闭"
-        } else if matches!(dialog.source, Some(ReportSource::Process)) {
-            "PgUp/PgDn 翻页 · Y 复制 · Esc 关闭"
         } else if dialog.source.is_some() {
             "Tab 切页 · R 刷新 · Esc 关闭"
         } else if dialog.max_scroll > 0 {

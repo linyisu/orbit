@@ -1,4 +1,6 @@
-//! Stable source indices for the three conversation regions in either frontend.
+//! Chronological conversation segments shared by both frontends.
+
+use std::ops::Range;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Role {
@@ -12,48 +14,56 @@ pub enum Role {
 #[derive(Default, Debug, PartialEq, Eq)]
 pub struct Layout {
     pub order: Vec<usize>,
-    pub progress: Vec<usize>,
+    pub segments: Vec<Segment>,
 }
 
-/// Groups reasoning and calls without changing their internal order or discarding progress.
-/// Only user input starts a new region; model requests and background returns do not.
+/// A source item or an uninterrupted run of tool calls, in arrival order.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Segment {
+    Part(usize),
+    Tools(Range<usize>),
+}
+
+/// Keeps prose and reasoning in place. Only adjacent tools share a disclosure.
+/// Updating a background result does not create or move a segment.
 pub fn partition(roles: &[Role]) -> Layout {
-    let mut layout = Layout::default();
-    let mut start = 0;
-    for end in 1..=roles.len() {
-        if end == roles.len() || roles[end] == Role::User {
-            append(&mut layout, roles, start..end);
-            start = end;
+    let mut layout = Layout {
+        order: (0..roles.len()).collect(),
+        segments: Vec::new(),
+    };
+    for (index, role) in roles.iter().enumerate() {
+        if *role == Role::Tool {
+            if let Some(Segment::Tools(range)) = layout.segments.last_mut() {
+                range.end = index + 1;
+            } else {
+                layout
+                    .segments
+                    .push(Segment::Tools(index..index + 1));
+            }
+        } else {
+            layout
+                .segments
+                .push(Segment::Part(index));
         }
     }
     layout
 }
 
-fn append(layout: &mut Layout, roles: &[Role], range: std::ops::Range<usize>) {
-    let start = answer_start(
-        range
-            .clone()
-            .map(|index| (index, roles[index])),
-    );
-    let is_answer = |index: &usize| roles[*index] == Role::Text && *index >= start;
-    for role in [Role::User, Role::Thought, Role::Tool] {
-        layout.order.extend(
-            range
-                .clone()
-                .filter(|index| roles[*index] == role),
-        );
+/// Finds adjacent calls around an existing tool. Non-tool indices are single items.
+pub fn tool_range(len: usize, index: usize, is_tool: impl Fn(usize) -> bool) -> Range<usize> {
+    if index >= len {
+        return len..len;
     }
-    layout
-        .order
-        .extend(range.clone().filter(is_answer));
-    layout.order.extend(
-        range
-            .clone()
-            .filter(|index| roles[*index] == Role::Notice),
-    );
-    layout
-        .progress
-        .extend(range.filter(|index| roles[*index] == Role::Text && !is_answer(index)));
+    let mut range = index..index + 1;
+    if is_tool(index) {
+        while range.start > 0 && is_tool(range.start - 1) {
+            range.start -= 1;
+        }
+        while range.end < len && is_tool(range.end) {
+            range.end += 1;
+        }
+    }
+    range
 }
 
 /// Prose before the last tool is progress; all prose after it belongs to the answer.
@@ -78,16 +88,31 @@ mod tests {
     use super::{Role::*, *};
 
     #[test]
-    fn interleaved_requests_keep_reasoning_calls_and_answer_separate() {
-        let layout = partition(&[User, Text, Tool, Thought, Text, Tool, Thought, Text]);
-        assert_eq!(layout.order, [0, 3, 6, 2, 5, 7]);
-        assert_eq!(layout.progress, [1, 4]);
+    fn interleaved_requests_preserve_prose_and_group_only_adjacent_calls() {
+        let roles = [User, Thought, Text, Tool, Tool, Thought, Tool, Text, Notice];
+        let layout = partition(&roles);
+        assert_eq!(layout.order, (0..roles.len()).collect::<Vec<_>>());
+        assert_eq!(
+            layout.segments,
+            [
+                Segment::Part(0),
+                Segment::Part(1),
+                Segment::Part(2),
+                Segment::Tools(3..5),
+                Segment::Part(5),
+                Segment::Tools(6..7),
+                Segment::Part(7),
+                Segment::Part(8),
+            ]
+        );
+        assert_eq!(tool_range(roles.len(), 4, |i| roles[i] == Tool), 3..5);
+        assert_eq!(tool_range(roles.len(), 6, |i| roles[i] == Tool), 6..7);
     }
 
     #[test]
     fn later_input_never_takes_an_earlier_answer_or_reasoning() {
         let layout = partition(&[User, Thought, Text, User, Tool, Text, Notice]);
         assert_eq!(layout.order, [0, 1, 2, 3, 4, 5, 6]);
-        assert!(layout.progress.is_empty());
+        assert_eq!(layout.segments.len(), 7);
     }
 }

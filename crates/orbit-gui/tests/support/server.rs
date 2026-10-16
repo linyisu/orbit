@@ -1111,6 +1111,9 @@ fn main() -> anyhow::Result<()> {
                     if prompt.lines().next() == Some("disclosure-flow") {
                         pending = disclosures::flow_events();
                     }
+                    if prompt == "chronological-disclosures" {
+                        pending = disclosures::chronological_events();
+                    }
                     if prompt == "tool-regions" {
                         pending = tool_regions::events();
                     }

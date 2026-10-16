@@ -37,8 +37,24 @@ pub struct Turn {
 }
 
 impl Turn {
+    /// Projects source parts without reordering or hiding intermediate prose.
+    pub fn segments(&self) -> Vec<layout::Segment> {
+        let roles = self
+            .parts
+            .iter()
+            .map(|part| match part.kind {
+                Kind::Text => layout::Role::Text,
+                Kind::Thought => layout::Role::Thought,
+                Kind::Tool => layout::Role::Tool,
+                Kind::Notice => layout::Role::Notice,
+            })
+            .collect::<Vec<_>>();
+        layout::partition(&roles).segments
+    }
+
     pub fn reply(&self) -> String {
-        self.conclusions()
+        (0..self.parts.len())
+            .filter(|index| self.parts[*index].kind == Kind::Text)
             .map(|index| self.parts[index].content.as_str())
             .filter(|text| !text.is_empty())
             .collect::<Vec<_>>()
@@ -329,7 +345,8 @@ impl Transcript {
             self.turns[turn].thought
         } else {
             self.turns[turn].text
-        };
+        }
+        .filter(|index| *index + 1 == self.turns[turn].parts.len());
         if text.trim().is_empty() && current.is_none() {
             return None;
         }
@@ -499,7 +516,10 @@ mod tests {
                 tool: None,
             });
         }
-        assert_eq!(turn.reply(), "final answer");
+        assert_eq!(
+            turn.reply(),
+            "**first**\n```rust\nlet x = 1;\n```\n\nfinal answer"
+        );
     }
 
     #[test]
@@ -667,7 +687,7 @@ mod tests {
     }
 
     #[test]
-    fn mixed_reasoning_keeps_the_answer_visible_until_execution_resumes() {
+    fn reasoning_between_prose_keeps_distinct_chronological_segments() {
         let mut transcript = Transcript::default();
         apply(
             &mut transcript,
@@ -739,8 +759,9 @@ mod tests {
             }),
         );
         let turn = &transcript.turns[0];
-        assert_eq!(turn.conclusion(), Some(1));
-        assert_eq!(turn.parts[1].content, "检查完成。");
+        assert_eq!(turn.conclusion(), Some(3));
+        assert_eq!(turn.parts[1].content, "检查");
+        assert_eq!(turn.parts[3].content, "完成。");
         assert_eq!(
             turn.process_indices()
                 .collect::<Vec<_>>(),
@@ -763,7 +784,7 @@ mod tests {
         assert_eq!(
             turn.process_indices()
                 .collect::<Vec<_>>(),
-            vec![0, 4]
+            vec![0, 5]
         );
         apply(
             &mut transcript,
@@ -806,12 +827,12 @@ mod tests {
             }),
         );
         let turn = &transcript.turns[0];
-        assert_eq!(turn.conclusion(), Some(5));
-        assert_eq!(turn.parts[5].content, "再次检查完成。");
+        assert_eq!(turn.conclusion(), Some(6));
+        assert_eq!(turn.parts[6].content, "再次检查完成。");
         assert_eq!(
             turn.process_indices()
                 .collect::<Vec<_>>(),
-            vec![0, 4]
+            vec![0, 5]
         );
         assert_eq!(turn.process_count(), 2);
     }

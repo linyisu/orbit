@@ -10,46 +10,17 @@ use super::{
 };
 
 pub(super) fn source_start(items: &[TranscriptItem], index: usize) -> usize {
-    let start = items[..index.min(items.len())]
-        .iter()
-        .rposition(|item| {
-            matches!(
-                item,
-                TranscriptItem::User(_) | TranscriptItem::UserWithImages { .. }
-            )
-        })
-        .map_or(0, |index| index + 1);
-    items[start..]
-        .iter()
-        .position(|item| matches!(item, TranscriptItem::Tool(_)))
-        .map_or(index, |offset| start + offset)
+    start(items, index)
 }
 
 pub(super) fn start<T: Borrow<TranscriptItem>>(items: &[T], index: usize) -> usize {
-    if !items
-        .get(index)
-        .is_some_and(|item| matches!(item.borrow(), TranscriptItem::Tool(_)))
-    {
-        return index;
-    }
-    let mut start = index;
-    while start > 0 && matches!(items[start - 1].borrow(), TranscriptItem::Tool(_)) {
-        start -= 1;
-    }
-    start
+    range(items, index).start
 }
 
 pub(super) fn range<T: Borrow<TranscriptItem>>(items: &[T], index: usize) -> Range<usize> {
-    let mut end = index + 1;
-    if items
-        .get(index)
-        .is_some_and(|item| matches!(item.borrow(), TranscriptItem::Tool(_)))
-    {
-        while end < items.len() && matches!(items[end].borrow(), TranscriptItem::Tool(_)) {
-            end += 1;
-        }
-    }
-    index..end
+    orbit_client::conversation::layout::tool_range(items.len(), index, |i| {
+        matches!(items[i].borrow(), TranscriptItem::Tool(_))
+    })
 }
 
 pub(super) fn header<T: Borrow<TranscriptItem>>(

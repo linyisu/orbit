@@ -1516,7 +1516,11 @@ pub(super) fn transcript_lines_at_width(
 
 // Display budgets only: original arguments/results stay intact for execution and storage.
 fn draw_status(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
-    state.progress_area = area;
+    state.progress_area = if state.running() {
+        area
+    } else {
+        Rect::default()
+    };
     if let Some(message) = &state.resume_loading {
         frame.render_widget(
             Paragraph::new(Line::from(Span::styled(
@@ -1550,10 +1554,7 @@ fn draw_status(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
             Style::default().fg(ACCENT),
         )]
     } else {
-        vec![Span::styled(
-            "  过程记录 · Alt+P",
-            Style::default().fg(THEME.secondary),
-        )]
+        Vec::new()
     };
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }

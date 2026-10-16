@@ -51,7 +51,7 @@ pub(super) fn keyboard_action(state: &mut UiState, event: Event, busy: bool) -> 
     {
         match key.code {
             KeyCode::Char('p') => {
-                state.open_process_log();
+                state.reveal_activity();
                 return Action::None;
             }
             KeyCode::Char('o') => {

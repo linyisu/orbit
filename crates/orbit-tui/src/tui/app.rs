@@ -260,31 +260,9 @@ pub struct UiState {
 }
 
 impl UiState {
-    pub(super) fn open_process_log(&mut self) {
-        use orbit_client::conversation::layout::{Role, partition};
-        let roles = self
-            .transcript
-            .iter()
-            .map(|item| match item {
-                TranscriptItem::User(_) | TranscriptItem::UserWithImages { .. } => Role::User,
-                TranscriptItem::Assistant(_) => Role::Text,
-                TranscriptItem::Tool(_) => Role::Tool,
-                TranscriptItem::Thinking(_) => Role::Thought,
-                _ => Role::Notice,
-            })
-            .collect::<Vec<_>>();
-        let text = partition(&roles)
-            .progress
-            .into_iter()
-            .filter_map(|index| match &self.transcript[index] {
-                TranscriptItem::Assistant(text) => Some(text.as_str()),
-                _ => None,
-            })
-            .collect::<Vec<_>>()
-            .join("\n\n");
-        let mut dialog = super::dialogs::InfoDialog::new("过程记录", text);
-        dialog.source = Some(super::dialogs::ReportSource::Process);
-        self.info_dialog = Some(dialog);
+    pub(super) fn reveal_activity(&mut self) {
+        self.scroll = 0;
+        self.follow_bottom = true;
     }
 
     pub(super) fn is_home(&self) -> bool {
@@ -1176,15 +1154,7 @@ impl UiState {
                 dialog.update_tool(&row.record());
             }
             let start = super::tool_groups::source_start(&self.transcript, index);
-            let end = self.transcript[start..]
-                .iter()
-                .position(|item| {
-                    matches!(
-                        item,
-                        TranscriptItem::User(_) | TranscriptItem::UserWithImages { .. }
-                    )
-                })
-                .map_or(self.transcript.len(), |offset| start + offset);
+            let end = super::tool_groups::range(&self.transcript, index).end;
             if !self.transcript[start..end].iter().any(|item| {
                 matches!(item, TranscriptItem::Tool(row) if row.status == ToolStatus::Running)
             }) && !self.manual_disclosures.contains(&start) {

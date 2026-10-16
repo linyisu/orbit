@@ -76,7 +76,7 @@ fn completed_thinking_drops_trailing_blank_rows_without_changing_content() {
     ] {
         row.elapsed = millis.map(std::time::Duration::from_millis);
         let lines = transcript_lines(&[TranscriptItem::Thinking(row.clone())], true);
-        assert_eq!(lines[0].to_string().trim(), expected);
+        assert_eq!(lines[0].to_string().trim(), format!("⌄ {expected}"));
         assert_eq!(lines.len(), 3);
     }
     assert_eq!(row.content, "thought\n\n  \n");

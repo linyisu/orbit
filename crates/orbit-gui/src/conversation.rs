@@ -1,13 +1,12 @@
-//! A virtualized conversation of user turns, each with one execution disclosure.
+//! Chronological conversation segments with independently owned disclosures.
 mod images;
 mod markdown;
 mod model;
 mod navigation;
 mod process;
-mod process_height;
 use crate::file_preview::FileRequest;
 use gpui_kit::component::{
-    ActiveTheme, ElementExt, Icon, IconName, Sizable,
+    ActiveTheme, Icon, IconName, Sizable,
     bubble::{Bubble, BubbleContent, BubbleVariant},
     button::{Button, ButtonVariants},
     h_flex,
@@ -20,16 +19,17 @@ use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use model::{Kind, Transcript, Turn};
 pub(crate) use navigation::bind_keys;
+use orbit_client::conversation::layout::Segment;
 use orbit_client::protocol::Update;
 use process::ProcessDisclosure;
-use process_height::ProcessHeight;
-use std::{cell::Cell, rc::Rc, sync::Arc};
+use std::{cell::Cell, collections::BTreeMap, rc::Rc, sync::Arc};
 
 pub(crate) struct Conversation {
     _subscriptions: Vec<Subscription>,
     transcript: Transcript,
     activity: orbit_client::activity::Activity,
     rows: Vec<Entity<TurnView>>,
+    order: Vec<RowKey>,
     scroll: Entity<MessageScrollerState>,
     navigation: Entity<navigation::Navigation>,
     navigation_controls: Entity<navigation::Controls>,
@@ -38,24 +38,30 @@ pub(crate) struct Conversation {
 }
 #[derive(Clone)]
 pub(crate) struct ToolRequest(pub orbit_client::execution::ToolRun);
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RowKey {
+    Prompt(usize),
+    Part(usize, usize),
+    Tools(usize, usize),
+    Footer(usize),
+}
+
 struct TurnView {
-    index: usize,
     user: Option<Entity<MessageRow>>,
     parts: Vec<Entity<MessageRow>>,
-    process: Vec<usize>,
-    thoughts: Vec<usize>,
-    conclusions: Vec<usize>,
+    groups: BTreeMap<usize, Entity<ToolGroup>>,
     reply: SharedString,
-    label: SharedString,
-    disclosure: ProcessDisclosure,
-    scroll: Entity<MessageScrollerState>,
-    process_scroll: Entity<MessageScrollerState>,
-    process_height: ProcessHeight,
-    process_limit: Pixels,
-    viewport_height: Rc<Cell<Pixels>>,
     viewport_bounds: Rc<Cell<Bounds<Pixels>>>,
     _subscriptions: Vec<Subscription>,
 }
+
+struct ToolGroup {
+    start: usize,
+    rows: Vec<Entity<MessageRow>>,
+    label: SharedString,
+    disclosure: ProcessDisclosure,
+}
+
 struct LayoutChanged {
     index: usize,
 }
@@ -87,6 +93,9 @@ struct MessageImage {
 }
 
 impl EventEmitter<Disclosure> for MessageRow {}
+impl EventEmitter<Disclosure> for ToolGroup {}
+impl EventEmitter<Disclosure> for TurnView {}
+impl EventEmitter<LayoutChanged> for TurnView {}
 impl EventEmitter<LayoutChanged> for MessageRow {}
 impl EventEmitter<FileRequest> for MessageRow {}
 impl EventEmitter<FileRequest> for TurnView {}
@@ -108,6 +117,7 @@ impl Conversation {
             transcript: Transcript::default(),
             activity: Default::default(),
             rows: vec![],
+            order: vec![],
             scroll,
             viewport_height,
             viewport_bounds: Rc::new(Cell::new(Bounds::default())),
@@ -149,14 +159,13 @@ impl Conversation {
         };
         while self.rows.len() < self.transcript.turns.len() {
             let index = self.rows.len();
-            let row = cx.new(|cx| {
-                TurnView::new(
-                    index * 2 + 1,
-                    self.scroll.clone(),
-                    self.viewport_height.clone(),
-                    self.viewport_bounds.clone(),
-                    cx,
-                )
+            let row = cx.new(|_| TurnView {
+                user: None,
+                parts: Vec::new(),
+                groups: BTreeMap::new(),
+                reply: "".into(),
+                viewport_bounds: self.viewport_bounds.clone(),
+                _subscriptions: Vec::new(),
             });
             self._subscriptions
                 .push(cx.subscribe(&row, |_, _, request: &FileRequest, cx| {
@@ -166,24 +175,54 @@ impl Conversation {
                 .push(cx.subscribe(&row, |_, _, request: &ToolRequest, cx| {
                     cx.emit(request.clone());
                 }));
+            self._subscriptions
+                .push(cx.subscribe(&row, move |view, _, event: &Disclosure, cx| {
+                    view.scroll
+                        .update(cx, |scroll, cx| scroll.pause_following(cx));
+                    view.remeasure_part(index, event.index, cx);
+                }));
+            self._subscriptions.push(cx.subscribe(
+                &row,
+                move |view, _, event: &LayoutChanged, cx| {
+                    view.remeasure_part(index, event.index, cx);
+                },
+            ));
             self.rows.push(row);
-            // Keep the prompt and its response in separate virtual rows. A
-            // disclosure can then reveal its header without scrolling back
-            // through a potentially very long user message.
-            self.scroll
-                .update(cx, |scroll, cx| scroll.append(2, cx));
             if let Some(prompt) = &self.transcript.turns[index].prompt {
                 self.navigation
                     .update(cx, |navigation, cx| {
-                        navigation.append(index * 2, prompt, cx)
+                        navigation.append(self.order.len(), prompt, cx)
                     });
             }
         }
         let turn = &self.transcript.turns[change.turn];
+        let structure_changed = self.rows[change.turn]
+            .read(cx)
+            .parts
+            .len()
+            != turn.parts.len()
+            || self.order.last() != Some(&RowKey::Footer(self.rows.len() - 1));
         self.rows[change.turn].update(cx, |view, cx| view.sync(turn, change.part, cx));
-        self.scroll.update(cx, |scroll, cx| {
-            scroll.remeasure_items(change.turn * 2 + 1..change.turn * 2 + 2, cx)
-        });
+        if structure_changed {
+            self.sync_order(cx);
+        }
+        if let Some(part) = change.part {
+            self.remeasure_part(change.turn, part, cx);
+        } else {
+            let start = self
+                .order
+                .iter()
+                .position(|key| *key == RowKey::Prompt(change.turn))
+                .unwrap();
+            let end = self
+                .order
+                .iter()
+                .position(|key| *key == RowKey::Footer(change.turn))
+                .unwrap();
+            self.scroll.update(cx, |scroll, cx| {
+                scroll.remeasure_items(start..end + 1, cx);
+            });
+        }
         cx.notify();
     }
 
@@ -196,20 +235,76 @@ impl Conversation {
         }
     }
 
-    pub(crate) fn process_log(&self) -> String {
-        self.transcript
-            .turns
-            .iter()
-            .flat_map(Turn::progress)
-            .collect::<Vec<_>>()
-            .join("\n\n")
+    pub(crate) fn reveal_activity(&mut self, cx: &mut Context<Self>) {
+        self.scroll
+            .update(cx, |scroll, cx| scroll.scroll_to_end(cx));
     }
 
-    pub(crate) fn has_progress(&self) -> bool {
-        self.transcript
-            .turns
+    fn remeasure_part(&mut self, turn: usize, part: usize, cx: &mut Context<Self>) {
+        let key = self.transcript.turns[turn]
+            .segments()
+            .into_iter()
+            .find_map(|segment| match segment {
+                Segment::Part(index) if index == part => Some(RowKey::Part(turn, part)),
+                Segment::Tools(range) if range.contains(&part) => {
+                    Some(RowKey::Tools(turn, range.start))
+                }
+                _ => None,
+            });
+        if let Some(index) = key.and_then(|key| {
+            self.order
+                .iter()
+                .position(|row| *row == key)
+        }) {
+            self.scroll.update(cx, |scroll, cx| {
+                scroll.remeasure_items(index..index + 1, cx);
+            });
+        }
+    }
+
+    fn sync_order(&mut self, cx: &mut Context<Self>) {
+        let mut order = Vec::new();
+        let mut prompts = Vec::new();
+        for (turn, source) in self.transcript.turns.iter().enumerate() {
+            if source.prompt.is_some() {
+                prompts.push(order.len());
+            }
+            order.push(RowKey::Prompt(turn));
+            order.extend(
+                source
+                    .segments()
+                    .into_iter()
+                    .map(|segment| match segment {
+                        Segment::Part(part) => RowKey::Part(turn, part),
+                        Segment::Tools(range) => RowKey::Tools(turn, range.start),
+                    }),
+            );
+            order.push(RowKey::Footer(turn));
+        }
+        let prefix = self
+            .order
             .iter()
-            .any(|turn| turn.progress().next().is_some())
+            .zip(&order)
+            .take_while(|(a, b)| a == b)
+            .count();
+        let suffix = self.order[prefix..]
+            .iter()
+            .rev()
+            .zip(order[prefix..].iter().rev())
+            .take_while(|(a, b)| a == b)
+            .count();
+        if prefix < self.order.len() || prefix < order.len() {
+            self.scroll.update(cx, |scroll, cx| {
+                scroll.splice(
+                    prefix..self.order.len() - suffix,
+                    order.len() - prefix - suffix,
+                    cx,
+                );
+            });
+        }
+        self.order = order;
+        self.navigation
+            .update(cx, |navigation, cx| navigation.update_rows(&prompts, cx));
     }
 
     pub(crate) fn image(
@@ -259,7 +354,13 @@ impl Conversation {
                     }
                 });
                 self.scroll.update(cx, |scroll, cx| {
-                    scroll.remeasure_items(index * 2..index * 2 + 1, cx)
+                    if let Some(position) = self
+                        .order
+                        .iter()
+                        .position(|key| *key == RowKey::Prompt(index))
+                    {
+                        scroll.remeasure_items(position..position + 1, cx);
+                    }
                 });
             }
         }
@@ -267,64 +368,13 @@ impl Conversation {
 }
 
 impl TurnView {
-    fn measure_process_row(
-        &mut self,
-        revision: u64,
-        index: usize,
-        size: Size<Pixels>,
-        cx: &mut Context<Self>,
-    ) {
-        let before = self
-            .process_height
-            .height(self.process_limit);
-        self.process_height
-            .record(revision, index, size);
-        if before
-            != self
-                .process_height
-                .height(self.process_limit)
-        {
-            self.scroll.update(cx, |scroll, cx| {
-                scroll.remeasure_items(self.index..self.index + 1, cx);
-            });
-            cx.notify();
-        }
-    }
-
-    fn new(
-        index: usize,
-        scroll: Entity<MessageScrollerState>,
-        viewport_height: Rc<Cell<Pixels>>,
-        viewport_bounds: Rc<Cell<Bounds<Pixels>>>,
-        cx: &mut Context<Self>,
-    ) -> Self {
-        Self {
-            index,
-            user: None,
-            parts: vec![],
-            process: vec![],
-            thoughts: vec![],
-            conclusions: Vec::new(),
-            reply: "".into(),
-            label: "".into(),
-            disclosure: ProcessDisclosure::default(),
-            scroll,
-            process_scroll: cx.new(|cx| MessageScrollerState::new(0, cx)),
-            process_height: ProcessHeight::default(),
-            process_limit: px(0.),
-            viewport_height,
-            viewport_bounds,
-            _subscriptions: vec![],
-        }
-    }
-
     fn sync(&mut self, turn: &Turn, changed: Option<usize>, cx: &mut Context<Self>) {
         self.reply = turn.reply().into();
         if self.user.is_none()
             && let Some(prompt) = &turn.prompt
         {
             let row = cx.new(|cx| {
-                let mut row = MessageRow::new(self.index - 1, prompt, false, true, cx);
+                let mut row = MessageRow::new(0, prompt, false, true, cx);
                 row.viewport = Some(self.viewport_bounds.clone());
                 row.files = turn.files.clone();
                 row.images = turn
@@ -359,50 +409,15 @@ impl TurnView {
                     cx.emit(request.clone());
                 }));
             self._subscriptions
-                .push(cx.subscribe(&row, |view, _, event: &LayoutChanged, cx| {
-                    view.process_height.refresh();
-                    if let Some(index) = view
-                        .process
-                        .iter()
-                        .position(|part| *part == event.index)
-                    {
-                        view.process_scroll
-                            .update(cx, |scroll, cx| {
-                                scroll.remeasure_items(index..index + 1, cx);
-                            });
-                    }
-                    view.scroll.update(cx, |scroll, cx| {
-                        scroll.remeasure_items(view.index..view.index + 1, cx);
-                    });
-                    cx.notify();
+                .push(cx.subscribe(&row, |_, _, event: &LayoutChanged, cx| {
+                    cx.emit(LayoutChanged { index: event.index });
                 }));
             self._subscriptions
-                .push(cx.subscribe(&row, |view, _, event: &Disclosure, cx| {
-                    view.process_height.refresh();
-                    if let Some(index) = view
-                        .process
-                        .iter()
-                        .position(|part| *part == event.index)
-                    {
-                        view.process_scroll
-                            .update(cx, |scroll, cx| {
-                                scroll.remeasure_items(index..index + 1, cx);
-                                // Explicitly anchor after invalidation: a list whose
-                                // collapsed rows fit has resumed tail following.
-                                scroll.scroll_to_item(index, cx);
-                            });
-                    }
-                    view.scroll.update(cx, |scroll, cx| {
-                        scroll.remeasure_items(view.index..view.index + 1, cx);
-                        scroll.scroll_to_item(view.index, cx);
-                    });
-                    cx.notify();
+                .push(cx.subscribe(&row, |_, _, event: &Disclosure, cx| {
+                    cx.emit(Disclosure { index: event.index });
                 }));
             self.parts.push(row);
         }
-        let conclusions = turn.conclusions().collect();
-        self.thoughts = turn.thoughts().collect();
-        let process: Vec<_> = turn.process_indices().collect();
         let indices: Vec<_> = changed
             .map(|i| vec![i])
             .unwrap_or_else(|| (0..self.parts.len()).collect());
@@ -434,195 +449,117 @@ impl TurnView {
                 row.source_len = part.content.len();
                 cx.notify();
             });
-            if let Some(index) = process
-                .iter()
-                .position(|part| *part == index)
-            {
-                self.process_scroll
-                    .update(cx, |scroll, cx| {
-                        scroll.remeasure_items(index..index + 1, cx)
+        }
+        for segment in turn.segments() {
+            let Segment::Tools(range) = segment else {
+                continue;
+            };
+            let start = range.start;
+            let group = self
+                .groups
+                .entry(start)
+                .or_insert_with(|| {
+                    let group = cx.new(|_| ToolGroup {
+                        start,
+                        rows: Vec::new(),
+                        label: "".into(),
+                        disclosure: ProcessDisclosure::default(),
                     });
-            }
-        }
-        let preserved = self
-            .process
-            .iter()
-            .zip(&process)
-            .take_while(|(a, b)| a == b)
-            .count();
-        let count = turn.process_count();
-        if count > self.process.len() {
-            self.process_scroll
-                .update(cx, |scroll, cx| {
-                    scroll.append(count - self.process.len(), cx)
+                    self._subscriptions.push(cx.subscribe(
+                        &group,
+                        |_, _, event: &Disclosure, cx| {
+                            cx.emit(Disclosure { index: event.index });
+                        },
+                    ));
+                    group
                 });
+            group.update(cx, |group, cx| {
+                group.rows = self.parts[range.clone()].to_vec();
+                group.label = orbit_client::execution::batch_label(
+                    turn.parts[range.clone()]
+                        .iter()
+                        .filter_map(|part| {
+                            part.tool
+                                .as_ref()
+                                .map(|tool| tool.status)
+                        }),
+                )
+                .into();
+                group.disclosure.sync(
+                    !turn.parts[range]
+                        .iter()
+                        .any(|part| part.running),
+                );
+                cx.notify();
+            });
         }
-        if preserved < self.process.len() {
-            self.process_scroll
-                .update(cx, |scroll, cx| {
-                    scroll.remeasure_items(preserved..count, cx)
-                });
-        }
-        if self.process != process {
-            self.process_height.invalidate(count);
-        } else if changed.is_some_and(|part| process.contains(&part)) {
-            self.process_height.refresh();
-        }
-        self.process = process;
-        self.disclosure
-            .sync(!turn.tools_running());
-        self.conclusions = conclusions;
-        self.label = turn.label().into();
         cx.notify();
     }
 }
 
-impl Render for TurnView {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let weak = cx.weak_entity();
-        let reading = self.process.iter().any(|index| {
-            let part = self.parts[*index].read(cx);
-            part.expanded && part.source_len > 0
-        });
-        let available = if self.viewport_height.get() > px(0.) {
-            self.viewport_height.get()
-        } else {
-            window.viewport_size().height * 0.6
-        };
-        self.process_limit = if reading {
-            (available * 0.7).min(window.rem_size() * 32.)
-        } else {
-            available * 0.5
-        };
-        let process_height = self
-            .process_height
-            .height(self.process_limit);
-        let revision = self.process_height.revision();
-        v_flex()
-            .w_full()
-            .min_w_0()
-            .items_start()
-            .gap_4()
-            .children(
-                self.thoughts
-                    .iter()
-                    .map(|index| self.parts[*index].clone()),
-            )
-            .when(!self.process.is_empty(), |view| {
-                view.child(gpui_kit::base::ScrollContainment::new(
-                    "process-heading-wheel-boundary",
-                    Button::new("turn-process")
-                        .ghost()
-                        .small()
-                        .icon(if self.disclosure.expanded() {
+/// Sibling disclosures share the arrow column and text baseline.
+fn disclosure_button(id: &'static str, title: SharedString, expanded: bool) -> Button {
+    Button::new(id)
+        .ghost()
+        .small()
+        .px_0()
+        .max_w_full()
+        .accessibility_label(title.clone())
+        .child(
+            h_flex()
+                .min_w_0()
+                .child(
+                    div().w(rems(1.5)).flex_none().child(
+                        Icon::new(if expanded {
                             IconName::ChevronDown
                         } else {
                             IconName::ChevronRight
                         })
-                        .label(self.label.clone())
-                        .on_click(cx.listener(|view, _, _, cx| {
-                            view.disclosure.toggle();
-                            if view.disclosure.expanded() {
-                                view.process_scroll
-                                    .update(cx, |scroll, cx| scroll.scroll_to_item(0, cx));
-                            }
-                            view.scroll.update(cx, |scroll, cx| {
-                                scroll.remeasure_items(view.index..view.index + 1, cx);
-                                scroll.scroll_to_item(view.index, cx);
-                            });
-                            cx.notify();
-                        })),
-                ))
-            })
-            .when(
-                self.disclosure.expanded() && !self.process.is_empty(),
-                |view| {
-                    view.child(gpui_kit::base::ScrollContainment::new(
-                        "process-wheel-boundary",
-                        div()
-                            .id("process-viewport")
-                            .occlude()
-                            .w_full()
-                            .min_w_0()
-                            .h(process_height)
-                            .border_l_1()
-                            .border_color(cx.theme().border)
-                            .pl_3()
-                            .child(
-                                MessageScroller::new(
-                                    "turn-activities",
-                                    self.process_scroll.clone(),
-                                    move |index, _, cx| {
-                                        weak.upgrade()
-                                            .and_then(|view| {
-                                                let view = view.read(cx);
-                                                view.process.get(index).map(|part| {
-                                                    (
-                                                        view.parts[*part].clone(),
-                                                        index + 1 == view.process.len(),
-                                                    )
-                                                })
-                                            })
-                                            .map(|(part, last)| {
-                                                let measured = weak.clone();
-                                                // Keep the final control clear of the clipping
-                                                // edge. Row padding participates in list height
-                                                // and wheel/scrollbar limits, unlike an inset
-                                                // outside the scrolling content.
-                                                div()
-                                                    .w_full()
-                                                    .min_w_0()
-                                                    .child(
-                                                        div()
-                                                            .w_full()
-                                                            .min_w_0()
-                                                            .pb_1()
-                                                            .when(last, |row| row.pb_3())
-                                                            .child(part),
-                                                    )
-                                                    .on_prepaint(move |bounds, _, cx| {
-                                                        let measured = measured.clone();
-                                                        cx.defer(move |cx| {
-                                                            let _ =
-                                                                measured.update(cx, |view, cx| {
-                                                                    view.measure_process_row(
-                                                                        revision,
-                                                                        index,
-                                                                        bounds.size,
-                                                                        cx,
-                                                                    );
-                                                                });
-                                                        });
-                                                    })
-                                                    .into_any_element()
-                                            })
-                                            .unwrap_or_else(|| div().into_any_element())
-                                    },
-                                )
-                                .jump_button(false)
-                                .with_row_style(StyleRefinement::default().px_0().pb_0())
-                                .with_list_style(StyleRefinement::default().py_0())
-                                .size_full(),
-                            ),
-                    ))
-                },
-            )
-            .children(
-                self.conclusions
-                    .iter()
-                    .filter_map(|index| self.parts.get(*index).cloned()),
-            )
-            .when(!self.reply.is_empty(), |view| {
-                view.child(
-                    h_flex().child(
-                        gpui_kit::component::clipboard::Clipboard::new("copy-answer")
-                            .value(self.reply.clone())
-                            .small()
-                            .tooltip("复制完整 AI 回答")
-                            .accessibility_label("复制完整 AI 回答"),
+                        .small(),
                     ),
                 )
+                .child(div().min_w_0().truncate().child(title)),
+        )
+}
+
+impl Render for ToolGroup {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        v_flex()
+            .w_full()
+            .min_w_0()
+            .items_start()
+            .gap_2()
+            .child(
+                disclosure_button("tool-group", self.label.clone(), self.disclosure.expanded())
+                    .on_click(cx.listener(|view, _, _, cx| {
+                        view.disclosure.toggle();
+                        cx.emit(Disclosure { index: view.start });
+                        cx.notify();
+                    })),
+            )
+            .when(self.disclosure.expanded(), |view| {
+                view.child(
+                    v_flex()
+                        .w_full()
+                        .min_w_0()
+                        .pl(rems(1.5))
+                        .children(self.rows.clone()),
+                )
             })
+    }
+}
+
+impl Render for TurnView {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div().when(!self.reply.is_empty(), |view| {
+            view.child(
+                gpui_kit::component::clipboard::Clipboard::new("copy-answer")
+                    .value(self.reply.clone())
+                    .small()
+                    .tooltip("复制完整 AI 回答")
+                    .accessibility_label("复制完整 AI 回答"),
+            )
+        })
     }
 }
 
@@ -655,22 +592,27 @@ impl Render for Conversation {
             MessageScroller::new("conversation", self.scroll.clone(), move |index, _, cx| {
                 weak.upgrade()
                     .and_then(|view| {
-                        view.read(cx)
-                            .rows
-                            .get(index / 2)
-                            .cloned()
-                    })
-                    .map(|turn| {
-                        let row = if index % 2 == 0 {
-                            div()
+                        let view = view.read(cx);
+                        let key = *view.order.get(index)?;
+                        Some(match key {
+                            RowKey::Prompt(turn) => div()
                                 .w_full()
-                                .when_some(turn.read(cx).user.clone(), |view, user| {
-                                    view.py_3().child(user)
+                                .when_some(view.rows[turn].read(cx).user.clone(), |row, user| {
+                                    row.py_3().child(user)
                                 })
-                                .into_any_element()
-                        } else {
-                            turn.into_any_element()
-                        };
+                                .into_any_element(),
+                            RowKey::Part(turn, part) => view.rows[turn].read(cx).parts[part]
+                                .clone()
+                                .into_any_element(),
+                            RowKey::Tools(turn, start) => view.rows[turn].read(cx).groups[&start]
+                                .clone()
+                                .into_any_element(),
+                            RowKey::Footer(turn) => view.rows[turn]
+                                .clone()
+                                .into_any_element(),
+                        })
+                    })
+                    .map(|row| {
                         let row_bounds = row_bounds.clone();
                         h_flex()
                             .relative()
@@ -732,10 +674,9 @@ impl Render for Conversation {
                                 if viewport_height.replace(bounds.size.height) != bounds.size.height
                                 {
                                     let owner = owner.clone();
-                                    // This is the resolved chat viewport, excluding
-                                    // the composer and toolbar. Resize disclosures
-                                    // after paint, outside the list's measurement
-                                    // borrow, and only when that viewport changes.
+                                    // Invalidate row measurements after paint, outside
+                                    // the list's measurement borrow, only when the
+                                    // viewport excluding the composer changes.
                                     cx.defer(move |cx| {
                                         let _ = owner.update(cx, |view, cx| {
                                             for row in &view.rows {
@@ -860,7 +801,7 @@ impl Render for MessageRow {
                                 .child(tool.summary()),
                         ),
                 )
-                .tooltip(format!("{} · {}", tool.status.label(), tool.summary()))
+                .accessibility_label(format!("{} · {}", tool.status.label(), tool.summary()))
                 .on_click(cx.listener(move |_, _, _, cx| cx.emit(ToolRequest(tool.clone()))))
                 .into_any_element();
         }
@@ -873,36 +814,8 @@ impl Render for MessageRow {
             .gap_2()
             .when(self.muted, |view| {
                 view.child(
-                    Button::new("disclose")
-                        .ghost()
-                        .small()
-                        .accessibility_label(self.title.clone())
-                        .px_0()
-                        .max_w_full()
-                        .child(
-                            h_flex()
-                                .min_w_0()
-                                .child(
-                                    div()
-                                        .w(disclosure_inset)
-                                        .flex_none()
-                                        .child(
-                                            Icon::new(if self.expanded {
-                                                IconName::ChevronDown
-                                            } else {
-                                                IconName::ChevronRight
-                                            })
-                                            .small(),
-                                        ),
-                                )
-                                .child(
-                                    div()
-                                        .min_w_0()
-                                        .truncate()
-                                        .child(self.title.clone()),
-                                ),
-                        )
-                        .on_click(cx.listener(|view, _, _, cx| {
+                    disclosure_button("disclose", self.title.clone(), self.expanded).on_click(
+                        cx.listener(|view, _, _, cx| {
                             view.expanded = !view.expanded;
                             view.manual = true;
                             if view.expanded
@@ -914,7 +827,8 @@ impl Render for MessageRow {
                             }
                             cx.emit(Disclosure { index: view.index });
                             cx.notify();
-                        })),
+                        }),
+                    ),
                 )
             })
             .when(!self.images.is_empty(), |view| {
@@ -1037,6 +951,9 @@ impl Render for MessageRow {
                             .w_full()
                             .min_w_0()
                             .pl(disclosure_inset)
+                            .border_l_1()
+                            .border_dashed()
+                            .border_color(cx.theme().muted_foreground)
                             .child(text),
                     )
                 } else {
