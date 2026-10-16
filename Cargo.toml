@@ -24,7 +24,7 @@ exclude = ["vendor/ratex-unicode-font", "vendor/gpui-pre-wgpu"]
 [patch.crates-io]
 gpui-pre-wgpu = { path = "vendor/gpui-pre-wgpu" }
 ratex-unicode-font = { path = "vendor/ratex-unicode-font" }
-rquickjs = { git = "https://github.com/linyisu/gpui-component", rev = "2db7a46318bb941f740e37ffb06c5ff0db90130c" }
+rquickjs = { git = "https://github.com/linyisu/gpui-component", rev = "889c130bedf1acc254f894564e65355b941a84eb" }
 
 [workspace.package]
 version = "0.1.0"

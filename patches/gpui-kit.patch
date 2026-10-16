@@ -1717,6 +1717,54 @@ index 7a8ddf51..594120fb 100644
              soft_wrap,
          }
      }
+diff --git a/crates/component/src/message_scroller.rs b/crates/component/src/message_scroller.rs
+index b7307773..6516c667 100644
+--- a/crates/component/src/message_scroller.rs
++++ b/crates/component/src/message_scroller.rs
+@@ -149,6 +149,15 @@ impl MessageScrollerState {
+         true
+     }
+ 
++    /// Preserve the current item and pixel offset while disabling automatic tail following.
++    ///
++    /// Use before a reader expands or collapses content. Following stays disabled until
++    /// `scroll_to_end` or `reset` explicitly resumes it, even when short content fits.
++    pub fn pause_following(&mut self, cx: &mut Context<Self>) {
++        self.list_state.set_follow_mode(FollowMode::Normal);
++        cx.notify();
++    }
++
+     /// Resume tail following and scroll to the latest row.
+     pub fn scroll_to_end(&mut self, cx: &mut Context<Self>) {
+         self.list_state.set_follow_mode(FollowMode::Tail);
+@@ -483,6 +492,27 @@ mod tests {
+         });
+     }
+ 
++    #[gpui::test]
++    fn pausing_preserves_the_reading_offset_during_content_changes(cx: &mut gpui::TestAppContext) {
++        let state = cx.new(|cx| MessageScrollerState::new(4, cx));
++        state.update(cx, |state, cx| {
++            state.list_state.scroll_to(ListOffset {
++                item_ix: 1,
++                offset_in_item: px(17.),
++            });
++            let before = state.list_state.logical_scroll_top();
++            state.pause_following(cx);
++            state.remeasure_items(0..3, cx);
++            state.append(2, cx);
++            let after = state.list_state.logical_scroll_top();
++            assert_eq!(before.item_ix, after.item_ix);
++            assert_eq!(before.offset_in_item, after.offset_in_item);
++            assert!(!state.is_following_tail());
++            state.scroll_to_end(cx);
++            assert!(state.is_following_tail());
++        });
++    }
++
+     #[gpui::test]
+     fn test_message_scroller_builder(cx: &mut gpui::TestAppContext) {
+         let state = cx.new(|cx| MessageScrollerState::new(0, cx));
 diff --git a/website/base/text-view.md b/website/base/text-view.md
 index e761b4b6..f1b510e8 100644
 --- a/website/base/text-view.md
@@ -1730,6 +1778,18 @@ index e761b4b6..f1b510e8 100644
  
  The callback receives a `CodeBlock` and returns byte ranges paired with GPUI `HighlightStyle` values:
  
+diff --git a/website/component/message-scroller.md b/website/component/message-scroller.md
+index 749aad5c..a6f1516f 100644
+--- a/website/component/message-scroller.md
++++ b/website/component/message-scroller.md
+@@ -385,6 +385,7 @@ model around this component.
+ | `remeasure(cx)` | — | Remeasure all rows after global layout changes. |
+ | `remeasure_items(range, cx)` | `true` if valid | Remeasure selected dynamic rows. |
+ | `scroll_to_item(index, cx)` | `false` if out of range | Navigate to an arbitrary row index. |
++| `pause_following(cx)` | — | Preserve the reading position and disable tail following until explicitly resumed. |
+ | `scroll_to_end(cx)` | tail following enabled | Move to the latest row and resume following. |
+ 
+ ### `MessageScroller`
 diff --git a/website/zh-CN/base/text-view.md b/website/zh-CN/base/text-view.md
 index 4fda2653..5e2ac6b7 100644
 --- a/website/zh-CN/base/text-view.md
@@ -1743,3 +1803,15 @@ index 4fda2653..5e2ac6b7 100644
  
  回调接收 `CodeBlock`，并返回 UTF-8 字节范围及对应的 GPUI `HighlightStyle`：
  
+diff --git a/website/zh-CN/component/message-scroller.md b/website/zh-CN/component/message-scroller.md
+index 5ff081ee..01e507cb 100644
+--- a/website/zh-CN/component/message-scroller.md
++++ b/website/zh-CN/component/message-scroller.md
+@@ -298,6 +298,7 @@ GPUI 版本保留必要的滚动行为，省略 React primitive 中重复的 Pro
+ | `remeasure(cx)` | 标记所有 row 重新测量。 |
+ | `remeasure_items(range, cx)` | 标记指定 range 重新测量。 |
+ | `scroll_to_item(index, cx)` | 定位到指定 index；越界返回 `false`。 |
++| `pause_following(cx)` | — | Preserve the reading position and disable tail following until explicitly resumed. |
+ | `scroll_to_end(cx)` | 恢复尾部跟随并滚到最新内容。 |
+ 
+ ### `MessageScroller`

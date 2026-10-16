@@ -3688,7 +3688,7 @@ dependencies = [
 [[package]]
 name = "gpui-base"
 version = "0.7.1"
-source = "git+https://github.com/linyisu/gpui-component?rev=2db7a46318bb941f740e37ffb06c5ff0db90130c#2db7a46318bb941f740e37ffb06c5ff0db90130c"
+source = "git+https://github.com/linyisu/gpui-component?rev=889c130bedf1acc254f894564e65355b941a84eb#889c130bedf1acc254f894564e65355b941a84eb"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -3729,7 +3729,7 @@ dependencies = [
 [[package]]
 name = "gpui-component"
 version = "0.7.1"
-source = "git+https://github.com/linyisu/gpui-component?rev=2db7a46318bb941f740e37ffb06c5ff0db90130c#2db7a46318bb941f740e37ffb06c5ff0db90130c"
+source = "git+https://github.com/linyisu/gpui-component?rev=889c130bedf1acc254f894564e65355b941a84eb#889c130bedf1acc254f894564e65355b941a84eb"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3790,7 +3790,7 @@ dependencies = [
 [[package]]
 name = "gpui-component-macros"
 version = "0.7.1"
-source = "git+https://github.com/linyisu/gpui-component?rev=2db7a46318bb941f740e37ffb06c5ff0db90130c#2db7a46318bb941f740e37ffb06c5ff0db90130c"
+source = "git+https://github.com/linyisu/gpui-component?rev=889c130bedf1acc254f894564e65355b941a84eb#889c130bedf1acc254f894564e65355b941a84eb"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
@@ -3801,7 +3801,7 @@ dependencies = [
 [[package]]
 name = "gpui-component-shell"
 version = "0.7.1"
-source = "git+https://github.com/linyisu/gpui-component?rev=2db7a46318bb941f740e37ffb06c5ff0db90130c#2db7a46318bb941f740e37ffb06c5ff0db90130c"
+source = "git+https://github.com/linyisu/gpui-component?rev=889c130bedf1acc254f894564e65355b941a84eb#889c130bedf1acc254f894564e65355b941a84eb"
 dependencies = [
  "gpui-component",
  "gpui-shell",
@@ -3886,7 +3886,7 @@ dependencies = [
 [[package]]
 name = "gpui-fps"
 version = "0.7.1"
-source = "git+https://github.com/linyisu/gpui-component?rev=2db7a46318bb941f740e37ffb06c5ff0db90130c#2db7a46318bb941f740e37ffb06c5ff0db90130c"
+source = "git+https://github.com/linyisu/gpui-component?rev=889c130bedf1acc254f894564e65355b941a84eb#889c130bedf1acc254f894564e65355b941a84eb"
 dependencies = [
  "core-graphics 0.24.0",
  "gpui-pre",
@@ -3903,7 +3903,7 @@ dependencies = [
 [[package]]
 name = "gpui-kit"
 version = "0.7.1"
-source = "git+https://github.com/linyisu/gpui-component?rev=2db7a46318bb941f740e37ffb06c5ff0db90130c#2db7a46318bb941f740e37ffb06c5ff0db90130c"
+source = "git+https://github.com/linyisu/gpui-component?rev=889c130bedf1acc254f894564e65355b941a84eb#889c130bedf1acc254f894564e65355b941a84eb"
 dependencies = [
  "gpui-base",
  "gpui-component",
@@ -3917,7 +3917,7 @@ dependencies = [
 [[package]]
 name = "gpui-kit-assets"
 version = "0.7.1"
-source = "git+https://github.com/linyisu/gpui-component?rev=2db7a46318bb941f740e37ffb06c5ff0db90130c#2db7a46318bb941f740e37ffb06c5ff0db90130c"
+source = "git+https://github.com/linyisu/gpui-component?rev=889c130bedf1acc254f894564e65355b941a84eb#889c130bedf1acc254f894564e65355b941a84eb"
 dependencies = [
  "anyhow",
  "gpui-pre",
@@ -4444,7 +4444,7 @@ checksum = "d337c9acf058238e45ce0570d8a5958439242889492f91ae2d8e324211a61ccd"
 [[package]]
 name = "gpui-shell"
 version = "0.7.1"
-source = "git+https://github.com/linyisu/gpui-component?rev=2db7a46318bb941f740e37ffb06c5ff0db90130c#2db7a46318bb941f740e37ffb06c5ff0db90130c"
+source = "git+https://github.com/linyisu/gpui-component?rev=889c130bedf1acc254f894564e65355b941a84eb#889c130bedf1acc254f894564e65355b941a84eb"
 dependencies = [
  "anyhow",
  "async-channel",
@@ -9393,7 +9393,7 @@ dependencies = [
 [[package]]
 name = "rquickjs"
 version = "0.12.9"
-source = "git+https://github.com/linyisu/gpui-component?rev=2db7a46318bb941f740e37ffb06c5ff0db90130c#2db7a46318bb941f740e37ffb06c5ff0db90130c"
+source = "git+https://github.com/linyisu/gpui-component?rev=889c130bedf1acc254f894564e65355b941a84eb#889c130bedf1acc254f894564e65355b941a84eb"
 dependencies = [
  "quickjs-jit",
 ]
