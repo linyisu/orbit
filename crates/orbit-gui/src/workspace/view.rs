@@ -301,10 +301,20 @@ impl Workspace {
                     }
                 });
         } else {
+            let preview = path.to_owned();
+            let owner = cx.weak_entity();
             card = card
                 .small()
                 .media(AttachmentMedia::new().child(Icon::new(IconName::File)))
-                .content(AttachmentContent::new().title(AttachmentTitle::new(name)));
+                .content(AttachmentContent::new().title(AttachmentTitle::new(name.clone())))
+                .on_click(move |_, window, cx| {
+                    if owner
+                        .read_with(cx, |view, _| view.paths.contains(&preview))
+                        .unwrap_or(false)
+                    {
+                        crate::file_preview::open_path(name.clone(), preview.clone(), window, cx);
+                    }
+                });
         }
         if self.pending.is_none() {
             card = card.on_remove(cx.listener(move |view, _, _, cx| {

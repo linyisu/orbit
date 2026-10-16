@@ -1,11 +1,11 @@
 //! A virtualized conversation of user turns, each with one execution disclosure.
 mod images;
 mod markdown;
-pub(crate) use images::ImageRequest;
 mod model;
 mod navigation;
 mod process;
 mod process_height;
+use crate::file_preview::FileRequest;
 use gpui_kit::component::{
     ActiveTheme, ElementExt, Icon, IconName, Sizable,
     bubble::{Bubble, BubbleContent, BubbleVariant},
@@ -88,9 +88,9 @@ struct MessageImage {
 
 impl EventEmitter<Disclosure> for MessageRow {}
 impl EventEmitter<LayoutChanged> for MessageRow {}
-impl EventEmitter<ImageRequest> for MessageRow {}
-impl EventEmitter<ImageRequest> for TurnView {}
-impl EventEmitter<ImageRequest> for Conversation {}
+impl EventEmitter<FileRequest> for MessageRow {}
+impl EventEmitter<FileRequest> for TurnView {}
+impl EventEmitter<FileRequest> for Conversation {}
 impl EventEmitter<ToolRequest> for MessageRow {}
 impl EventEmitter<ToolRequest> for TurnView {}
 impl EventEmitter<ToolRequest> for Conversation {}
@@ -159,7 +159,7 @@ impl Conversation {
                 )
             });
             self._subscriptions
-                .push(cx.subscribe(&row, |_, _, request: &ImageRequest, cx| {
+                .push(cx.subscribe(&row, |_, _, request: &FileRequest, cx| {
                     cx.emit(request.clone());
                 }));
             self._subscriptions
@@ -323,7 +323,7 @@ impl TurnView {
         if self.user.is_none()
             && let Some(prompt) = &turn.prompt
         {
-            self.user = Some(cx.new(|cx| {
+            let row = cx.new(|cx| {
                 let mut row = MessageRow::new(self.index - 1, prompt, false, true, cx);
                 row.viewport = Some(self.viewport_bounds.clone());
                 row.files = turn.files.clone();
@@ -337,7 +337,12 @@ impl TurnView {
                     })
                     .collect();
                 row
-            }));
+            });
+            self._subscriptions
+                .push(cx.subscribe(&row, |_, _, request: &FileRequest, cx| {
+                    cx.emit(request.clone());
+                }));
+            self.user = Some(row);
         }
         while self.parts.len() < turn.parts.len() {
             let index = self.parts.len();
@@ -350,7 +355,7 @@ impl TurnView {
                     cx.emit(request.clone());
                 }));
             self._subscriptions
-                .push(cx.subscribe(&row, |_, _, request: &ImageRequest, cx| {
+                .push(cx.subscribe(&row, |_, _, request: &FileRequest, cx| {
                     cx.emit(request.clone());
                 }));
             self._subscriptions
@@ -786,7 +791,7 @@ impl MessageRow {
             let images = cx.new(images::ReplyImages::new);
             let resolver = images::ReplyImages::resolver(&images, cx);
             text.update(cx, |text, cx| text.set_image_source_override(resolver, cx));
-            subscriptions.push(cx.subscribe(&images, |_, _, request: &ImageRequest, cx| {
+            subscriptions.push(cx.subscribe(&images, |_, _, request: &FileRequest, cx| {
                 cx.emit(request.clone());
             }));
             subscriptions.push(cx.observe(&images, |row, _, cx| {
@@ -912,30 +917,6 @@ impl Render for MessageRow {
                         })),
                 )
             })
-            .when(!self.files.is_empty(), |view| {
-                view.child(
-                    h_flex()
-                        .gap_2()
-                        .flex_wrap()
-                        .children(self.files.iter().map(|file| {
-                            gpui_kit::component::attachment::Attachment::new()
-                                .id(SharedString::from(file.path.clone()))
-                                .small()
-                                .media(
-                                    gpui_kit::component::attachment::AttachmentMedia::new()
-                                        .child(Icon::new(IconName::File)),
-                                )
-                                .content(
-                                    gpui_kit::component::attachment::AttachmentContent::new()
-                                        .title(
-                                            gpui_kit::component::attachment::AttachmentTitle::new(
-                                                file.name.clone(),
-                                            ),
-                                        ),
-                                )
-                        })),
-                )
-            })
             .when(!self.images.is_empty(), |view| {
                 view.child(
                     h_flex()
@@ -977,6 +958,37 @@ impl Render for MessageRow {
                                         })
                                 }),
                         ),
+                )
+            })
+            .when(!self.files.is_empty(), |view| {
+                view.child(
+                    h_flex()
+                        .gap_2()
+                        .flex_wrap()
+                        .children(self.files.iter().map(|file| {
+                            let file = file.clone();
+                            gpui_kit::component::attachment::Attachment::new()
+                                .id(SharedString::from(file.path.clone()))
+                                .small()
+                                .tooltip(format!("查看 {}", file.name))
+                                .media(
+                                    gpui_kit::component::attachment::AttachmentMedia::new()
+                                        .child(Icon::new(IconName::File)),
+                                )
+                                .content(
+                                    gpui_kit::component::attachment::AttachmentContent::new()
+                                        .title(
+                                            gpui_kit::component::attachment::AttachmentTitle::new(
+                                                file.name.clone(),
+                                            ),
+                                        ),
+                                )
+                                .on_click(cx.listener(move |_, _, window, cx| {
+                                    let request =
+                                        crate::file_preview::open(file.clone(), window, cx);
+                                    cx.emit(request);
+                                }))
+                        })),
                 )
             })
             .when(self.expanded, |view| {

@@ -7,6 +7,7 @@ mod backend;
 mod conversation;
 mod dialog;
 mod execution;
+mod file_preview;
 mod image_http;
 mod image_preview;
 mod keymap;

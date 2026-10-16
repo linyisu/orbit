@@ -1,3 +1,6 @@
+//! Bounded attachment import, transport and read-only previews shared by clients.
+mod preview;
+pub use preview::FilePreview;
 use std::path::{Path, PathBuf};
 
 use crate::{
@@ -77,6 +80,19 @@ pub fn composer_uploads(
 /// Read a bounded regular file before transporting it to the session host.
 pub fn file_upload(path: &Path) -> Result<orbit_protocol::FileUpload> {
     use base64::Engine;
+    let bytes = read_file(path)?;
+    Ok(orbit_protocol::FileUpload {
+        name: path
+            .file_name()
+            .context("附件缺少文件名")?
+            .to_string_lossy()
+            .into_owned(),
+        data: base64::engine::general_purpose::STANDARD.encode(bytes),
+    })
+}
+
+/// Read a local regular attachment with the same size bound used for uploads.
+pub fn read_file(path: &Path) -> Result<Vec<u8>> {
     use std::io::Read;
     let metadata = std::fs::metadata(path)?;
     anyhow::ensure!(metadata.is_file(), "附件必须是普通文件：{}", path.display());
@@ -95,14 +111,7 @@ pub fn file_upload(path: &Path) -> Result<orbit_protocol::FileUpload> {
         "附件超过 20 MiB：{}",
         path.display()
     );
-    Ok(orbit_protocol::FileUpload {
-        name: path
-            .file_name()
-            .context("附件缺少文件名")?
-            .to_string_lossy()
-            .into_owned(),
-        data: base64::engine::general_purpose::STANDARD.encode(bytes),
-    })
+    Ok(bytes)
 }
 
 /// Recognize only a complete list of existing local files, leaving prose untouched.

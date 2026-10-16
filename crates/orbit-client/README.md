@@ -38,6 +38,7 @@ GUI 与 TUI 使用同一路由。全局保存成功不依赖远程会话在线�
 - [directories.rs](src/directories.rs)：目标目录读取、父目录与子目录路径，不通过客户端文件系统解释远端路径。
 - [windows.rs](src/windows.rs)：两端共用的窗口恢复、草稿资产、进程租约与旧快照迁移。
 - [attachments.rs](src/attachments.rs)：图片与普通文件的有界上传、粘贴路径识别；普通文件单个上限 20 MiB。
+  文本预览保留 UTF-8 原文，最多显示前 1 MiB；二进制文件只提供元数据。
 
 ## 验证
 

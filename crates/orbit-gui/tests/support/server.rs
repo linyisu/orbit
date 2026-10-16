@@ -5,6 +5,7 @@ mod disclosures;
 mod files;
 mod input_queue;
 mod inspector;
+mod message_attachments;
 mod planning;
 mod reply_images;
 mod review;
@@ -652,6 +653,9 @@ fn main() -> anyhow::Result<()> {
                 }
                 if session == "reply-images" {
                     history.insert(session.clone(), reply_images::seed(&workspace)?);
+                }
+                if session == "message-attachments" {
+                    history.insert(session.clone(), message_attachments::seed(&workspace)?);
                 }
                 if session == "tool-history" {
                     history.insert(session.clone(), tool_history());

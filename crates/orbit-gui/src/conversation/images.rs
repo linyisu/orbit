@@ -1,4 +1,5 @@
 //! Markdown images load through the owning workspace, including SSH/WSL paths.
+use crate::file_preview::FileRequest;
 use gpui_kit::*;
 use orbit_client::protocol::Response;
 use std::{
@@ -6,27 +7,6 @@ use std::{
     sync::{Arc, Mutex},
 };
 use tokio::sync::oneshot;
-
-type ImageResponse = oneshot::Sender<Result<Response, String>>;
-
-#[derive(Clone)]
-pub(crate) struct ImageRequest {
-    path: String,
-    response: Arc<Mutex<Option<ImageResponse>>>,
-}
-
-impl ImageRequest {
-    pub fn path(&self) -> &str {
-        &self.path
-    }
-
-    pub fn take_response(&self) -> Option<ImageResponse> {
-        self.response
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .take()
-    }
-}
 
 #[derive(Clone)]
 enum Load {
@@ -41,7 +21,7 @@ pub(super) struct ReplyImages {
     loads: Vec<Task<()>>,
 }
 
-impl EventEmitter<ImageRequest> for ReplyImages {}
+impl EventEmitter<FileRequest> for ReplyImages {}
 
 impl ReplyImages {
     pub fn new(_: &mut Context<Self>) -> Self {
@@ -92,10 +72,7 @@ impl ReplyImages {
         cache.insert(uri.to_owned(), Load::Pending);
         drop(cache);
         let (response, received) = oneshot::channel();
-        cx.emit(ImageRequest {
-            path: path.into(),
-            response: Arc::new(Mutex::new(Some(response))),
-        });
+        cx.emit(FileRequest::new(path.into(), response));
         let uri = uri.to_owned();
         self.loads
             .push(cx.spawn(async move |owner, cx| {

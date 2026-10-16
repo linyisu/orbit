@@ -237,14 +237,26 @@ impl Workspace {
         let conversation = cx.new(Conversation::new);
         let subscription = cx.subscribe(
             &conversation,
-            |view, _, request: &crate::conversation::ImageRequest, cx| {
+            |view, source, request: &crate::file_preview::FileRequest, cx| {
                 if let Some(response) = request.take_response() {
-                    if let Some(info) = &view.info {
+                    let current = source.entity_id() == view.conversation.entity_id()
+                        || view
+                            .subagent
+                            .as_ref()
+                            .is_some_and(|(_, conversation)| {
+                                conversation.entity_id() == source.entity_id()
+                            });
+                    let session = view
+                        .info
+                        .as_ref()
+                        .filter(|_| current)
+                        .map(|info| info.id.clone());
+                    if let Some(session) = session {
                         view.command(
                             Command::Settings {
                                 request: Request::ReadFile {
                                     allow_missing: false,
-                                    session: info.id.clone(),
+                                    session,
                                     path: request.path().to_owned(),
                                 },
                                 result: response,
