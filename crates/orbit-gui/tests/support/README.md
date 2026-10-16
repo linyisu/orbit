@@ -11,3 +11,5 @@
 组件用法参考 [Select](https://gpui-kit.com/component/select) 与 [Scrollable](https://gpui-kit.com/component/scrollable) 官方文档。
 
 模型恢复验收使用 `--resume model-recovery --model fixture::local`。发送 `generated-model-failure`，确认错误通知出现；切换到 `fixture::other` 后，上下文应从 200% 更新为 5%，当前错误入口与通知消失，历史失败记录仍保留。
+
+侧栏验收恢复独立生成的本地、SSH、WSL 标签；远程传输使用临时 PATH 中仅允许启动 fixture 的替身。检查启动即列出全部环境、分段切换记住上次选择、切换保留未发送草稿、五个快捷入口打开正确页面，以及下拉的方向键与 Escape。覆盖浅色、深色和 20 号字体下的最小窗口。

@@ -1,4 +1,5 @@
 //! A single window-owned sidebar. Tabs supply data; they never own navigation state.
+mod environment;
 mod organization;
 #[path = "session_controls.rs"]
 mod session_controls;
@@ -15,6 +16,8 @@ pub(crate) struct Sidebar {
     visible: bool,
     hosts: Vec<HostNavigation>,
     host: Option<usize>,
+    last_local: Option<usize>,
+    last_remote: Option<usize>,
     info: Option<SessionInfo>,
     navigation_tasks: Vec<WorkspaceSummary>,
     hovered_title: Option<(SharedString, Instant)>,
@@ -74,6 +77,8 @@ impl Sidebar {
             visible: true,
             hosts: vec![],
             host: None,
+            last_local: None,
+            last_remote: None,
             info: None,
             navigation_tasks: vec![],
             hovered_title: None,
@@ -81,7 +86,12 @@ impl Sidebar {
         }
     }
 
-    pub(crate) fn bind(&mut self, owner: &Entity<Workspace>, cx: &mut Context<Self>) {
+    pub(crate) fn bind(
+        &mut self,
+        owner: &Entity<Workspace>,
+        targets: Vec<Options>,
+        cx: &mut Context<Self>,
+    ) {
         let view = owner.read(cx);
         let selection_changed = self
             .owner
@@ -95,26 +105,21 @@ impl Sidebar {
         let location = view.location.clone();
         self.info = view.info.clone();
         self.navigation_tasks = view.navigation_tasks.clone();
-        let host = self
-            .hosts
-            .iter()
-            .position(|host| host.options.same_host(&options));
-        let host = host.unwrap_or_else(|| {
-            self.hosts.push(HostNavigation {
-                options,
-                sessions: vec![],
-                groups: vec![],
-                tree: cx.new(|cx| TreeState::new(cx)),
-                placements: vec![],
-                projects: Projects::default(),
-            });
-            self.hosts.len() - 1
-        });
+        for target in targets {
+            self.remember_host(target, cx);
+        }
+        let host = self.remember_host(options.clone(), cx);
         if self.host != Some(host) {
             self.host = Some(host);
             self.hovered_title = None;
         }
+        if options.ssh.is_some() || options.wsl.is_some() {
+            self.last_remote = Some(host);
+        } else {
+            self.last_local = Some(host);
+        }
         let host = &mut self.hosts[host];
+        host.options = options;
         let previous_selected = host
             .tree
             .read(cx)
@@ -183,6 +188,32 @@ impl Sidebar {
         cx.notify();
     }
 
+    /// Retain navigation state for restored tabs before they are first activated.
+    fn remember_host(&mut self, options: Options, cx: &mut Context<Self>) -> usize {
+        if let Some(ix) = self
+            .hosts
+            .iter()
+            .position(|host| host.options.same_host(&options))
+        {
+            return ix;
+        }
+        self.hosts.push(HostNavigation {
+            options,
+            sessions: vec![],
+            groups: vec![],
+            tree: cx.new(|cx| TreeState::new(cx)),
+            placements: vec![],
+            projects: Projects::default(),
+        });
+        let ix = self.hosts.len() - 1;
+        if self.hosts[ix].is_remote() {
+            self.last_remote.get_or_insert(ix);
+        } else {
+            self.last_local.get_or_insert(ix);
+        }
+        ix
+    }
+
     pub(crate) fn visible(&self) -> bool {
         self.visible
     }
@@ -226,6 +257,7 @@ impl Render for Sidebar {
             return div().into_any_element();
         };
         let active = owner.read(cx);
+        let new_task_disabled = active.opening || !active.connected;
         v_flex()
             .key_context("Orbit")
             .on_action(cx.listener(|view, _: &ToggleSidebar, window, cx| {
@@ -296,104 +328,7 @@ impl Render for Sidebar {
                 v_flex()
                     .p_3()
                     .gap_1()
-                    .child(
-                        Button::new("environment-switcher")
-                            .ghost()
-                            .small()
-                            .w_full()
-                            .child(
-                                h_flex()
-                                    .w_full()
-                                    .gap_2()
-                                    .child(
-                                        Icon::new(
-                                            if active.options.ssh.is_some()
-                                                || active.options.wsl.is_some()
-                                            {
-                                                IconName::Monitor
-                                            } else {
-                                                IconName::Laptop
-                                            },
-                                        )
-                                        .size_4(),
-                                    )
-                                    .child(
-                                        div()
-                                            .flex_1()
-                                            .min_w_0()
-                                            .text_ellipsis()
-                                            .child(active.environment()),
-                                    )
-                                    .child(Icon::new(IconName::ChevronDown).size_3()),
-                            )
-                            .accessibility_label("切换连接环境")
-                            .dropdown_menu({
-                                let owner = cx.weak_entity();
-                                let hosts: Vec<_> = self
-                                    .hosts
-                                    .iter()
-                                    .map(|host| {
-                                        let label = host
-                                            .options
-                                            .ssh
-                                            .as_ref()
-                                            .map(|host| format!("SSH · {host}"))
-                                            .or_else(|| {
-                                                host.options
-                                                    .wsl
-                                                    .as_ref()
-                                                    .map(|host| format!("WSL · {host}"))
-                                            })
-                                            .unwrap_or_else(|| "本地".into());
-                                        (label, host.options.clone())
-                                    })
-                                    .collect();
-                                move |menu, _, _| {
-                                    let mut menu = menu;
-                                    for (label, options) in &hosts {
-                                        let owner = owner.clone();
-                                        let mut options = options.clone();
-                                        options.resume = None;
-                                        options.recover_draft = false;
-                                        options.relink_on_resume = false;
-                                        menu =
-                                            menu.item(PopupMenuItem::new(label.clone()).on_click(
-                                                move |_, window, cx| {
-                                                    let _ = owner.update(cx, |view, cx| {
-                                                        view.with_owner(
-                                                            cx,
-                                                            |_, _, cx| {
-                                                                cx.emit(WorkspaceEvent::Open(
-                                                                    Box::new(options.clone()),
-                                                                ))
-                                                            },
-                                                            window,
-                                                        )
-                                                    });
-                                                },
-                                            ));
-                                    }
-                                    let owner = owner.clone();
-                                    menu.separator().item(
-                                        PopupMenuItem::new("连接远程项目…").on_click(
-                                            move |_, window, cx| {
-                                                let _ = owner.update(cx, |view, cx| {
-                                                    view.with_owner(
-                                                        cx,
-                                                        |view, window, cx| {
-                                                            view.remote_connection_dialog(
-                                                                window, cx,
-                                                            )
-                                                        },
-                                                        window,
-                                                    )
-                                                });
-                                            },
-                                        ),
-                                    )
-                                }
-                            }),
-                    )
+                    .child(self.environment_switcher(cx))
                     .child(
                         Button::new("new-session")
                             .ghost()
@@ -408,57 +343,14 @@ impl Render for Sidebar {
                                     .child("新任务"),
                             )
                             .tooltip(crate::keymap::tooltip("新任务", "new_conversation", cx))
-                            .disabled(active.opening || !active.connected)
+                            .disabled(new_task_disabled)
                             .on_click(cx.listener(|view, _, window, cx| {
                                 view.with_owner(cx, |view, _, cx| view.open(None, cx), window)
                             })),
                     )
                     .child(
-                        Button::new("open-project")
-                            .ghost()
-                            .small()
-                            .w_full()
-                            .accessibility_label("打开项目")
-                            .child(
-                                h_flex()
-                                    .w_full()
-                                    .gap_2()
-                                    .child(Icon::new(IconName::Folder).size_4())
-                                    .child("打开项目…"),
-                            )
-                            .tooltip(crate::keymap::tooltip("打开项目", "open_project", cx))
-                            .disabled(active.choosing_project || active.pending.is_some())
-                            .on_click(cx.listener(|view, _, window, cx| {
-                                view.with_owner(
-                                    cx,
-                                    |view, window, cx| view.open_project(window, cx),
-                                    window,
-                                )
-                            })),
-                    )
-                    .child(
-                        Button::new("connect-remote")
-                            .ghost()
-                            .small()
-                            .w_full()
-                            .accessibility_label("连接远程项目")
-                            .child(
-                                h_flex()
-                                    .w_full()
-                                    .gap_2()
-                                    .child(Icon::new(IconName::Monitor).size_4())
-                                    .child("连接远程项目…"),
-                            )
-                            .on_click(cx.listener(|view, _, window, cx| {
-                                view.with_owner(
-                                    cx,
-                                    |view, window, cx| view.remote_connection_dialog(window, cx),
-                                    window,
-                                )
-                            })),
-                    )
-                    .child(
                         Button::new("find-task")
+                            .accessibility_label("搜索任务")
                             .ghost()
                             .small()
                             .w_full()
@@ -467,7 +359,7 @@ impl Render for Sidebar {
                                     .w_full()
                                     .gap_2()
                                     .child(Icon::new(IconName::Search).size_4())
-                                    .child("搜索任务"),
+                                    .child("搜索"),
                             )
                             .tooltip(crate::keymap::tooltip("搜索任务", "search_sessions", cx))
                             .on_click(cx.listener(|view, _, window, cx| {
@@ -478,54 +370,49 @@ impl Render for Sidebar {
                                 )
                             })),
                     )
-                    .child(
-                        Button::new("project-tasks")
-                            .ghost()
-                            .small()
-                            .w_full()
-                            .accessibility_label("项目任务")
-                            .disabled(active.info.is_none())
-                            .child(
-                                h_flex()
-                                    .w_full()
-                                    .gap_2()
-                                    .child(Icon::new(IconName::ListTodo).size_4())
-                                    .child("项目任务"),
-                            )
-                            .on_click(cx.listener(|view, _, window, cx| {
-                                view.with_owner(
-                                    cx,
-                                    |view, window, cx| view.show_project_tasks(false, window, cx),
-                                    window,
+                    .children(
+                        [
+                            (
+                                "sidebar-mcp",
+                                "MCP",
+                                IconName::Wrench,
+                                WorkspaceCommand::Mcp,
+                            ),
+                            (
+                                "sidebar-skills",
+                                "Skill",
+                                IconName::BookOpen,
+                                WorkspaceCommand::Skills,
+                            ),
+                            (
+                                "sidebar-plugins",
+                                "插件",
+                                IconName::Puzzle,
+                                WorkspaceCommand::Plugins,
+                            ),
+                        ]
+                        .into_iter()
+                        .map(|(id, label, icon, command)| {
+                            Button::new(id)
+                                .ghost()
+                                .small()
+                                .w_full()
+                                .accessibility_label(label)
+                                .child(
+                                    h_flex()
+                                        .w_full()
+                                        .gap_2()
+                                        .child(Icon::new(icon).size_4())
+                                        .child(label),
                                 )
-                            })),
-                    )
-                    .child(
-                        Button::new("plugin-marketplace")
-                            .ghost()
-                            .small()
-                            .w_full()
-                            .child(
-                                h_flex()
-                                    .w_full()
-                                    .gap_2()
-                                    .child(Icon::new(IconName::Puzzle).size_4())
-                                    .child("插件市场"),
-                            )
-                            .accessibility_label("插件市场")
-                            .on_click(cx.listener(|view, _, window, cx| {
-                                view.with_owner(
-                                    cx,
-                                    |view, window, cx| {
-                                        view.execute(
-                                            super::actions::WorkspaceCommand::Plugins,
-                                            window,
-                                            cx,
-                                        )
-                                    },
-                                    window,
-                                );
-                            })),
+                                .on_click(cx.listener(move |view, _, window, cx| {
+                                    view.with_owner(
+                                        cx,
+                                        |view, window, cx| view.execute(command, window, cx),
+                                        window,
+                                    );
+                                }))
+                        }),
                     ),
             )
             .child(

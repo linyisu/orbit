@@ -585,8 +585,14 @@ impl Workbench {
             .iter()
             .find(|task| task.view.read(cx).key() == self.active)
         {
+            let targets = self
+                .tasks
+                .iter()
+                .filter(|task| !task.closed)
+                .map(|task| task.view.read(cx).options().clone())
+                .collect();
             self.sidebar
-                .update(cx, |sidebar, cx| sidebar.bind(&task.view, cx));
+                .update(cx, |sidebar, cx| sidebar.bind(&task.view, targets, cx));
         }
     }
 

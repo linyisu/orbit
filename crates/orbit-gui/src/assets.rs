@@ -20,6 +20,7 @@ gpui_kit::assets::icon_assets!(
         Command,
         Monitor,
         Laptop,
+        Cloud,
         ListTodo,
         Pencil,
         Pin,
@@ -52,19 +53,24 @@ mod tests {
     use super::*;
 
     #[test]
-    fn source_import_icon_is_available_in_the_application_bundle() {
-        let path = gpui_kit::assets::IconName::Download.path();
-        let bytes = AppAssets.load(&path).unwrap().unwrap();
-        assert!(
-            std::str::from_utf8(&bytes)
-                .unwrap()
-                .contains("<svg")
-        );
-        assert!(
-            AppAssets
-                .list("icons/")
-                .unwrap()
-                .contains(&path)
-        );
+    fn source_import_and_environment_icons_are_available_in_the_application_bundle() {
+        for icon in [
+            gpui_kit::assets::IconName::Download,
+            gpui_kit::assets::IconName::Cloud,
+        ] {
+            let path = icon.path();
+            let bytes = AppAssets.load(&path).unwrap().unwrap();
+            assert!(
+                std::str::from_utf8(&bytes)
+                    .unwrap()
+                    .contains("<svg")
+            );
+            assert!(
+                AppAssets
+                    .list("icons/")
+                    .unwrap()
+                    .contains(&path)
+            );
+        }
     }
 }
