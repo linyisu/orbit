@@ -421,7 +421,7 @@ impl Workspace {
             tasks.update(cx, |tasks, cx| tasks.disconnected(window, cx));
         }
         if self.error.is_some() {
-            window.remove_notification::<Workspace>(cx);
+            window.remove_notification1::<Workspace>(SharedString::from(self.key.clone()), cx);
         }
         self.error = None;
         self.opening = true;
@@ -677,6 +677,14 @@ impl Workspace {
     }
 
     fn profile(&mut self, info: SessionInfo, window: &mut Window, cx: &mut Context<Self>) {
+        if self.context_usage.select_profile(&info) {
+            self.error = None;
+            self.execution.clear_failure();
+            window.remove_notification1::<Workspace>(SharedString::from(self.key.clone()), cx);
+        }
+        if let Some(used) = self.context_usage.used_tokens() {
+            self.context_used = used;
+        }
         if self
             .info
             .as_ref()
@@ -774,6 +782,8 @@ impl Workspace {
                 self.options.recover_draft = false;
                 // This entity owns one task's composer. Restoring transport
                 // history must never overwrite text edited while offline.
+                self.context_usage = Default::default();
+                self.context_used = 0;
                 self.profile(info, window, cx);
                 self.opening = true;
                 self.busy = false;
@@ -812,8 +822,6 @@ impl Workspace {
                     }
                 }
                 self.planning = Default::default();
-                self.context_used = 0;
-                self.context_usage = Default::default();
                 self.panel = None;
                 self.subagent = None;
                 self.usage = cx.new(crate::usage::Usage::new);

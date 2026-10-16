@@ -11,6 +11,57 @@ fn mouse(kind: MouseEventKind, x: u16, y: u16) -> Event {
 }
 
 #[test]
+fn confirmed_model_changes_refresh_context_and_dismiss_only_current_failure_status() {
+    let (mut tab, _requests) = tab("本地");
+    let mut info: SessionInfo = serde_json::from_value(serde_json::json!({
+        "id": "generated-session",
+        "title": "Generated task",
+        "workspace": "/generated/workspace",
+        "model": "alpha",
+        "models": [],
+        "supports_vision": false,
+        "reasoning_effort": null,
+        "reasoning_efforts": [],
+        "context_tokens": 2_000,
+        "input_context_tokens": 1_800,
+        "max_output_tokens": 200,
+        "context_used_tokens": 3_600
+    }))
+    .unwrap();
+    tab.profile(&info);
+    tab.state
+        .feedback
+        .info("Generated diagnostic", "Independent information");
+    tab.state
+        .apply(orbit_client::protocol::events::AgentEvent::Failed {
+            error: "generated summary request failed".into(),
+        });
+    tab.state
+        .input
+        .set("preserve the generated draft".into());
+    let transcript_len = tab.state.transcript.len();
+    assert_eq!(tab.state.status, RunStatus::Failed);
+    assert!(render_screen(&mut tab.state).contains("generated summary request failed"));
+    info.model = "beta".into();
+    info.input_context_tokens = 8_000;
+    info.context_tokens = 8_200;
+    info.context_used_tokens = Some(1_200);
+    tab.profile(&info);
+    assert_eq!(tab.state.status, RunStatus::Idle);
+    assert_eq!(tab.state.context_used_tokens, 1_200);
+    assert_eq!(tab.state.input_context_tokens, 8_000);
+    assert_eq!(tab.state.transcript.len(), transcript_len);
+    assert_eq!(tab.state.input.text, "preserve the generated draft");
+    let screen = render_screen(&mut tab.state);
+    assert!(!screen.contains("generated summary request failed"));
+    assert!(screen.contains("Generated diagnostic"));
+    tab.state.status = RunStatus::Failed;
+    info.title = "Renamed generated task".into();
+    tab.profile(&info);
+    assert_eq!(tab.state.status, RunStatus::Failed);
+}
+
+#[test]
 fn report_dialog_scrolls_through_real_input_even_under_a_notification() {
     let (mut tab, _requests) = tab("本地");
     tab.state

@@ -316,6 +316,13 @@ pub(crate) struct Execution {
 }
 
 impl Execution {
+    /// Dismiss the previous run's failure indicator without changing its tool records.
+    pub(crate) fn clear_failure(&mut self) {
+        if self.phase == Phase::Failed {
+            self.phase = Phase::Ready;
+        }
+    }
+
     pub(crate) fn phase(&self) -> Phase {
         self.phase
     }
@@ -918,6 +925,9 @@ mod tests {
         })));
         assert_eq!(state.tools()[0].status, ToolStatus::Failed);
         assert_eq!(state.phase(), Phase::Failed);
+        state.clear_failure();
+        assert_eq!(state.phase(), Phase::Ready);
+        assert_eq!(state.tools()[0].status, ToolStatus::Failed);
     }
 
     #[test]

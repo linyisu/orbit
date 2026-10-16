@@ -392,7 +392,7 @@ impl Workspace {
                 window.close_all_dialogs(cx);
             }
             self.suspend_connection_challenge(window, cx);
-            window.remove_notification::<Workspace>(cx);
+            window.remove_notification1::<Workspace>(SharedString::from(self.key.clone()), cx);
         }
         if visible && changed {
             self.focus_page(window, cx);

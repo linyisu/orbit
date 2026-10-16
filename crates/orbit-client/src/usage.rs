@@ -162,9 +162,49 @@ pub fn reset_timestamp(value: &str) -> Option<i64> {
 #[derive(Clone, Debug, Default)]
 pub struct ContextUsage {
     calibrations: std::collections::BTreeMap<String, orbit_agent::calibration::TokenCalibration>,
+    profile: Option<ContextProfile>,
+    estimated_input: Option<usize>,
+    used_tokens: Option<usize>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ContextProfile {
+    model: String,
+    reasoning_effort: Option<String>,
+    context_tokens: usize,
+    input_context_tokens: usize,
+    max_output_tokens: u32,
 }
 
 impl ContextUsage {
+    /// Apply a confirmed profile and refresh occupancy without replaying a model request.
+    /// Return whether a previously selected execution profile changed.
+    pub fn select_profile(&mut self, info: &crate::protocol::SessionInfo) -> bool {
+        let profile = ContextProfile {
+            model: info.model.clone(),
+            reasoning_effort: info.reasoning_effort.clone(),
+            context_tokens: info.context_tokens,
+            input_context_tokens: info.input_context_tokens,
+            max_output_tokens: info.max_output_tokens,
+        };
+        let changed = self
+            .profile
+            .as_ref()
+            .is_some_and(|previous| previous != &profile);
+        self.used_tokens = info.context_used_tokens.or_else(|| {
+            self.estimated_input.map(|estimated| {
+                self.calibration(&info.model)
+                    .estimate(estimated)
+            })
+        });
+        self.profile = Some(profile);
+        changed
+    }
+
+    pub fn used_tokens(&self) -> Option<usize> {
+        self.used_tokens
+    }
+
     pub fn calibration(&self, model: &str) -> orbit_agent::calibration::TokenCalibration {
         self.calibrations
             .get(model)
@@ -179,17 +219,21 @@ impl ContextUsage {
         event: &orbit_agent::events::AgentEvent,
     ) -> Option<usize> {
         use orbit_agent::events::AgentEvent;
-        match event {
-            AgentEvent::ContextUsage { estimated_input } => Some(
-                self.calibration(model)
-                    .estimate(*estimated_input),
-            ),
+        let used = match event {
+            AgentEvent::ContextUsage { estimated_input } => {
+                self.estimated_input = Some(*estimated_input);
+                Some(
+                    self.calibration(model)
+                        .estimate(*estimated_input),
+                )
+            }
             AgentEvent::RequestMetrics {
                 profile,
                 estimated_input,
                 usage,
                 ..
             } => {
+                self.estimated_input = Some(*estimated_input);
                 let reported_input = usage
                     .as_ref()
                     .and_then(|usage| usage.prompt_tokens);
@@ -199,6 +243,7 @@ impl ContextUsage {
                     .observe(*estimated_input, reported_input);
                 Some(
                     reported_input
+                        .filter(|_| profile == model)
                         .and_then(|tokens| usize::try_from(tokens).ok())
                         .filter(|tokens| *tokens > 0)
                         .unwrap_or_else(|| {
@@ -207,12 +252,19 @@ impl ContextUsage {
                         }),
                 )
             }
-            AgentEvent::ContextCompacted { after_tokens, .. } => Some(
-                self.calibration(model)
-                    .estimate(*after_tokens),
-            ),
+            AgentEvent::ContextCompacted { after_tokens, .. } => {
+                self.estimated_input = Some(*after_tokens);
+                Some(
+                    self.calibration(model)
+                        .estimate(*after_tokens),
+                )
+            }
             _ => None,
+        };
+        if let Some(used) = used {
+            self.used_tokens = Some(used);
         }
+        used
     }
 }
 
@@ -224,6 +276,67 @@ pub fn context_percent(used: usize, input_budget: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn context_profile(model: &str, used: Option<usize>) -> crate::protocol::SessionInfo {
+        serde_json::from_value(serde_json::json!({
+            "id": "generated-session",
+            "title": "Generated task",
+            "workspace": "/generated/workspace",
+            "model": model,
+            "models": [],
+            "supports_vision": false,
+            "reasoning_effort": null,
+            "reasoning_efforts": [],
+            "context_tokens": 10_000,
+            "input_context_tokens": 9_000,
+            "max_output_tokens": 1_000,
+            "context_used_tokens": used
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn confirmed_profiles_refresh_occupancy_and_only_invalidate_execution_changes() {
+        let mut context = ContextUsage::default();
+        let mut info = context_profile("alpha", Some(700));
+        assert!(!context.select_profile(&info));
+        assert_eq!(context.used_tokens(), Some(700));
+        info.title = "Renamed generated task".into();
+        info.mode = orbit_protocol::Mode::Ask;
+        info.context_used_tokens = Some(800);
+        assert!(!context.select_profile(&info));
+        assert_eq!(context.used_tokens(), Some(800));
+        info.model = "beta".into();
+        info.context_used_tokens = Some(300);
+        assert!(context.select_profile(&info));
+        assert_eq!(context.used_tokens(), Some(300));
+        info.input_context_tokens = 8_000;
+        assert!(context.select_profile(&info));
+        assert!(!context.select_profile(&info));
+    }
+
+    #[test]
+    fn legacy_profiles_recalibrate_event_evidence_without_reusing_another_models_usage() {
+        use orbit_agent::events::AgentEvent;
+        let mut context = ContextUsage::default();
+        context.select_profile(&context_profile("alpha", None));
+        let metrics = AgentEvent::RequestMetrics {
+            profile: "alpha".into(),
+            estimated_input: 120,
+            retries: None,
+            usage: Some(orbit_model::types::Usage {
+                prompt_tokens: Some(240),
+                ..Default::default()
+            }),
+            elapsed_ms: 10,
+        };
+        assert_eq!(context.observe("alpha", &metrics), Some(240));
+        assert!(context.select_profile(&context_profile("beta", None)));
+        assert_eq!(context.used_tokens(), Some(120));
+        assert_eq!(context.observe("beta", &metrics), Some(120));
+        assert!(context.select_profile(&context_profile("alpha", None)));
+        assert_eq!(context.used_tokens(), Some(240));
+    }
 
     #[test]
     fn balance_summary_keeps_currency_totals_without_counting_their_components() {

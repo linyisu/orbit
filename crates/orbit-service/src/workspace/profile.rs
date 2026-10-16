@@ -78,6 +78,15 @@ pub(super) fn describe(setup: &PreparedWorkspace) -> SessionInfo {
         context_tokens: budget.context_tokens,
         input_context_tokens: budget.input_context_tokens,
         max_output_tokens: budget.max_output_tokens,
+        context_used_tokens: Some(
+            setup
+                .session
+                .calibration(&resources.model_name)
+                .estimate(orbit_agent::context::estimate_tokens(
+                    &setup.session.snapshot.history,
+                    &resources.tools.definitions(),
+                )),
+        ),
     }
 }
 

@@ -248,9 +248,16 @@ fn main() -> anyhow::Result<()> {
                 "supports_vision": true,
                 "reasoning_effort": null,
                 "reasoning_efforts": [],
-                "context_tokens": 128_000,
-                "input_context_tokens": 120_000,
-                "max_output_tokens": 8_000
+                "context_tokens": if session == "model-recovery" {
+                    if model == "fixture::local" { 10_000 } else { 91_000 }
+                } else { 128_000 },
+                "input_context_tokens": if session == "model-recovery" {
+                    if model == "fixture::local" { 9_000 } else { 90_000 }
+                } else { 120_000 },
+                "max_output_tokens": if session == "model-recovery" { 1_000 } else { 8_000 },
+                "context_used_tokens": if session == "model-recovery" {
+                    Some(if model == "fixture::local" { 18_000 } else { 4_500 })
+                } else { None }
             })
         };
         let response = match request["method"]
@@ -1125,9 +1132,19 @@ fn main() -> anyhow::Result<()> {
                             }
                         })];
                     }
+                    if prompt == "generated-model-failure" {
+                        pending = [json!({
+                            "Agent": {
+                                "Failed": { "error": "Generated summary failure." }
+                            }
+                        })]
+                        .into();
+                    }
                     pending.push_back(json!({
                         "Finished": {
-                            "status": "completed"
+                            "status": if prompt == "generated-model-failure" {
+                                "failed"
+                            } else { "completed" }
                         }
                     }));
                     json!({

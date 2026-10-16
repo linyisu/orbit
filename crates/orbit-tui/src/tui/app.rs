@@ -578,6 +578,14 @@ impl UiState {
         self.follow_bottom = true;
     }
 
+    pub fn select_model_profile(&mut self, info: &orbit_client::protocol::SessionInfo) -> bool {
+        let changed = self.context_usage.select_profile(info);
+        if let Some(used) = self.context_usage.used_tokens() {
+            self.context_used_tokens = used;
+        }
+        changed
+    }
+
     pub fn apply(&mut self, event: AgentEvent) {
         if let Some(used) = self
             .context_usage

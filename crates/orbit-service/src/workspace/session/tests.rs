@@ -562,7 +562,18 @@ async fn oversized_tool_catalog_reports_the_budget_and_preserves_history() {
             serde_json::json!({"type": "object"}),
             |_, _| async { Ok("unused".into()) },
         ));
+    for (model, actual) in [("test::small", 400), ("test::large", 100)] {
+        setup
+            .session
+            .snapshot
+            .calibration
+            .entry(model.into())
+            .or_default()
+            .observe(200, Some(actual));
+    }
     let original = setup.session.snapshot.history.clone();
+    let estimated =
+        orbit_agent::context::estimate_tokens(&original, &setup.resources.tools.definitions());
     let store = setup.session.store.clone();
     let handle = Handle::spawn(setup, None)
         .await
@@ -575,6 +586,7 @@ async fn oversized_tool_catalog_reports_the_budget_and_preserves_history() {
         .await
         .unwrap();
     let info = handle.current_info().await;
+    assert_eq!(info.context_used_tokens, Some(estimated * 2));
     handle
         .command(Command::Start {
             request_id: orbit_protocol::request_id(),
@@ -615,6 +627,20 @@ async fn oversized_tool_catalog_reports_the_budget_and_preserves_history() {
     let snapshot = store.load(&info.id).await.unwrap();
     assert_eq!(snapshot.history, original);
     assert_eq!(snapshot.runs.last().unwrap().status, "failed");
+    handle
+        .command(Command::SetModel {
+            model: "test::large".into(),
+            effort: None,
+        })
+        .await
+        .unwrap();
+    let refreshed = handle.current_info().await;
+    assert_eq!(refreshed.context_used_tokens, Some(estimated.div_ceil(2)));
+    assert!(refreshed.context_used_tokens.unwrap() < refreshed.input_context_tokens);
+    let preserved = store.load(&info.id).await.unwrap();
+    assert_eq!(preserved.history, original);
+    assert_eq!(preserved.runs.len(), snapshot.runs.len());
+    assert_eq!(preserved.runs.last().unwrap().status, "failed");
     handle
         .command(Command::Close)
         .await

@@ -54,6 +54,15 @@ impl Feedback {
         self.push(title, text, false);
     }
 
+    /// Dismiss obsolete failures while preserving independent informational notices.
+    pub fn dismiss_errors(&mut self) {
+        self.notices
+            .retain(|notice| !notice.error);
+        self.area = Rect::default();
+        self.close = Rect::default();
+        self.pressed = None;
+    }
+
     fn push(&mut self, title: &str, text: &str, error: bool) {
         const MAX_CHARS: usize = 8_192;
         let now = Instant::now();

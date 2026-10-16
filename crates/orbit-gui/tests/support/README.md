@@ -9,3 +9,5 @@
 逐页验证短内容不滚动、长内容可滚到末尾、拖动滚动条后仍可切页并恢复位置。API 协议下拉需跟随控件宽度，支持方向键、Enter 与 Escape。
 插件目录、已启用插件和市场来源分别检查最后一项可见；市场来源沿用弹窗正文滚动，避免叠加第二层滚动条。
 组件用法参考 [Select](https://gpui-kit.com/component/select) 与 [Scrollable](https://gpui-kit.com/component/scrollable) 官方文档。
+
+模型恢复验收使用 `--resume model-recovery --model fixture::local`。发送 `generated-model-failure`，确认错误通知出现；切换到 `fixture::other` 后，上下文应从 200% 更新为 5%，当前错误入口与通知消失，历史失败记录仍保留。

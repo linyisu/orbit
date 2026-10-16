@@ -304,6 +304,10 @@ pub struct SessionInfo {
     pub context_tokens: usize,
     pub input_context_tokens: usize,
     pub max_output_tokens: u32,
+    /// History and tool schemas at publication, using the selected model's calibration.
+    /// Older services omit this snapshot; clients may fall back to event evidence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_used_tokens: Option<usize>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]

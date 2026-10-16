@@ -430,6 +430,12 @@ impl Tab {
     }
 
     fn profile(&mut self, info: &SessionInfo) {
+        if self.state.select_model_profile(info) {
+            if self.state.status == RunStatus::Failed {
+                self.state.status = RunStatus::Idle;
+            }
+            self.state.feedback.dismiss_errors();
+        }
         if self.state.model != info.model {
             self.invalidate_usage();
         }

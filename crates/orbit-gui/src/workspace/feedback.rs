@@ -112,7 +112,7 @@ impl Workspace {
                         } else {
                             "无法打开项目"
                         })
-                        .id::<Workspace>()
+                        .id1::<Workspace>(SharedString::from(view.key.clone()))
                         .on_click(move |_, window, cx| {
                             let _ = owner.update(cx, |view, cx| view.show_error(window, cx));
                         }),
