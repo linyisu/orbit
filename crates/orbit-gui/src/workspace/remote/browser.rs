@@ -1,20 +1,20 @@
 //! Target-owned directory navigation, including SSH authentication. No remote
 //! path is inspected through the desktop filesystem or interpolated by the UI.
 use super::*;
-use gpui_kit::component::{list::ListItem, spinner::Spinner};
+use gpui_kit::component::spinner::Spinner;
 use orbit_client::{directories::Listing, interaction, transport::Connection};
 
 pub(super) struct Selected(pub(super) String);
 
 pub(super) struct DirectoryBrowser {
-    options: Options,
+    options: Option<Options>,
     runtime: Arc<tokio::runtime::Runtime>,
     connection: Option<Arc<Connection>>,
     progress: interaction::Progress,
-    focus: FocusHandle,
     path: Entity<InputState>,
     password: Entity<InputState>,
-    tree: Entity<TreeState>,
+    choices: Entity<choices::ChoiceInput>,
+    embedded: bool,
     listing: Option<Listing>,
     busy: bool,
     stage: SharedString,
@@ -27,8 +27,13 @@ pub(super) struct DirectoryBrowser {
 }
 
 impl EventEmitter<Selected> for DirectoryBrowser {}
+impl EventEmitter<choices::ChoiceEvent> for DirectoryBrowser {}
 
 impl DirectoryBrowser {
+    pub(super) fn is_open(&self, cx: &App) -> bool {
+        self.choices.read(cx).is_open()
+    }
+
     pub(super) fn new(
         options: Options,
         runtime: Arc<tokio::runtime::Runtime>,
@@ -45,76 +50,84 @@ impl DirectoryBrowser {
             input.set_value(initial.clone(), window, cx);
             input
         });
-        let password = cx.new(|cx| InputState::new(window, cx).masked(true));
-        let path_subscription = cx.subscribe_in(&path, window, |view, path, event, _, cx| {
-            if matches!(event, InputEvent::PressEnter { shift: false, .. }) {
-                view.load(path.read(cx).value().trim().to_owned(), cx);
-            }
+        let mut browser = Self::picker(runtime, path, window, cx);
+        browser.options = Some(options);
+        browser.embedded = false;
+        browser.load(initial, cx);
+        browser
+    }
+
+    /// Share the form's path input; defer remote I/O until the dropdown is opened.
+    pub(super) fn picker(
+        runtime: Arc<tokio::runtime::Runtime>,
+        path: Entity<InputState>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let choices = cx.new(|cx| {
+            choices::ChoiceInput::new(
+                path.clone(),
+                "工作区目录",
+                choices::ChoiceKind::Directory,
+                window,
+                cx,
+            )
         });
+        let status = cx.weak_entity();
+        choices.update(cx, |choices, cx| {
+            choices.set_items(
+                vec![choices::Choice {
+                    value: "~/".into(),
+                    label: "~/".into(),
+                }],
+                window,
+                cx,
+            );
+            choices.set_footer(std::rc::Rc::new(move |window, cx| {
+                status
+                    .upgrade()
+                    .map(|owner| {
+                        owner
+                            .read(cx)
+                            .status(owner.downgrade(), window, cx)
+                            .into_any_element()
+                    })
+                    .unwrap_or_else(|| div().into_any_element())
+            }));
+        });
+        let choice_events =
+            cx.subscribe_in(&choices, window, |view, _, event, _, cx| match event {
+                choices::ChoiceEvent::Selected(path) => view.load(path.clone(), cx),
+                choices::ChoiceEvent::Browse | choices::ChoiceEvent::Submit if !view.embedded => {
+                    view.load(
+                        view.path
+                            .read(cx)
+                            .value()
+                            .trim()
+                            .to_owned(),
+                        cx,
+                    );
+                }
+                choices::ChoiceEvent::Browse => cx.emit(choices::ChoiceEvent::Browse),
+                choices::ChoiceEvent::Submit => cx.emit(choices::ChoiceEvent::Submit),
+            });
+        let password = cx.new(|cx| InputState::new(window, cx).masked(true));
         let password_subscription =
             cx.subscribe_in(&password, window, |view, _, event, window, cx| {
                 if matches!(event, InputEvent::PressEnter { shift: false, .. }) {
                     view.answer(true, window, cx);
                 }
             });
-        let (progress, mut updates) = interaction::channel();
-        let update_task = cx.spawn(async move |owner, cx| {
-            loop {
-                tokio::select! {
-                    changed = updates.stage.changed() => {
-                        if changed.is_err() {
-                            break;
-                        }
-                        let stage = updates
-                            .stage
-                            .borrow_and_update()
-                            .clone();
-                        if owner
-                            .update(cx, |view, cx| {
-                                view.stage = stage.into();
-                                cx.notify();
-                            })
-                            .is_err()
-                        {
-                            break;
-                        }
-                    }
-                    challenge = updates.prompts.recv() => {
-                        let Some(challenge) = challenge else { break };
-                        if owner
-                            .update_in(cx, |view, window, cx| {
-                                let first = view.challenges.is_empty();
-                                view.challenges.push_back(challenge);
-                                if first
-                                    && !view
-                                        .challenges
-                                        .front()
-                                        .is_some_and(|item| item.confirm)
-                                {
-                                    view.password.update(cx, |input, cx| {
-                                        input.set_value("", window, cx);
-                                        input.focus(window, cx);
-                                    });
-                                }
-                                cx.notify();
-                            })
-                            .is_err()
-                        {
-                            break;
-                        }
-                    }
-                }
-            }
-        });
-        let mut browser = Self {
-            options,
+        let (progress, update_task) = Self::interaction(cx);
+        Self {
+            options: None,
             runtime,
             connection: None,
             progress,
-            focus: cx.focus_handle().tab_stop(false),
             path,
             password,
-            tree: cx.new(|cx| TreeState::new(cx)),
+            choices,
+            embedded: true,
             listing: None,
             busy: false,
             stage: "准备读取目录".into(),
@@ -123,28 +136,131 @@ impl DirectoryBrowser {
             request: None,
             receive: Task::ready(()),
             _updates: update_task,
-            _subscriptions: vec![path_subscription, password_subscription],
-        };
-        browser.load(initial, cx);
-        browser
+            _subscriptions: vec![choice_events, password_subscription],
+        }
+    }
+
+    fn interaction(cx: &mut Context<Self>) -> (interaction::Progress, Task<()>) {
+        let (progress, mut updates) = interaction::channel();
+        let update_task = cx.spawn(async move |owner, cx| {
+            loop {
+                tokio::select! {
+                    changed = updates.stage.changed() => {
+                        if changed.is_err() {
+                            break;
+                        }
+                        let stage = updates.stage.borrow_and_update().clone();
+                        if owner.update(cx, |view, cx| {
+                            view.stage = stage.into();
+                            view.refresh_status(cx);
+                        }).is_err() {
+                            break;
+                        }
+                    }
+                    challenge = updates.prompts.recv() => {
+                        let Some(challenge) = challenge else {
+                            break;
+                        };
+                        if owner.update_in(cx, |view, window, cx| {
+                            let first = view.challenges.is_empty();
+                            view.challenges.push_back(challenge);
+                            if first && !view.challenges.front().is_some_and(|item| item.confirm) {
+                                view.password.update(cx, |input, cx| {
+                                    input.set_value("", window, cx);
+                                    input.focus(window, cx);
+                                });
+                            }
+                            view.refresh_status(cx);
+                        }).is_err() {
+                            break;
+                        }
+                    }
+                }
+            }
+        });
+        (progress, update_task)
+    }
+
+    /// Cancel the pending listing and discard its authentication channel.
+    fn cancel_listing(&mut self, cx: &mut Context<Self>) {
+        if let Some(request) = self.request.take() {
+            request.abort();
+        }
+        self.receive = Task::ready(());
+        self.busy = false;
+        self.challenges.clear();
+        let (progress, updates) = Self::interaction(cx);
+        self.progress = progress;
+        self._updates = updates;
+    }
+
+    /// Replace target credentials before listing, cancelling work belonging to the old target.
+    pub(super) fn browse(&mut self, options: Options, window: &mut Window, cx: &mut Context<Self>) {
+        if self
+            .options
+            .as_ref()
+            .is_none_or(|current| !current.same_host(&options))
+        {
+            self.invalidate(window, cx);
+        }
+        self.options = Some(options);
+        self.load(
+            self.path
+                .read(cx)
+                .value()
+                .trim()
+                .to_owned(),
+            cx,
+        );
+    }
+
+    pub(super) fn invalidate(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.cancel_listing(cx);
+        self.options = None;
+        self.connection = None;
+        self.listing = None;
+        self.challenges.clear();
+        self.error = None;
+        self.choices.update(cx, |choices, cx| {
+            choices.set_items(
+                vec![choices::Choice {
+                    value: "~/".into(),
+                    label: "~/".into(),
+                }],
+                window,
+                cx,
+            )
+        });
+        self.refresh_status(cx);
+    }
+
+    fn refresh_status(&self, cx: &mut Context<Self>) {
+        self.choices
+            .update(cx, |_, cx| cx.notify());
+        cx.notify();
     }
 
     pub(super) fn focus(&self, window: &mut Window, cx: &mut App) {
-        self.focus.focus(window, cx);
+        self.path
+            .update(cx, |input, cx| input.focus(window, cx));
     }
 
     fn load(&mut self, path: String, cx: &mut Context<Self>) {
-        if self.busy {
+        let Some(options) = self.options.clone() else {
             return;
+        };
+        if self.request.is_some() {
+            self.cancel_listing(cx);
+            self.connection = None;
         }
         if path.is_empty() || path.chars().any(char::is_control) {
             self.error = Some("填写有效的目标目录。".into());
-            cx.notify();
+            self.refresh_status(cx);
             return;
         }
         self.busy = true;
         self.error = None;
-        let options = self.options.clone();
+        let requested = path.clone();
         let connection = self.connection.clone();
         let progress = self.progress.clone();
         let (result, response) = tokio::sync::oneshot::channel();
@@ -172,35 +288,50 @@ impl DirectoryBrowser {
             .map_err(|error| format!("{error:#}"));
             let _ = result.send(result_value);
         }));
-        self.receive = cx.spawn(async move |owner, cx| {
-            let result = response
-                .await
-                .unwrap_or_else(|_| Err("目录读取已中断，请重试。".into()));
-            let _ = owner.update_in(cx, |view, window, cx| {
-                view.request = None;
-                view.busy = false;
-                view.challenges.clear();
-                match result {
-                    Ok((connection, listing)) => {
-                        view.connection = Some(connection);
-                        view.path.update(cx, |input, cx| {
-                            input.set_value(listing.path.clone(), window, cx);
-                        });
-                        let items = listing
-                            .directories
-                            .iter()
-                            .map(|name| TreeItem::new(join_path(&listing.path, name), name.clone()))
-                            .collect::<Vec<_>>();
-                        view.tree
-                            .update(cx, |tree, cx| tree.set_items(items, cx));
-                        view.listing = Some(listing);
-                    }
-                    Err(error) => view.error = Some(error.into()),
-                }
-                cx.notify();
+        self.receive =
+            cx.spawn(async move |owner, cx| {
+                let result = response
+                    .await
+                    .unwrap_or_else(|_| Err("目录读取已中断，请重试。".into()));
+                let _ =
+                    owner.update_in(cx, |view, window, cx| {
+                        view.request = None;
+                        view.busy = false;
+                        view.challenges.clear();
+                        match result {
+                            Ok((connection, listing)) => {
+                                view.connection = Some(connection);
+                                if view.path.read(cx).value().as_ref() == requested {
+                                    view.path.update(cx, |input, cx| {
+                                        input.set_value(listing.path.clone(), window, cx)
+                                    });
+                                }
+                                let mut items = vec![choices::Choice {
+                                    value: "~/".into(),
+                                    label: "~/".into(),
+                                }];
+                                if let Some(parent) = listing.parent_path() {
+                                    items.push(choices::Choice {
+                                        value: parent.into(),
+                                        label: "../".into(),
+                                    });
+                                }
+                                items.extend(listing.directories.iter().map(|name| {
+                                    choices::Choice {
+                                        value: listing.directory_path(name),
+                                        label: format!("{name}/"),
+                                    }
+                                }));
+                                view.choices
+                                    .update(cx, |choices, cx| choices.set_items(items, window, cx));
+                                view.listing = Some(listing);
+                            }
+                            Err(error) => view.error = Some(error.into()),
+                        }
+                        view.refresh_status(cx);
+                    });
             });
-        });
-        cx.notify();
+        self.refresh_status(cx);
     }
 
     fn answer(&mut self, accepted: bool, window: &mut Window, cx: &mut Context<Self>) {
@@ -229,9 +360,10 @@ impl DirectoryBrowser {
             }
         });
         if !needs_password {
-            self.focus.focus(window, cx);
+            self.path
+                .update(cx, |input, cx| input.focus(window, cx));
         }
-        cx.notify();
+        self.refresh_status(cx);
     }
 }
 
@@ -243,113 +375,39 @@ impl Drop for DirectoryBrowser {
     }
 }
 
-fn join_path(parent: &str, name: &str) -> String {
-    format!("{}/{}", parent.trim_end_matches('/'), name)
-}
-
-fn parent_path(path: &str) -> &str {
-    path.trim_end_matches('/')
-        .rsplit_once('/')
-        .map(|(parent, _)| if parent.is_empty() { "/" } else { parent })
-        .unwrap_or("/")
-}
-
-impl Render for DirectoryBrowser {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let owner = cx.weak_entity();
-        let busy = self.busy;
-        let current = self
-            .listing
-            .as_ref()
-            .map(|listing| listing.path.clone());
-        let parent = current
-            .as_deref()
-            .map(parent_path)
-            .map(str::to_owned);
+impl DirectoryBrowser {
+    fn status(&self, owner: WeakEntity<Self>, _: &mut Window, cx: &App) -> AnyElement {
+        if !self.busy && self.error.is_none() && self.challenges.is_empty() {
+            return div().into_any_element();
+        }
         v_flex()
-            .track_focus(&self.focus)
-            .flex_shrink_0()
             .gap_2()
-            .child(
-                h_flex()
-                    .gap_2()
-                    .child(
-                        div().flex_1().min_w_0().child(
-                            Input::new(&self.path)
-                                .aria_label("浏览目标目录")
-                                .disabled(busy)
-                                .w_full(),
-                        ),
-                    )
-                    .child(
-                        Button::new("remote-directory-go")
-                            .label("前往")
-                            .disabled(busy)
-                            .on_click(cx.listener(|view, _, _, cx| {
-                                let path = view
-                                    .path
-                                    .read(cx)
-                                    .value()
-                                    .trim()
-                                    .to_owned();
-                                view.load(path, cx);
-                            })),
-                    ),
-            )
-            .child(
-                h_flex()
-                    .gap_2()
-                    .child(
-                        Button::new("remote-directory-parent")
-                            .ghost()
-                            .small()
-                            .icon(IconName::ArrowUp)
-                            .label("上一级")
-                            .disabled(busy || current.as_deref() == Some("/") || current.is_none())
-                            .on_click(cx.listener(move |view, _, _, cx| {
-                                if let Some(path) = &parent {
-                                    view.load(path.clone(), cx);
-                                }
-                            })),
-                    )
-                    .child(
-                        Button::new("remote-directory-home")
-                            .ghost()
-                            .small()
-                            .icon(IconName::House)
-                            .label("主目录")
-                            .disabled(busy)
-                            .on_click(cx.listener(|view, _, _, cx| view.load("~".into(), cx))),
-                    )
-                    .child(div().flex_1())
-                    .child(
-                        Button::new("remote-directory-select")
-                            .small()
-                            .label("使用此目录")
-                            .disabled(busy || current.is_none())
-                            .on_click(cx.listener(move |_, _, _, cx| {
-                                if let Some(path) = &current {
-                                    cx.emit(Selected(path.clone()));
-                                }
-                            })),
-                    ),
-            )
-            .when(busy, |view| {
-                view.child(
+            .p_2()
+            .when(self.busy, |panel| {
+                panel.child(
                     h_flex()
                         .gap_2()
                         .child(Spinner::new().small())
                         .child(
                             div()
                                 .text_sm()
-                                .text_color(cx.theme().muted_foreground)
                                 .child(self.stage.clone()),
                         ),
                 )
             })
-            .when_some(self.challenges.front(), |view, challenge| {
+            .when_some(self.error.clone(), |panel, error| {
+                panel.child(
+                    div()
+                        .text_sm()
+                        .text_color(cx.theme().danger)
+                        .child(error),
+                )
+            })
+            .when_some(self.challenges.front(), |panel, challenge| {
                 let confirm = challenge.confirm;
-                view.child(
+                let cancel = owner.clone();
+                let accept = owner.clone();
+                panel.child(
                     v_flex()
                         .gap_2()
                         .child(
@@ -357,8 +415,8 @@ impl Render for DirectoryBrowser {
                                 .text_sm()
                                 .child(challenge.prompt.clone()),
                         )
-                        .when(!confirm, |view| {
-                            view.child(
+                        .when(!confirm, |panel| {
+                            panel.child(
                                 Input::new(&self.password)
                                     .aria_label("SSH 验证")
                                     .w_full(),
@@ -371,132 +429,46 @@ impl Render for DirectoryBrowser {
                                 .child(
                                     Button::new("remote-auth-cancel")
                                         .label("取消验证")
-                                        .on_click(cx.listener(|view, _, window, cx| {
-                                            view.answer(false, window, cx)
-                                        })),
+                                        .on_click(move |_, window, cx| {
+                                            let _ = cancel.update(cx, |view, cx| {
+                                                view.answer(false, window, cx)
+                                            });
+                                        }),
                                 )
                                 .child(
                                     Button::new("remote-auth-accept")
                                         .primary()
                                         .label(if confirm { "信任并继续" } else { "继续" })
-                                        .on_click(cx.listener(|view, _, window, cx| {
-                                            view.answer(true, window, cx)
-                                        })),
+                                        .on_click(move |_, window, cx| {
+                                            let _ = accept.update(cx, |view, cx| {
+                                                view.answer(true, window, cx)
+                                            });
+                                        }),
                                 ),
                         ),
                 )
             })
-            .when_some(self.error.clone(), |view, error| {
-                view.child(
-                    div()
-                        .text_sm()
-                        .text_color(cx.theme().danger)
-                        .child(error),
-                )
-            })
-            .when_some(self.listing.as_ref(), |view, listing| {
-                view.child(
-                    div()
-                        .text_xs()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(format!("当前目录：{}", listing.path)),
-                )
-            })
-            .when(
-                self.challenges.is_empty()
-                    && self
-                        .listing
-                        .as_ref()
-                        .is_some_and(|listing| listing.directories.is_empty()),
-                |view| {
-                    view.child(
-                        div()
-                            .py_4()
-                            .text_sm()
-                            .text_color(cx.theme().muted_foreground)
-                            .child("此目录没有子目录"),
-                    )
-                },
-            )
-            .when(
-                self.challenges.is_empty()
-                    && self
-                        .listing
-                        .as_ref()
-                        .is_some_and(|listing| !listing.directories.is_empty()),
-                |view| {
-                    view.child(
-                        div()
-                            .h_40()
-                            .flex_shrink_0()
-                            .min_h_0()
-                            .capture_key_down(cx.listener(|view, event: &KeyDownEvent, _, cx| {
-                                if event.keystroke.key == "enter" && !view.busy {
-                                    let path = view
-                                        .tree
-                                        .read(cx)
-                                        .selected_item()
-                                        .map(|item| item.id.to_string());
-                                    if let Some(path) = path {
-                                        view.load(path, cx);
-                                        cx.stop_propagation();
-                                    }
-                                }
-                            }))
-                            .child(Tree::new(&self.tree, move |_, entry, _, _, _| {
-                                let path = entry.item().id.to_string();
-                                let full_path = path.clone();
-                                let owner = owner.clone();
-                                ListItem::new(entry.item().id.clone())
-                                    .accessibility_label(entry.item().label.clone())
-                                    .disabled(busy)
-                                    .h_8()
-                                    .overflow_hidden()
-                                    .child(
-                                        h_flex()
-                                            .w_full()
-                                            .min_w_0()
-                                            .gap_2()
-                                            .child(
-                                                Icon::new(IconName::Folder)
-                                                    .size_4()
-                                                    .flex_shrink_0(),
-                                            )
-                                            .child(
-                                                div()
-                                                    .flex_1()
-                                                    .min_w_0()
-                                                    .text_ellipsis()
-                                                    .child(entry.item().label.clone()),
-                                            ),
-                                    )
-                                    .tooltip(move |window, cx| {
-                                        gpui_kit::component::tooltip::Tooltip::new(
-                                            full_path.clone(),
-                                        )
-                                        .build(window, cx)
-                                    })
-                                    .on_click(move |_, _, cx| {
-                                        let _ = owner
-                                            .update(cx, |view, cx| view.load(path.clone(), cx));
-                                    })
-                            })),
-                    )
-                },
-            )
+            .into_any_element()
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{join_path, parent_path};
-
-    #[::core::prelude::v1::test]
-    fn directory_navigation_preserves_target_names_and_root() {
-        assert_eq!(join_path("/", "project '中文'"), "/project '中文'");
-        assert_eq!(join_path("/home/dev/", "a b"), "/home/dev/a b");
-        assert_eq!(parent_path("/home/dev/project"), "/home/dev");
-        assert_eq!(parent_path("/home/"), "/");
-        assert_eq!(parent_path("/"), "/");
+impl Render for DirectoryBrowser {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        v_flex()
+            .w_full()
+            .gap_3()
+            .child(self.choices.clone())
+            .when(!self.embedded, |panel| {
+                panel.child(
+                    h_flex().justify_end().child(
+                        Button::new("remote-directory-select")
+                            .label("使用此目录")
+                            .disabled(self.busy || self.listing.is_none())
+                            .on_click(cx.listener(|view, _, _, cx| {
+                                cx.emit(Selected(view.path.read(cx).value().to_string()));
+                            })),
+                    ),
+                )
+            })
     }
 }

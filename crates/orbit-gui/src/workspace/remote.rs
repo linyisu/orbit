@@ -2,6 +2,8 @@
 //! and its retry lifecycle. Inputs remain intact until a valid target is submitted.
 #[path = "remote/browser.rs"]
 mod browser;
+#[path = "remote/choices.rs"]
+mod choices;
 use super::*;
 use gpui_kit::component::{
     input::{Input, InputState},
@@ -33,7 +35,6 @@ fn remote_options(draft: &Draft, base: &Options) -> anyhow::Result<Options> {
 struct RemoteConnection {
     owner: WeakEntity<Workspace>,
     options: Options,
-    runtime: Arc<tokio::runtime::Runtime>,
     mode: Mode,
     host: Entity<InputState>,
     distribution: Entity<InputState>,
@@ -53,8 +54,9 @@ struct RemoteConnection {
     advanced: bool,
     submitted: bool,
     error: Option<SharedString>,
-    browser: Option<Entity<browser::DirectoryBrowser>>,
-    browser_subscription: Option<Subscription>,
+    browser: Entity<browser::DirectoryBrowser>,
+    host_choices: Entity<choices::ChoiceInput>,
+    distribution_choices: Entity<choices::ChoiceInput>,
     _subscriptions: Vec<Subscription>,
     _discovery: Task<()>,
 }
@@ -82,7 +84,13 @@ pub(super) fn open(
                 let form = form.clone();
                 move |_, window, cx| {
                     form.update(cx, |view, cx| {
-                        if view.browser.is_none() {
+                        if !view.host_choices.read(cx).is_open()
+                            && !view
+                                .distribution_choices
+                                .read(cx)
+                                .is_open()
+                            && !view.browser.read(cx).is_open(cx)
+                        {
                             view.connect(window, cx);
                         }
                     });
@@ -260,6 +268,29 @@ impl RemoteConnection {
         } else {
             Mode::Ssh
         };
+        let host_choices = cx.new(|cx| {
+            choices::ChoiceInput::new(
+                host.clone(),
+                "SSH 主机",
+                choices::ChoiceKind::Target,
+                window,
+                cx,
+            )
+        });
+        let distribution_choices = cx.new(|cx| {
+            choices::ChoiceInput::new(
+                distribution.clone(),
+                "WSL 发行版",
+                choices::ChoiceKind::Target,
+                window,
+                cx,
+            )
+        });
+        let browser = cx.new(|cx| {
+            browser::DirectoryBrowser::picker(runtime.clone(), workspace.clone(), window, cx)
+        });
+        let workspace_id = workspace.entity_id();
+        let choice_ids = [host.entity_id(), distribution.entity_id(), workspace_id];
         let inputs = [
             &host,
             &distribution,
@@ -274,18 +305,44 @@ impl RemoteConnection {
         let mut subscriptions: Vec<_> = inputs
             .into_iter()
             .map(|input| {
-                cx.subscribe_in(input, window, |view, _, event, window, cx| match event {
-                    InputEvent::Change => {
-                        view.error = None;
-                        view.browser = None;
-                        view.browser_subscription = None;
-                        cx.notify();
-                    }
-                    InputEvent::PressEnter { shift: false, .. } => view.connect(window, cx),
-                    _ => {}
-                })
+                cx.subscribe_in(
+                    input,
+                    window,
+                    move |view, input, event, window, cx| match event {
+                        InputEvent::Change => {
+                            view.error = None;
+                            if input.entity_id() != workspace_id {
+                                view.browser
+                                    .update(cx, |browser, cx| browser.invalidate(window, cx));
+                            }
+                            cx.notify();
+                        }
+                        InputEvent::PressEnter { shift: false, .. }
+                            if !choice_ids.contains(&input.entity_id()) =>
+                        {
+                            view.connect(window, cx)
+                        }
+                        _ => {}
+                    },
+                )
             })
             .collect();
+        for choice in [&host_choices, &distribution_choices] {
+            subscriptions.push(
+                cx.subscribe_in(choice, window, |view, _, event, window, cx| {
+                    if matches!(event, choices::ChoiceEvent::Submit) {
+                        view.connect(window, cx);
+                    }
+                }),
+            );
+        }
+        subscriptions.push(
+            cx.subscribe_in(&browser, window, |view, _, event, window, cx| match event {
+                choices::ChoiceEvent::Browse => view.browse(window, cx),
+                choices::ChoiceEvent::Submit => view.connect(window, cx),
+                choices::ChoiceEvent::Selected(_) => {}
+            }),
+        );
         let scroll = ScrollHandle::new();
         let mut field_focus = std::collections::HashMap::new();
         for input in inputs {
@@ -328,9 +385,10 @@ impl RemoteConnection {
                     revision = next;
                     let (hosts, distributions) = orbit_client::discovery::snapshot();
                     if owner
-                        .update(cx, |view, cx| {
+                        .update_in(cx, |view, window, cx| {
                             view.hosts = hosts;
                             view.distributions = distributions;
+                            view.sync_targets(window, cx);
                             cx.notify();
                         })
                         .is_err()
@@ -344,10 +402,9 @@ impl RemoteConnection {
                 cx.notify();
             });
         });
-        Self {
+        let mut view = Self {
             owner,
             options,
-            runtime,
             mode,
             host,
             distribution,
@@ -367,11 +424,43 @@ impl RemoteConnection {
             advanced,
             submitted: false,
             error: None,
-            browser: None,
-            browser_subscription: None,
+            browser,
+            host_choices,
+            distribution_choices,
             _subscriptions: subscriptions,
             _discovery: discovery,
-        }
+        };
+        view.sync_targets(window, cx);
+        view
+    }
+
+    fn sync_targets(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let hosts = self
+            .hosts
+            .iter()
+            .map(|host| choices::Choice {
+                value: host.name.clone(),
+                label: if host.hostname.is_empty() {
+                    host.name.clone()
+                } else {
+                    format!("{} · {}", host.name, host.hostname)
+                },
+            })
+            .collect();
+        self.host_choices
+            .update(cx, |choices, cx| choices.set_items(hosts, window, cx));
+        let distributions = self
+            .distributions
+            .iter()
+            .map(|name| choices::Choice {
+                value: name.clone(),
+                label: name.clone(),
+            })
+            .collect();
+        self.distribution_choices
+            .update(cx, |choices, cx| {
+                choices.set_items(distributions, window, cx)
+            });
     }
 
     fn focus_target(&self, window: &mut Window, cx: &mut Context<Self>) {
@@ -430,24 +519,8 @@ impl RemoteConnection {
     fn browse(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         match remote_options(&self.draft(cx), &self.options) {
             Ok(options) => {
-                let browser = cx.new(|cx| {
-                    browser::DirectoryBrowser::new(options, self.runtime.clone(), window, cx)
-                });
-                browser.update(cx, |view, cx| view.focus(window, cx));
-                self.browser_subscription = Some(cx.subscribe_in(
-                    &browser,
-                    window,
-                    |view, _, event: &browser::Selected, window, cx| {
-                        view.workspace.update(cx, |input, cx| {
-                            input.set_value(event.0.clone(), window, cx);
-                            input.focus(window, cx);
-                        });
-                        view.browser = None;
-                        view.browser_subscription = None;
-                        cx.notify();
-                    },
-                ));
-                self.browser = Some(browser);
+                self.browser
+                    .update(cx, |browser, cx| browser.browse(options, window, cx));
                 self.error = None;
             }
             Err(error) => self.error = Some(error.to_string().into()),
@@ -492,64 +565,11 @@ impl Render for RemoteConnection {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let owner = cx.weak_entity();
         let mode = self.mode;
-        let known: Vec<_> = if mode == Mode::Ssh {
-            self.hosts
-                .iter()
-                .map(|host| {
-                    let label = if host.hostname.is_empty() {
-                        host.name.clone()
-                    } else {
-                        format!("{} · {}", host.name, host.hostname)
-                    };
-                    (host.name.clone(), label)
-                })
-                .collect()
+        let target_controls = if mode == Mode::Ssh {
+            self.host_choices.clone()
         } else {
-            self.distributions
-                .iter()
-                .map(|name| (name.clone(), name.clone()))
-                .collect()
+            self.distribution_choices.clone()
         };
-        let target = if mode == Mode::Ssh {
-            &self.host
-        } else {
-            &self.distribution
-        };
-        let target_input = target.clone();
-        let target_controls = h_flex()
-            .gap_2()
-            .child(
-                div().flex_1().min_w_0().child(
-                    Input::new(target)
-                        .aria_label(if mode == Mode::Ssh {
-                            "SSH 主机"
-                        } else {
-                            "WSL 发行版"
-                        })
-                        .w_full(),
-                ),
-            )
-            .when(!known.is_empty(), |row| {
-                row.child(
-                    Button::new("known-remotes")
-                        .icon(IconName::ChevronDown)
-                        .label("已配置")
-                        .dropdown_menu(move |mut menu, _, _| {
-                            for (value, label) in &known {
-                                let value = value.clone();
-                                let input = target_input.clone();
-                                menu = menu.item(PopupMenuItem::new(label.clone()).on_click(
-                                    move |_, window, cx| {
-                                        input.update(cx, |input, cx| {
-                                            input.set_value(value.clone(), window, cx)
-                                        });
-                                    },
-                                ));
-                            }
-                            menu
-                        }),
-                )
-            });
         let mut rows: Vec<AnyElement> = vec![
             RadioGroup::horizontal("remote-mode")
                 .selected_index(Some(if mode == Mode::Ssh { 0 } else { 1 }))
@@ -558,8 +578,8 @@ impl Render for RemoteConnection {
                 .on_change(cx.listener(|view, ix, window, cx| {
                     view.mode = if *ix == 0 { Mode::Ssh } else { Mode::Wsl };
                     view.error = None;
-                    view.browser = None;
-                    view.browser_subscription = None;
+                    view.browser
+                        .update(cx, |browser, cx| browser.invalidate(window, cx));
                     view.focus_target(window, cx);
                     cx.notify();
                 }))
@@ -601,46 +621,7 @@ impl Render for RemoteConnection {
             v_flex()
                 .gap_1p5()
                 .child(div().text_sm().child("工作区目录"))
-                .child(
-                    h_flex()
-                        .gap_2()
-                        .child(
-                            div().flex_1().min_w_0().child(
-                                Input::new(&self.workspace)
-                                    .aria_label("工作区目录")
-                                    .w_full(),
-                            ),
-                        )
-                        .child(
-                            Button::new("remote-browse")
-                                .icon(IconName::FolderOpen)
-                                .label(if self.browser.is_some() {
-                                    "关闭浏览"
-                                } else {
-                                    "浏览目录"
-                                })
-                                .on_click(cx.listener(|view, _, window, cx| {
-                                    if view.browser.is_some() {
-                                        view.browser = None;
-                                        view.browser_subscription = None;
-                                        view.workspace.update(cx, |input, cx| {
-                                            input.focus(window, cx);
-                                        });
-                                        cx.notify();
-                                    } else {
-                                        view.browse(window, cx);
-                                    }
-                                })),
-                        ),
-                )
-                .when_some(self.browser.clone(), |view, browser| {
-                    view.child(
-                        div()
-                            .flex_shrink_0()
-                            .pt_2()
-                            .child(browser),
-                    )
-                })
+                .child(self.browser.clone())
                 .into_any_element(),
         );
         rows.push(

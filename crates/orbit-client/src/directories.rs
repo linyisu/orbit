@@ -12,6 +12,27 @@ pub struct Listing {
     pub directories: Vec<String>,
 }
 
+impl Listing {
+    /// Return the parent of the resolved target path, or `None` at its filesystem root.
+    pub fn parent_path(&self) -> Option<&str> {
+        let path = self.path.trim_end_matches('/');
+        if path.is_empty() {
+            return None;
+        }
+        Some(path.rsplit_once('/').map_or(
+            "/",
+            |(parent, _)| {
+                if parent.is_empty() { "/" } else { parent }
+            },
+        ))
+    }
+
+    /// Join a name returned by this listing without interpreting quotes or shell syntax.
+    pub fn directory_path(&self, name: &str) -> String {
+        format!("{}/{}", self.path.trim_end_matches('/'), name)
+    }
+}
+
 pub async fn list(connection: &Connection, path: &str, progress: &Progress) -> Result<Listing> {
     progress.report(format!("读取远端目录：{path}"));
     let quoted = format!("'{}'", path.replace('\'', "'\\''"));
@@ -121,6 +142,31 @@ mod resolution_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn target_navigation_handles_root_and_literal_directory_names() {
+        let root = Listing {
+            path: "/".into(),
+            directories: vec![],
+        };
+        assert_eq!(root.parent_path(), None);
+        assert_eq!(root.directory_path("sample project"), "/sample project");
+        let listing = Listing {
+            path: "/srv/sandbox/".into(),
+            directories: vec![],
+        };
+        assert_eq!(listing.parent_path(), Some("/srv"));
+        assert_eq!(
+            listing.directory_path("draft 'one'"),
+            "/srv/sandbox/draft 'one'"
+        );
+        let child = Listing {
+            path: "/sandbox".into(),
+            directories: vec![],
+        };
+        assert_eq!(child.parent_path(), Some("/"));
+    }
+
     #[test]
     fn directory_names_are_delimited_without_shell_or_line_interpretation() {
         let listing =

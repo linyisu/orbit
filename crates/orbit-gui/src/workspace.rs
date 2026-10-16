@@ -73,6 +73,7 @@ actions!(
         CompletionSubmit,
         CompletionConfirm,
         CompletionDismiss,
+        DismissRemoteChoices,
         InputHistoryPrevious,
         InputHistoryNext,
         CloseTask,
@@ -81,9 +82,31 @@ actions!(
 );
 
 pub(crate) fn bind_keys(cx: &mut App) {
+    const REMOTE_CHOICE_INPUT: &str = "RemoteChoiceInput > Input";
+    const REMOTE_CHOICE_LIST: &str = "RemoteChoices > Combobox > List";
+
     files::bind_keys(cx);
     inspector::bind_keys(cx);
     cx.bind_keys([
+        KeyBinding::new("tab", DismissRemoteChoices, Some(REMOTE_CHOICE_INPUT)),
+        KeyBinding::new("shift-tab", DismissRemoteChoices, Some(REMOTE_CHOICE_INPUT)),
+        KeyBinding::new("tab", DismissRemoteChoices, Some(REMOTE_CHOICE_LIST)),
+        KeyBinding::new("shift-tab", DismissRemoteChoices, Some(REMOTE_CHOICE_LIST)),
+        KeyBinding::new(
+            "down",
+            gpui_kit::base::actions::SelectDown,
+            Some(REMOTE_CHOICE_INPUT),
+        ),
+        KeyBinding::new(
+            "up",
+            gpui_kit::base::actions::SelectUp,
+            Some(REMOTE_CHOICE_INPUT),
+        ),
+        KeyBinding::new(
+            "escape",
+            gpui_kit::base::actions::Cancel,
+            Some(REMOTE_CHOICE_INPUT),
+        ),
         KeyBinding::new(
             "down",
             CompletionNext,

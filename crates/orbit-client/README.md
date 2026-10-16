@@ -25,6 +25,7 @@ DeepSeek 用量只展示 CNY：底部显示总余额，详情保留总余额、�
 - [pump.rs](src/pump.rs)、[prompt.rs](src/prompt.rs)：交互请求和单次任务事件流。
 - [accounts.rs](src/accounts.rs)：账号授权与连接元数据；浏览器及项目输入由前端呈现。
 - [configuration.rs](src/configuration.rs)：本机配置快照与凭据传递。
+- [directories.rs](src/directories.rs)：目标目录读取、父目录与子目录路径，不通过客户端文件系统解释远端路径。
 - [windows.rs](src/windows.rs)：两端共用的窗口恢复、草稿资产、进程租约与旧快照迁移。
 - [attachments.rs](src/attachments.rs)：图片与普通文件的有界上传、粘贴路径识别；普通文件单个上限 20 MiB。
 
