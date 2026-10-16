@@ -76,15 +76,11 @@ impl Sidebar {
             .iter()
             .filter(|host| host.is_remote())
             .count();
-        let label = if remote {
-            current.label()
-        } else {
-            "此计算机".into()
-        };
+        let label = current.label();
         let hosts: Vec<_> = self
             .hosts
             .iter()
-            .filter(|host| host.is_remote() == remote)
+            .filter(|host| host.is_remote())
             .map(|host| {
                 (
                     host.label(),
@@ -138,65 +134,44 @@ impl Sidebar {
                         view.select_environment(*ix == 1, window, cx);
                     })),
             )
-            .child(
-                Button::new("environment-switcher")
-                    .ghost()
-                    .small()
-                    .w_full()
-                    .accessibility_label("当前环境与项目操作")
-                    .child(
-                        h_flex()
-                            .w_full()
-                            .gap_2()
-                            .child(
-                                Icon::new(if remote {
-                                    IconName::Monitor
-                                } else {
-                                    IconName::Laptop
-                                })
-                                .size_4(),
-                            )
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .text_ellipsis()
-                                    .child(label.clone()),
-                            )
-                            .child(Icon::new(IconName::ChevronDown).size_3()),
-                    )
-                    .tooltip(label)
-                    .dropdown_menu(move |mut menu, _, _| {
-                        for (label, options, selected) in &hosts {
+            .when(remote, |panel| {
+                panel.child(
+                    Button::new("environment-switcher")
+                        .ghost()
+                        .small()
+                        .w_full()
+                        .accessibility_label("远程环境")
+                        .child(
+                            h_flex()
+                                .w_full()
+                                .gap_2()
+                                .child(Icon::new(IconName::Monitor).size_4())
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .text_ellipsis()
+                                        .child(label.clone()),
+                                )
+                                .child(Icon::new(IconName::ChevronDown).size_3()),
+                        )
+                        .tooltip(label)
+                        .dropdown_menu(move |mut menu, _, _| {
+                            for (label, options, selected) in &hosts {
+                                let owner = owner.clone();
+                                let options = options.clone();
+                                menu = menu.item(
+                                    PopupMenuItem::new(label.clone())
+                                        .checked(*selected)
+                                        .on_click(move |_, window, cx| {
+                                            let _ = owner.update(cx, |view, cx| {
+                                                view.select_host(options.clone(), window, cx)
+                                            });
+                                        }),
+                                );
+                            }
                             let owner = owner.clone();
-                            let options = options.clone();
-                            menu = menu.item(
-                                PopupMenuItem::new(label.clone())
-                                    .checked(*selected)
-                                    .on_click(move |_, window, cx| {
-                                        let _ = owner.update(cx, |view, cx| {
-                                            view.select_host(options.clone(), window, cx)
-                                        });
-                                    }),
-                            );
-                        }
-                        let project_owner = owner.clone();
-                        menu = menu.separator().item(
-                            PopupMenuItem::new("打开项目…")
-                                .icon(IconName::Folder)
-                                .on_click(move |_, window, cx| {
-                                    let _ = project_owner.update(cx, |view, cx| {
-                                        view.with_owner(
-                                            cx,
-                                            |view, window, cx| view.open_project(window, cx),
-                                            window,
-                                        );
-                                    });
-                                }),
-                        );
-                        if remote {
-                            let owner = owner.clone();
-                            menu = menu.item(
+                            menu = menu.separator().item(
                                 PopupMenuItem::new("添加远程连接…")
                                     .icon(IconName::Plus)
                                     .on_click(move |_, window, cx| {
@@ -211,9 +186,9 @@ impl Sidebar {
                                         });
                                     }),
                             );
-                        }
-                        menu
-                    }),
-            )
+                            menu
+                        }),
+                )
+            })
     }
 }
