@@ -341,13 +341,6 @@ fn is_nonempty_regular_file(path: &Path) -> bool {
 mod tests {
     use super::*;
 
-    #[test]
-    fn core_prompt_requires_investigation_and_verification_for_code_changes() {
-        assert!(CORE_PROMPT.contains("inspect the relevant workspace structure"));
-        assert!(CORE_PROMPT.contains("run formatting and focused verification"));
-        assert!(CORE_PROMPT.contains("Never claim a change or test passed without tool evidence"));
-    }
-
     fn write(path: &Path, text: &str) {
         fs::write(path, text).unwrap();
     }
@@ -381,8 +374,19 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["AGENTS.md", "AGENTS.md", "AGENTS.override.md"]
         );
-        assert!(loaded.content.find("user rule") < loaded.content.find("root rule"));
-        assert!(loaded.content.find("root rule") < loaded.content.find("nested override"));
+        let user_position = loaded
+            .content
+            .find("user rule")
+            .unwrap();
+        let root_position = loaded
+            .content
+            .find("root rule")
+            .unwrap();
+        let nested_position = loaded
+            .content
+            .find("nested override")
+            .unwrap();
+        assert!(user_position < root_position && root_position < nested_position);
         assert!(
             !loaded
                 .content

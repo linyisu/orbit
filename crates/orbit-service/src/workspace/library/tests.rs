@@ -297,7 +297,7 @@ async fn global_import_freezes_resources_without_writing_any_project() {
 }
 
 #[tokio::test]
-async fn global_market_updates_do_not_change_applied_plugin_snapshots() {
+async fn removing_a_global_market_preserves_applied_plugin_snapshots() {
     let root = tempfile::tempdir().unwrap();
     let options = options(root.path());
     let mut library = Library::isolated(&options);

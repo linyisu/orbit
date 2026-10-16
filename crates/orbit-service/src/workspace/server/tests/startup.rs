@@ -315,32 +315,7 @@ async fn first_send_waits_for_mcp_tools_without_blocking_control_commands() {
         .unwrap()
         .unwrap()
         .unwrap();
-    let (mut socket, request) = tokio::time::timeout(Duration::from_secs(3), async {
-        loop {
-            let (mut socket, _) = listener.accept().await.unwrap();
-            let mut header = Vec::new();
-            while !header.ends_with(b"\r\n\r\n") {
-                header.push(socket.read_u8().await.unwrap());
-            }
-            let length: usize = String::from_utf8(header).unwrap().lines().find_map(|line| {
-                line.to_ascii_lowercase().strip_prefix("content-length:")
-                    .map(|value| value.trim().parse().unwrap())
-            }).unwrap();
-            let mut body = vec![0; length];
-            socket.read_exact(&mut body).await.unwrap();
-            let request: serde_json::Value = serde_json::from_slice(&body).unwrap();
-            if request["stream"] == true { break (socket, request); }
-            // Session title generation races with the main streaming request.
-            let body = r#"{"choices":[{"message":{"role":"assistant","content":"test"},"finish_reason":"stop"}]}"#;
-            socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: \
-                application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                    body
-                    .len())
-                    .as_bytes())
-                    .await
-                    .unwrap();
-        }
-    }).await.unwrap();
+    let (mut socket, request) = streaming_request(&listener).await;
     assert!(
         request["tools"]
             .as_array()

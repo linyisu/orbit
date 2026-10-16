@@ -261,7 +261,15 @@ fn native_child_discovery_owns_each_row_and_waits_for_cancelled_storage_state() 
         assert!(
             page.updates
                 .iter()
-                .any(|update| format!("{update:?}").contains("仅向第一行跟进"))
+                .any(|update| matches!(
+                    update,
+                    orbit_client::protocol::Update::Agent(event) if matches!(
+                        event.as_ref(),
+                        orbit_client::protocol::events::AgentEvent::Model(
+                            orbit_client::protocol::model::StreamEvent::TextDelta(text)
+                        ) if text == "仅向第一行跟进"
+                    )
+                ))
         );
         assert!(matches!(
             request(

@@ -5,8 +5,6 @@ use std::{
     path::{Path, PathBuf},
 };
 
-#[cfg(test)]
-use crate::repository::symbols::extract_symbols;
 use crate::repository::{RepositoryIndex, Source, language};
 use ignore::WalkBuilder;
 use orbit_agent::{
@@ -1458,120 +1456,5 @@ mod task_retrieval_tests {
             );
             assert_eq!(result["truncated"]["content"], true);
         }
-    }
-
-    #[test]
-    fn tree_sitter_ast_extraction_multi_language() {
-        let rust_code = r#"
-pub struct Engine;
-
-impl Engine {
-    pub fn start(&self) -> bool {
-        true
-    }
-}
-
-pub async fn run_service() -> Result<(), String> {
-    Ok(())
-}
-"#;
-        let rs_syms = extract_symbols(Path::new("src/engine.rs"), rust_code);
-        assert!(rs_syms.iter().any(|s| {
-            s.name == "Engine"
-                && s.kind == "struct"
-                && s.signature
-                    .contains("pub struct Engine")
-        }));
-        assert!(rs_syms.iter().any(|s| s.name == "start"
-            && s.kind == "method"
-            && s.signature.contains("pub fn start")));
-        assert!(rs_syms.iter().any(|s| {
-            s.name == "run_service"
-                && s.kind == "function"
-                && s.signature
-                    .contains("pub async fn run_service")
-        }));
-
-        let py_code = r#"
-class Worker:
-    def __init__(self, name: str):
-        self.name = name
-
-    def execute(self):
-        pass
-
-def launch_worker():
-    pass
-"#;
-        let py_syms = extract_symbols(Path::new("worker.py"), py_code);
-        assert!(
-            py_syms
-                .iter()
-                .any(|s| s.name == "Worker" && s.kind == "class")
-        );
-        assert!(
-            py_syms
-                .iter()
-                .any(|s| s.name == "execute" && s.kind == "method")
-        );
-        assert!(
-            py_syms
-                .iter()
-                .any(|s| s.name == "launch_worker" && s.kind == "function")
-        );
-
-        let ts_code = r#"
-export interface UserConfig {
-    timeout: number;
-}
-
-export function createClient(config: UserConfig) {
-    return null;
-}
-"#;
-        let ts_syms = extract_symbols(Path::new("src/client.ts"), ts_code);
-        assert!(ts_syms.iter().any(|s| {
-            s.name == "UserConfig"
-                && s.kind == "interface"
-                && s.signature
-                    .contains("export interface UserConfig")
-        }));
-        assert!(ts_syms.iter().any(|s| {
-            s.name == "createClient"
-                && s.kind == "function"
-                && s.signature
-                    .contains("export function createClient")
-        }));
-
-        let go_code = r#"
-package main
-
-type Config struct {
-    Port int
-}
-
-func (c *Config) Validate() error {
-    return nil
-}
-
-func Serve() {
-}
-"#;
-        let go_syms = extract_symbols(Path::new("main.go"), go_code);
-        assert!(
-            go_syms
-                .iter()
-                .any(|s| s.name == "Config" && s.kind == "struct")
-        );
-        assert!(
-            go_syms
-                .iter()
-                .any(|s| s.name == "Validate" && s.kind == "method")
-        );
-        assert!(
-            go_syms
-                .iter()
-                .any(|s| s.name == "Serve" && s.kind == "function")
-        );
     }
 }

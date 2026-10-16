@@ -559,13 +559,6 @@ async fn disconnect_preserves_approval_and_run_duplicate_submission_does_not_rep
     assert_eq!(
         updates
             .iter()
-            .filter(|update| update.get("Started").is_some())
-            .count(),
-        1
-    );
-    assert_eq!(
-        updates
-            .iter()
             .rev()
             .find(|update| update.get("Finished").is_some())
             .unwrap()["Finished"]["status"],

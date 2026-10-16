@@ -373,10 +373,16 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(
-            serde_json::from_str::<serde_json::Value>(&second).unwrap()["content"],
-            "乙"
-        );
+        let second: serde_json::Value = serde_json::from_str(&second).unwrap();
+        assert_eq!(second["content"], "乙");
+        assert_eq!(second["next_offset"], 6);
+        let last = tool
+            .execute(call(6), CancellationToken::new())
+            .await
+            .unwrap();
+        let last: serde_json::Value = serde_json::from_str(&last).unwrap();
+        assert_eq!(last["content"], "丙");
+        assert_eq!(last["has_more"], false);
         let other = ReadCommandOutput::new(CommandOutputs::default());
         assert!(
             other
@@ -439,42 +445,5 @@ mod tests {
         assert_eq!(value["next_offset"], 3);
         assert_eq!(value["total_retained_bytes"], 6);
         assert_eq!(value["truncated"], true);
-    }
-
-    #[test]
-    fn unicode_pages_resume_on_character_boundaries() {
-        let tmp = tempfile::tempdir().unwrap();
-        std::fs::write(tmp.path().join("cmd-1-2-3.stdout"), "甲乙丙").unwrap();
-        let first: serde_json::Value = serde_json::from_str(
-            &read(
-                tmp.path().to_owned(),
-                Arguments {
-                    output_id: "cmd-1-2-3".into(),
-                    max_bytes: 4,
-                    ..Arguments::default()
-                },
-                CancellationToken::new(),
-            )
-            .unwrap(),
-        )
-        .unwrap();
-        let second: serde_json::Value = serde_json::from_str(
-            &read(
-                tmp.path().to_owned(),
-                Arguments {
-                    output_id: "cmd-1-2-3".into(),
-                    offset: first["next_offset"].as_u64().unwrap(),
-                    max_bytes: 4,
-                    ..Arguments::default()
-                },
-                CancellationToken::new(),
-            )
-            .unwrap(),
-        )
-        .unwrap();
-
-        assert_eq!(first["content"], "甲");
-        assert_eq!(second["content"], "乙");
-        assert_eq!(second["next_offset"], 6);
     }
 }

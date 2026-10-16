@@ -237,6 +237,7 @@ mod tests {
         assert!(read(&directory.path().join("other"), &id).is_err());
         assert!(read(&owner, "../outside").is_err());
         std::fs::remove_file(owner.join(format!("{id}.json"))).unwrap();
+        std::fs::write(directory.path().join("external"), &original).unwrap();
         std::os::unix::fs::symlink(
             directory.path().join("external"),
             owner.join(format!("{id}.json")),

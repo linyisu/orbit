@@ -4,8 +4,6 @@ use request::read_request;
 
 #[tokio::test]
 async fn account_providers_authenticate_and_collect_sse_for_nonstream_callers() {
-    use serde_json::json;
-
     for (format, kind, base, payload) in [
         (
             ApiFormat::ChatgptCodex,
@@ -42,26 +40,6 @@ async fn account_providers_authenticate_and_collect_sse_for_nonstream_callers() 
         ),
     ] {
         let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("test.json");
-        let credential = json!({
-            "version": 1,
-            "kind": kind,
-            "endpoint": format!("{base}/"),
-            "access": "fake-account-token",
-            "refresh": "fake-refresh-token",
-            "expires_at": u64::MAX,
-            "account_id": "test-account",
-            "project_id": "test-project"
-        });
-
-        std::fs::write(&path, credential.to_string()).unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700))
-                .unwrap();
-            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
-        }
         let content_type = if format == ApiFormat::ChatgptCodex {
             ""
         } else {
@@ -81,15 +59,11 @@ async fn account_providers_authenticate_and_collect_sse_for_nonstream_callers() 
                 "test-model"
             }
             .into(),
-            credential: Some(orbit_auth::CredentialRef {
-                directory: directory.path().into(),
-                name: "test".into(),
-            }),
             timeout: Duration::from_secs(5),
             max_retries: 0,
             ..Default::default()
         };
-        let mut model = ModelClient::new(config).unwrap();
+        let mut model = account_client(config, kind, directory.path());
         // The credential scope remains the real service; only the test HTTP transport is
         // redirected.
         model.request_endpoint = Some(transport.parse().unwrap());
@@ -228,24 +202,34 @@ async fn does_not_follow_a_model_endpoint_redirect() {
     assert!(request.await.contains("secret"));
 }
 
-#[test]
-fn recognizes_context_limit_before_truncating_a_long_error_body() {
-    let body = serde_json::json!({
-        "error": {
-            "code": "context_length_exceeded",
-            "message": "x".repeat(4_000)
-        }
-    })
-    .to_string();
-    let error = crate::error::ModelError::Http {
-        status: 400,
-        request_id: String::new(),
-        body: super::truncate_body(&body, 2_000),
-        retryable: false,
-        context_limit: crate::error::ModelError::has_context_limit_code(&body),
-    };
+#[tokio::test]
+async fn recognizes_context_limit_before_truncating_a_long_error_body() {
+    let body = format!(
+        r#"{{"error":{{"message":"{}","code":"context_length_exceeded"}}}}"#,
+        "x".repeat(4_000)
+    );
+    let (url, request) = test_server(format!(
+        "HTTP/1.1 400 Bad Request\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{body}",
+        body.len()
+    ))
+    .await;
+    let error = client(&url, "openai_chat_completions", "mock", None)
+        .complete(ChatRequest::new(vec![ChatMessage::user("hello")]))
+        .await
+        .unwrap_err();
 
     assert!(error.is_context_limit());
+    let ModelError::Http { status, body, .. } = error else {
+        panic!("HTTP error expected");
+    };
+    assert_eq!(status, 400);
+    assert!(body.ends_with('…'));
+    assert!(!body.contains("context_length_exceeded"));
+    assert!(
+        request
+            .await
+            .starts_with("post /chat/completions ")
+    );
 }
 
 #[tokio::test]
@@ -303,18 +287,15 @@ use super::*;
 
 #[test]
 fn parses_all_supported_api_formats() {
-    assert_eq!(
-        ApiFormat::parse("openai_chat_completions").unwrap(),
-        ApiFormat::OpenaiChatCompletions
-    );
-    assert_eq!(
-        ApiFormat::parse("openai_responses").unwrap(),
-        ApiFormat::OpenaiResponses
-    );
-    assert_eq!(
-        ApiFormat::parse("anthropic_messages").unwrap(),
-        ApiFormat::AnthropicMessages
-    );
+    for (name, expected) in [
+        ("openai_chat_completions", ApiFormat::OpenaiChatCompletions),
+        ("openai_responses", ApiFormat::OpenaiResponses),
+        ("anthropic_messages", ApiFormat::AnthropicMessages),
+        ("google_code_assist", ApiFormat::GoogleCodeAssist),
+        ("chatgpt_codex", ApiFormat::ChatgptCodex),
+    ] {
+        assert_eq!(ApiFormat::parse(name).unwrap(), expected);
+    }
     assert!(matches!(
         ApiFormat::parse("unknown"),
         Err(ModelError::UnsupportedApiFormat(_))
@@ -825,16 +806,70 @@ async fn codex_missing_content_type_does_not_accept_non_sse_bodies() {
             "HTTP/1.1 200 OK\r\ncontent-length: {}\r\n\r\n{payload}",
             payload.len()
         );
-        let (url, _) = test_server(response).await;
-        let mut model = client(&url, "openai_responses", "mock", None);
-        model.config.api_format = ApiFormat::ChatgptCodex;
+        let (url, captured) = test_server(response).await;
+        let directory = tempfile::tempdir().unwrap();
+        let mut model = account_client(
+            ModelConfig {
+                api_format: ApiFormat::ChatgptCodex,
+                base_url: "https://chatgpt.com/backend-api/codex".into(),
+                model: "test-model".into(),
+                timeout: Duration::from_secs(5),
+                max_retries: 0,
+                ..Default::default()
+            },
+            orbit_auth::CredentialKind::ChatgptOAuth,
+            directory.path(),
+        );
+        model.request_endpoint = Some(url.parse().unwrap());
 
-        let result = model
+        let error = model
             .complete(ChatRequest::new(vec![ChatMessage::user("hello")]))
-            .await;
+            .await
+            .unwrap_err();
 
-        assert!(result.is_err(), "unexpected success for {payload:?}");
+        assert!(
+            matches!(
+                error,
+                ModelError::IncompleteSseEvent | ModelError::Decode(_)
+            ),
+            "unexpected error for {payload:?}: {error}"
+        );
+        assert!(
+            captured
+                .await
+                .contains("authorization: bearer fake-account-token")
+        );
     }
+}
+
+fn account_client(
+    mut config: ModelConfig,
+    kind: orbit_auth::CredentialKind,
+    directory: &std::path::Path,
+) -> ModelClient {
+    let path = directory.join("test.json");
+    let credential = serde_json::json!({
+        "version": 1,
+        "kind": kind,
+        "endpoint": format!("{}/", config.base_url),
+        "access": "fake-account-token",
+        "refresh": "fake-refresh-token",
+        "expires_at": u64::MAX,
+        "account_id": "test-account",
+        "project_id": "test-project"
+    });
+    std::fs::write(&path, credential.to_string()).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(directory, std::fs::Permissions::from_mode(0o700)).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    config.credential = Some(orbit_auth::CredentialRef {
+        directory: directory.into(),
+        name: "test".into(),
+    });
+    ModelClient::new(config).unwrap()
 }
 
 fn client(base_url: &str, api_format: &str, model: &str, api_key: Option<&str>) -> ModelClient {

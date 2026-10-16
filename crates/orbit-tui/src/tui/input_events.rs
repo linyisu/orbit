@@ -89,8 +89,10 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn motion_does_not_wait_for_another_event_or_discard_errors_and_direction_changes() {
+    #[test]
+    fn motion_does_not_wait_for_another_event_or_discard_errors_and_direction_changes() {
+        use futures_util::FutureExt;
+
         let left = mouse(MouseEventKind::Drag(MouseButton::Left), 2);
         let right = mouse(MouseEventKind::Drag(MouseButton::Right), 3);
         let mut stream = stream::iter([
@@ -102,21 +104,24 @@ mod tests {
         let mut pending = None;
         assert_eq!(
             next(&mut stream, &mut pending)
-                .await
+                .now_or_never()
+                .expect("available input must not wait for another event")
                 .unwrap()
                 .unwrap(),
             left
         );
         assert_eq!(
             next(&mut stream, &mut pending)
-                .await
+                .now_or_never()
+                .expect("available input must not wait for another event")
                 .unwrap()
                 .unwrap(),
             right
         );
         assert_eq!(
             next(&mut stream, &mut pending)
-                .await
+                .now_or_never()
+                .expect("available input must not wait for another event")
                 .unwrap()
                 .unwrap_err()
                 .to_string(),
@@ -125,7 +130,8 @@ mod tests {
         let mut stream = stream::iter([Ok(left.clone())]).chain(stream::pending());
         assert_eq!(
             next(&mut stream, &mut pending)
-                .await
+                .now_or_never()
+                .expect("available input must not wait for another event")
                 .unwrap()
                 .unwrap(),
             left

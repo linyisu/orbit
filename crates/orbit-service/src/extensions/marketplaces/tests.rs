@@ -393,8 +393,13 @@ fn rejects_malformed_or_duplicate_plugin_entries() {
 #[test]
 fn rejects_packages_outside_the_marketplace() {
     let temp = tempfile::tempdir().unwrap();
-
-    assert!(resolve_package_path(temp.path(), "../outside").is_err());
+    let market = temp.path().join("market");
+    let package = market.join("package");
+    fs::create_dir_all(&package).unwrap();
+    fs::create_dir(temp.path().join("outside")).unwrap();
+    assert_eq!(resolve_package_path(&market, "package").unwrap(), package);
+    let error = resolve_package_path(&market, "../outside").unwrap_err();
+    assert!(error.to_string().contains("parent"), "{error:#}");
 }
 
 #[test]

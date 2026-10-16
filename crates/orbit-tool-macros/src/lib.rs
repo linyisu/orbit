@@ -133,14 +133,49 @@ mod tests {
 
     #[test]
     fn invalid_signatures_and_missing_contracts_are_rejected() {
-        for source in [
-            "fn execute(&self, args: Args, token: Token) {}",
-            "async fn execute(&mut self, args: Args, token: Token) {}",
-            "async fn execute<T>(&self, args: T, token: Token) {}",
-            "async fn execute(&self, args: Args, token: Token) {}",
+        let valid: ImplItemFn = syn::parse_quote! {
+            /// Execute the generated operation.
+            async fn execute(&self, args: Args, token: Token) -> Result<Output, Error> {
+                Ok(Output)
+            }
+        };
+        assert!(expand(Some(syn::parse_quote!("generated")), valid.clone()).is_ok());
+        for (source, expected) in [
+            (
+                "fn execute(&self, args: Args, token: Token) -> Result<Output, Error> {}",
+                "expected async fn execute",
+            ),
+            (
+                "async fn execute(&mut self, args: Args, token: Token) -> Result<Output, Error> {}",
+                "first argument must be &self",
+            ),
+            (
+                "async fn execute<T>(&self, args: T, token: Token) -> Result<Output, Error> {}",
+                "expected async fn execute",
+            ),
+            (
+                "async fn execute(&self, args: Args, token: Token) {}",
+                "declare Result<ToolOutput, ToolError> as the return type",
+            ),
         ] {
-            let method = syn::parse_str(source).unwrap();
-            assert!(expand(Some(syn::parse_quote!("generated")), method).is_err());
+            let mut method: ImplItemFn = syn::parse_str(source).unwrap();
+            method.attrs = valid.attrs.clone();
+            let error = expand(Some(syn::parse_quote!("generated")), method).unwrap_err();
+            assert!(error.to_string().starts_with(expected), "{source}: {error}");
         }
+        let mut undocumented = valid.clone();
+        undocumented.attrs.clear();
+        let error = expand(Some(syn::parse_quote!("generated")), undocumented).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .starts_with("document the tool method")
+        );
+        assert_eq!(
+            expand(None, valid)
+                .unwrap_err()
+                .to_string(),
+            "missing tool name"
+        );
     }
 }

@@ -605,38 +605,6 @@ mod tests {
     }
 
     #[test]
-    fn failed_write_can_retry_the_same_values_with_a_new_receipt() {
-        let (changes, mut receiver) = watch::channel(SaveRequest {
-            revision: 0,
-            values: Values::default(),
-        });
-        let (_, save_updates) = watch::channel(crate::keymap::SaveStatus::Saved(0));
-        let runtime = tokio::runtime::Runtime::new().unwrap();
-        let mut preferences = Preferences {
-            values: Values::default(),
-            revision: 0,
-            save_status: crate::keymap::SaveStatus::Saved(0),
-            changes,
-            save_updates,
-            _save_observer: None,
-            _writer: runtime.spawn(async {}),
-        };
-        assert_eq!(preferences.publish(), 1);
-        preferences.save_status = crate::keymap::SaveStatus::Failed {
-            revision: 1,
-            message: "disk full".into(),
-        };
-        receiver.borrow_and_update();
-        assert_eq!(preferences.publish(), 2);
-        assert!(receiver.has_changed().unwrap());
-        assert_eq!(receiver.borrow().revision, 2);
-        assert_eq!(
-            preferences.save_status,
-            crate::keymap::SaveStatus::Saving(2)
-        );
-    }
-
-    #[test]
     fn disk_failure_preserves_values_and_same_value_retry_is_persisted() {
         use crate::keymap::SaveStatus;
         use clap::Parser;
@@ -682,6 +650,7 @@ mod tests {
         );
         std::fs::remove_file(&parent).unwrap();
         let second = preferences.publish();
+        assert!(second > first);
         runtime.block_on(async {
             tokio::time::timeout(
                 std::time::Duration::from_secs(5),

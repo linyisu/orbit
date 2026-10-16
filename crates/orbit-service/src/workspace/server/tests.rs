@@ -484,3 +484,56 @@ async fn tool_output_reads_are_session_scoped_and_do_not_start_a_run() {
     );
     assert!(!fixture.handle.view.lock().await.busy);
 }
+
+async fn streaming_request(
+    listener: &tokio::net::TcpListener,
+) -> (tokio::net::TcpStream, serde_json::Value) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut header = Vec::new();
+            while !header.ends_with(b"\r\n\r\n") {
+                header.push(socket.read_u8().await.unwrap());
+            }
+            let length = String::from_utf8(header)
+                .unwrap()
+                .lines()
+                .find_map(|line| {
+                    line.to_ascii_lowercase()
+                        .strip_prefix("content-length:")
+                        .map(|value| value.trim().parse::<usize>().unwrap())
+                })
+                .unwrap();
+            let mut body = vec![0; length];
+            socket
+                .read_exact(&mut body)
+                .await
+                .unwrap();
+            let request: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            if request["stream"] == true {
+                return (socket, request);
+            }
+            let body = serde_json::json!({
+                "choices": [{
+                    "message": { "role": "assistant", "content": "Generated title" },
+                    "finish_reason": "stop",
+                }],
+            })
+            .to_string();
+            socket
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
+                    Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .unwrap();
+        }
+    })
+    .await
+    .unwrap()
+}

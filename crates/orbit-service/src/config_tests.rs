@@ -246,7 +246,7 @@ fn chat_capability_filter_removes_groups_before_request_assembly() {
 }
 
 #[test]
-fn disabled_commands_hide_audit_and_export_tools() {
+fn disabled_commands_hide_execution_output_and_verification() {
     let mut tools = ToolRegistry::new();
 
     for name in ["Exec", "CommandOutput", "CheckEvidence"] {

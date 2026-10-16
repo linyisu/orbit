@@ -675,6 +675,11 @@ fn progress_snapshots_are_bounded_and_do_not_hide_ledger_events() {
     assert!(page.tool_progress.is_empty());
     view.progress[0].stdout = Some("bounded output".into());
     let first = view.page(0).unwrap();
+    assert_eq!(first.tool_progress.len(), 1);
+    assert_eq!(
+        first.tool_progress[0].stdout.as_deref(),
+        Some("bounded output")
+    );
     let second = view.page(first.next).unwrap();
     assert_eq!(
         serde_json::to_value(&first.tool_progress).unwrap(),

@@ -205,92 +205,49 @@ fn home_output_scrolls_in_a_temporary_dialog_without_changing_the_draft() {
 }
 
 #[test]
-fn delete_requires_two_presses_to_confirm_and_any_other_key_cancels() {
-    let mut picker = SessionPicker::new(vec![
-        session("keep", "保留的会话"),
-        session("del", "要删除的会话"),
-    ]);
-    picker.selected = 1;
-
-    assert!(picker.pending_delete.is_none());
-    let del_key = Event::Key(KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE));
-
-    let mut state = UiState::new("model");
-    state.picker = Some(picker);
-
-    handle(&mut state, del_key.clone());
-    assert_eq!(
-        state
-            .picker
-            .as_ref()
-            .unwrap()
-            .pending_delete
-            .as_deref(),
-        Some("del")
-    );
-    assert!(state.delete_request.is_none());
-
-    handle(
-        &mut state,
-        Event::Key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE)),
-    );
-    assert!(
-        state
-            .picker
-            .as_ref()
-            .unwrap()
-            .pending_delete
-            .is_none()
-    );
-
-    handle(
-        &mut state,
-        Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)),
-    );
-    handle(&mut state, del_key.clone());
-    handle(&mut state, del_key.clone());
-    assert_eq!(state.delete_request.as_deref(), Some("del"));
-    assert!(
-        state
-            .picker
-            .as_ref()
-            .unwrap()
-            .pending_delete
-            .is_none()
-    );
-}
-
-#[test]
-fn delete_confirmed_with_enter_after_first_del_press() {
-    let mut state = UiState::new("model");
-    state.picker = Some(SessionPicker::new(vec![session("abc", "会话")]));
-
-    handle(
-        &mut state,
-        Event::Key(KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE)),
-    );
-    assert!(
-        state
-            .picker
-            .as_ref()
-            .unwrap()
-            .pending_delete
-            .is_some()
-    );
-
-    handle(
-        &mut state,
-        Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
-    );
-    assert_eq!(state.delete_request.as_deref(), Some("abc"));
-    assert!(
-        state
-            .picker
-            .as_ref()
-            .unwrap()
-            .pending_delete
-            .is_none()
-    );
+fn delete_requires_confirmation_and_navigation_cancels_pending_selection() {
+    for confirmation in [KeyCode::Delete, KeyCode::Enter] {
+        let mut state = UiState::new("model");
+        let mut picker = SessionPicker::new(vec![
+            session("keep", "保留的会话"),
+            session("del", "要删除的会话"),
+        ]);
+        picker.selected = 1;
+        state.picker = Some(picker);
+        handle(&mut state, key(KeyCode::Delete));
+        assert_eq!(
+            state
+                .picker
+                .as_ref()
+                .unwrap()
+                .pending_delete
+                .as_deref(),
+            Some("del")
+        );
+        assert!(state.delete_request.is_none());
+        handle(&mut state, key(KeyCode::Up));
+        assert!(
+            state
+                .picker
+                .as_ref()
+                .unwrap()
+                .pending_delete
+                .is_none()
+        );
+        assert!(state.delete_request.is_none());
+        handle(&mut state, key(KeyCode::Down));
+        handle(&mut state, key(KeyCode::Delete));
+        handle(&mut state, key(confirmation));
+        assert_eq!(state.delete_request.as_deref(), Some("del"));
+        assert!(
+            state
+                .picker
+                .as_ref()
+                .unwrap()
+                .pending_delete
+                .is_none()
+        );
+    }
 }
 
 #[test]
@@ -1062,7 +1019,7 @@ fn marketplace_search_and_enabled_filter_never_inspect_hidden_plugins() {
 }
 
 #[test]
-fn marketplace_catalog_updates_preserve_identity_and_reject_other_projects() {
+fn marketplace_catalog_updates_preserve_identity_and_reject_other_sessions() {
     let first = plugin_marketplace();
     let mut second = first.clone();
     second.source = "owner/another-catalog".into();
@@ -1173,7 +1130,7 @@ fn marketplace_filtered_rows_keep_original_plugin_identity() {
 }
 
 #[test]
-fn marketplace_dialog_enables_inspected_plugin_for_current_project() {
+fn marketplace_dialog_applies_inspected_plugin_to_current_session() {
     let mut state = UiState::new("model");
     state.marketplace_dialog = Some(MarketplaceDialog::new(
         vec![plugin_marketplace()],

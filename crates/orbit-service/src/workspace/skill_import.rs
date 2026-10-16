@@ -35,18 +35,6 @@ pub(super) struct Scan {
 }
 
 impl Scan {
-    #[cfg(test)]
-    pub(super) async fn acquire(
-        session: String,
-        workspace: PathBuf,
-        source: String,
-        home: Option<PathBuf>,
-        existing: HashSet<String>,
-    ) -> Result<Self> {
-        let destination = project_root(&workspace).join(".orbit/skills");
-        Self::acquire_to(session, workspace, source, home, existing, destination).await
-    }
-
     /// Global imports use the same frozen-package validation with an explicit destination.
     pub(super) async fn acquire_to(
         session: String,
@@ -331,11 +319,6 @@ impl Scan {
         }
         result
     }
-}
-
-#[cfg(test)]
-fn project_root(workspace: &Path) -> PathBuf {
-    crate::instructions::project_root(workspace).unwrap_or_else(|| workspace.to_path_buf())
 }
 
 fn ignored(name: &std::ffi::OsStr) -> bool {

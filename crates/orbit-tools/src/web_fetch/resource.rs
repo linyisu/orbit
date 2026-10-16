@@ -165,20 +165,23 @@ mod tests {
     use super::*;
     #[tokio::test]
     async fn preview_rejects_private_targets_and_credentials_before_network_io() {
-        for url in [
-            "http://127.0.0.1/a.png",
-            "http://[::1]/a.png",
-            "https://localhost/a.png",
-            "https://local.test/a.png",
-            "https://u:p@example.com/a.png",
-            "file:///etc/passwd",
+        for (url, reason) in [
+            ("http://127.0.0.1/a.png", "non-public"),
+            ("http://[::1]/a.png", "non-public"),
+            ("https://localhost/a.png", "private hostname"),
+            ("https://local.test/a.png", "private hostname"),
+            ("https://u:p@example.com/a.png", "credentials"),
+            ("file:///etc/passwd", "scheme"),
         ] {
-            assert!(fetch_image(url).await.is_err(), "{url}");
+            let error = fetch_image(url).await.unwrap_err();
+            assert!(error.to_string().contains(reason), "{url}: {error}");
             assert!(
                 WebClient::default()
                     .fetch_json(url, 1_024)
                     .await
-                    .is_err(),
+                    .unwrap_err()
+                    .to_string()
+                    .contains(reason),
                 "{url}"
             );
         }

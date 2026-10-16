@@ -1,8 +1,6 @@
 use std::{
     fs,
     os::unix::fs::{PermissionsExt, symlink},
-    path::PathBuf,
-    sync::atomic::{AtomicU64, Ordering},
     time::Duration,
 };
 
@@ -16,35 +14,19 @@ use orbit_tools::{
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
-static NEXT: AtomicU64 = AtomicU64::new(0);
-
-struct Fixture(PathBuf);
+struct Fixture(tempfile::TempDir);
 
 impl Fixture {
     fn new() -> Self {
-        let path = std::env::temp_dir().join(format!(
-            "orbit-write-test-{}-{}",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::Relaxed)
-        ));
-
-        fs::create_dir(&path).unwrap();
-
-        Self(path)
+        Self(tempfile::tempdir().unwrap())
     }
 
     fn tool(&self) -> (WriteFile, ApprovalReceiver) {
         let (sender, receiver) = approval::channel();
         (
-            WriteFile::new(Workspace::new(&self.0).unwrap(), sender),
+            WriteFile::new(Workspace::new(self.0.path()).unwrap(), sender),
             receiver,
         )
-    }
-}
-
-impl Drop for Fixture {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
     }
 }
 
@@ -77,12 +59,16 @@ async fn request(receiver: &mut ApprovalReceiver) -> approval::ApprovalRequest {
 }
 
 fn no_temp(root: &Fixture) {
-    assert!(fs::read_dir(&root.0).unwrap().all(|e| {
-        !e.unwrap()
-            .file_name()
-            .to_string_lossy()
-            .starts_with(".orbit-write-")
-    }));
+    assert!(
+        fs::read_dir(root.0.path())
+            .unwrap()
+            .all(|e| {
+                !e.unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".orbit-write-")
+            })
+    );
 }
 
 #[tokio::test]
@@ -98,7 +84,11 @@ async fn requires_approval_then_creates_and_replaces_exact_utf8_with_mode_preser
         };
 
         if before.is_some() {
-            fs::set_permissions(root.0.join("file"), fs::Permissions::from_mode(0o750)).unwrap();
+            fs::set_permissions(
+                root.0.path().join("file"),
+                fs::Permissions::from_mode(0o750),
+            )
+            .unwrap();
         }
 
         let task = start(tool, "file", after, CancellationToken::new());
@@ -110,7 +100,7 @@ async fn requires_approval_then_creates_and_replaces_exact_utf8_with_mode_preser
         assert_eq!(preview.before.as_deref(), before);
         assert_eq!(preview.after, after);
         assert_eq!(
-            fs::read_to_string(root.0.join("file"))
+            fs::read_to_string(root.0.path().join("file"))
                 .ok()
                 .as_deref(),
             before
@@ -129,9 +119,12 @@ async fn requires_approval_then_creates_and_replaces_exact_utf8_with_mode_preser
         let result: serde_json::Value = serde_json::from_str(&output).unwrap();
 
         assert_eq!(result["written_bytes"], after.len());
-        assert_eq!(fs::read_to_string(root.0.join("file")).unwrap(), after);
         assert_eq!(
-            fs::metadata(root.0.join("file"))
+            fs::read_to_string(root.0.path().join("file")).unwrap(),
+            after
+        );
+        assert_eq!(
+            fs::metadata(root.0.path().join("file"))
                 .unwrap()
                 .permissions()
                 .mode()
@@ -166,7 +159,7 @@ async fn deny_cancel_and_closed_ui_never_write() {
         }
 
         assert!(task.await.unwrap().is_err());
-        assert!(!root.0.join("new").exists());
+        assert!(!root.0.path().join("new").exists());
 
         no_temp(&root);
     }
@@ -179,14 +172,14 @@ async fn deny_cancel_and_closed_ui_never_write() {
             .await
             .is_err()
     );
-    assert!(!root.0.join("new").exists());
+    assert!(!root.0.path().join("new").exists());
 }
 
 #[tokio::test]
 async fn restore_requires_a_matching_checkpoint_and_can_remove_created_files() {
     let root = Fixture::new();
     let (tool, mut approvals) = root.tool();
-    fs::write(root.0.join("existing"), "Orbit version").unwrap();
+    fs::write(root.0.path().join("existing"), "Orbit version").unwrap();
     let task = tokio::spawn({
         let tool = tool.clone();
 
@@ -219,11 +212,11 @@ async fn restore_requires_a_matching_checkpoint_and_can_remove_created_files() {
             .contains("\"restored\":true")
     );
     assert_eq!(
-        fs::read_to_string(root.0.join("existing")).unwrap(),
+        fs::read_to_string(root.0.path().join("existing")).unwrap(),
         "original"
     );
 
-    fs::write(root.0.join("created"), "created by Orbit").unwrap();
+    fs::write(root.0.path().join("created"), "created by Orbit").unwrap();
     let task = tokio::spawn({
         let tool = tool.clone();
 
@@ -254,9 +247,9 @@ async fn restore_requires_a_matching_checkpoint_and_can_remove_created_files() {
             .unwrap()
             .contains("\"created_file_removed\":true")
     );
-    assert!(!root.0.join("created").exists());
+    assert!(!root.0.path().join("created").exists());
 
-    fs::write(root.0.join("external"), "human version").unwrap();
+    fs::write(root.0.path().join("external"), "human version").unwrap();
 
     assert!(
         tool.restore(
@@ -277,7 +270,7 @@ async fn restore_requires_a_matching_checkpoint_and_can_remove_created_files() {
 async fn restore_refuses_a_file_changed_after_its_preview() {
     let root = Fixture::new();
     let (tool, mut approvals) = root.tool();
-    fs::write(root.0.join("created"), "created by Orbit").unwrap();
+    fs::write(root.0.path().join("created"), "created by Orbit").unwrap();
     let task = tokio::spawn(async move {
         tool.restore(
             FileChange {
@@ -290,12 +283,12 @@ async fn restore_refuses_a_file_changed_after_its_preview() {
         .await
     });
     let approval = request(&mut approvals).await;
-    fs::write(root.0.join("created"), "human changed it").unwrap();
+    fs::write(root.0.path().join("created"), "human changed it").unwrap();
     approval.decision.send(true).unwrap();
 
     assert!(task.await.unwrap().is_err());
     assert_eq!(
-        fs::read_to_string(root.0.join("created")).unwrap(),
+        fs::read_to_string(root.0.path().join("created")).unwrap(),
         "human changed it"
     );
 }
@@ -305,7 +298,7 @@ async fn refuses_changes_and_file_replacements_during_approval() {
     let root = Fixture::new();
 
     for kind in 0..4 {
-        let path = root.0.join("file");
+        let path = root.0.path().join("file");
 
         if path.exists() {
             fs::remove_file(&path).unwrap();
@@ -322,8 +315,9 @@ async fn refuses_changes_and_file_replacements_during_approval() {
         match kind {
             0 | 2 => fs::write(&path, "external edit").unwrap(),
             1 => {
-                fs::remove_file(&path).unwrap();
-                fs::write(&path, "same content, new inode").unwrap();
+                let replacement = root.0.path().join("replacement");
+                fs::write(&replacement, "before").unwrap();
+                fs::rename(replacement, &path).unwrap();
             }
 
             _ => {
@@ -349,13 +343,13 @@ async fn refuses_changes_and_file_replacements_during_approval() {
 #[tokio::test]
 async fn rejects_unsafe_paths_links_binary_large_files_and_missing_parents_before_asking() {
     let root = Fixture::new();
-    fs::write(root.0.join("binary"), [0, 1, 2]).unwrap();
-    fs::write(root.0.join("large"), vec![b'x'; 1_048_577]).unwrap();
-    fs::write(root.0.join("original"), "text").unwrap();
-    fs::hard_link(root.0.join("original"), root.0.join("hard")).unwrap();
-    symlink("original", root.0.join("symlink")).unwrap();
-    symlink("/tmp", root.0.join("linked-dir")).unwrap();
-    fs::create_dir(root.0.join("directory")).unwrap();
+    fs::write(root.0.path().join("binary"), [0, 1, 2]).unwrap();
+    fs::write(root.0.path().join("large"), vec![b'x'; 1_048_577]).unwrap();
+    fs::write(root.0.path().join("original"), "text").unwrap();
+    fs::hard_link(root.0.path().join("original"), root.0.path().join("hard")).unwrap();
+    symlink("original", root.0.path().join("symlink")).unwrap();
+    symlink("/tmp", root.0.path().join("linked-dir")).unwrap();
+    fs::create_dir(root.0.path().join("directory")).unwrap();
 
     for path in [
         "../escape",
@@ -388,19 +382,19 @@ async fn rejects_unsafe_paths_links_binary_large_files_and_missing_parents_befor
 
     let (tool, _) = root.tool();
 
-    assert!(
+    assert!(matches!(
         tool.execute(
             call("file", &"x".repeat(1_048_577)),
             CancellationToken::new()
         )
-        .await
-        .is_err()
-    );
-    assert!(
+        .await,
+        Err(ToolError::ExecutionFailed(message)) if message.contains("UTF-8 text without NUL")
+    ));
+    assert!(matches!(
         tool.execute(call("file", "a\0b"), CancellationToken::new())
-            .await
-            .is_err()
-    );
+            .await,
+        Err(ToolError::ExecutionFailed(message)) if message.contains("UTF-8 text without NUL")
+    ));
 
     no_temp(&root);
 }
@@ -423,15 +417,21 @@ async fn ordinary_config_filename_requires_approval_instead_of_a_blanket_ban() {
         .unwrap();
 
     assert!(task.await.unwrap().is_err());
-    assert!(!root.0.join("config.toml").exists());
+    assert!(
+        !root
+            .0
+            .path()
+            .join("config.toml")
+            .exists()
+    );
 }
 
 #[tokio::test]
 async fn protected_custom_files_and_parent_replacement_cannot_be_written() {
     let root = Fixture::new();
-    let mut workspace = Workspace::new(&root.0).unwrap();
+    let mut workspace = Workspace::new(root.0.path()).unwrap();
     workspace
-        .protect(root.0.join("private.db"))
+        .protect(root.0.path().join("private.db"))
         .unwrap();
     let (sender, mut receiver) = approval::channel();
     let tool = WriteFile::new(workspace, sender);
@@ -443,27 +443,33 @@ async fn protected_custom_files_and_parent_replacement_cannot_be_written() {
     );
     assert!(receiver.try_recv().is_err());
 
-    fs::create_dir(root.0.join("dir")).unwrap();
+    fs::create_dir(root.0.path().join("dir")).unwrap();
     let (tool, mut approvals) = root.tool();
     let task = start(tool, "dir/file", "x", CancellationToken::new());
     let approval = request(&mut approvals).await;
-    fs::rename(root.0.join("dir"), root.0.join("moved")).unwrap();
-    fs::create_dir(root.0.join("dir")).unwrap();
+    fs::rename(root.0.path().join("dir"), root.0.path().join("moved")).unwrap();
+    fs::create_dir(root.0.path().join("dir")).unwrap();
     approval.decision.send(true).unwrap();
 
     assert!(task.await.unwrap().is_err());
-    assert!(!root.0.join("dir/file").exists());
-    assert!(!root.0.join("moved/file").exists());
+    assert!(!root.0.path().join("dir/file").exists());
+    assert!(
+        !root
+            .0
+            .path()
+            .join("moved/file")
+            .exists()
+    );
 }
 
 #[tokio::test]
 async fn protects_descendants_of_session_lock_directory() {
     let root = Fixture::new();
-    fs::create_dir(root.0.join("session-locks")).unwrap();
-    fs::write(root.0.join("session-locks/id"), "").unwrap();
-    let mut workspace = Workspace::new(&root.0).unwrap();
+    fs::create_dir(root.0.path().join("session-locks")).unwrap();
+    fs::write(root.0.path().join("session-locks/id"), "").unwrap();
+    let mut workspace = Workspace::new(root.0.path()).unwrap();
     workspace
-        .protect(root.0.join("session-locks"))
+        .protect(root.0.path().join("session-locks"))
         .unwrap();
     let (sender, mut receiver) = approval::channel();
     let tool = WriteFile::new(workspace, sender);

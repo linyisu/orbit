@@ -676,80 +676,7 @@ async fn test_session_switch_and_resume_clears_session_grants() {
 }
 
 #[tokio::test]
-async fn test_resume_preserves_attachments_losslessly_and_projects_for_text_only_model() {
-    let tmp = tempfile::tempdir().unwrap();
-    let db_path = tmp.path().join("orbit.db");
-    let mut session = SessionState::open(db_path.clone(), None, "test::model".into())
-        .await
-        .unwrap();
-
-    session
-        .begin("hi".into(), "test::model".into())
-        .await
-        .unwrap();
-    session
-        .finish(orbit_store::types::RunCompletion::Completed {
-            history: vec![
-                ChatMessage::user("hi"),
-                ChatMessage::user_with_attachments(
-                    "check this",
-                    vec![orbit_model::types::Attachment::Image {
-                        lease: None,
-                        name: "pic.png".into(),
-                        mime_type: "image/png".into(),
-                        path: "/path/to/pic.png".into(),
-                    }],
-                ),
-            ],
-        })
-        .await
-        .unwrap();
-
-    let id = session.id().to_owned();
-    drop(session);
-
-    let resumed = SessionState::open(db_path, Some(id), "test::model".into())
-        .await
-        .unwrap();
-
-    assert_eq!(resumed.snapshot.history.len(), 2);
-
-    let ChatMessage::User {
-        content,
-        attachments,
-    } = &resumed.snapshot.history[1]
-    else {
-        panic!("expected user message");
-    };
-
-    assert_eq!(
-        attachments.len(),
-        1,
-        "persisted history must retain attachments losslessly"
-    );
-    assert_eq!(content, "check this");
-
-    let projected = orbit_agent::model_messages(&resumed.snapshot.history, false);
-    let ChatMessage::User {
-        content: proj_content,
-        attachments: proj_attachments,
-    } = &projected[1]
-    else {
-        panic!("expected projected user message");
-    };
-
-    assert!(
-        proj_attachments.is_empty(),
-        "projected request attachments must be emptied"
-    );
-    assert!(
-        proj_content
-            .contains("[Image omitted: current model does not support image input: pic.png]")
-    );
-}
-
-#[tokio::test]
-async fn test_full_roundtrip_vision_to_text_to_vision_persists_attachments_losslessly() {
+async fn vision_to_text_to_vision_roundtrip_preserves_original_history() {
     let tmp = tempfile::tempdir().unwrap();
     let db_path = tmp.path().join("orbit.db");
 
@@ -775,7 +702,9 @@ async fn test_full_roundtrip_vision_to_text_to_vision_persists_attachments_lossl
     ];
 
     session
-        .finish(orbit_store::types::RunCompletion::Completed { history })
+        .finish(orbit_store::types::RunCompletion::Completed {
+            history: history.clone(),
+        })
         .await
         .unwrap();
     let id = session.id().to_owned();
@@ -785,6 +714,7 @@ async fn test_full_roundtrip_vision_to_text_to_vision_persists_attachments_lossl
         SessionState::open(db_path.clone(), Some(id.clone()), "test::text-model".into())
             .await
             .unwrap();
+    assert_eq!(session_text.snapshot.history, history);
     let projected = orbit_agent::model_messages(&session_text.snapshot.history, false);
 
     assert_eq!(projected.len(), 3);
@@ -811,7 +741,7 @@ async fn test_full_roundtrip_vision_to_text_to_vision_persists_attachments_lossl
     history_turn2.push(ChatMessage::assistant("It was Mount Fuji."));
     session_text
         .finish(orbit_store::types::RunCompletion::Completed {
-            history: history_turn2,
+            history: history_turn2.clone(),
         })
         .await
         .unwrap();
@@ -825,99 +755,11 @@ async fn test_full_roundtrip_vision_to_text_to_vision_persists_attachments_lossl
     .await
     .unwrap();
 
-    assert_eq!(session_vision.snapshot.history.len(), 5);
-
-    let ChatMessage::User {
-        attachments: final_attachments,
-        ..
-    } = &session_vision.snapshot.history[1]
-    else {
-        panic!()
-    };
-
+    assert_eq!(session_vision.snapshot.history, history_turn2);
     assert_eq!(
-        final_attachments.len(),
-        1,
-        "persisted history must still retain image attachment"
+        orbit_agent::model_messages(&session_vision.snapshot.history, true),
+        history_turn2
     );
-
-    let projected_vision = orbit_agent::model_messages(&session_vision.snapshot.history, true);
-    let ChatMessage::User {
-        attachments: vis_attachments,
-        ..
-    } = &projected_vision[1]
-    else {
-        panic!()
-    };
-
-    assert_eq!(
-        vis_attachments.len(),
-        1,
-        "vision projection must include the raw image attachment"
-    );
-}
-
-#[tokio::test]
-#[ignore = "requires ORBIT_RECOVERY_DB and ORBIT_RECOVERY_SESSION"]
-async fn test_real_session_recovery_validation() {
-    let real_db = match std::env::var("ORBIT_RECOVERY_DB") {
-        Ok(v) if !v.is_empty() => std::path::PathBuf::from(v),
-        _ => return,
-    };
-
-    let session_id = match std::env::var("ORBIT_RECOVERY_SESSION") {
-        Ok(v) if !v.is_empty() => v,
-        _ => return,
-    };
-
-    if !real_db.exists() {
-        return;
-    }
-
-    let tmp = tempfile::tempdir().unwrap();
-    let copy_db = tmp.path().join("orbit_copy.db");
-    std::fs::copy(&real_db, &copy_db).unwrap();
-
-    for suffix in ["-wal", "-shm", "-journal"] {
-        let mut src = real_db.as_os_str().to_os_string();
-        src.push(suffix);
-        let src = std::path::PathBuf::from(src);
-
-        if src.exists() {
-            let mut dst = copy_db.as_os_str().to_os_string();
-            dst.push(suffix);
-            let _ = std::fs::copy(&src, std::path::PathBuf::from(dst));
-        }
-    }
-
-    let store = orbit_store::store::Store::open(copy_db)
-        .await
-        .unwrap();
-    let saved = store
-        .session(&session_id)
-        .await
-        .unwrap();
-    let prepared =
-        SessionState::prepare_resume(store.clone(), saved.project_id.clone(), session_id)
-            .await
-            .unwrap();
-
-    assert!(!prepared.snapshot.history.is_empty());
-
-    let projected_text = orbit_agent::model_messages(&prepared.snapshot.history, false);
-
-    for msg in &projected_text {
-        if let ChatMessage::User { attachments, .. } = msg {
-            assert!(
-                attachments.is_empty(),
-                "text-only model must receive 0 attachments"
-            );
-        }
-    }
-
-    let projected_vision = orbit_agent::model_messages(&prepared.snapshot.history, true);
-
-    assert_eq!(projected_vision.len(), prepared.snapshot.history.len());
 }
 
 struct FailFirstFlush(std::sync::atomic::AtomicBool);

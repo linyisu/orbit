@@ -84,7 +84,11 @@ async fn cancellation_terminates_a_running_conversion_worker() {
     let root = tempfile::tempdir().unwrap();
     std::fs::write(root.path().join("data.csv"), "a,b\n1,2\n").unwrap();
     let worker = root.path().join("slow-worker");
-    std::fs::write(&worker, "#!/bin/sh\nexec /bin/sleep 30\n").unwrap();
+    std::fs::write(
+        &worker,
+        "#!/bin/sh\nprintf started > \"$0.started\"\nexec /bin/sleep 30\n",
+    )
+    .unwrap();
     std::fs::set_permissions(&worker, std::fs::Permissions::from_mode(0o700)).unwrap();
     let tool = ReadDocument::new(Workspace::new(root.path()).unwrap()).with_worker(worker);
     let token = CancellationToken::new();
@@ -103,7 +107,18 @@ async fn cancellation_terminates_a_running_conversion_worker() {
         .await
     });
 
-    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while !root
+            .path()
+            .join("slow-worker.started")
+            .exists()
+        {
+            assert!(!task.is_finished(), "worker exited before starting");
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("conversion worker started before cancellation");
     token.cancel();
     let result = tokio::time::timeout(std::time::Duration::from_secs(2), task)
         .await

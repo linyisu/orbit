@@ -36,6 +36,8 @@ fn command_output_preview_reads_the_requested_log_and_bounds_unicode_tail() {
     .unwrap();
     let tail = read_command_stdout(directory.path(), "cmd-orbit-unicode").unwrap();
     assert!(tail.len() <= 16 * 1_024);
+    assert!(tail.len() >= 16 * 1_024 - 3);
+    assert!(tail.ends_with("Orbit end"));
     assert!(content.ends_with(&tail));
     assert!(!tail.contains('\u{fffd}'));
 }

@@ -89,7 +89,7 @@ use orbit_model::types::ToolCall;
 use crate::approval::ApprovalPreview;
 
 #[test]
-fn validates_stdio_configuration_and_namespaces_tools() {
+fn stdio_configuration_defaults_to_disabled() {
     let config: McpConfig = toml::from_str(
         r#"
             [servers.files]

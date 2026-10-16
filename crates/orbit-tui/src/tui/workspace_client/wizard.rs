@@ -807,11 +807,11 @@ mod tests {
     }
 
     #[test]
-    fn dialog_layout_keeps_actions_visible_and_exports_optional_previews() {
-        for (name, spec) in [
-            ("ssh", Some(Spec::parse("/ssh server.example").unwrap())),
-            ("wsl", Some(Spec::parse("/wsl Ubuntu").unwrap())),
-            ("directory", None),
+    fn dialog_layout_keeps_actions_visible() {
+        for spec in [
+            Some(Spec::parse("/ssh server.example").unwrap()),
+            Some(Spec::parse("/wsl Ubuntu").unwrap()),
+            None,
         ] {
             let mut wizard = Wizard::new(spec);
             if wizard.form.is_none() {
@@ -844,25 +844,6 @@ mod tests {
                     .iter()
                     .any(|(_, id)| matches!(id, 80 | 81))
             );
-            if let Ok(path) = std::env::var("ORBIT_WIZARD_PREVIEW") {
-                let buffer = terminal.backend().buffer();
-                let cells = buffer
-                    .content
-                    .iter()
-                    .map(|cell| {
-                        serde_json::json!({
-                            "text": cell.symbol(),
-                            "fg": format!("{:?}", cell.fg),
-                            "bg": format!("{:?}", cell.bg)
-                        })
-                    })
-                    .collect::<Vec<_>>();
-                std::fs::write(
-                    format!("{path}-{name}.json"),
-                    serde_json::to_vec(&cells).unwrap(),
-                )
-                .unwrap();
-            }
         }
     }
 

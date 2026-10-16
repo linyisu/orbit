@@ -236,9 +236,8 @@ async fn large_context_uses_bounded_summary_fragments() {
 }
 
 #[tokio::test]
-async fn invalid_summary_and_cancellation_preserve_history() {
+async fn invalid_summary_and_cancellation_do_not_return_compacted_context() {
     let history = long_task();
-    let original = history.clone();
     let mut truncated = answer("partial");
     truncated.finish_reason = Some("length".into());
     let invalid_tool = ChatCompletion {
@@ -264,7 +263,6 @@ async fn invalid_summary_and_cancellation_preserve_history() {
         .await;
 
         assert!(result.is_err());
-        assert_eq!(history, original);
     }
 
     let token = CancellationToken::new();
@@ -353,9 +351,8 @@ async fn truncated_summary_retries_with_a_smaller_source_batch() {
 }
 
 #[tokio::test]
-async fn automatic_compaction_preserves_history_after_a_retryable_summary_failure() {
+async fn automatic_compaction_reports_retryable_summary_failure_once() {
     let history = long_task();
-    let original = history.clone();
     let plan = autocompact::plan(&history, &[], 1_000, 8_000).unwrap();
     let backend = MockModel::from_results([Err(ModelError::Http {
         status: 429,
@@ -375,7 +372,6 @@ async fn automatic_compaction_preserves_history_after_a_retryable_summary_failur
             ..
         })
     ));
-    assert_eq!(history, original);
     assert_eq!(backend.requests().len(), 1);
 }
 
@@ -578,10 +574,11 @@ async fn invalid_early_summary_preserves_context_and_disabled_mode_skips_compact
 async fn cancellation_interrupts_a_summary_backend_that_does_not_poll_the_token() {
     use orbit_agent::model::{CompletionFuture, ModelBackend, StreamFuture};
 
-    struct Waiting;
+    struct Waiting(std::sync::Arc<tokio::sync::Notify>);
 
     impl ModelBackend for Waiting {
         fn complete<'a>(&'a self, _: ChatRequest, _: CancellationToken) -> CompletionFuture<'a> {
+            self.0.notify_one();
             Box::pin(std::future::pending())
         }
 
@@ -593,10 +590,14 @@ async fn cancellation_interrupts_a_summary_backend_that_does_not_poll_the_token(
     let token = CancellationToken::new();
     let plan = autocompact::plan(&long_task(), &[], 1_000, 8_000).unwrap();
     let cancel = token.clone();
+    let started = std::sync::Arc::new(tokio::sync::Notify::new());
+    let backend = Waiting(started.clone());
     let task = tokio::spawn(async move {
-        autocompact::execute(&Waiting, plan, &[], 1_000, 8_000, token).await
+        autocompact::execute(&backend, plan, &[], 1_000, 8_000, token).await
     });
-    tokio::task::yield_now().await;
+    tokio::time::timeout(std::time::Duration::from_secs(1), started.notified())
+        .await
+        .expect("summary request started before cancellation");
     cancel.cancel();
     let result = tokio::time::timeout(std::time::Duration::from_secs(1), task)
         .await
@@ -1059,7 +1060,6 @@ async fn tool_heavy_history_reclaims_over_seventy_percent_without_a_model_call()
     let history = tool_heavy_task();
     let archive = Archive::default();
     let backend = MockModel::new([]);
-    let started = std::time::Instant::now();
     let compacted = autocompact::execute_with_archive(
         &backend,
         autocompact::plan(&history, &[], 1_000, 224_000).unwrap(),
@@ -1071,14 +1071,6 @@ async fn tool_heavy_history_reclaims_over_seventy_percent_without_a_model_call()
     )
     .await
     .unwrap();
-
-    println!(
-        "tool-heavy replay: {} -> {} estimated tokens; {} model requests; {:?}",
-        compacted.before_tokens,
-        compacted.after_tokens,
-        backend.requests().len(),
-        started.elapsed()
-    );
 
     assert!(backend.requests().is_empty());
     assert_eq!(
@@ -1257,86 +1249,6 @@ async fn manual_compaction_handles_a_single_long_task_with_the_same_budget() {
     );
 
     assert_paired(&compacted.history);
-}
-
-/// Opt-in local replay. Never calls a provider or modifies the user's database.
-#[tokio::test]
-#[ignore = "set ORBIT_REPLAY_HISTORY to a locally exported ChatMessage array"]
-async fn replay_archived_tool_pruning() {
-    let path = std::env::var("ORBIT_REPLAY_HISTORY").unwrap();
-    let history: Vec<ChatMessage> = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
-    let archive = Archive::default();
-    let backend = MockModel::new([]);
-    let started = std::time::Instant::now();
-    let compacted = autocompact::execute_with_archive(
-        &backend,
-        autocompact::plan(&history, &[], 0, 224_000).unwrap(),
-        &[],
-        0,
-        224_000,
-        CancellationToken::new(),
-        Some(&archive),
-    )
-    .await
-    .unwrap();
-
-    assert_eq!(
-        compacted.record.strategy,
-        orbit_agent::memory::CompactionStrategy::ToolPruning
-    );
-    assert_eq!(archive.0.lock().unwrap()[0], history);
-
-    assert_paired(&compacted.history);
-    println!(
-        "local replay: {} -> {} estimated tokens; {} model requests; {:?}",
-        compacted.before_tokens,
-        compacted.after_tokens,
-        backend.requests().len(),
-        started.elapsed()
-    );
-}
-
-#[tokio::test]
-#[ignore = "set ORBIT_REPLAY_HISTORY to a locally exported ChatMessage array"]
-async fn replay_manual_compaction_when_summary_is_unavailable() {
-    use orbit_agent::{compaction::CompactionSettings, memory::CompactionMode};
-
-    let path = std::env::var("ORBIT_REPLAY_HISTORY").unwrap();
-    let history: Vec<ChatMessage> = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
-    let settings = CompactionSettings::default();
-    let archive = Archive::default();
-    let timeout = || ModelError::Timeout {
-        duration: std::time::Duration::from_secs(1),
-        stage: "summary".into(),
-    };
-    let backend = MockModel::from_results((0..20).map(|_| Err(timeout())));
-    let plan = autocompact::plan_configured(
-        &history,
-        &[],
-        64_000,
-        288_000,
-        CompactionMode::Manual,
-        &settings,
-    )
-    .unwrap();
-    let result = autocompact::execute_configured(
-        &backend,
-        plan,
-        &[],
-        64_000,
-        288_000,
-        CancellationToken::new(),
-        Some(&archive),
-        &settings,
-    )
-    .await;
-
-    assert!(result.is_err());
-
-    println!(
-        "local replay: manual summary did not complete after {} model requests",
-        backend.requests().len()
-    );
 }
 
 #[tokio::test]

@@ -295,6 +295,7 @@ mod tests {
             .session_storage_usage()
             .await
             .unwrap();
+        assert_eq!(usage.len(), 2);
         assert!(
             usage
                 .iter()

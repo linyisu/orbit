@@ -521,6 +521,7 @@ pub(crate) mod tests {
                 "transport::tests::response_fixture",
                 "--exact",
                 "--nocapture",
+                "--ignored",
             ])
             .env(RESPONSES_PATH_ENV, path)
             .stdin(std::process::Stdio::piped())
@@ -546,11 +547,11 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "subprocess fixture; launched by fixture_client with generated responses"]
     async fn response_fixture() {
         use tokio::io::AsyncWriteExt;
-        let Some(path) = std::env::var_os(RESPONSES_PATH_ENV) else {
-            return;
-        };
+        let path = std::env::var_os(RESPONSES_PATH_ENV)
+            .expect("response fixture must be launched through fixture_client");
         let responses: Vec<Response> =
             serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
         let mut stdin = tokio::io::stdin();

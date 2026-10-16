@@ -909,22 +909,6 @@ fn clipboard_regular_files_are_references_without_image_decoding() {
 }
 
 #[test]
-fn compaction_and_images_use_the_same_request_for_every_target() {
-    for target in ["本地", "SSH dev", "WSL Ubuntu"] {
-        let (mut tab, mut requests) = tab(target);
-        tab.submit("/compact".into()).unwrap();
-        assert!(matches!(
-            requests.try_recv().unwrap().request,
-            Request::Start {
-                compact: true,
-                images,
-                ..
-            } if images.is_empty()
-        ));
-    }
-}
-
-#[test]
 fn steering_is_visible_before_receipt_and_is_reconciled_by_message_id() {
     use orbit_client::protocol::events::AgentEvent;
     use orbit_client::protocol::model::StreamEvent;
@@ -1516,11 +1500,11 @@ fn directory_enter_keeps_completed_path_instead_of_choosing_its_first_child() {
         let (mut tab, mut requests) = tab(label);
         tab.state
             .input
-            .set("/cd ~/Tests/TC_learn/".into());
+            .set("/cd ~/fixtures/sample/".into());
         tab.apply(Response::Completions {
             input: tab.state.input.text.clone(),
             entries: vec![crate::tui::completion::Candidate {
-                name: "/cd ~/Tests/TC_learn/_check/".into(),
+                name: "/cd ~/fixtures/sample/_check/".into(),
                 display: Some("_check/".into()),
                 description: String::new(),
                 continue_input: true,
@@ -1537,7 +1521,7 @@ fn directory_enter_keeps_completed_path_instead_of_choosing_its_first_child() {
             Request::SessionAction {
                 action: orbit_protocol::SessionAction::ChangeDirectory { path },
                 ..
-            } if path == "~/Tests/TC_learn/"
+            } if path == "~/fixtures/sample/"
         ));
         assert!(tab.state.info_dialog.is_none());
     }

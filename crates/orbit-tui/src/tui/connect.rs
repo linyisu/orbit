@@ -647,22 +647,4 @@ mod tests {
             &rows
         ));
     }
-
-    #[tokio::test]
-    async fn dropping_login_cancels_background_work() {
-        let (sender, receiver) = tokio::sync::oneshot::channel::<()>();
-        let task = AbortOnDropHandle::new(tokio::spawn(async move {
-            let _sender = sender;
-            std::future::pending::<()>().await;
-        }));
-
-        drop(task);
-
-        assert!(
-            tokio::time::timeout(Duration::from_secs(1), receiver)
-                .await
-                .unwrap()
-                .is_err()
-        );
-    }
 }

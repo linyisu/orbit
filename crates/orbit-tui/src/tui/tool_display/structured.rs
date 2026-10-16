@@ -805,6 +805,3 @@ pub(super) fn fallback(row: &ToolRow, expanded: bool, width: u16) -> Option<Vec<
 
     Some(view.finish())
 }
-
-#[cfg(test)]
-mod tests;

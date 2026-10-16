@@ -287,9 +287,9 @@ fn bare_model_name_is_accepted() {
     assert!(matches!(
         rx.try_recv(),
         Ok(Call {
-            request: Request::SetModel { .. },
+            request: Request::SetModel { model, .. },
             ..
-        })
+        }) if model == "mock::model"
     ));
 }
 
@@ -393,15 +393,16 @@ fn interrupted_tool_is_no_longer_running_after_restore() {
             },
         ],
     );
-    assert!(
-        tab.state
-            .transcript
-            .iter()
-            .all(|item| !matches!(
-                item,
-                TranscriptItem::Tool(tool) if tool.status == crate::tui::app::ToolStatus::Running
-            ))
-    );
+    let tools = tab
+        .state
+        .transcript
+        .iter()
+        .filter_map(|item| match item {
+            TranscriptItem::Tool(tool) => Some((tool.id.as_str(), &tool.status)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(tools, [("call", &crate::tui::app::ToolStatus::Failed)]);
 }
 
 #[test]
@@ -550,39 +551,50 @@ fn sent_images_have_a_message_marker_and_preserve_the_next_draft() {
 #[test]
 fn failed_start_restores_only_the_submitted_images() {
     let (mut tab, _rx) = tab("本地");
+    let submitted = image();
+    let next = orbit_client::protocol::model::Attachment::Image {
+        lease: None,
+        name: "next-draft.png".into(),
+        mime_type: "image/png".into(),
+        path: "/synthetic/next-draft.png".into(),
+    };
     tab.starting = Some("sent".into());
-    tab.starting_attachments.push(image());
-    tab.state.attachments.push(image());
+    tab.starting_attachments
+        .push(submitted.clone());
+    tab.state.attachments.push(next.clone());
     tab.apply(Response::Error("rejected".into()));
-    assert_eq!(tab.state.attachments.len(), 2);
+    assert_eq!(tab.state.attachments, vec![submitted, next]);
+    assert!(tab.starting_attachments.is_empty());
     assert_eq!(tab.state.input.text, "sent");
 }
 
 #[test]
 fn compact_preserves_the_image_draft_and_sends_no_uploads() {
-    let (mut tab, mut requests) = tab("本地");
-    tab.state.attachments.push(image());
-    tab.submit("/compact".into()).unwrap();
-    assert!(matches!(
-        requests.try_recv(),
-        Ok(Call {
-            request:
-                Request::Start {
-                    compact: true,
-                    images,
-                    ..
-                },
-            ..
-        }) if images.is_empty()
-    ));
-    apply_page(
-        &mut tab,
-        vec![Update::Started {
-            prompt: "/compact".into(),
-            presentation: Default::default(),
-        }],
-    );
-    assert_eq!(tab.state.attachments.len(), 1);
+    for label in ["本地", "SSH example", "WSL Test"] {
+        let (mut tab, mut requests) = tab(label);
+        tab.state.attachments.push(image());
+        tab.submit("/compact".into()).unwrap();
+        assert!(matches!(
+            requests.try_recv(),
+            Ok(Call {
+                request:
+                    Request::Start {
+                        compact: true,
+                        images,
+                        ..
+                    },
+                ..
+            }) if images.is_empty()
+        ));
+        apply_page(
+            &mut tab,
+            vec![Update::Started {
+                prompt: "/compact".into(),
+                presentation: Default::default(),
+            }],
+        );
+        assert_eq!(tab.state.attachments.len(), 1);
+    }
 }
 
 #[test]
@@ -689,7 +701,7 @@ fn replay_preserves_reading_position_and_finalizes_only_replayed_background_tool
 }
 
 #[test]
-fn running_command_card_updates_stdout_without_overwriting_a_finished_result() {
+fn running_command_updates_stdout_without_overwriting_a_finished_result() {
     let (mut tab, _rx) = tab("本地");
     let call =
         orbit_client::protocol::model::ToolCall::function("command", "Exec", serde_json::json!({}));

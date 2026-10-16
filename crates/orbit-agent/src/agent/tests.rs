@@ -562,7 +562,7 @@ async fn image_tool_output_is_added_to_the_next_model_request() {
 }
 
 #[tokio::test]
-async fn scenario_1_text_only_model_removes_read_image_and_fails_fast_on_invocation() {
+async fn text_only_model_excludes_image_tools_and_reports_unsupported_calls() {
     let backend = MockModel::new(vec![
         assistant_tool_call("image-call", "ReadImage", "{}"),
         assistant_text("I see it failed"),
@@ -608,51 +608,7 @@ async fn scenario_1_text_only_model_removes_read_image_and_fails_fast_on_invocat
 }
 
 #[tokio::test]
-async fn scenario_2_model_failure_preserves_attachments_in_checkpoint_losslessly() {
-    use std::sync::Arc;
-
-    let journal = Arc::new(FailingJournal {
-        checkpoints: std::sync::Mutex::new(Vec::new()),
-        fail_start: false,
-        fail_receipt: false,
-    });
-    let backend = MockModel::from_results(vec![
-        Ok(assistant_tool_call("image-call", "ReadImage", "{}")),
-        Err(orbit_model::error::ModelError::Protocol(
-            "HTTP 500: rate limit or transient failure".into(),
-        )),
-    ])
-    .with_vision(true);
-    let mut tools = ToolRegistry::new();
-    tools.register(ImageTool);
-    let agent = Agent::new(backend.clone(), tools, AgentConfig::default())
-        .with_execution_journal(journal.clone());
-    let result = agent
-        .run(request(), CancellationToken::new())
-        .await;
-
-    assert!(result.is_err());
-
-    let checkpoints = journal.checkpoints.lock().unwrap();
-    let last_checkpoint = checkpoints
-        .last()
-        .expect("saved checkpoint");
-    let has_raw_attachments = last_checkpoint
-        .history
-        .iter()
-        .any(|m| match m {
-            ChatMessage::User { attachments, .. } => !attachments.is_empty(),
-            _ => false,
-        });
-
-    assert!(
-        has_raw_attachments,
-        "checkpoint must preserve raw image attachments losslessly on model failure"
-    );
-}
-
-#[tokio::test]
-async fn scenario_3_retry_after_model_failure_retains_image_attachment() {
+async fn model_failure_checkpoint_preserves_images_for_retry() {
     use std::sync::Arc;
 
     let journal = Arc::new(FailingJournal {
@@ -671,9 +627,14 @@ async fn scenario_3_retry_after_model_failure_retains_image_attachment() {
     tools.register(ImageTool);
     let agent = Agent::new(backend.clone(), tools.clone(), AgentConfig::default())
         .with_execution_journal(journal.clone());
-    let _ = agent
+    let error = agent
         .run(request(), CancellationToken::new())
-        .await;
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        AgentError::Model(orbit_model::error::ModelError::Protocol(_))
+    ));
 
     let restored_history = {
         let checkpoints = journal.checkpoints.lock().unwrap();
@@ -684,13 +645,22 @@ async fn scenario_3_retry_after_model_failure_retains_image_attachment() {
             .clone()
     };
 
-    assert!(
-        restored_history
-            .iter()
-            .any(|m| match m {
-                ChatMessage::User { attachments, .. } => !attachments.is_empty(),
-                _ => false,
-            })
+    let restored_images: Vec<_> = restored_history
+        .iter()
+        .flat_map(|message| match message {
+            ChatMessage::User { attachments, .. } => attachments.as_slice(),
+            _ => &[],
+        })
+        .cloned()
+        .collect();
+    assert_eq!(
+        restored_images,
+        vec![Attachment::Image {
+            lease: None,
+            name: "scene.png".into(),
+            mime_type: "image/png".into(),
+            path: "/global/scene.png".into(),
+        }]
     );
 
     let follow_up_backend =
@@ -706,83 +676,22 @@ async fn scenario_3_retry_after_model_failure_retains_image_attachment() {
     let requests = follow_up_backend.requests();
 
     assert_eq!(requests.len(), 1);
-    assert!(
+    assert_eq!(
         requests[0]
             .messages
             .iter()
-            .any(|m| match m {
-                ChatMessage::User { attachments, .. } => !attachments.is_empty(),
-                _ => false,
+            .flat_map(|message| match message {
+                ChatMessage::User { attachments, .. } => attachments.as_slice(),
+                _ => &[],
             })
+            .cloned()
+            .collect::<Vec<_>>(),
+        restored_images
     );
 }
 
 #[tokio::test]
-async fn scenario_4_resuming_failed_conversation_with_text_only_model() {
-    let historical_poison = vec![
-        ChatMessage::system("system"),
-        ChatMessage::user("look at 1.jpg"),
-        ChatMessage::user_with_attachments(
-            "The ReadImage tool loaded the following local image into this model request: 1.jpg. \
-                Analyze the actual image content directly.",
-            vec![Attachment::Image {
-                lease: None,
-                name: "1.jpg".into(),
-                mime_type: "image/jpeg".into(),
-                path: "/stored/1.jpg".into(),
-            }],
-        ),
-        ChatMessage::user("你看，我就说你不能识图吧"),
-    ];
-
-    let text_only_backend =
-        MockModel::new(vec![assistant_text("确实，当前模型不支持直接识图。")]).with_vision(false);
-    let agent = Agent::new(
-        text_only_backend.clone(),
-        ToolRegistry::new(),
-        AgentConfig::default(),
-    );
-    let result = agent
-        .run(
-            ChatRequest::new(historical_poison),
-            CancellationToken::new(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(result.turns, 1);
-
-    let requests = text_only_backend.requests();
-
-    assert_eq!(requests.len(), 1);
-
-    for msg in &requests[0].messages {
-        if let ChatMessage::User { attachments, .. } = msg {
-            assert!(
-                attachments.is_empty(),
-                "text-only model must receive 0 attachments"
-            );
-        }
-    }
-
-    let recovered_image_msg = requests[0]
-        .messages
-        .iter()
-        .find(|m| match m {
-            ChatMessage::User { content, .. } => content
-                .contains("[Image omitted: current model does not support image input: 1.jpg]"),
-            _ => false,
-        });
-
-    assert!(
-        recovered_image_msg.is_some(),
-        "must contain degradation text notice"
-    );
-}
-
-#[tokio::test]
-async fn scenario_5_switching_conversation_with_historical_images_to_text_only_and_back_to_vision()
-{
+async fn switching_model_vision_preserves_original_image_history() {
     let vision_backend = MockModel::new(vec![
         assistant_tool_call("image-call", "ReadImage", "{}"),
         assistant_text("I see a blue square in scene.png."),
@@ -1190,7 +1099,10 @@ async fn reasoning_is_displayed_but_not_added_to_assistant_history() {
 
 struct StreamOnlyModel;
 
-struct PartialStreamModel(StreamEvent);
+struct PartialStreamModel {
+    event: StreamEvent,
+    requests: std::sync::atomic::AtomicUsize,
+}
 
 impl ModelBackend for PartialStreamModel {
     fn complete<'a>(
@@ -1207,8 +1119,16 @@ impl ModelBackend for PartialStreamModel {
         _: CancellationToken,
     ) -> crate::model::StreamFuture<'a> {
         Box::pin(async {
-            Ok(Box::pin(futures_util::stream::iter([Ok(self.0.clone())]))
-                as orbit_model::types::ModelStream)
+            assert_eq!(
+                self.requests
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst),
+                0,
+                "an incomplete stream must not be retried"
+            );
+            Ok(
+                Box::pin(futures_util::stream::iter([Ok(self.event.clone())]))
+                    as orbit_model::types::ModelStream,
+            )
         })
     }
 }
@@ -1236,7 +1156,14 @@ async fn incomplete_streams_neither_execute_partial_tools_nor_replay_the_request
             json!({}),
             |_, _| async { panic!("unconfirmed tool calls must not run") },
         ));
-        let agent = Agent::new(PartialStreamModel(event), tools, AgentConfig::default());
+        let agent = Agent::new(
+            PartialStreamModel {
+                event,
+                requests: Default::default(),
+            },
+            tools,
+            AgentConfig::default(),
+        );
         let error = agent
             .run(request(), CancellationToken::new())
             .await
@@ -1464,21 +1391,8 @@ async fn max_turns_stops_an_unfinished_loop() {
 
 #[tokio::test]
 async fn max_tool_calls_stops_tool_execution() {
-    let first = ToolCall {
-        purpose: None,
-        metadata: None,
-        id: "call-1".to_owned(),
-        kind: "function".to_owned(),
-        function: FunctionCall {
-            name: "missing".to_owned(),
-            arguments: "{}".to_owned(),
-        },
-    };
-    let second = ToolCall {
-        metadata: None,
-        id: "call-2".to_owned(),
-        ..first.clone()
-    };
+    let first = ToolCall::function("call-1", "mutate", json!({}));
+    let second = ToolCall::function("call-2", "mutate", json!({}));
     let model = MockModel::new([ChatCompletion {
         id: None,
         model: Some("mock".to_owned()),
@@ -1494,9 +1408,13 @@ async fn max_tool_calls_stops_tool_execution() {
         fail_start: false,
         fail_receipt: false,
     });
+    let mut tools = ToolRegistry::new();
+    tools.register(ClosureTool::new("mutate", "", json!({}), |_, _| async {
+        panic!("an over-budget tool batch must not start")
+    }));
     let agent = Agent::new(
         model,
-        ToolRegistry::new(),
+        tools,
         AgentConfig {
             max_turns: 4,
             max_tool_calls: 1,
@@ -1511,24 +1429,19 @@ async fn max_tool_calls_stops_tool_execution() {
         .expect_err("tool budget must stop the loop");
 
     assert!(matches!(error, AgentError::MaxToolCalls));
-    assert!(
-        journal
-            .checkpoints
-            .lock()
-            .unwrap()
+    let checkpoints = journal.checkpoints.lock().unwrap();
+    assert!(!checkpoints.is_empty());
+    assert!(checkpoints.iter().all(|checkpoint| {
+        !checkpoint
+            .history
             .iter()
-            .all(|checkpoint| {
-                !checkpoint
-                    .history
-                    .iter()
-                    .any(|message| {
-                        matches!(
-                            message,
-                            ChatMessage::Assistant { tool_calls, .. } if !tool_calls.is_empty()
-                        )
-                    })
+            .any(|message| {
+                matches!(
+                    message,
+                    ChatMessage::Assistant { tool_calls, .. } if !tool_calls.is_empty()
+                )
             })
-    );
+    }));
 }
 
 #[tokio::test]

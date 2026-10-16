@@ -412,6 +412,7 @@ mod tests {
             &snapshot.model,
             &mut snapshot.account,
         );
+        assert_eq!(snapshot.summary_limits().count(), 2);
         assert!(
             snapshot
                 .summary_limits()

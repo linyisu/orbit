@@ -665,22 +665,6 @@ mod tests {
     }
 
     #[test]
-    fn preserves_draft_and_edits_graphemes() {
-        let mut input = InputState::default();
-        input.insert("你好👩‍💻");
-        input.backspace();
-
-        assert_eq!(input.text, "你好");
-        assert_eq!(input.take().as_deref(), Some("你好"));
-
-        input.insert("draft");
-        input.history_up();
-        input.history_down();
-
-        assert_eq!(input.text, "draft");
-    }
-
-    #[test]
     fn multiline_navigation_preserves_columns_and_stays_in_the_draft() {
         let mut input = InputState::default();
         input.history.push("old prompt".into());

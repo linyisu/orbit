@@ -193,20 +193,20 @@ fn semantic_main_content_omits_navigation_and_link_footnotes_are_not_duplicated(
     assert!(!content.contains("Navigation") && !content.contains("Footer"));
     assert!(!content.contains("[1]:"));
     assert_eq!(result["links"][0]["url"], "https://example.org/guide");
-    for start in 0..content.chars().count() {
-        if content.chars().nth(start) == Some('1') {
-            assert_eq!(
-                page_links(
-                    result["links"].as_array().unwrap(),
-                    content,
-                    start,
-                    start + 1
-                )
-                .len(),
-                1
-            );
-        }
-    }
+    let start = content
+        .chars()
+        .position(|character| character == '1')
+        .unwrap();
+    assert_eq!(
+        page_links(
+            result["links"].as_array().unwrap(),
+            content,
+            start,
+            start + 1
+        )
+        .len(),
+        1
+    );
 }
 
 #[tokio::test]
@@ -747,96 +747,6 @@ async fn fetches_a_real_public_page() {
         result["content"]
     );
     assert_eq!(result["url"], "https://example.com/");
-
-    let tool = WebFetch::new(WebConfig {
-        proxy: std::env::var("ORBIT_WEB_TEST_PROXY").ok(),
-        ..Default::default()
-    })
-    .unwrap();
-    let mut start = 0;
-
-    for _ in 0..2 {
-        let output = tool
-            .execute(
-                ToolCall::function(
-                    "web",
-                    "WebFetch",
-                    json!({
-                        "url": "https://www.rust-lang.org/learn",
-                        "start_char": start,
-                        "max_chars": 300
-                    }),
-                ),
-                CancellationToken::new(),
-            )
-            .await
-            .unwrap();
-        let page: serde_json::Value = serde_json::from_str(&output).unwrap();
-
-        assert_eq!(page["start_char"], start);
-        assert_eq!(
-            page["content"]
-                .as_str()
-                .unwrap()
-                .chars()
-                .count(),
-            300
-        );
-
-        start = page["next_start_char"]
-            .as_u64()
-            .unwrap();
-        println!(
-            "Rust page: final_url={}, next_start_char={start}",
-            page["url"]
-        );
-    }
-}
-
-#[tokio::test]
-#[ignore = "requires Firefox, a trusted proxy and access to the public wiki"]
-async fn browser_challenge_reads_the_requested_wiki_page() {
-    let proxy = std::env::var("ORBIT_WEB_TEST_PROXY").expect("set ORBIT_WEB_TEST_PROXY");
-    let output = WebFetch::new(WebConfig {
-        proxy: Some(proxy.clone()),
-        ..Default::default()
-    })
-    .unwrap()
-    .execute(
-        ToolCall::function(
-            "wiki",
-            "WebFetch",
-            json!({
-                "url": "https://isaac.huijiwiki.com/wiki/%E9%81%93%E5%85%B7",
-                "max_chars": 2_000
-            }),
-        ),
-        CancellationToken::new(),
-    )
-    .await
-    .unwrap();
-    let page: serde_json::Value = serde_json::from_str(&output).unwrap();
-
-    assert_eq!(
-        page["url"],
-        "https://isaac.huijiwiki.com/wiki/%E9%81%93%E5%85%B7"
-    );
-    assert!(
-        page["content"]
-            .as_str()
-            .unwrap()
-            .contains("道具")
-    );
-
-    let browser_page = browser::fetch(
-        &checked_url("https://isaac.huijiwiki.com/wiki/%E9%81%93%E5%85%B7").unwrap(),
-        &Url::parse(&proxy).unwrap(),
-    )
-    .await
-    .unwrap();
-
-    assert!(browser_page.title.contains("道具"));
-    assert!(browser_page.text.contains("道具"));
 }
 
 #[test]

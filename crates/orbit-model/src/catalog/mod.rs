@@ -154,34 +154,4 @@ fn profile(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn partial_observations_preserve_known_models_but_complete_empty_catalogs_clear_them() {
-        let previous = vec![
-            ModelProfile::new("generated-first"),
-            ModelProfile::new("generated-updated"),
-        ];
-        let mut updated = ModelProfile::new("generated-updated");
-        updated.context_tokens = Some(128_000);
-        let mut catalog = ModelCatalog {
-            models: vec![updated, ModelProfile::new("generated-next")],
-            unavailable: Vec::new(),
-            coverage: CatalogCoverage::Partial,
-        };
-        let resolved = catalog.resolve(previous);
-        assert_eq!(
-            resolved
-                .iter()
-                .map(|model| model.id.as_str())
-                .collect::<Vec<_>>(),
-            ["generated-first", "generated-updated", "generated-next"]
-        );
-        assert_eq!(resolved[1].context_tokens, Some(128_000));
-        catalog.models.clear();
-        assert_eq!(catalog.resolve(resolved.clone()).len(), 3);
-        catalog.coverage = CatalogCoverage::Complete;
-        assert!(catalog.resolve(resolved).is_empty());
-    }
-}
+mod tests;

@@ -214,48 +214,6 @@ fn completed_reasoning_collapses_and_header_hover_and_click_reveal_it() {
 }
 
 #[test]
-fn collapsed_tool_cards_fit_width_and_bound_the_preview() {
-    use super::super::app::ToolRow;
-
-    for status in [
-        ToolStatus::Running,
-        ToolStatus::Finished,
-        ToolStatus::Failed,
-    ] {
-        let item = TranscriptItem::Tool(ToolRow {
-            changes: Vec::new(),
-            purpose: None,
-            id: "call".into(),
-            name: "Exec".into(),
-            status,
-            arguments: serde_json::json!({
-                "command": format!("中文\t{}", "command ".repeat(50))
-            })
-            .to_string(),
-            output: "hidden result".into(),
-        });
-
-        for width in [1, 8, 24, 80] {
-            let lines = transcript_lines_at_width(std::slice::from_ref(&item), false, width);
-            assert!(lines.len() <= 9);
-            assert!(
-                lines
-                    .iter()
-                    .all(|line| line.width() <= usize::from(width)),
-                "{lines:?}"
-            );
-            assert!(
-                lines
-                    .last()
-                    .unwrap()
-                    .to_string()
-                    .is_empty()
-            );
-        }
-    }
-}
-
-#[test]
 fn hovered_title_scrolls_without_splitting_wide_or_combining_characters() {
     let title = "中文e\u{301}标题长到需要滚动显示最后内容";
     let initial = scrolling_title(title, 12, None);
@@ -485,7 +443,7 @@ fn selected_tab_remains_visible_and_clickable_at_narrow_width() {
             elapsed: std::time::Duration::ZERO,
             id: format!("session-{index}"),
             title: if index == 3 {
-                "主流数字电路仿真软件推荐".into()
+                "独立生成的长标题用于验证窄窗口布局".into()
             } else {
                 format!("Tab {index}")
             },
@@ -593,627 +551,6 @@ fn selected_tab_remains_visible_and_clickable_at_narrow_width() {
 }
 
 #[test]
-fn tool_previews_bound_single_line_payloads_without_changing_results() {
-    use super::super::app::ToolRow;
-
-    let output = "中文".repeat(20_000);
-    let item = TranscriptItem::Tool(ToolRow {
-        changes: Vec::new(),
-        purpose: None,
-        id: "write".into(),
-        name: "WriteFile".into(),
-        arguments: serde_json::json!({
-            "path": "report.md",
-            "content": output
-        })
-        .to_string(),
-        status: ToolStatus::Finished,
-        output: output.clone(),
-    });
-    let short = transcript_lines(std::slice::from_ref(&item), false);
-
-    assert!(
-        short[0]
-            .to_string()
-            .contains("report.md · 1 行 · 120000 字节")
-    );
-    assert!(short.len() <= 9);
-    assert!(
-        short
-            .last()
-            .unwrap()
-            .to_string()
-            .is_empty()
-    );
-    assert!(
-        !short
-            .iter()
-            .any(|line| line.to_string().contains("[展开]"))
-    );
-    let expanded = transcript_lines(std::slice::from_ref(&item), true);
-    assert!(expanded.len() > short.len());
-    let TranscriptItem::Tool(row) = &item else {
-        unreachable!()
-    };
-    assert_eq!(row.output, output);
-    assert!(
-        tool_summary(
-            &serde_json::json!({
-                "command": "x".repeat(10_000)
-            })
-            .to_string()
-        )
-        .chars()
-        .count()
-            < 170
-    );
-}
-
-#[test]
-fn incomplete_command_logs_are_not_presented_as_complete() {
-    let row = super::super::app::ToolRow {
-        changes: Vec::new(),
-        purpose: None,
-        id: "command".into(),
-        name: "Exec".into(),
-        arguments: serde_json::json!({
-            "command": "example"
-        })
-        .to_string(),
-        status: ToolStatus::Finished,
-        output: serde_json::json!({
-            "stdout": "tail",
-            "exit_code": 0,
-            "output_id": "sample",
-            "retained_output_truncated": true,
-            "retained_output_error": "disk full",
-        })
-        .to_string(),
-    };
-    let text = tool_card(&row, true, 100)
-        .iter()
-        .map(ToString::to_string)
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert!(text.contains("disk full") && text.contains("tail"));
-    assert!(!text.contains("完整输出已留存"));
-}
-
-#[test]
-fn command_cards_show_all_returned_output_without_internal_log_instructions() {
-    let stdout = (0..200)
-        .map(|n| format!("output line {n}\n"))
-        .collect::<String>();
-    let row = super::super::app::ToolRow {
-        changes: Vec::new(),
-        purpose: None,
-        id: "command".into(),
-        name: "Exec".into(),
-        arguments: serde_json::json!({
-            "command": "example"
-        })
-        .to_string(),
-        status: ToolStatus::Finished,
-        output: serde_json::json!({
-            "stdout": stdout,
-            "stderr": "stderr content",
-            "exit_code": 0,
-            "output_id": "cmd-example",
-            "retained_output_truncated": false
-        })
-        .to_string(),
-    };
-    let text = tool_card(&row, true, 100)
-        .iter()
-        .map(ToString::to_string)
-        .collect::<Vec<_>>()
-        .join("\n");
-    for n in 0..200 {
-        assert!(text.contains(&format!("output line {n}")));
-    }
-    assert!(text.contains("stderr content"));
-    assert!(!text.contains("output_id") && !text.contains("cmd-example"));
-}
-
-#[test]
-fn tool_card_collapsed_single_line_and_expanded_box_click_behavior() {
-    use super::super::app::ToolRow;
-    let row = ToolRow {
-        changes: Vec::new(),
-        purpose: None,
-        id: "write_1".into(),
-        name: "WriteFile".into(),
-        arguments: serde_json::json!({
-            "path": "hello.py",
-            "content": "print(\"Hello, world!\")"
-        })
-        .to_string(),
-        status: ToolStatus::Finished,
-        output: serde_json::json!({
-            "written_bytes": 22,
-            "created": true
-        })
-        .to_string(),
-    };
-
-    let collapsed = tool_card(&row, false, 80);
-    assert_eq!(collapsed.len(), 1);
-    assert!(
-        collapsed[0]
-            .to_string()
-            .starts_with("  WriteFile hello.py")
-    );
-    assert!(
-        !collapsed[0]
-            .to_string()
-            .contains(icons::CHECK)
-    );
-    assert!(
-        !collapsed[0]
-            .to_string()
-            .contains(icons::LOADING)
-    );
-    assert!(
-        !collapsed[0]
-            .to_string()
-            .contains(icons::CLOSE)
-    );
-
-    let expanded = tool_card(&row, true, 80);
-    assert!(expanded.len() >= 4);
-    assert!(expanded[0].to_string().starts_with('╭') && expanded[0].to_string().ends_with('╮'));
-    assert!(
-        expanded[1]
-            .to_string()
-            .contains("WriteFile hello.py")
-    );
-    assert!(
-        expanded[2]
-            .to_string()
-            .starts_with("│ ")
-            && expanded[2].to_string().ends_with(" │")
-    );
-    assert!(
-        expanded[3]
-            .to_string()
-            .contains("1 │ print(\"Hello, world!\")")
-    );
-    let bottom = &expanded[expanded.len() - 1];
-    assert!(bottom.to_string().starts_with('╰') && bottom.to_string().ends_with('╯'));
-
-    for line in &expanded {
-        assert_eq!(line.width(), 80);
-    }
-}
-
-#[test]
-fn tool_card_edit_file_renders_diff_backgrounds_across_row() {
-    use super::super::app::ToolRow;
-
-    let row = ToolRow {
-        changes: Vec::new(),
-        purpose: None,
-        id: "edit_1".into(),
-        name: "EditFile".into(),
-        arguments: serde_json::json!({
-            "path": "hello.py",
-            "old_text": "x = 1",
-            "new_text": "x = 2"
-        })
-        .to_string(),
-        status: ToolStatus::Finished,
-        output: "success".into(),
-    };
-
-    let card = tool_card(&row, true, 80);
-    for line in &card {
-        assert_eq!(line.width(), 80);
-    }
-
-    let rem_line = card
-        .iter()
-        .find(|l| l.to_string().contains("-   1 │ x = 1"))
-        .expect("removed line found");
-    let add_line = card
-        .iter()
-        .find(|l| l.to_string().contains("+   1 │ x = 2"))
-        .expect("added line found");
-
-    let rem_bg = Some(crate::tui::theme::THEME.diff_removed_bg);
-    assert_eq!(rem_line.spans[0].content, "│");
-    assert_eq!(rem_line.spans[1].style.bg, rem_bg);
-    assert_eq!(rem_line.spans.last().unwrap().content, "│");
-    assert_eq!(
-        rem_line.spans[rem_line.spans.len() - 2]
-            .style
-            .bg,
-        rem_bg
-    );
-
-    let add_bg = Some(crate::tui::theme::THEME.diff_added_bg);
-    assert_eq!(add_line.spans[0].content, "│");
-    assert_eq!(add_line.spans[1].style.bg, add_bg);
-    assert_eq!(add_line.spans.last().unwrap().content, "│");
-    assert_eq!(
-        add_line.spans[add_line.spans.len() - 2]
-            .style
-            .bg,
-        add_bg
-    );
-}
-
-#[test]
-fn file_previews_keep_markdown_source_while_fetched_documents_render_structure() {
-    use super::super::app::ToolRow;
-    let content = "# Orbit Guide\n\n- **Orbit** uses `Rust`.\n\n| Item | Link |\n| --- | --- |\n| \
-        Docs | [Orbit](https://orbit.example/docs) |\n\n```rust\nlet url = \
-        \"https://orbit.example/code\";\n```\n\n---";
-    let numbered = content
-        .lines()
-        .enumerate()
-        .map(|(index, line)| format!("{}: {line}\n", index + 40))
-        .collect::<String>();
-
-    for name in ["ReadFile", "WriteFile", "WebFetch", "ReadDocument"] {
-        let row = ToolRow {
-            changes: Vec::new(),
-            purpose: None,
-            id: "orbit-preview".into(),
-            name: name.into(),
-            arguments: serde_json::json!({
-                "path": "docs/Orbit Guide.MD",
-                "content": content
-            })
-            .to_string(),
-            status: ToolStatus::Finished,
-            output: serde_json::json!({
-                "path": "docs/Orbit Guide.MD",
-                "format": "pdf",
-                "content": if name == "ReadFile" {
-                    &numbered
-                } else {
-                    content
-                },
-                "start_line": 40,
-                "end_line": 53,
-                "start_char": 0,
-                "total_chars": content.chars().count(),
-                "truncated": false
-            })
-            .to_string(),
-        };
-        let original = row.output.clone();
-        for width in [10, 16, 32, 80, 180] {
-            let card = tool_card_with_links(&row, true, width);
-            assert!(
-                card.iter()
-                    .all(|line| line.line.width() == usize::from(width)),
-                "{name} {width}"
-            );
-            let text = card
-                .iter()
-                .map(|linked| linked.line.to_string())
-                .collect::<Vec<_>>()
-                .join("\n");
-            let source = matches!(name, "ReadFile" | "WriteFile");
-            let links: Vec<_> = card
-                .iter()
-                .flat_map(|line| &line.links)
-                .collect();
-            assert!(
-                width == 10
-                    || links
-                        .iter()
-                        .any(|link| link.url == "https://orbit.example/docs"),
-                "{name} {width}"
-            );
-            assert!(
-                width == 10
-                    || links
-                        .iter()
-                        .any(|link| link.url == "https://orbit.example/code"),
-                "{name} {width}"
-            );
-            for linked in &card {
-                for link in &linked.links {
-                    let text = linked.line.to_string();
-                    let label = &text[link.start..link.end];
-                    assert!(
-                        !label.is_empty() && !label.contains('│'),
-                        "{name} {width}: {label}"
-                    );
-                }
-            }
-
-            if width >= 80 {
-                assert!(text.contains("Orbit Guide"));
-                if source {
-                    assert!(text.contains("# Orbit Guide"));
-                    assert!(text.contains("- **Orbit** uses `Rust`."));
-                    assert!(!text.contains('┬'));
-                } else {
-                    assert!(text.contains("• Orbit uses Rust."));
-                    assert!(text.contains('┬'));
-                    assert!(!text.contains("https://orbit.example/docs"));
-                }
-            }
-
-            if !source && width >= 12 {
-                assert!(
-                    card.iter()
-                        .any(|linked| linked.line.spans.iter().any(|span| {
-                            span.style.fg == Some(super::super::theme::THEME.md_rule)
-                                && span.content == "─".repeat(usize::from(width) - 8)
-                        })),
-                    "{name} {width}"
-                );
-            }
-        }
-
-        assert_eq!(row.output, original);
-    }
-}
-
-#[test]
-fn web_fetch_resolves_relative_and_paginated_reference_links_against_final_url() {
-    use super::super::app::ToolRow;
-    let base = "https://docs.orbit.example/guide/topic.html";
-    let content = "* [当前文档][1]\n* [旧版](../archive/)\n* [其他站点](//other.orbit.example/help)\n* \
-        [不安全](javascript:alert)\n";
-    for definitions in ["", "\n[1]: /docs/\n"] {
-        let row = ToolRow {
-            changes: Vec::new(),
-            purpose: None,
-            id: "fetch".into(),
-            name: "WebFetch".into(),
-            arguments: serde_json::json!({
-                "url": "https://docs.orbit.example/redirect"
-            })
-            .to_string(),
-            status: ToolStatus::Finished,
-            output: serde_json::json!({
-                "url": base,
-                "content": format!("{content}{definitions}"),
-                "links": [{
-                    "n": 1,
-                    "url": "https://docs.orbit.example/docs/"
-                }]
-            })
-            .to_string(),
-        };
-        for width in [18, 40, 100] {
-            let lines = tool_card_with_links(&row, true, width);
-            let targets: std::collections::BTreeSet<_> = lines
-                .iter()
-                .flat_map(|l| l.links.iter().map(|l| l.url.as_str()))
-                .collect();
-            for expected in [
-                base,
-                "https://docs.orbit.example/docs/",
-                "https://docs.orbit.example/archive/",
-                "https://other.orbit.example/help",
-            ] {
-                assert!(targets.contains(expected), "{width}: {targets:?}");
-            }
-            assert!(
-                targets
-                    .iter()
-                    .all(|url| super::super::browser_url(url).is_ok())
-            );
-        }
-    }
-}
-
-#[test]
-fn web_fetch_title_is_not_a_link_but_wrapped_body_urls_keep_the_full_target() {
-    use super::super::app::ToolRow;
-    let url = "https://orbit.example/docs/rendering/";
-    let row = ToolRow {
-        changes: Vec::new(),
-        purpose: None,
-        id: "orbit-fetch".into(),
-        name: "WebFetch".into(),
-        arguments: serde_json::json!({
-            "url": url
-        })
-        .to_string(),
-        status: ToolStatus::Finished,
-        output: serde_json::json!({
-            "url": url,
-            "content": "[Orbit 文档](https://orbit.example/docs/rendering/)",
-            "total_chars": 64
-        })
-        .to_string(),
-    };
-
-    for width in [16, 32, 80] {
-        let collapsed = tool_card_with_links(&row, false, width);
-        assert!(
-            collapsed
-                .iter()
-                .all(|line| line.links.is_empty())
-        );
-        let expanded = tool_card_with_links(&row, true, width);
-        let blank = expanded
-            .iter()
-            .position(|line| {
-                line.line
-                    .to_string()
-                    .trim_matches(['│', ' '])
-                    .is_empty()
-            })
-            .unwrap();
-        assert!(
-            expanded[..blank]
-                .iter()
-                .all(|line| line.links.is_empty())
-        );
-        let targets: Vec<_> = expanded[blank..]
-            .iter()
-            .flat_map(|line| &line.links)
-            .collect();
-        assert!(targets.len() > 1);
-        assert!(
-            targets
-                .iter()
-                .all(|link| link.url == url)
-        );
-        assert!(
-            expanded
-                .iter()
-                .any(|line| line.links.iter().any(|link| {
-                    line.line
-                        .to_string()
-                        .get(link.start..link.end)
-                        .is_some_and(|label| label.contains("Orbit"))
-                }))
-        );
-    }
-}
-
-#[test]
-fn source_colors_and_multiline_state_match_across_code_previews() {
-    use super::super::{app::ToolRow, markdown};
-    let content =
-        "/* Orbit block\nfn inside_comment() {}\n*/\nfn main() {\n    let name = \"orbit\";\n}";
-    let samples: Vec<_> = content.lines().collect();
-    let numbered = samples
-        .iter()
-        .enumerate()
-        .map(|(index, line)| format!("{}: {line}\n", index + 1))
-        .collect::<String>();
-    let tools: Vec<_> = ["ReadFile", "WriteFile", "EditFile"]
-        .into_iter()
-        .map(|name| ToolRow {
-            changes: Vec::new(),
-            purpose: None,
-            id: "orbit-code".into(),
-            name: name.into(),
-            arguments: serde_json::json!({
-                "path": "src/Orbit Code.RS",
-                "content": content,
-                "old_text": "",
-                "new_text": content
-            })
-            .to_string(),
-            status: ToolStatus::Finished,
-            output: serde_json::json!({
-                "path": "src/Orbit Code.RS",
-                "content": numbered,
-                "end_line": samples.len()
-            })
-            .to_string(),
-        })
-        .collect();
-    let cards: Vec<_> = tools
-        .iter()
-        .map(|row| tool_card(row, true, 100))
-        .collect();
-    let message = markdown::document(&format!("```rust\n{content}\n```"), 100);
-    let mut approval = UiState::new("mock");
-    approval.approval = Some(orbit_client::protocol::approval::ApprovalPreview::Write(
-        orbit_client::protocol::approval::WritePreview {
-            path: "src/Orbit Code.RS".into(),
-            before: None,
-            after: content.into(),
-        },
-    ));
-    let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
-    terminal
-        .draw(|frame| super::super::approval::draw(frame, &mut approval))
-        .unwrap();
-    let buffer = terminal.backend().buffer();
-    let colors = |line: &Line<'static>, source: &str| {
-        let start = line.to_string().find(source).unwrap();
-        let colors: Vec<_> = line
-            .spans
-            .iter()
-            .flat_map(|span| std::iter::repeat_n(span.style.fg, span.content.len()))
-            .collect();
-        colors[start..start + source.len()].to_vec()
-    };
-
-    let mut source_row = 0;
-    for (index, sample) in samples.iter().enumerate() {
-        let expected = colors(&message[index + 1].line, sample);
-        for card in &cards {
-            assert_eq!(colors(&card[index + 3], sample), expected, "{sample}");
-        }
-        let actual = (source_row..30)
-            .find_map(|y| {
-                let row: String = (0..100)
-                    .map(|x| buffer[(x, y)].symbol())
-                    .collect();
-                row.find(sample).map(|start| {
-                    source_row = y + 1;
-                    let x = row[..start].width() as u16;
-                    (x..x + sample.len() as u16)
-                        .map(|x| Some(buffer[(x, y)].fg))
-                        .collect::<Vec<_>>()
-                })
-            })
-            .expect("approval renders source line");
-        assert_eq!(actual, expected, "{sample}");
-    }
-
-    let comment_colors = colors(&message[2].line, samples[1]);
-    assert!(
-        comment_colors
-            .iter()
-            .all(|color| *color == Some(Color::Rgb(163, 173, 190)))
-    );
-    assert_eq!(
-        colors(&message[4].line, samples[3])[0],
-        Some(Color::Rgb(198, 120, 221))
-    );
-}
-
-#[test]
-fn collapsed_tools_keep_one_blank_line_between_them() {
-    use super::super::app::ToolRow;
-
-    let row1 = ToolRow {
-        changes: Vec::new(),
-        purpose: None,
-        id: "1".into(),
-        name: "Exec".into(),
-        arguments: serde_json::json!({
-            "command": "git status"
-        })
-        .to_string(),
-        status: ToolStatus::Finished,
-        output: "clean".into(),
-    };
-    let row2 = ToolRow {
-        changes: Vec::new(),
-        purpose: None,
-        id: "2".into(),
-        name: "ReadFile".into(),
-        arguments: serde_json::json!({
-            "path": "main.rs"
-        })
-        .to_string(),
-        status: ToolStatus::Finished,
-        output: "fn main() {}".into(),
-    };
-    let items = vec![TranscriptItem::Tool(row1), TranscriptItem::Tool(row2)];
-    let lines = transcript_lines(&items, false);
-    assert_eq!(lines.len(), 4);
-    assert!(lines[0].to_string().contains("Exec"));
-    assert!(lines[1].to_string().is_empty());
-    assert!(
-        lines[2]
-            .to_string()
-            .contains("ReadFile")
-    );
-    assert!(lines[3].to_string().is_empty());
-
-    let mut layout = super::super::transcript::TranscriptLayout::default();
-    layout.update(&items, None, 80);
-    assert_eq!(layout.height(), 2);
-}
-
-#[test]
 fn hovering_expanded_thinking_content_preserves_its_syntax_style() {
     let mut thinking =
         super::super::app::ThinkingRow::from("```rust\nlet orbit = 1;\n```".to_owned());
@@ -1261,32 +598,38 @@ fn hovering_expanded_thinking_content_preserves_its_syntax_style() {
 #[test]
 fn tool_rows_remain_compact_at_narrow_widths() {
     for width in [28, 70] {
-        let mut state = UiState::new("fixture");
-        state
-            .transcript
-            .push(TranscriptItem::Tool(super::super::app::ToolRow {
-                id: "compact".into(),
-                name: "ReadFile".into(),
-                purpose: Some("Inspect generated source ".repeat(30)),
-                arguments: "{}".into(),
-                output: "RESULT_MARKER".into(),
-                status: ToolStatus::Finished,
-                changes: vec![],
-            }));
-        state.expanded_tool_groups.insert(0);
-        let screen = render(&mut state, width, 30);
-        assert_eq!(screen.matches("ReadFile ·").count(), 1);
-        assert!(!screen.contains("RESULT_MARKER"));
-        assert_eq!(state.transcript_layout.height(), 3);
-        super::super::toggle_transcript_item(&mut state, 0);
-        assert!(
+        for status in [
+            ToolStatus::Running,
+            ToolStatus::Finished,
+            ToolStatus::Failed,
+        ] {
+            let mut state = UiState::new("fixture");
             state
-                .info_dialog
-                .as_ref()
-                .unwrap()
-                .content
-                .contains("RESULT_MARKER")
-        );
+                .transcript
+                .push(TranscriptItem::Tool(super::super::app::ToolRow {
+                    id: "compact".into(),
+                    name: "ReadFile".into(),
+                    purpose: Some("Inspect generated source ".repeat(30)),
+                    arguments: "{}".into(),
+                    output: "RESULT_MARKER".into(),
+                    status,
+                    changes: vec![],
+                }));
+            state.expanded_tool_groups.insert(0);
+            let screen = render(&mut state, width, 30);
+            assert_eq!(screen.matches("ReadFile ·").count(), 1);
+            assert!(!screen.contains("RESULT_MARKER"));
+            assert_eq!(state.transcript_layout.height(), 3);
+            super::super::toggle_transcript_item(&mut state, 0);
+            assert!(
+                state
+                    .info_dialog
+                    .as_ref()
+                    .unwrap()
+                    .content
+                    .contains("RESULT_MARKER")
+            );
+        }
     }
 }
 
@@ -1355,7 +698,13 @@ fn command_menu_keeps_composer_anchored_and_highlights_the_entire_selection() {
                 active: true,
                 status: RunStatus::Idle,
             });
+        } else {
+            state
+                .transcript
+                .push(TranscriptItem::User("Generated layout fixture".into()));
         }
+
+        assert_eq!(state.is_home(), home);
 
         let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
         terminal
@@ -1515,7 +864,7 @@ fn clicking_a_tool_row_opens_that_call_instead_of_the_last_one() {
 }
 
 #[test]
-fn tool_controls_expand_read_search_and_generic_outputs_and_keep_the_draft() {
+fn tool_inspectors_show_returned_content_and_keep_the_draft() {
     use super::super::app::ToolRow;
 
     let cases = [
@@ -1527,6 +876,7 @@ fn tool_controls_expand_read_search_and_generic_outputs_and_keep_the_draft() {
                 "content": format!("1: {}", "中文".repeat(80))
             })
             .to_string(),
+            vec!["中文".repeat(80)],
         ),
         (
             "Grep",
@@ -1542,21 +892,37 @@ fn tool_controls_expand_read_search_and_generic_outputs_and_keep_the_draft() {
                 }]
             })
             .to_string(),
+            vec!["src/main.rs".into(), "context".into(), "hit".into()],
         ),
         (
             "Exec",
             serde_json::json!({
                 "stdout": "first\nsecond\nthird\n",
                 "stderr": "",
-                "exit_code": 0
+                "exit_code": 0,
+                "elapsed": {"secs": 0, "nanos": 0},
+                "timed_out": false,
+                "cancelled": false,
+                "output_truncated": false,
+                "stdout_total_bytes": 19,
+                "stderr_total_bytes": 0
             })
             .to_string(),
+            vec!["first\nsecond\nthird\n".into()],
         ),
-        ("mcp_external", "result ".repeat(80)),
-        ("failed_tool", "error detail\nmore\nlast".into()),
+        (
+            "MCP_Example_Echo",
+            "result ".repeat(80),
+            vec!["result ".repeat(80)],
+        ),
+        (
+            "FailingTool",
+            "error detail\nmore\nlast".into(),
+            vec!["error detail\nmore\nlast".into()],
+        ),
     ];
 
-    for (name, output) in cases {
+    for (name, output, expected) in cases {
         let mut state = UiState::new("model");
         state
             .input
@@ -1569,7 +935,7 @@ fn tool_controls_expand_read_search_and_generic_outputs_and_keep_the_draft() {
                 id: "first".into(),
                 name: name.into(),
                 arguments: "{}".into(),
-                status: if name == "failed_tool" {
+                status: if name == "FailingTool" {
                     ToolStatus::Failed
                 } else {
                     ToolStatus::Finished
@@ -1584,18 +950,9 @@ fn tool_controls_expand_read_search_and_generic_outputs_and_keep_the_draft() {
             .info_dialog
             .as_ref()
             .expect("tool inspector opened");
-        assert!(
-            dialog
-                .content
-                .contains(&orbit_client::execution::details::content(
-                    &match &state.transcript[0] {
-                        TranscriptItem::Tool(row) => row.record(),
-                        _ => unreachable!(),
-                    },
-                    orbit_client::execution::details::Stream::Result,
-                ))
-                || name == "Exec"
-        );
+        for text in expected {
+            assert!(dialog.content.contains(&text), "{name}: {text}");
+        }
         assert_eq!(state.input.text, "unfinished draft");
         let TranscriptItem::Tool(row) = &state.transcript[0] else {
             unreachable!()

@@ -94,57 +94,31 @@ mod tests {
     use super::*;
 
     #[test]
-    fn summary_obeys_service_selection_without_interpreting_labels() {
+    fn summary_uses_service_selection_and_excludes_model_counters() {
         let mut snapshot = Snapshot::default();
-        snapshot.account.limits = [None, Some(true), Some(false)]
-            .into_iter()
-            .enumerate()
-            .map(|(index, selected)| Limit {
-                label: format!("generated-pool-{index}"),
-                include_in_summary: selected,
-                ..Default::default()
-            })
-            .collect();
+        snapshot.account.limits = [
+            (Scope::Account, None),
+            (Scope::Account, Some(true)),
+            (Scope::Account, Some(false)),
+            (Scope::Model, None),
+            (Scope::Model, Some(true)),
+            (Scope::Model, Some(false)),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(index, (scope, selected))| Limit {
+            label: format!("generated-pool-{index}"),
+            scope,
+            include_in_summary: selected,
+            ..Default::default()
+        })
+        .collect();
         assert_eq!(
             snapshot
                 .summary_limits()
                 .map(|limit| limit.label.as_str())
                 .collect::<Vec<_>>(),
             ["generated-pool-0", "generated-pool-1"]
-        );
-    }
-
-    #[test]
-    fn summary_preserves_generic_shared_limits_and_excludes_model_counters() {
-        let snapshot = Snapshot {
-            model: "arbitrary-model".into(),
-            account: Account {
-                provider: "Other".into(),
-                limits: vec![
-                    Limit {
-                        label: "weekly".into(),
-                        ..Default::default()
-                    },
-                    Limit {
-                        label: "per-model".into(),
-                        scope: Scope::Model,
-                        ..Default::default()
-                    },
-                    Limit {
-                        label: "5h".into(),
-                        ..Default::default()
-                    },
-                ],
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-        assert_eq!(
-            snapshot
-                .summary_limits()
-                .map(|limit| limit.label.as_str())
-                .collect::<Vec<_>>(),
-            ["weekly", "5h"]
         );
     }
 }

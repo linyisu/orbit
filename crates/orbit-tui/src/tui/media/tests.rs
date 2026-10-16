@@ -557,26 +557,18 @@ fn finished_thinking_keep_formula_targets_and_fallback_lines() {
 }
 
 #[test]
-fn screenshot_formulas_render_through_the_full_async_ui_pipeline() {
-    let source = "## 内联公式\n质能方程 $E = mc^2$；欧拉恒等式 $e^{i\\pi} + 1 = 0$\n求根公式 $x = \\frac{-b \\pm \
-        \\sqrt{b^2 - 4ac}}{2a}$\n希腊字母 $\\alpha\\ \\beta\\ \\gamma\\ \\theta\\ \\lambda\\ \
-        \\sigma\\ \\omega$\n常用符号 $\\in\\ \\notin\\ \\subset\\ \\supset\\ \\cup\\ \\cap\\ \
-        \\forall\\ \\exists\\ \\leq\\ \\geq\\ \\approx\\ \\sim\\ \\to\\ \\implies\\ \\iff$\n\n## \
-        块级公式\n\n$$\n\\int_{-\\infty}^{\\infty}e^{-x^2}\\,dx=\\sqrt{\\pi}\n$$\n\n黎曼 zeta 函数 \
-        ($\\operatorname{Re}(s)>1$)：\n\n$$\n\\zeta(s)=\\sum_{n=1}^{\\infty}\\frac{1}{n^{s}}=\\prod\
-        _{p\\ \\text{prime}}\\frac{1}{1-p^{-s}}\n$$\n\n$$\nA=\\begin{pmatrix}1&2\\\\3&4\\end{pmatr\
-        ix}\\qquad A^{-1}=\\frac{1}{-2}\\begin{pmatrix}4&-2\\\\-3&1\\end{pmatrix}\n$$\n\n$$\n\\beg\
-        in{aligned}f'(x)&=\\lim_{h\\to0}\\frac{f(x+h)-f(x)}{h}\\\\[6pt]f(x)&=\\sum_{n=0}^{\\infty}\
-        \\frac{f^{(n)}(0)}{n!}x^n\\end{aligned}\n$$\n\n$$\n\\operatorname{sgn}(x)=\\begin{cases}-1\
-        ,&x<0\\\\0,&x=0\\\\1,&x>0\\end{cases}\n$$\n\n$$\n\\begin{aligned}\\nabla\\cdot\\mathbf{E}&\
-        =\\frac{\\rho}{\\varepsilon_0}\\\\\\nabla\\cdot\\mathbf{B}&=0\\\\\\nabla\\times\\mathbf{E}\
-        &=-\\frac{\\partial\\mathbf{B}}{\\partial t}\\\\\\nabla\\times\\mathbf{B}&=\\mu_0\\mathbf{\
-        J}+\\mu_0\\varepsilon_0\\frac{\\partial\\mathbf{E}}{\\partial t}\\end{aligned}\n$$";
+fn mixed_inline_and_block_math_render_through_the_full_async_ui_pipeline() {
+    let source = [
+        "First inline $x_1 + 2$ and second inline $x_2 + 3$.",
+        "$$\\frac{5}{7}$$",
+        "$$\\begin{matrix}p&q\\\\r&s\\end{matrix}$$",
+    ]
+    .join("\n\n");
     let mut state = UiState::new("mock");
     state.media = context(ProtocolType::Kitty);
     state
         .transcript
-        .push(TranscriptItem::Assistant(source.into()));
+        .push(TranscriptItem::Assistant(source));
     let mut terminal = Terminal::new(TestBackend::new(180, 140)).unwrap();
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
@@ -595,7 +587,7 @@ fn screenshot_formulas_render_through_the_full_async_ui_pipeline() {
             }
         }
 
-        if cache.len() == 12
+        if cache.len() == 4
             && cache
                 .values()
                 .all(|v| matches!(v.value, Value::Ready(_)))
@@ -2672,32 +2664,13 @@ fn message_thumbnails_are_spaced_above_text_and_remain_individually_previewable(
     }
 }
 
-/// Generates a real export for visual inspection, independently of the terminal.
-#[test]
-#[ignore = "writes formula gallery to /tmp for manual visual inspection"]
-fn export_formula_gallery() {
-    let examples = [
-        r"E=mc^2",
-        r"\frac{-b\pm\sqrt{b^2-4ac}}{2a}",
-        r"\int_{-\infty}^{\infty}e^{-x^2}\,dx=\sqrt{\pi}",
-        r"\begin{pmatrix}a&b\\c&d\end{pmatrix}",
-    ];
-    let mut gallery = image::RgbaImage::from_pixel(850, 460, image::Rgba([13, 18, 23, 255]));
-    for (n, tex) in examples.iter().enumerate() {
-        let (svg, _) = decode::math_svg(tex, true, 64, [220, 224, 232]).unwrap();
-        let picture = decode::raster_svg(svg.as_bytes(), 800, 108, None, false).unwrap();
-        image::imageops::overlay(&mut gallery, &picture.to_rgba8(), 24, (n * 115 + 4) as i64);
-        std::fs::write(format!("/tmp/orbit-formula-{n}.svg"), svg).unwrap();
-    }
-
-    gallery
-        .save("/tmp/orbit-ratex-gallery.png")
-        .unwrap();
-}
-
 #[test]
 fn thinking_formulas_keep_combined_rails_on_every_wrapped_and_graphic_row() {
-    let source = r"Analyzing prefix trees for carry calculation with $G_{HL}=G_H+P_H G_L$ and $P_{HL}=P_H P_L$. Considering $\frac{C_{in}}{2}$ as a special case before scripting the circuit for verification.";
+    let source = concat!(
+        "Generated paragraph with inline equations $u_1 = u_0 + 3$ and $v_1 = 2v_0$. ",
+        "Additional synthetic text forces wrapping around $\\frac{7}{9}$ while ",
+        "the nested rails retain their allocated columns on every rendered row."
+    );
     for width in [32, 64, 100] {
         for prefix in ["  ┊ ", "  ┊ │ "] {
             let context = context(ProtocolType::Kitty);

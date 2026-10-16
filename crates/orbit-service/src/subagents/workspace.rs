@@ -115,7 +115,7 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn development_worktrees_keep_changes_separate_and_survive_reopen() {
+    async fn development_worktrees_isolate_changes_and_reject_untracked_roots() {
         let directory = tempfile::tempdir().unwrap();
         let repo = directory.path().join("repo");
         std::fs::create_dir(&repo).unwrap();

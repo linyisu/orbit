@@ -131,19 +131,8 @@ mod tests {
         let timeout = ExecutionResult {
             exit_code: None,
             elapsed: Duration::from_secs(10),
-            stdout: String::new(),
-            stderr: String::new(),
             timed_out: true,
-            cancelled: false,
-            output_truncated: false,
-            stdout_total_bytes: 0,
-            stderr_total_bytes: 0,
-            output_id: None,
-            retained_output_truncated: false,
-            retained_output_error: None,
-            sandbox: "native",
-            verification_error: None,
-            verification: None,
+            ..success
         };
 
         assert_eq!(timeout.display_summary(), "timed out · 10000 ms");

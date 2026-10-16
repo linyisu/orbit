@@ -32,7 +32,7 @@ fn outside_paths_require_approval_until_granted() {
     let external_file = tmp_external.path().join("dataset.csv");
     std::fs::write(&external_file, "data").unwrap();
 
-    let engine = PolicyEngine::new(workspace);
+    let engine = PolicyEngine::new(workspace.clone());
     let cap_read = FilesystemCapability::local_read(&external_file);
 
     assert!(matches!(
@@ -52,6 +52,10 @@ fn outside_paths_require_approval_until_granted() {
 
     assert!(matches!(
         engine.check_filesystem(&cap_write),
+        PolicyDecision::NeedsApproval(_)
+    ));
+    assert!(matches!(
+        PolicyEngine::new(workspace).check_filesystem(&cap_read),
         PolicyDecision::NeedsApproval(_)
     ));
 }
@@ -113,20 +117,16 @@ fn session_store_prunes_redundant_subpaths() {
 
     let mut store = SessionGrantStore::new();
 
-    store.grant(FilesystemGrant::read_only(
-        EnvironmentId::Local,
-        child.clone(),
-    ));
+    let child_grant = FilesystemGrant::read_only(EnvironmentId::Local, child);
+    let parent_grant = FilesystemGrant::read_only(EnvironmentId::Local, parent);
+    store.grant(child_grant.clone());
+    assert_eq!(store.grants(), std::slice::from_ref(&child_grant));
 
-    assert_eq!(store.grants().len(), 1);
+    store.grant(parent_grant.clone());
+    assert_eq!(store.grants(), std::slice::from_ref(&parent_grant));
 
-    store.grant(FilesystemGrant::read_only(EnvironmentId::Local, parent));
-
-    assert_eq!(store.grants().len(), 1);
-
-    store.grant(FilesystemGrant::read_only(EnvironmentId::Local, child));
-
-    assert_eq!(store.grants().len(), 1);
+    store.grant(child_grant);
+    assert_eq!(store.grants(), &[parent_grant]);
 }
 
 #[test]
@@ -244,15 +244,20 @@ fn persistent_permissions_upfront_validation_and_overlap_rejection() {
             .is_err()
     );
 
+    let inside = tmp_ws.path().join("src");
+    std::fs::create_dir(&inside).unwrap();
     let perms_inside = WorkspacePermissions {
         read_templates: Vec::new(),
         write_templates: Vec::new(),
-        read: vec![tmp_ws.path().join("src")],
+        read: vec![inside],
         read_write: Vec::new(),
     };
 
+    let err = PolicyEngine::try_with_permissions(ws.clone(), perms_inside, NetworkPolicy::Allow)
+        .unwrap_err();
     assert!(
-        PolicyEngine::try_with_permissions(ws.clone(), perms_inside, NetworkPolicy::Allow).is_err()
+        err.to_string()
+            .contains("is inside the workspace")
     );
 
     let sub_dir = ext_dir.join("secret");
@@ -319,5 +324,107 @@ fn ordinary_system_files_can_receive_scoped_user_grants() {
             "/proc/self/status"
         ))),
         PolicyDecision::Denied(_)
+    ));
+}
+
+#[test]
+fn persistent_workspace_policy_grants_configured_external_paths() {
+    let tmp_ws = tempfile::tempdir().unwrap();
+    let tmp_cache = tempfile::tempdir().unwrap();
+    let tmp_logs = tempfile::tempdir().unwrap();
+
+    let workspace = ResolvedPath::resolve(tmp_ws.path(), None).unwrap();
+
+    let permissions = WorkspacePermissions {
+        read_templates: Vec::new(),
+        write_templates: Vec::new(),
+        read: vec![tmp_cache.path().to_path_buf()],
+        read_write: vec![tmp_logs.path().to_path_buf()],
+    };
+
+    let engine = PolicyEngine::with_permissions(workspace, permissions, NetworkPolicy::Allow);
+
+    let cache_file = tmp_cache.path().join("pkg.tar.gz");
+    std::fs::write(&cache_file, "bytes").unwrap();
+
+    let cache_read = FilesystemCapability::local_read(&cache_file);
+
+    assert_eq!(
+        engine.check_filesystem(&cache_read),
+        PolicyDecision::Granted
+    );
+
+    let cache_write = FilesystemCapability::local_write(&cache_file);
+
+    assert!(matches!(
+        engine.check_filesystem(&cache_write),
+        PolicyDecision::NeedsApproval(_)
+    ));
+
+    let log_file = tmp_logs.path().join("app.log");
+    let log_read = FilesystemCapability::local_read(&log_file);
+    let log_write = FilesystemCapability::local_write(&log_file);
+
+    assert_eq!(engine.check_filesystem(&log_read), PolicyDecision::Granted);
+    assert_eq!(engine.check_filesystem(&log_write), PolicyDecision::Granted);
+}
+
+#[test]
+fn symlink_pointing_outside_workspace_is_evaluated_against_target() {
+    let tmp_ws = tempfile::tempdir().unwrap();
+    let tmp_outside = tempfile::tempdir().unwrap();
+
+    let outside_secret = tmp_outside.path().join("id_rsa");
+    std::fs::write(&outside_secret, "PRIVATE KEY").unwrap();
+
+    let link_inside_ws = tmp_ws.path().join("stolen_key");
+    std::os::unix::fs::symlink(&outside_secret, &link_inside_ws).unwrap();
+
+    let workspace = ResolvedPath::resolve(tmp_ws.path(), None).unwrap();
+    let engine = PolicyEngine::new(workspace);
+
+    let cap = FilesystemCapability::local_read(&link_inside_ws);
+    let decision = engine.check_filesystem(&cap);
+
+    assert!(
+        matches!(decision, PolicyDecision::NeedsApproval(_)),
+        "symlink to outside file must require approval: {decision:?}"
+    );
+}
+
+#[test]
+fn remote_environment_capabilities_are_isolated_from_local() {
+    let tmp_ws = tempfile::tempdir().unwrap();
+    let workspace = ResolvedPath::resolve(tmp_ws.path(), None).unwrap();
+    let engine = PolicyEngine::new(workspace);
+
+    let local_path = tmp_ws.path().join("file.txt");
+    let remote_env = EnvironmentId::Remote("gpu-server".into());
+
+    let remote_cap =
+        FilesystemCapability::new(remote_env.clone(), &local_path, FilesystemAccess::Read);
+
+    assert!(matches!(
+        engine.check_filesystem(&remote_cap),
+        PolicyDecision::NeedsApproval(_)
+    ));
+
+    let resolved = ResolvedPath::resolve(&local_path, None).unwrap();
+    engine.record_grant(FilesystemGrant::read_only(remote_env, resolved));
+
+    assert_eq!(
+        engine.check_filesystem(&remote_cap),
+        PolicyDecision::Granted
+    );
+
+    let other_remote_cap = FilesystemCapability::new(
+        EnvironmentId::Remote("other-server".into()),
+        &local_path,
+        FilesystemAccess::Read,
+    );
+
+    assert!(matches!(
+        engine.check_filesystem(&other_remote_cap),
+        PolicyDecision::NeedsApproval(_)
     ));
 }

@@ -1209,7 +1209,7 @@ mod tests {
     }
 
     #[test]
-    fn agent_saves_all_controls_and_preserves_unexposed_settings_and_comments() {
+    fn agent_saves_edited_controls_and_preserves_unexposed_settings_and_comments() {
         let (_directory, mut state) = state(false);
         let form = state.agent_form.as_mut().unwrap();
         form.fields[0].set("17".into());
@@ -1217,7 +1217,8 @@ mod tests {
         form.fields[5].set("3".into());
         form.network = false;
         form.disabled.insert(Capability::Write);
-        form.tools.set("Read\nDemo_Tool".into());
+        form.tools
+            .set("ReadFile\nDemo_Tool".into());
         state.save();
         assert!(state.error.is_none(), "{:?}", state.error);
         let content = std::fs::read_to_string(&state.path).unwrap();
@@ -1226,6 +1227,14 @@ mod tests {
         assert!(content.contains("check='cargo check'"));
         let draft = AdvancedDraft::load(&state.path, &state.auth).unwrap();
         assert_eq!(draft.settings().max_turns, 17);
+        assert_eq!(
+            draft
+                .settings()
+                .command
+                .default_timeout_seconds,
+            5
+        );
+        assert_eq!(draft.settings().disabled_tools, ["ReadFile", "Demo_Tool"]);
         assert_eq!(
             draft
                 .settings()

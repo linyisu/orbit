@@ -235,7 +235,7 @@ fn collapsed_disclosures_use_text_width_and_expanded_thinking_uses_the_full_area
 }
 
 #[test]
-fn tool_title_and_output_are_clickable() {
+fn collapsed_tool_group_and_expanded_tool_row_have_distinct_click_targets() {
     let items = vec![TranscriptItem::Tool(super::super::app::ToolRow {
         changes: Vec::new(),
         purpose: None,
@@ -971,8 +971,10 @@ fn streamed_html_preserves_open_frames_breaks_and_click_targets_after_resize() {
 
 #[test]
 fn width_and_expansion_invalidate_cached_heights() {
+    let mut thinking = super::super::app::ThinkingRow::from("thinking words ".repeat(80));
+    thinking.finished = true;
     let items = vec![
-        TranscriptItem::Thinking("thinking words ".repeat(80).into()),
+        TranscriptItem::Thinking(thinking),
         TranscriptItem::Assistant("answer words ".repeat(80)),
     ];
     let mut layout = TranscriptLayout::default();
@@ -980,8 +982,8 @@ fn width_and_expansion_invalidate_cached_heights() {
     for (width, expanded) in [
         (80, None),
         (20, None),
-        (20, Some(1)),
-        (80, Some(1)),
+        (20, Some(0)),
+        (80, Some(0)),
         (80, None),
     ] {
         layout.update(&items, expanded, width);
@@ -989,6 +991,7 @@ fn width_and_expansion_invalidate_cached_heights() {
         expected.update(&items, expanded, width);
 
         assert_eq!(layout.height(), expected.height());
+        assert_eq!(layout.entries[0].height > 2, expanded == Some(0));
 
         let offset = layout.height().saturating_sub(6);
         let mut actual_terminal = Terminal::new(TestBackend::new(width, 6)).unwrap();
@@ -1046,8 +1049,8 @@ fn user_turns_use_a_framed_bubble_and_wrap_inside_its_side_rails() {
 
 #[test]
 fn user_wrap_consumes_overflowing_spaces_and_keeps_fitting_whitespace() {
-    let first = "你好，请你在当前目录中将所有你能使用的工具依次使用一遍";
-    let second = "如果有对仓库造成影响的，则新建一个demo/，在内部执行。";
+    let first = "合成段落甲用于验证长空白分隔符与中文自动换行";
+    let second = "合成段落乙应在换行后保持文字完整且不多出空行。";
     let source = format!("{first}{}{second}", " ".repeat(85));
     let items = [TranscriptItem::User(source.clone())];
     let mut layout = TranscriptLayout::default();
@@ -1077,7 +1080,7 @@ fn user_wrap_consumes_overflowing_spaces_and_keeps_fitting_whitespace() {
         assert!(
             lines
                 .iter()
-                .any(|line| line.starts_with("如果")),
+                .any(|line| line.starts_with("合成段落乙")),
             "{lines:?}"
         );
         assert!(
@@ -1174,7 +1177,6 @@ fn streaming_keeps_completed_lines_and_scrolling_reuses_layout() {
     }
 
     let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
-    let started = std::time::Instant::now();
 
     for offset in (0..10_000).step_by(100) {
         layout.update(&items, None, 100);
@@ -1182,11 +1184,6 @@ fn streaming_keeps_completed_lines_and_scrolling_reuses_layout() {
             .draw(|f| layout.draw(f, f.area(), offset))
             .unwrap();
     }
-
-    eprintln!(
-        "100 scroll frames over 10000 lines: {:?}",
-        started.elapsed()
-    );
 
     assert_eq!(
         stable,

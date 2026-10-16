@@ -104,7 +104,7 @@ async fn ungranted_symlink_pointing_outside_is_blocked() {
                 .contains("permission denied")
     );
 
-    let (tx, _) = approval::channel();
+    let (tx, mut approvals) = approval::channel();
     let write_tool = WriteFile::new(workspace, tx);
     let write_err = write_tool
         .execute(
@@ -121,4 +121,9 @@ async fn ungranted_symlink_pointing_outside_is_blocked() {
         .await;
 
     assert!(write_err.is_err());
+    assert!(approvals.try_recv().is_err());
+    assert_eq!(
+        fs::read_to_string(external_target).unwrap(),
+        "root:x:0:0:..."
+    );
 }

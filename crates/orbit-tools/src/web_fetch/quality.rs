@@ -26,7 +26,7 @@ pub(super) fn javascript_shell(text: &str) -> bool {
 mod tests {
     use super::*;
     #[test]
-    fn identifies_js_shell_but_not_substantive_articles_or_json() {
+    fn distinguishes_javascript_shells_from_substantive_articles() {
         assert!(javascript_shell(
             "For full functionality of this site it is necessary to enable JavaScript."
         ));

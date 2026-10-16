@@ -481,7 +481,10 @@ async fn draft_preferences_stay_in_memory_until_first_message_and_survive_resume
 
 #[tokio::test]
 async fn last_client_discards_drafts_but_retains_running_sessions_until_finish() {
-    let fixture = Fixture::new("http://127.0.0.1:1/v1").await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .unwrap();
+    let fixture = Fixture::new(&format!("http://{}/v1", listener.local_addr().unwrap())).await;
     let Response::Opened(info) = fixture
         .request(Request::Open {
             model: Some("test::test".into()),
@@ -561,6 +564,12 @@ async fn last_client_discards_drafts_but_retains_running_sessions_until_finish()
             compact: false,
             model: None,
         })
+        .await
+        .unwrap();
+    let (mut socket, _) = streaming_request(&listener).await;
+    use tokio::io::AsyncWriteExt;
+    socket
+        .write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\n")
         .await
         .unwrap();
     fixture

@@ -278,49 +278,6 @@ fn preview_is_at_most_one_quarter_of_window_and_scrolls_long_text() {
 }
 
 #[test]
-fn crowded_navigation_reaches_all_rounds_and_resize_rebuilds_targets() {
-    let mut state = UiState::new("model");
-    state.transcript = (0..100)
-        .map(|i| TranscriptItem::User(format!("round {i}")))
-        .collect();
-    let mut terminal = Terminal::new(TestBackend::new(50, 15)).unwrap();
-    terminal
-        .draw(|f| render::draw(f, &mut state))
-        .unwrap();
-
-    for _ in 0..40 {
-        let area = state.navigation.area;
-        handle(
-            &mut state,
-            &mouse(MouseEventKind::ScrollDown, area.x, area.y),
-        );
-        terminal
-            .draw(|f| render::draw(f, &mut state))
-            .unwrap();
-    }
-
-    assert!(
-        state
-            .navigation
-            .targets
-            .last()
-            .unwrap()
-            .2
-            .contains("round 99")
-    );
-
-    let mut larger = Terminal::new(TestBackend::new(100, 30)).unwrap();
-    larger
-        .draw(|f| render::draw(f, &mut state))
-        .unwrap();
-
-    for (y, offset, _) in &state.navigation.targets {
-        assert!(*y < state.navigation.area.bottom() - 1);
-        assert!(*offset < state.transcript_layout.height());
-    }
-}
-
-#[test]
 fn output_keeps_a_blank_column_before_navigation() {
     let mut state = UiState::new("model");
     state
@@ -339,7 +296,7 @@ fn output_keeps_a_blank_column_before_navigation() {
 }
 
 #[test]
-fn navigation_auto_follows_latest_rounds_when_crowded() {
+fn crowded_navigation_follows_latest_scrolls_both_directions_and_rebuilds_on_resize() {
     let mut state = UiState::new("model");
     state.transcript = (0..50)
         .map(|i| TranscriptItem::User(format!("round {i}")))
@@ -385,6 +342,34 @@ fn navigation_auto_follows_latest_rounds_when_crowded() {
             .2
             .contains("round 0")
     );
+
+    for _ in 0..25 {
+        handle(
+            &mut state,
+            &mouse(MouseEventKind::ScrollDown, area.x, area.y),
+        );
+        terminal
+            .draw(|frame| render::draw(frame, &mut state))
+            .unwrap();
+    }
+    assert!(
+        state
+            .navigation
+            .targets
+            .last()
+            .unwrap()
+            .2
+            .contains("round 49")
+    );
+    let mut larger = Terminal::new(TestBackend::new(100, 30)).unwrap();
+    larger
+        .draw(|frame| render::draw(frame, &mut state))
+        .unwrap();
+    assert!(!state.navigation.targets.is_empty());
+    for (y, offset, _) in &state.navigation.targets {
+        assert!(*y < state.navigation.area.bottom() - 1);
+        assert!(*offset < state.transcript_layout.height());
+    }
 }
 
 #[test]

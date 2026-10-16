@@ -235,12 +235,12 @@ async fn automatic_proxy_cannot_access_private_targets_or_private_redirects() {
             .all("http://127.0.0.1:9")
             .build(),
     );
-    for value in [
-        "http://127.0.0.1/a",
-        "http://198.18.0.40/a",
-        "https://[::1]/a",
-        "http://localhost/a",
-        "https://metadata.internal/a",
+    for (value, reason) in [
+        ("http://127.0.0.1/a", "non-public"),
+        ("http://198.18.0.40/a", "non-public"),
+        ("https://[::1]/a", "non-public"),
+        ("http://localhost/a", "private hostname"),
+        ("https://metadata.internal/a", "private hostname"),
     ] {
         let call = ToolCall::function(
             "page",
@@ -253,10 +253,16 @@ async fn automatic_proxy_cannot_access_private_targets_or_private_redirects() {
             WebFetch::with_client(client.clone())
                 .execute(call, CancellationToken::new())
                 .await
-                .is_err(),
+                .unwrap_err()
+                .to_string()
+                .contains(reason),
             "{value}"
         );
-        assert!(client.fetch_image(value).await.is_err(), "{value}");
+        let error = client
+            .fetch_image(value)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains(reason), "{value}: {error}");
     }
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")

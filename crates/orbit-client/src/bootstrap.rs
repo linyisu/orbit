@@ -445,6 +445,7 @@ mod tests {
             let mut child = tokio::process::Command::new("sh")
                 .arg("-c")
                 .arg(upload_script(directory.to_str().unwrap(), hash))
+                .current_dir(root.path())
                 .stdin(Stdio::piped())
                 .stderr(Stdio::null())
                 .spawn()
@@ -457,6 +458,7 @@ mod tests {
                 .await
                 .unwrap();
             assert_eq!(child.wait().await.unwrap().success(), success);
+            assert!(!root.path().join("bad").exists());
             assert_eq!(std::fs::read(directory.join("orbit")).unwrap(), bytes);
             assert_eq!(
                 std::fs::read_dir(&directory)

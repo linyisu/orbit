@@ -22,9 +22,10 @@ fn node_cli_uses_registry_stdio_arguments_without_running_source() {
         );
     }
     fs::write(source.join("server.json"), r#"{"packages":[{"registryType":"npm","identifier":"fixture-tools","transport":{"type":"streamable-http"},"packageArguments":[{"type":"positional","value":"mcp"}]}]}"#).unwrap();
+    let entries = discover::discover(&source).unwrap();
+    assert_eq!(entries.len(), 2);
     assert!(
-        discover::discover(&source)
-            .unwrap()
+        entries
             .iter()
             .all(|entry| entry.launch.args.len() == 1)
     );

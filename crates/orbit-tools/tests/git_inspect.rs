@@ -339,7 +339,8 @@ async fn reports_branch_status_diff_and_history_without_writing() {
             .len(),
         2
     );
-    assert!(capture_baseline(Path::new("/tmp")).is_none());
+    let non_repository = tempfile::tempdir().unwrap();
+    assert!(capture_baseline(non_repository.path()).is_none());
 
     let tool = GitInspect::new(Workspace::new(directory.path()).unwrap());
 

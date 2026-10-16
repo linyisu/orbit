@@ -421,10 +421,9 @@ mod tests {
     fn quota_timestamps_have_one_unit_policy_for_every_frontend() {
         assert_eq!(reset_timestamp("1800000000"), Some(1_800_000_000));
         assert_eq!(reset_timestamp("1800000000000"), Some(1_800_000_000));
-        assert_eq!(
-            reset_timestamp("2027-01-15T08:00:00+08:00"),
-            reset_timestamp("2027-01-15T00:00:00Z")
-        );
+        for value in ["2027-01-15T08:00:00+08:00", "2027-01-15T00:00:00Z"] {
+            assert_eq!(reset_timestamp(value), Some(1_799_971_200));
+        }
         for value in ["", "invalid", "0", "-4"] {
             assert_eq!(reset_timestamp(value), None);
         }

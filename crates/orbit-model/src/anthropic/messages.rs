@@ -469,73 +469,30 @@ mod tests {
     use super::*;
 
     #[test]
-    fn sends_max_effort_with_the_configured_thinking_mode() {
-        for extra in [
-            json!({}),
-            json!({
-                "thinking": {
-                    "type": "enabled"
-                }
-            }),
+    fn reasoning_effort_and_thinking_mode_preserve_explicit_settings() {
+        for (effort, expected_effort) in [
+            (ReasoningEffort::High, "high"),
+            (ReasoningEffort::Max, "max"),
         ] {
-            let mut request = ChatRequest::new(vec![ChatMessage::user("think")]);
-            request.reasoning_effort = Some(ReasoningEffort::Max);
+            for (extra, expected_mode) in [
+                (json!({}), "adaptive"),
+                (json!({"thinking": {"type": "enabled"}}), "enabled"),
+            ] {
+                let mut request = ChatRequest::new(vec![ChatMessage::user("think")]);
+                request.reasoning_effort = Some(effort);
+                let (body, _) = encode(
+                    "claude-test",
+                    request,
+                    Some(ReasoningAdapter::AnthropicMessages),
+                    &extra,
+                    true,
+                )
+                .unwrap();
 
-            let (body, _) = encode(
-                "claude-test",
-                request,
-                Some(ReasoningAdapter::AnthropicMessages),
-                &extra,
-                true,
-            )
-            .unwrap();
-
-            assert_eq!(body["output_config"]["effort"], "max");
-            assert_eq!(
-                body["thinking"]["type"],
-                extra["thinking"]["type"]
-                    .as_str()
-                    .unwrap_or("adaptive")
-            );
+                assert_eq!(body["output_config"]["effort"], expected_effort);
+                assert_eq!(body["thinking"]["type"], expected_mode);
+            }
         }
-    }
-
-    #[test]
-    fn includes_adaptive_thinking_effort_when_configured() {
-        let mut request = ChatRequest::new(vec![ChatMessage::user("think")]);
-        request.reasoning_effort = Some(ReasoningEffort::High);
-        let (body, _) = encode(
-            "claude-test",
-            request,
-            Some(ReasoningAdapter::AnthropicMessages),
-            &json!({}),
-            true,
-        )
-        .unwrap();
-
-        assert_eq!(body["thinking"]["type"], "adaptive");
-        assert_eq!(body["output_config"]["effort"], "high");
-    }
-
-    #[test]
-    fn model_profile_extra_can_override_the_adaptive_thinking_switch() {
-        let mut request = ChatRequest::new(vec![ChatMessage::user("think")]);
-        request.reasoning_effort = Some(ReasoningEffort::High);
-        let (body, _) = encode(
-            "gateway-name",
-            request,
-            Some(ReasoningAdapter::AnthropicMessages),
-            &json!({
-                "thinking": {
-                    "type": "enabled"
-                }
-            }),
-            true,
-        )
-        .unwrap();
-
-        assert_eq!(body["thinking"]["type"], "enabled");
-        assert_eq!(body["output_config"]["effort"], "high");
     }
 
     #[test]

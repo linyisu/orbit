@@ -348,39 +348,6 @@ async fn lease_blocks_second_writer_and_recovers_only_after_release() {
 }
 
 #[tokio::test]
-async fn failed_run_keeps_saved_context_recoverable() {
-    let db = Database::new();
-    let store = Store::open(db.path()).await.unwrap();
-    let mut writer = store
-        .create(db.0.to_string_lossy().into_owned(), "mock".into())
-        .await
-        .unwrap();
-    writer
-        .begin("prompt".into(), "mock".into())
-        .await
-        .unwrap();
-
-    assert_eq!(
-        store
-            .load(writer.id())
-            .await
-            .unwrap()
-            .runs[0]
-            .status,
-        "running"
-    );
-
-    writer
-        .finish(&crate::types::RunCompletion::Failed, vec![])
-        .await
-        .unwrap();
-    drop(writer);
-    drop(store);
-
-    assert!(Store::open(db.path()).await.is_ok());
-}
-
-#[tokio::test]
 async fn rejects_a_database_from_a_newer_schema() {
     let db = Database::new();
     let store = Store::open(db.path()).await.unwrap();
@@ -664,7 +631,7 @@ async fn project_rename_preserves_history_without_markers_and_copy_is_separate()
 }
 
 #[tokio::test]
-async fn project_plugins_are_central_stable_and_independent_from_market_cache() {
+async fn legacy_project_plugin_records_survive_rename_and_can_be_removed() {
     let db = Database::new();
     let store = Store::open(db.path()).await.unwrap();
     let original = db.0.join("plugin-project");

@@ -1,9 +1,9 @@
 use super::*;
 
-fn isolated_workspace(root: &Path) -> PathBuf {
-    let workspace = root.join("workspace");
-    fs::create_dir_all(workspace.join(".git")).unwrap();
-    workspace
+fn isolated_home(root: &Path) -> PathBuf {
+    let home = root.join("home");
+    fs::create_dir(&home).unwrap();
+    home
 }
 
 fn skill(root: &Path, relative: &str, name: &str) {
@@ -16,13 +16,14 @@ fn skill(root: &Path, relative: &str, name: &str) {
     .unwrap();
 }
 
-async fn scan(source: &Path, workspace: &Path) -> Scan {
-    Scan::acquire(
-        "session".into(),
-        workspace.into(),
+async fn scan(source: &Path, home: &Path) -> Scan {
+    Scan::acquire_to(
+        "global-library".into(),
+        home.into(),
         source.display().to_string(),
         None,
         HashSet::new(),
+        home.join(".config/orbit/skills"),
     )
     .await
     .unwrap()
@@ -32,7 +33,7 @@ async fn scan(source: &Path, workspace: &Path) -> Scan {
 async fn discovery_freezes_complete_packages_and_installs_without_executing_scripts() {
     let root = tempfile::tempdir().unwrap();
     let source = root.path().join("source");
-    let workspace = isolated_workspace(root.path());
+    let home = isolated_home(root.path());
     skill(&source, "skills/review", "review");
     for (path, content) in [
         ("scripts/check.sh", "#!/bin/sh\nexit 99"),
@@ -53,7 +54,7 @@ async fn discovery_freezes_complete_packages_and_installs_without_executing_scri
         )
         .unwrap();
     }
-    let scan = scan(&source, &workspace).await;
+    let scan = scan(&source, &home).await;
     assert_eq!(scan.candidates.len(), 1);
     assert_eq!(scan.candidates[0].path, "skills/review");
     fs::write(
@@ -63,13 +64,13 @@ async fn discovery_freezes_complete_packages_and_installs_without_executing_scri
     .unwrap();
     scan.install(
         &scan.token,
-        "session",
-        &workspace,
+        "global-library",
+        &home,
         &["skills/review".into()],
         &HashSet::new(),
     )
     .unwrap();
-    let installed = workspace.join(".orbit/skills/review");
+    let installed = home.join(".config/orbit/skills/review");
     assert_eq!(
         fs::read_to_string(installed.join("references/guide.md")).unwrap(),
         "original"
@@ -95,15 +96,14 @@ async fn discovery_freezes_complete_packages_and_installs_without_executing_scri
             0o755
         );
     }
-    let skills =
-        crate::skills::Skills::discover_with_plugin_roots(&workspace, None, None, Vec::new());
+    let skills = crate::skills::Skills::global(Some(home.clone()), Some(home.join(".config")));
     assert_eq!(skills.len(), 1);
     assert!(skills.get("review").is_some());
     assert!(
         scan.install(
             &scan.token,
-            "session",
-            &workspace,
+            "global-library",
+            &home,
             &["skills/review".into()],
             &HashSet::new()
         )
@@ -115,43 +115,43 @@ async fn discovery_freezes_complete_packages_and_installs_without_executing_scri
 async fn conflicts_preflight_whole_selection_and_snapshot_identity_is_bound() {
     let root = tempfile::tempdir().unwrap();
     let source = root.path().join("source");
-    let workspace = isolated_workspace(root.path());
+    let home = isolated_home(root.path());
     let other = root.path().join("other");
     fs::create_dir(&other).unwrap();
     skill(&source, "first", "first");
     skill(&source, "second", "second");
-    let mut scan = scan(&source, &workspace).await;
+    let mut scan = scan(&source, &home).await;
     let paths = vec!["first".into(), "second".into()];
     for (token, session, target, selection) in [
-        ("wrong", "session", workspace.as_path(), paths.as_slice()),
+        ("wrong", "global-library", home.as_path(), paths.as_slice()),
         (
             scan.token.as_str(),
-            "other-session",
-            workspace.as_path(),
+            "other-library",
+            home.as_path(),
             paths.as_slice(),
         ),
         (
             scan.token.as_str(),
-            "session",
+            "global-library",
             other.as_path(),
             paths.as_slice(),
         ),
         (
             scan.token.as_str(),
-            "session",
-            workspace.as_path(),
+            "global-library",
+            home.as_path(),
             &["../first".into()],
         ),
         (
             scan.token.as_str(),
-            "session",
-            workspace.as_path(),
+            "global-library",
+            home.as_path(),
             &["/first".into()],
         ),
         (
             scan.token.as_str(),
-            "session",
-            workspace.as_path(),
+            "global-library",
+            home.as_path(),
             &["first".into(), "first".into()],
         ),
     ] {
@@ -160,18 +160,24 @@ async fn conflicts_preflight_whole_selection_and_snapshot_identity_is_bound() {
                 .is_err()
         );
     }
-    assert!(!workspace.join(".orbit").exists());
+    assert!(!home.join(".config").exists());
     // A conflict appearing after scanning cannot leave an earlier selection installed.
-    let existing = workspace.join(".orbit/skills/second");
+    let existing = home.join(".config/orbit/skills/second");
     fs::create_dir_all(&existing).unwrap();
     fs::write(existing.join("keep.txt"), "do not replace").unwrap();
     assert!(
-        scan.install(&scan.token, "session", &workspace, &paths, &HashSet::new())
-            .is_err()
+        scan.install(
+            &scan.token,
+            "global-library",
+            &home,
+            &paths,
+            &HashSet::new()
+        )
+        .is_err()
     );
     assert!(
-        !workspace
-            .join(".orbit/skills/first")
+        !home
+            .join(".config/orbit/skills/first")
             .exists()
     );
     assert_eq!(
@@ -182,8 +188,8 @@ async fn conflicts_preflight_whole_selection_and_snapshot_identity_is_bound() {
     assert!(
         scan.install(
             &scan.token,
-            "session",
-            &workspace,
+            "global-library",
+            &home,
             &["first".into()],
             &HashSet::new()
         )
@@ -197,16 +203,17 @@ async fn conflicts_preflight_whole_selection_and_snapshot_identity_is_bound() {
 async fn duplicate_names_and_installed_user_skills_are_reported_as_conflicts() {
     let root = tempfile::tempdir().unwrap();
     let source = root.path().join("source");
-    let workspace = isolated_workspace(root.path());
+    let home = isolated_home(root.path());
     skill(&source, "alpha", "duplicate");
     skill(&source, "beta", "duplicate");
     skill(&source, "user", "personal");
-    let scan = Scan::acquire(
-        "session".into(),
-        workspace.clone(),
+    let scan = Scan::acquire_to(
+        "global-library".into(),
+        home.clone(),
         source.display().to_string(),
         None,
         HashSet::from(["personal".into()]),
+        home.join(".config/orbit/skills"),
     )
     .await
     .unwrap();
@@ -219,8 +226,8 @@ async fn duplicate_names_and_installed_user_skills_are_reported_as_conflicts() {
     assert!(
         scan.install(
             &scan.token,
-            "session",
-            &workspace,
+            "global-library",
+            &home,
             &["alpha".into()],
             &HashSet::new()
         )
@@ -229,16 +236,17 @@ async fn duplicate_names_and_installed_user_skills_are_reported_as_conflicts() {
 }
 
 #[tokio::test]
-async fn direct_skill_file_and_relative_workspace_source_are_supported() {
+async fn direct_skill_file_and_relative_home_source_are_supported() {
     let root = tempfile::tempdir().unwrap();
-    fs::create_dir(root.path().join(".git")).unwrap();
-    skill(root.path(), "incoming/review", "review");
-    let scan = Scan::acquire(
-        "session".into(),
+    let home = root.path();
+    skill(home, "incoming/review", "review");
+    let scan = Scan::acquire_to(
+        "global-library".into(),
         root.path().into(),
         "incoming/review/SKILL.md".into(),
         None,
         HashSet::new(),
+        home.join(".config/orbit/skills"),
     )
     .await
     .unwrap();
@@ -246,7 +254,7 @@ async fn direct_skill_file_and_relative_workspace_source_are_supported() {
     assert_eq!(scan.candidates[0].name, "review");
     scan.install(
         &scan.token,
-        "session",
+        "global-library",
         root.path(),
         &[".".into()],
         &HashSet::new(),
@@ -254,7 +262,7 @@ async fn direct_skill_file_and_relative_workspace_source_are_supported() {
     .unwrap();
     assert!(
         root.path()
-            .join(".orbit/skills/review/SKILL.md")
+            .join(".config/orbit/skills/review/SKILL.md")
             .is_file()
     );
 }
@@ -265,17 +273,18 @@ async fn symlink_sources_resources_and_destinations_are_rejected() {
     use std::os::unix::fs::symlink;
     let root = tempfile::tempdir().unwrap();
     let source = root.path().join("source");
-    let workspace = isolated_workspace(root.path());
+    let home = isolated_home(root.path());
     skill(&source, "review", "review");
     let link = source.join("review/link");
     symlink("/etc/passwd", &link).unwrap();
     assert!(
-        Scan::acquire(
-            "session".into(),
-            workspace.clone(),
+        Scan::acquire_to(
+            "global-library".into(),
+            home.clone(),
             source.display().to_string(),
             None,
-            HashSet::new()
+            HashSet::new(),
+            home.join(".config/orbit/skills"),
         )
         .await
         .is_err()
@@ -283,26 +292,27 @@ async fn symlink_sources_resources_and_destinations_are_rejected() {
     fs::remove_file(link).unwrap();
     symlink(&source, root.path().join("alias")).unwrap();
     assert!(
-        Scan::acquire(
-            "session".into(),
-            workspace.clone(),
+        Scan::acquire_to(
+            "global-library".into(),
+            home.clone(),
             root.path()
                 .join("alias")
                 .display()
                 .to_string(),
             None,
-            HashSet::new()
+            HashSet::new(),
+            home.join(".config/orbit/skills"),
         )
         .await
         .is_err()
     );
-    let scan = scan(&source, &workspace).await;
-    symlink(&source, workspace.join(".orbit")).unwrap();
+    let scan = scan(&source, &home).await;
+    symlink(&source, home.join(".config")).unwrap();
     assert!(
         scan.install(
             &scan.token,
-            "session",
-            &workspace,
+            "global-library",
+            &home,
             &["review".into()],
             &HashSet::new()
         )
@@ -315,40 +325,42 @@ async fn symlink_sources_resources_and_destinations_are_rejected() {
 async fn oversized_resources_fail_discovery_without_installing_anything() {
     let root = tempfile::tempdir().unwrap();
     let source = root.path().join("source");
-    let workspace = isolated_workspace(root.path());
+    let home = isolated_home(root.path());
     skill(&source, "review", "review");
     fs::File::create(source.join("review/large.bin"))
         .unwrap()
         .set_len(MAX_FILE_BYTES + 1)
         .unwrap();
-    let error = Scan::acquire(
-        "session".into(),
-        workspace.clone(),
+    let error = Scan::acquire_to(
+        "global-library".into(),
+        home.clone(),
         source.display().to_string(),
         None,
         HashSet::new(),
+        home.join(".config/orbit/skills"),
     )
     .await
     .err()
     .unwrap();
     assert!(error.to_string().contains("8 MiB"));
-    assert!(!workspace.join(".orbit").exists());
+    assert!(!home.join(".config").exists());
 }
 
 #[tokio::test]
 async fn empty_or_heading_only_skills_are_rejected_before_selection() {
     let root = tempfile::tempdir().unwrap();
     let source = root.path().join("source/review");
-    let workspace = isolated_workspace(root.path());
+    let home = isolated_home(root.path());
     fs::create_dir_all(&source).unwrap();
     for content in ["", "# Heading", "---\nname: review\n---\n# Heading"] {
         fs::write(source.join("SKILL.md"), content).unwrap();
-        let error = Scan::acquire(
-            "session".into(),
-            workspace.clone(),
+        let error = Scan::acquire_to(
+            "global-library".into(),
+            home.clone(),
             source.display().to_string(),
             None,
             HashSet::new(),
+            home.join(".config/orbit/skills"),
         )
         .await
         .err()
@@ -358,6 +370,6 @@ async fn empty_or_heading_only_skills_are_rejected_before_selection() {
                 .to_string()
                 .contains("缺少说明或正文")
         );
-        assert!(!workspace.join(".orbit").exists());
+        assert!(!home.join(".config").exists());
     }
 }

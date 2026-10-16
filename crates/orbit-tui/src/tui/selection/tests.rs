@@ -172,36 +172,10 @@ fn copying_wrapped_user_input_omits_consumed_spaces_and_frame() {
 }
 
 #[test]
-fn copying_message_and_tool_frames_keeps_literal_borders_and_body_blank_lines() {
-    use super::super::app::{ToolRow, ToolStatus};
-    use serde_json::json;
-
+fn copying_message_frames_keeps_literal_borders_and_body_blank_lines() {
     let source = "    first │─╭╮\n\n    second 你好";
     let user = select_transcript(&[TranscriptItem::User(source.into())], 60, &[]);
     assert_eq!(user.text().trim_end_matches('\n'), source);
-
-    let row = ToolRow {
-        changes: Vec::new(),
-        purpose: None,
-        id: "read".into(),
-        name: "ReadFile".into(),
-        arguments: json!({
-            "path": "example.txt"
-        })
-        .to_string(),
-        status: ToolStatus::Finished,
-        output: json!({
-            "path": "example.txt",
-            "content": "1:     first │─╭╮\n2: \n3:     second 你好\n"
-        })
-        .to_string(),
-    };
-    let copied = orbit_client::execution::details::content(
-        &row.record(),
-        orbit_client::execution::details::Stream::Result,
-    );
-    assert!(copied.contains("first │─╭╮") && copied.contains("second 你好"));
-    assert!(!copied.contains('╰'));
 }
 
 #[test]

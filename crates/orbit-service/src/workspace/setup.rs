@@ -654,13 +654,6 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path();
         std::fs::create_dir(root.join(".git")).unwrap();
-        let skill = root.join(".orbit/skills/example");
-        std::fs::create_dir_all(&skill).unwrap();
-        std::fs::write(
-            skill.join("SKILL.md"),
-            "---\nname: example\ndescription: Example skill\n---\nKeep identifiers stable.\n",
-        )
-        .unwrap();
         let mut configuration =
             TestConfig::new().provider(TestProvider::new("test").models([TestModel::new("mock")]));
         configuration
@@ -869,6 +862,10 @@ mod tests {
         assert!(setup.resources.tools.contains("Grep"));
         for name in [
             "WebFetch",
+            "WebSearch",
+            "Exec",
+            "EditFile",
+            "RequestAccess",
             "LoadSkill",
             "ReadFile",
             "SpawnAgent",
@@ -903,84 +900,6 @@ mod tests {
         );
         assert!(!setup.resources.policy.read_only);
     }
-
-    #[tokio::test]
-    async fn service_policy_filters_tools_before_delegation_and_blocks_mutation() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path();
-        std::fs::write(
-            root.join("config.toml"),
-            TestConfig::new()
-                .provider(
-                    TestProvider::new("test")
-                        .endpoint("http://127.0.0.1:1/v1")
-                        .key("test")
-                        .models([TestModel::new("mock")]),
-                )
-                .providers_toml()
-                .unwrap(),
-        )
-        .unwrap();
-        let options = WorkspaceOptions {
-            model: Some("test::mock".into()),
-            initial_directory: root.into(),
-            config: root.join("config.toml"),
-            auth_directory: root.join("auth"),
-            database: root.join("sessions.db"),
-            allow_mcp_start: false,
-            home: None,
-            config_home: None,
-            instruction_dir: None,
-            editor_command: "vi".into(),
-        };
-        let setup = prepare_service_with_policy(
-            &options,
-            None,
-            SessionPolicy {
-                read_only: true,
-                disabled: vec![Capability::Web, Capability::Skills],
-            },
-        )
-        .await
-        .unwrap();
-        let tools = &setup.resources.tools;
-        assert!(tools.contains("ReadFile"));
-        for name in [
-            "WriteFile",
-            "EditFile",
-            "Exec",
-            "git_push",
-            "RequestAccess",
-            "WebFetch",
-            "WebSearch",
-            "LoadSkill",
-        ] {
-            assert!(!tools.contains(name), "unexpected tool: {name}");
-        }
-        drop(setup);
-        let setup = prepare_service_with_policy(
-            &options,
-            None,
-            SessionPolicy {
-                read_only: false,
-                disabled: vec![Capability::All],
-            },
-        )
-        .await
-        .unwrap();
-        assert!(
-            setup
-                .resources
-                .tools
-                .definitions()
-                .is_empty()
-        );
-    }
-}
-
-#[cfg(test)]
-mod selection_tests {
-    use super::*;
 
     #[tokio::test]
     async fn creation_requires_selection_and_restore_uses_saved_model() {

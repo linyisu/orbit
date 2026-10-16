@@ -1086,14 +1086,19 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let cancellation = CancellationToken::new();
         let token = cancellation.clone();
+        let marker = directory.path().join("started");
         let canceller = std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_millis(50));
+            let deadline = Instant::now() + Duration::from_secs(2);
+            while !marker.exists() {
+                assert!(Instant::now() < deadline, "Git probe never started");
+                std::thread::sleep(Duration::from_millis(5));
+            }
             token.cancel();
         });
         let started = Instant::now();
         let result = run_git(
             directory.path(),
-            probe("exec sleep 30"),
+            probe("printf started > started; exec sleep 30"),
             &cancellation,
             &BTreeSet::new(),
             GitLimits {

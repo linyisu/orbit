@@ -342,24 +342,38 @@ async fn denial_cancellation_and_concurrent_changes_never_overwrite_the_file() {
 #[tokio::test]
 async fn rejects_protected_files_and_links() {
     let root = tempfile::tempdir().unwrap();
-    fs::write(root.path().join("config.toml"), "secret").unwrap();
+    fs::write(root.path().join("config.toml"), "text").unwrap();
     fs::write(root.path().join("file"), "text").unwrap();
     std::os::unix::fs::symlink("file", root.path().join("sym")).unwrap();
     fs::hard_link(root.path().join("file"), root.path().join("hard")).unwrap();
+    let mut workspace = Workspace::new(root.path()).unwrap();
+    workspace
+        .protect(root.path().join("config.toml"))
+        .unwrap();
+    let (sender, mut approvals) = approval::channel();
+    let tool = EditFile::new(workspace, sender);
 
     for path in ["config.toml", "sym", "hard"] {
-        let (task, mut rx) = start(
-            root.path(),
-            json!({
-                "path": path,
-                "old_text": "text",
-                "new_text": "changed"
-            }),
-            CancellationToken::new(),
-        );
-
-        assert!(task.await.unwrap().is_err());
-        assert!(rx.try_recv().is_err());
+        let result = tokio::time::timeout(
+            Duration::from_secs(2),
+            tool.execute(
+                ToolCall::function(
+                    "edit",
+                    "EditFile",
+                    json!({
+                        "path": path,
+                        "old_text": "text",
+                        "new_text": "changed"
+                    }),
+                ),
+                CancellationToken::new(),
+            ),
+        )
+        .await
+        .expect("protected edit unexpectedly requested approval");
+        assert!(result.is_err(), "{path}");
+        assert!(approvals.try_recv().is_err());
+        assert_eq!(fs::read_to_string(root.path().join(path)).unwrap(), "text");
     }
 }
 

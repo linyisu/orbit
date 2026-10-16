@@ -529,17 +529,16 @@ mod tests {
             .unwrap();
         assert!(alpha.is_expanded());
         assert!(!alpha.children[1].is_expanded());
-        assert_eq!(sessions[0].workspace.as_ref(), "/alpha");
     }
 
     #[test]
     fn new_catalog_entries_keep_saved_project_order_and_existing_expansion() {
         let sessions = vec![entry("b", "/beta"), entry("d", "/gamma")];
         let placements = vec![Placement::default(); 2];
-        let groups = grouped_items(&sessions, &placements, &projects(), &[]);
-        groups[0].children[0]
+        let mut groups = grouped_items(&sessions, &placements, &projects(), &[]);
+        groups[0].children[0] = groups[0].children[0]
             .clone()
-            .expanded(true);
+            .expanded(false);
         let refreshed = grouped_items(
             &sessions
                 .iter()
@@ -551,6 +550,6 @@ mod tests {
             &groups,
         );
         assert_eq!(project_paths(&refreshed), ["/gamma", "/beta"]);
-        assert!(refreshed[0].children[0].is_expanded());
+        assert!(!refreshed[0].children[0].is_expanded());
     }
 }

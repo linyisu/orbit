@@ -181,7 +181,7 @@ mod tests {
     use orbit_protocol::Inspection;
 
     #[tokio::test]
-    async fn empty_session_refresh_finds_plugins_enabled_after_opening() {
+    async fn skill_refresh_does_not_apply_legacy_project_plugins_to_a_draft() {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path();
         std::fs::create_dir(root.join(".git")).unwrap();
@@ -256,13 +256,6 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path();
         std::fs::create_dir(root.join(".git")).unwrap();
-        let skill = root.join(".orbit/skills/example");
-        std::fs::create_dir_all(&skill).unwrap();
-        std::fs::write(
-            skill.join("SKILL.md"),
-            "---\nname: example\ndescription: Example skill\n---\nKeep identifiers stable.\n",
-        )
-        .unwrap();
         TestConfig::new()
             .provider(
                 TestProvider::new("test")

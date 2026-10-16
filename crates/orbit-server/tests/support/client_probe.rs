@@ -26,6 +26,7 @@ pub fn command(root: &Path, bin: &Path, request: Value) -> Command {
         .env("HOME", root)
         .env("XDG_CONFIG_HOME", root.join("config-home"))
         .env("XDG_CACHE_HOME", root.join("cache"))
+        .current_dir(root)
         .kill_on_drop(true);
     command
 }

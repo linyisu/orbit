@@ -87,6 +87,13 @@ async fn auto_native_network_enabled_script_executes_in_requested_workspace_dire
         "first\nsecond\n"
     );
     assert!(!root.path().join("result.txt").exists());
+    assert_eq!(
+        value["stdout"].as_str().unwrap().trim(),
+        root.path()
+            .join("src")
+            .to_str()
+            .unwrap()
+    );
 }
 
 #[tokio::test]
@@ -189,10 +196,7 @@ async fn auto_local_mkdir_creates_nested_and_quoted_directories_in_the_requested
 #[tokio::test]
 async fn run_command_executes_directly_in_workspace_and_persists_changes() {
     let ws_temp = tempfile::tempdir().unwrap();
-    let workspace = match Workspace::new(ws_temp.path()) {
-        Ok(w) => w,
-        Err(_) => return,
-    };
+    let workspace = Workspace::new(ws_temp.path()).unwrap();
 
     let (sender, mut receiver) = approval::channel();
     let tool = RunCommand::new(workspace.clone(), sender);
@@ -305,69 +309,9 @@ async fn run_command_reports_when_workspace_fingerprint_is_unavailable() {
 }
 
 #[tokio::test]
-async fn run_command_executes_in_specified_cwd() {
-    let ws_temp = tempfile::tempdir().unwrap();
-    let sub = ws_temp
-        .path()
-        .join("crates")
-        .join("my_crate");
-    fs::create_dir_all(&sub).unwrap();
-
-    let workspace = match Workspace::new(ws_temp.path()) {
-        Ok(w) => w,
-        Err(_) => return,
-    };
-
-    let (sender, mut receiver) = approval::channel();
-    let tool = RunCommand::new(workspace.clone(), sender);
-
-    let task = tokio::spawn(async move {
-        tool.execute(
-            ToolCall::function(
-                "test",
-                "Exec",
-                json!({
-                    "command": "pwd && echo 'from_sub' > output.txt",
-                    "cwd": "crates/my_crate",
-                    "workspace_access": "read_write"
-                }),
-            ),
-            CancellationToken::new(),
-        )
-        .await
-    });
-
-    let request = receiver.recv().await.unwrap();
-    request.decision.send(true).unwrap();
-
-    let output = task.await.unwrap().unwrap();
-    let value: serde_json::Value = serde_json::from_str(&output.content).unwrap();
-
-    assert_eq!(value["exit_code"], 0);
-    assert_eq!(
-        value["stdout"]
-            .as_str()
-            .unwrap()
-            .lines()
-            .next()
-            .unwrap(),
-        sub.to_str().unwrap()
-    );
-    assert_eq!(
-        fs::read_to_string(sub.join("output.txt"))
-            .unwrap()
-            .trim(),
-        "from_sub"
-    );
-}
-
-#[tokio::test]
 async fn run_command_rejects_nonexistent_cwd() {
     let ws_temp = tempfile::tempdir().unwrap();
-    let workspace = match Workspace::new(ws_temp.path()) {
-        Ok(w) => w,
-        Err(_) => return,
-    };
+    let workspace = Workspace::new(ws_temp.path()).unwrap();
 
     let (sender, _receiver) = approval::channel();
     let tool = RunCommand::new(workspace, sender);
@@ -386,7 +330,6 @@ async fn run_command_rejects_nonexistent_cwd() {
         )
         .await;
 
-    assert!(result.is_err());
     match result {
         Err(orbit_agent::tool::ToolError::InvalidArguments { message, .. }) => {
             assert!(message.contains("invalid working directory"));
@@ -465,14 +408,19 @@ async fn run_command_uses_project_git_configuration_for_status_and_commit() {
         .unwrap();
 
     assert!(status.success());
-    let _ = std::process::Command::new("git")
-        .args(["config", "user.name", "Orbit Tester"])
-        .current_dir(ws_temp.path())
-        .status();
-    let _ = std::process::Command::new("git")
-        .args(["config", "user.email", "test@orbit.local"])
-        .current_dir(ws_temp.path())
-        .status();
+    for (name, value) in [
+        ("user.name", "Orbit Tester"),
+        ("user.email", "test@orbit.local"),
+    ] {
+        assert!(
+            std::process::Command::new("git")
+                .args(["config", name, value])
+                .current_dir(ws_temp.path())
+                .status()
+                .unwrap()
+                .success()
+        );
+    }
 
     fs::write(ws_temp.path().join("initial.txt"), "hello git\n").unwrap();
 
@@ -529,6 +477,7 @@ async fn run_command_uses_project_git_configuration_for_status_and_commit() {
         .current_dir(ws_temp.path())
         .output()
         .unwrap();
+    assert!(log.status.success());
     let log_str = String::from_utf8_lossy(&log.stdout);
     assert!(log_str.contains("initial commit"));
 }

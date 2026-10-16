@@ -305,6 +305,7 @@ fn first_send_recovery_checks_persistence_without_sending_a_message() {
                 .join(".fixture-requests"),
         )
         .unwrap();
+        assert!(!requests.is_empty());
         for line in requests.lines() {
             let request: serde_json::Value = serde_json::from_str(line).unwrap();
             assert!(!matches!(
@@ -1193,6 +1194,11 @@ fn replacement_directory_links_before_resume_and_preserves_ownership_checks() {
                         .expect("backend stopped")
                     {
                         Event::Response(Response::Sessions(sessions)) if succeeds => {
+                            assert!(
+                                sessions
+                                    .iter()
+                                    .any(|s| s.project_id == "fixture")
+                            );
                             assert!(
                                 sessions
                                     .iter()

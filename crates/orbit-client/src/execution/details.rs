@@ -556,24 +556,50 @@ mod tests {
     }
 
     #[test]
-    fn default_page_always_exists_for_running_and_finished_tools() {
-        for name in ["Exec", "ReadFile", "mcp_generated_inspect"] {
-            for background in [false, true] {
-                for status in [
-                    ToolStatus::Running,
-                    ToolStatus::Background,
-                    ToolStatus::Complete,
-                    ToolStatus::Failed,
-                ] {
-                    let mut tool = ToolRun::new(&ToolCall::function(
-                        "fixture",
-                        name,
-                        json!({"background": background}),
-                    ));
-                    tool.status = status;
-                    assert!(streams(&tool).contains(&default_stream(&tool)));
-                }
-            }
+    fn command_default_page_selects_stderr_only_when_stdout_is_empty() {
+        let mut tool = ToolRun::new(&ToolCall::function("fixture", "Exec", json!({})));
+        for (stdout, stderr, expected, pages) in [
+            ("", "", Stream::Stdout, &[Stream::Stdout, Stream::Raw][..]),
+            (
+                "out",
+                "",
+                Stream::Stdout,
+                &[Stream::Stdout, Stream::Raw][..],
+            ),
+            (
+                "",
+                "err",
+                Stream::Stderr,
+                &[Stream::Stdout, Stream::Stderr, Stream::Raw][..],
+            ),
+            (
+                "out",
+                "err",
+                Stream::Stdout,
+                &[Stream::Stdout, Stream::Stderr, Stream::Raw][..],
+            ),
+        ] {
+            tool.set_output(
+                ToolStatus::Complete,
+                json!({
+                    "exit_code": 0,
+                    "elapsed": {"secs": 0, "nanos": 0},
+                    "stdout": stdout,
+                    "stderr": stderr,
+                    "stdout_total_bytes": stdout.len(),
+                    "stderr_total_bytes": stderr.len(),
+                    "timed_out": false,
+                    "cancelled": false,
+                    "output_truncated": false
+                })
+                .to_string(),
+            );
+            assert_eq!(streams(&tool), pages);
+            assert_eq!(
+                default_stream(&tool),
+                expected,
+                "stdout={stdout:?}, stderr={stderr:?}"
+            );
         }
     }
 

@@ -974,9 +974,26 @@ mod tests {
             .unwrap()
             .name
             .set("new-skill".into());
-        assert!(matches!(state.save(), Action::Request(_)));
+        let body = "  draft step\n\nsecond step\n";
+        state.editor.as_mut().unwrap().body = Source::new(body);
+        assert!(matches!(
+            state.save(),
+            Action::Request(Request::Resources {
+                action: ResourceAction::SaveSkill { name, content, original: None },
+                ..
+            }) if name == "new-skill" && content == body
+        ));
         state.receive(Response::Error("duplicate skill".into()));
         assert_eq!(state.editor.as_ref().unwrap().name.text, "new-skill");
+        assert_eq!(
+            state
+                .editor
+                .as_ref()
+                .unwrap()
+                .body
+                .raw(),
+            body
+        );
         assert!(matches!(state.load(), Action::None));
     }
 

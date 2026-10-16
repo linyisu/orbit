@@ -184,8 +184,7 @@ async fn legacy_project_plugin_mutations_require_a_new_client() {
         .await
         .unwrap();
 
-    // The stale source must be rejected for its workspace before looking up or
-    // modifying any marketplace. This avoids touching the user's registry.
+    // Legacy project requests must fail before accessing the global registry.
     let error = fixture
         .request(Request::Plugins {
             session: fixture.handle.info.id.clone(),

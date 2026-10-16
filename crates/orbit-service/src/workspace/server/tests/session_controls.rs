@@ -85,7 +85,7 @@ async fn saved_session_rename_keeps_history_and_rejects_another_writer() {
     assert_eq!(after.session.workspace, before.session.workspace);
     assert_eq!(after.session.title, "跨项目的历史会话");
     assert_eq!(after.runs.len(), before.runs.len());
-    assert_eq!(after.history.len(), before.history.len());
+    assert_eq!(after.history, before.history);
     for title in [" ".to_owned(), "中".repeat(121)] {
         assert!(
             fixture

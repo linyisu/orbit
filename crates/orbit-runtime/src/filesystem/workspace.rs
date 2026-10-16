@@ -994,4 +994,173 @@ mod tests {
         );
         assert_eq!(current_policy.base.network, NetworkPolicy::Deny);
     }
+
+    #[test]
+    fn protects_database_sidecars_created_after_registry_initialization() {
+        let root = tempfile::tempdir().unwrap();
+        let sidecar = root.path().join("sessions.db-wal");
+        let mut workspace = Workspace::new(root.path()).unwrap();
+        workspace.protect(&sidecar).unwrap();
+        std::fs::write(&sidecar, "private conversation").unwrap();
+
+        assert!(
+            workspace
+                .open_read(std::path::Path::new("sessions.db-wal"))
+                .is_err()
+        );
+
+        std::fs::hard_link(&sidecar, root.path().join("alias")).unwrap();
+
+        assert!(
+            workspace
+                .open_read(std::path::Path::new("alias"))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn template_trust_is_exact_and_read_write_is_separate() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join(".env.example"), "EXAMPLE=1").unwrap();
+        std::fs::write(root.path().join(".env.local"), "SECRET=1").unwrap();
+        let mut workspace = Workspace::new(root.path()).unwrap();
+        workspace
+            .configure_policy(
+                crate::policy::WorkspacePermissions {
+                    read_templates: vec![".env.example".into()],
+                    ..Default::default()
+                },
+                crate::capability::NetworkPolicy::Deny,
+            )
+            .unwrap();
+        assert!(
+            workspace
+                .open_read(std::path::Path::new(".env.example"))
+                .is_ok()
+        );
+        assert!(
+            workspace
+                .open_read(std::path::Path::new(".env.local"))
+                .is_err()
+        );
+        assert!(
+            workspace
+                .authorize_write_parent(std::path::Path::new(".env.example"))
+                .is_err()
+        );
+        workspace
+            .configure_policy(
+                crate::policy::WorkspacePermissions {
+                    write_templates: vec![".env.example".into()],
+                    ..Default::default()
+                },
+                crate::capability::NetworkPolicy::Deny,
+            )
+            .unwrap();
+        assert!(
+            workspace
+                .authorize_write_parent(std::path::Path::new(".env.example"))
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn session_grants_are_ephemeral_and_clearable() {
+        use crate::{
+            capability::{EnvironmentId, FilesystemCapability},
+            policy::{FilesystemGrant, PolicyDecision},
+        };
+        let ws_temp = tempfile::tempdir().unwrap();
+        let ext_temp = tempfile::tempdir().unwrap();
+        let persistent_temp = tempfile::tempdir().unwrap();
+
+        let mut workspace = Workspace::new(ws_temp.path()).unwrap();
+
+        let permissions = WorkspacePermissions {
+            read_templates: Vec::new(),
+            write_templates: Vec::new(),
+            read: vec![persistent_temp.path().to_path_buf()],
+            read_write: vec![],
+        };
+
+        workspace
+            .configure_policy(permissions, NetworkPolicy::Allow)
+            .unwrap();
+
+        let external_file = ext_temp.path().join("data.csv");
+        std::fs::write(&external_file, "1,2,3\n").unwrap();
+        let cap = FilesystemCapability::local_read(&external_file);
+
+        assert!(matches!(
+            workspace
+                .policy()
+                .check_filesystem(&cap),
+            PolicyDecision::NeedsApproval(_)
+        ));
+
+        let resolved_ext = ResolvedPath::resolve(&external_file, None).unwrap();
+        workspace
+            .policy()
+            .record_grant(FilesystemGrant::read_only(
+                EnvironmentId::Local,
+                resolved_ext,
+            ));
+
+        assert_eq!(
+            workspace
+                .policy()
+                .check_filesystem(&cap),
+            PolicyDecision::Granted
+        );
+
+        workspace
+            .policy()
+            .clear_session_grants();
+
+        assert!(matches!(
+            workspace
+                .policy()
+                .check_filesystem(&cap),
+            PolicyDecision::NeedsApproval(_)
+        ));
+
+        let persistent_file = persistent_temp.path().join("model.bin");
+        std::fs::write(&persistent_file, "weights").unwrap();
+        let persistent_cap = FilesystemCapability::local_read(&persistent_file);
+
+        assert_eq!(
+            workspace
+                .policy()
+                .check_filesystem(&persistent_cap),
+            PolicyDecision::Granted
+        );
+
+        let ws_cap = FilesystemCapability::local_read_write(ws_temp.path().join("src/lib.rs"));
+
+        assert_eq!(
+            workspace
+                .policy()
+                .check_filesystem(&ws_cap),
+            PolicyDecision::Granted
+        );
+
+        let fresh_workspace = Workspace::new(ws_temp.path()).unwrap();
+
+        assert!(matches!(
+            fresh_workspace
+                .policy()
+                .check_filesystem(&cap),
+            PolicyDecision::NeedsApproval(_)
+        ));
+        assert_eq!(
+            fresh_workspace
+                .policy()
+                .session_grants()
+                .read()
+                .unwrap()
+                .grants()
+                .len(),
+            0
+        );
+    }
 }

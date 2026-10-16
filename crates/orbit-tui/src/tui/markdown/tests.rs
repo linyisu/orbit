@@ -1,6 +1,5 @@
 use super::table::labelled_table_rows;
 use super::*;
-use crate::tui::languages::syntax_for_label;
 
 #[test]
 fn basic_html_and_markdown_share_nested_semantic_styles() {
@@ -225,42 +224,7 @@ fn indented_code_preserves_unicode_and_shorter_indentation() {
 }
 
 #[test]
-fn resolves_real_model_labels_aliases_attributes_and_filename_extensions() {
-    for label in [
-        "csharp",
-        "C#",
-        "cs",
-        "C Sharp",
-        "{.csharp}",
-        "language-csharp",
-        "Program.cs",
-        "csharp title=demo",
-    ] {
-        assert_eq!(syntax_for_label(label).unwrap().name, "C#", "{label}");
-    }
-
-    for label in [
-        "vb",
-        "VB.NET",
-        "vbnet",
-        "Visual Basic",
-        "Visual Basic .NET",
-        "Module.vb",
-    ] {
-        assert_eq!(
-            syntax_for_label(label).unwrap().name,
-            "Visual Basic .NET",
-            "{label}"
-        );
-    }
-
-    for label in ["typescript", "ts", "tsx", "toml", "Dockerfile", "python3"] {
-        assert!(syntax_for_label(label).is_some(), "{label}");
-    }
-
-    assert!(syntax_for_label(".NET").is_none());
-    assert!(syntax_for_label("invented-language").is_none());
-
+fn code_fences_render_csharp_and_visual_basic_with_distinct_syntax_colors() {
     for (label, sample) in [
         (
             "csharp",

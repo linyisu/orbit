@@ -236,7 +236,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn capture_retains_a_paginated_log_with_a_hard_limit() {
+    async fn capture_preserves_complete_short_output_in_the_retained_log() {
         let directory = tempfile::tempdir().unwrap();
         let log = OutputLog::create(directory.path())
             .await

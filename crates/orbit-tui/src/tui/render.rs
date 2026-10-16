@@ -16,9 +16,6 @@ pub(super) use thinking::{thinking_card_at_width, thinking_linked};
 pub(super) use tool_cards::{default_tool_summary, read_file_summary, tool_card};
 
 #[cfg(test)]
-pub(super) use tool_cards::tool_card_with_links;
-
-#[cfg(test)]
 pub(super) use thinking::{assistant_line, thinking_line};
 #[cfg(test)]
 pub(super) use tool_cards::tool_summary;

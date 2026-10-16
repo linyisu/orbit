@@ -108,6 +108,7 @@ async fn commands_run_in_parallel_and_keep_their_own_logs_and_verification() {
     .unwrap()
     .unwrap();
 
+    assert_eq!(finished.len(), 2);
     for (index, job) in finished.iter().enumerate() {
         assert_eq!(job.status, JobStatus::Completed);
         assert_eq!(job.result.as_ref().unwrap()["exit_code"], 0);
