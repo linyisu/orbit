@@ -909,8 +909,8 @@ fn plugin_catalog(
 ) -> orbit_protocol::plugins::Catalog {
     orbit_protocol::plugins::Catalog {
         marketplaces,
-        project_id: project.into(),
-        enabled: Vec::new(),
+        session_id: project.into(),
+        applied: Vec::new(),
         inspections: Vec::new(),
     }
 }
@@ -1015,14 +1015,12 @@ fn marketplace_search_and_enabled_filter_never_inspect_hidden_plugins() {
             description: "中文 文档".into(),
             source: Some("plugins/docs".into()),
         });
-    let configured = ProjectPlugin {
-        project_id: "project".into(),
+    let configured = Selection {
         marketplace_source: market.source.clone(),
         plugin_name: "docs".into(),
         package_source: "plugins/docs".into(),
         version: None,
         marketplace_revision: None,
-        enabled_at: 1,
     };
     let mut state = UiState::new("model");
     state.marketplace_dialog = Some(MarketplaceDialog::new(
@@ -1205,28 +1203,24 @@ fn marketplace_dialog_enables_inspected_plugin_for_current_project() {
     };
     assert_eq!(
         plugin,
-        &ProjectPlugin {
-            project_id: "project".into(),
+        &Selection {
             marketplace_source: "owner/catalog".into(),
             plugin_name: "review".into(),
             package_source: "plugins/review".into(),
             version: Some("1.2.3".into()),
             marketplace_revision: None,
-            enabled_at: 0,
         }
     );
 }
 
 #[test]
 fn marketplace_dialog_disables_already_enabled_plugin() {
-    let enabled = ProjectPlugin {
-        project_id: "project".into(),
+    let enabled = Selection {
         marketplace_source: "owner/catalog".into(),
         plugin_name: "review".into(),
         package_source: "plugins/review".into(),
         version: Some("1.2.3".into()),
         marketplace_revision: None,
-        enabled_at: 1,
     };
     let mut state = UiState::new("model");
     state.marketplace_dialog = Some(MarketplaceDialog::new(

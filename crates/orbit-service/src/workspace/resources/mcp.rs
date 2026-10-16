@@ -2,6 +2,7 @@
 use super::*;
 use orbit_agent::tool::ToolRegistry;
 use orbit_tools::mcp::{McpConfig, McpServerStatus};
+use std::path::Path;
 use tokio::sync::oneshot;
 use tokio_util::task::AbortOnDropHandle;
 

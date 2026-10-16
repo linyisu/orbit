@@ -1402,6 +1402,15 @@ fn main() -> anyhow::Result<()> {
                         "type": "error",
                         "value": "工作区已切换，请重新打开当前项目的设置后重试"
                     })
+                } else if request["action"] == "AppliedExtensions"
+                    || request["action"]
+                        .get("ApplyExtension")
+                        .is_some()
+                    || request["action"]
+                        .get("RemoveExtension")
+                        .is_some()
+                {
+                    fixture_extensions(&workspace, &session, &request["action"])?
                 } else if let Some(response) = skill_imports.execute(
                     &session,
                     &workspace,
@@ -1517,6 +1526,7 @@ fn main() -> anyhow::Result<()> {
                     })
                 }
             }
+            "library" => global_library(&workspace, &request["action"])?,
             "plugins" => plugin_catalog(&workspace, &request["action"])?,
             _ => json!({
                 "type": "ok"
@@ -1727,8 +1737,8 @@ fn plugin_catalog(workspace: &str, action: &Value) -> anyhow::Result<Value> {
                 "type": "plugins",
                 "value": {
                     "marketplaces": [],
-                    "project_id": "fixture",
-                    "enabled": [],
+                    "session_id": "demo",
+                    "applied": [],
                     "inspections": []
                 }
             }));
@@ -1737,22 +1747,21 @@ fn plugin_catalog(workspace: &str, action: &Value) -> anyhow::Result<Value> {
     };
     match action["action"].as_str() {
         Some("enable") => {
-            let mut plugin: orbit_protocol::project::ProjectPlugin =
+            let plugin: orbit_protocol::plugins::Selection =
                 serde_json::from_value(action["plugin"].clone())?;
-            plugin.project_id = catalog.project_id.clone();
-            catalog.enabled.retain(|p| {
+            catalog.applied.retain(|p| {
                 p.marketplace_source != plugin.marketplace_source
                     || p.plugin_name != plugin.plugin_name
             });
-            catalog.enabled.push(plugin);
+            catalog.applied.push(plugin);
         }
-        Some("disable") => catalog.enabled.retain(|p| {
+        Some("disable") => catalog.applied.retain(|p| {
             Some(p.marketplace_source.as_str()) != action["marketplace_source"].as_str()
                 || Some(p.plugin_name.as_str()) != action["plugin_name"].as_str()
         }),
         Some("remove") => {
             if catalog
-                .enabled
+                .applied
                 .iter()
                 .any(|p| Some(p.marketplace_source.as_str()) == action["source"].as_str())
             {
@@ -1973,4 +1982,140 @@ fn task_snapshot(workspace: &str, action: &Value) -> Value {
             "value": format!("{error:#}")
         }),
     }
+}
+
+/// A persistent deterministic peer for the host-global endpoint, shared by short connections.
+fn global_library(workspace: &str, action: &Value) -> anyhow::Result<Value> {
+    let root = std::path::Path::new(workspace);
+    let skills_path = root.join(".fixture-global-skills.json");
+    let scans_path = root.join(".fixture-global-scans.json");
+    let mut skills: HashMap<String, String> = std::fs::read(&skills_path)
+        .ok()
+        .map(|bytes| serde_json::from_slice(&bytes))
+        .transpose()?
+        .unwrap_or_default();
+    let mut imports: skill_import::FixtureImports = std::fs::read(&scans_path)
+        .ok()
+        .map(|bytes| serde_json::from_slice(&bytes))
+        .transpose()?
+        .unwrap_or_default();
+    if root
+        .join(".fixture-skill-import")
+        .exists()
+    {
+        skill_import::seed(&mut skills);
+    }
+    let snapshot = if let Some(action) = action.get("Skills") {
+        let result = if let Some(response) =
+            imports.execute("global-library", workspace, action, &mut skills)
+        {
+            if response["type"] == "error" {
+                std::fs::write(&scans_path, serde_json::to_vec(&imports)?)?;
+                return Ok(response);
+            }
+            response["value"].clone()
+        } else if let Some(save) = action.get("SaveSkill") {
+            skills.insert(
+                save["name"].as_str().unwrap().into(),
+                save["content"].as_str().unwrap().into(),
+            );
+            json!({
+                "Skills": skills
+                    .keys()
+                    .map(|name| json!({
+                        "name": name,
+                        "title": name,
+                        "description": "Generated global skill",
+                        "source": "全局技能",
+                        "editable": true
+                    }))
+                    .collect::<Vec<_>>()
+            })
+        } else if let Some(read) = action.get("ReadSkill") {
+            json!({
+                "Skill": {
+                    "name": read["name"],
+                    "content": skills
+                        .get(read["name"].as_str().unwrap())
+                        .cloned()
+                        .unwrap_or_default(),
+                    "editable": true
+                }
+            })
+        } else {
+            json!({
+                "Skills": skills
+                    .keys()
+                    .map(|name| json!({
+                        "name": name,
+                        "title": name,
+                        "description": "Generated global skill",
+                        "source": "全局技能",
+                        "editable": true
+                    }))
+                    .collect::<Vec<_>>()
+            })
+        };
+        std::fs::write(skills_path, serde_json::to_vec(&skills)?)?;
+        std::fs::write(scans_path, serde_json::to_vec(&imports)?)?;
+        json!({"Skills": result})
+    } else if let Some(action) = action.get("Plugins") {
+        let response = plugin_catalog(workspace, action)?;
+        if response["type"] == "error" {
+            return Ok(response);
+        }
+        json!({"Plugins": response["value"]})
+    } else if let Some(export) = action.get("ExportSkill") {
+        let name = export["name"].as_str().unwrap();
+        let content = skills
+            .get(name)
+            .cloned()
+            .unwrap_or_else(|| "Generated skill body.".into());
+        json!({
+            "Bundle": {
+                "extension": {
+                    "key": format!("skill:{name}"),
+                    "name": name,
+                    "kind": "Skill"
+                },
+                "skill_roots": [format!("0/{name}")],
+                "files": [{
+                    "path": format!("0/{name}/SKILL.md"),
+                    "content": base64::engine::general_purpose::STANDARD.encode(content),
+                    "executable": false
+                }]
+            }
+        })
+    } else {
+        return Ok(json!({
+            "type": "error",
+            "value": "Unsupported synthetic global operation"
+        }));
+    };
+    Ok(json!({"type": "library", "value": snapshot}))
+}
+
+fn fixture_extensions(workspace: &str, session: &str, action: &Value) -> anyhow::Result<Value> {
+    let path = std::path::Path::new(workspace).join(format!(".fixture-applied-{session}.json"));
+    let mut applied: Vec<orbit_protocol::library::Extension> = std::fs::read(&path)
+        .ok()
+        .map(|bytes| serde_json::from_slice(&bytes))
+        .transpose()?
+        .unwrap_or_default();
+    if let Some(bundle) = action
+        .get("ApplyExtension")
+        .map(|value| &value["bundle"])
+    {
+        let extension: orbit_protocol::library::Extension =
+            serde_json::from_value(bundle["extension"].clone())?;
+        applied.retain(|current| current.key != extension.key);
+        applied.push(extension);
+    } else if let Some(remove) = action.get("RemoveExtension") {
+        applied.retain(|current| Some(current.key.as_str()) != remove["key"].as_str());
+    }
+    std::fs::write(path, serde_json::to_vec(&applied)?)?;
+    Ok(json!({
+        "type": "resources",
+        "value": {"Extensions": applied}
+    }))
 }

@@ -158,7 +158,7 @@ impl State {
             .as_ref()
             .is_some_and(|e| e.original.as_ref() != Some(&e.body.raw()))
         {
-            self.error = Some("请先保存技能，再载入当前会话。".into());
+            self.error = Some("请先保存技能，再应用到当前会话。".into());
             return Action::None;
         }
         self.start(
@@ -445,7 +445,7 @@ impl Panel for State {
                 self.skills = skills;
                 if matches!(pending, Some(Pending::Save)) {
                     self.editor = None;
-                    self.message = Some("技能已保存到项目。".into());
+                    self.message = Some("技能已保存到全局库。".into());
                 }
                 self.selected = self
                     .selected
@@ -517,7 +517,7 @@ impl Panel for State {
         let title = if self.editor.is_some() {
             "技能 · 查看与编辑"
         } else {
-            "项目技能"
+            "全局技能"
         };
         frame.render_widget(
             Paragraph::new(title).style(components::accent()),
@@ -527,14 +527,14 @@ impl Panel for State {
             if editor.readonly {
                 vec![
                     ("返回", Hit::Back),
-                    ("载入会话 L", Hit::Load),
+                    ("应用到会话 L", Hit::Load),
                     ("刷新原稿", Hit::Refresh),
                 ]
             } else {
                 vec![
                     ("收起（保留草稿）", Hit::Back),
                     ("保存 Ctrl+S", Hit::Save),
-                    ("载入会话", Hit::Load),
+                    ("应用到会话", Hit::Load),
                     ("刷新原稿", Hit::Refresh),
                 ]
             }
@@ -543,7 +543,7 @@ impl Panel for State {
                 ("新建 N", Hit::New),
                 ("刷新 R", Hit::Refresh),
                 ("搜索 /", Hit::Search),
-                ("载入 L", Hit::Load),
+                ("应用 L", Hit::Load),
             ]
         };
         toolbar(frame, row(area, 1), &buttons, &mut self.hits);
@@ -552,7 +552,7 @@ impl Panel for State {
             .as_deref()
             .or(self.message.as_deref())
             .unwrap_or(if self.pending.is_some() {
-                "正在请求工作区…"
+                "正在读取设置…"
             } else {
                 ""
             });
@@ -688,7 +688,7 @@ impl Panel for State {
             }
             if visible.is_empty() {
                 frame.render_widget(
-                    Paragraph::new("没有匹配的技能 · N 新建项目技能").style(components::muted()),
+                    Paragraph::new("没有匹配的技能 · N 新建全局技能").style(components::muted()),
                     self.body_area,
                 );
             }

@@ -15,10 +15,14 @@ pub(super) enum Kind {
 }
 pub(super) struct Resources {
     owner: WeakEntity<Workspace>,
+    library: orbit_client::library::Library,
+    runtime: Arc<tokio::runtime::Runtime>,
     session: Option<String>,
     workspace: String,
     kind: Kind,
     skills: Vec<Skill>,
+    applied: std::collections::HashSet<String>,
+    applied_task: Task<()>,
     memories: Vec<SessionMemory>,
     query: Entity<InputState>,
     category: MemoryCategory,
@@ -46,9 +50,12 @@ impl Resources {
         session: Option<String>,
         workspace: String,
         kind: Kind,
+        library: super::GlobalLibrary,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        let runtime = library.runtime;
+        let library = library.service;
         let entity = cx.weak_entity();
         cx.defer(move |cx| {
             let _ = entity.update(cx, |view, cx| view.refresh(cx));
@@ -61,10 +68,14 @@ impl Resources {
         });
         Self {
             owner,
+            library,
+            runtime,
             session,
             workspace,
             kind,
             skills: vec![],
+            applied: Default::default(),
+            applied_task: Task::ready(()),
             memories: vec![],
             query,
             category: MemoryCategory::Fact,
@@ -95,21 +106,53 @@ impl Resources {
                 action: orbit_protocol::SessionAction::LoadSkill { name },
                 ..
             } => Some(name.clone()),
+            Request::Resources {
+                action: Action::RemoveExtension { key },
+                ..
+            } => key
+                .strip_prefix("skill:")
+                .map(str::to_owned),
             _ => None,
         };
         self.status = None;
-        let sent = self.owner.update(cx, |view, _| {
-            if !view.info.as_ref().is_some_and(|info| {
-                Some(&info.id) == session.as_ref() && info.workspace == workspace
-            }) {
-                anyhow::bail!("工作区已切换，请重新打开当前工作区的资源。");
-            }
-            anyhow::ensure!(view.connected, "连接已断开，请重新连接后重试。");
-            view.backend
-                .as_ref()
-                .ok_or_else(|| anyhow::anyhow!("请先连接工作区"))?
-                .send(Command::Settings { request, result })
-        });
+        let sent = if matches!(self.kind, Kind::Skills)
+            && matches!(
+                &request,
+                Request::Resources {
+                    action: Action::Skills
+                        | Action::ReadSkill { .. }
+                        | Action::SaveSkill { .. }
+                        | Action::ScanSkills { .. }
+                        | Action::ImportSkills { .. },
+                    ..
+                }
+            ) {
+            let Request::Resources { action, .. } = request else {
+                unreachable!()
+            };
+            let library = self.library.clone();
+            self.runtime.spawn(async move {
+                let response = library
+                    .skills(action)
+                    .await
+                    .map_err(|error| format!("{error:#}"));
+                let _ = result.send(response);
+            });
+            Ok(Ok(()))
+        } else {
+            self.owner.update(cx, |view, _| {
+                if !view.info.as_ref().is_some_and(|info| {
+                    Some(&info.id) == session.as_ref() && info.workspace == workspace
+                }) {
+                    anyhow::bail!("工作区已切换，请重新打开当前工作区的资源。");
+                }
+                anyhow::ensure!(view.connected, "连接已断开，请重新连接后重试。");
+                view.backend
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("请先连接工作区"))?
+                    .send(Command::Settings { request, result })
+            })
+        };
         if let Err(error) = sent
             .map_err(|e| e.to_string())
             .and_then(|v| v.map_err(|e| e.to_string()))
@@ -122,7 +165,7 @@ impl Resources {
         self.error = None;
         self.status = loading_skill
             .as_ref()
-            .map(|name| format!("正在将 /{name} 载入当前会话…"));
+            .map(|name| format!("正在将 /{name} 应用到当前会话…"));
         self.task = cx.spawn(async move |owner, cx| {
             let result = receiver
                 .await
@@ -154,10 +197,25 @@ impl Resources {
                 match (loading_skill, result) {
                     (Some(_), Ok(Response::Report(report))) => {
                         view.status = Some(report.text);
+                        view.refresh_applied(cx);
+                    }
+                    (Some(_), Ok(Response::Resources(Snapshot::Extensions(extensions)))) => {
+                        view.applied = extensions
+                            .into_iter()
+                            .filter_map(|extension| {
+                                matches!(
+                                    extension.kind,
+                                    orbit_protocol::library::ExtensionKind::Skill
+                                )
+                                .then_some(extension.name)
+                            })
+                            .collect();
+                        view.status = Some("已从当前会话移除，已有对话内容保持不变。".into());
                     }
                     (None, Ok(Response::Resources(Snapshot::Skills(skills)))) => {
                         view.skills = skills;
                         view.editing = false;
+                        view.refresh_applied(cx);
                     }
                     (None, Ok(Response::Resources(Snapshot::Memories(memories)))) => {
                         view.memories = memories;
@@ -191,8 +249,77 @@ impl Resources {
         cx.notify();
     }
 
+    pub(super) fn bind_context(
+        &mut self,
+        session: Option<String>,
+        workspace: String,
+        cx: &mut Context<Self>,
+    ) {
+        self.session = session;
+        self.workspace = workspace;
+        let owner = cx.weak_entity();
+        cx.defer(move |cx| {
+            let _ = owner.update(cx, |view, cx| view.refresh_applied(cx));
+        });
+        cx.notify();
+    }
+
+    fn refresh_applied(&mut self, cx: &mut Context<Self>) {
+        if !matches!(self.kind, Kind::Skills) {
+            return;
+        }
+        self.applied.clear();
+        let Some(session) = self.session.clone() else {
+            return;
+        };
+        let workspace = self.workspace.clone();
+        let (result, receiver) = tokio::sync::oneshot::channel();
+        let sent = self.owner.update(cx, |view, _| {
+            anyhow::ensure!(view.connected, "会话尚未连接");
+            view.backend
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("会话尚未连接"))?
+                .send(Command::Settings {
+                    request: Request::Resources {
+                        session: session.clone(),
+                        expected_workspace: Some(workspace.clone()),
+                        action: Action::AppliedExtensions,
+                    },
+                    result,
+                })
+        });
+        if !matches!(sent, Ok(Ok(()))) {
+            return;
+        }
+        self.applied_task = cx.spawn(async move |owner, cx| {
+            let response = receiver.await;
+            let _ = owner.update(cx, |view, cx| {
+                if view.session.as_ref() != Some(&session) || view.workspace != workspace {
+                    return;
+                }
+                if let Ok(Ok(Response::Resources(Snapshot::Extensions(extensions)))) = response {
+                    view.applied = extensions
+                        .into_iter()
+                        .filter_map(|extension| {
+                            matches!(
+                                extension.kind,
+                                orbit_protocol::library::ExtensionKind::Skill
+                            )
+                            .then_some(extension.name)
+                        })
+                        .collect();
+                }
+                cx.notify();
+            });
+        });
+    }
+
     fn action(&mut self, action: Action, cx: &mut Context<Self>) {
-        if let Some(session) = self.session.clone() {
+        if let Some(session) = self
+            .session
+            .clone()
+            .or_else(|| matches!(self.kind, Kind::Skills).then(String::new))
+        {
             self.request(
                 Request::Resources {
                     session,
@@ -220,13 +347,21 @@ impl Resources {
             cx.notify();
             return;
         };
-        self.request(
+        let request = if self.applied.contains(&name) {
+            Request::Resources {
+                session,
+                expected_workspace: Some(self.workspace.clone()),
+                action: Action::RemoveExtension {
+                    key: format!("skill:{name}"),
+                },
+            }
+        } else {
             Request::SessionAction {
                 session,
                 action: orbit_protocol::SessionAction::LoadSkill { name },
-            },
-            cx,
-        );
+            }
+        };
+        self.request(request, cx);
     }
 
     fn new_item(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -288,33 +423,25 @@ impl Resources {
     }
 
     fn import_skills(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(session) = self.session.clone() else {
-            return;
-        };
         let importer = cx.new(|cx| {
-            import::Importer::new(
-                self.owner.clone(),
-                session,
-                self.workspace.clone(),
-                window,
-                cx,
-            )
+            import::Importer::new(self.library.clone(), self.runtime.clone(), window, cx)
         });
-        self.import_events = Some(cx.subscribe_in(
-            &importer,
-            window,
-            |view, _, event, window, cx| {
-                if let import::Event::Imported(skills, count) = event {
-                    view.skills = skills.clone();
-                    view.status = Some(format!("已导入 {count} 个技能，可从下方加载到当前会话。"));
-                }
-                view.importer = None;
-                view.import_events = None;
-                view.query
-                    .update(cx, |input, cx| input.focus(window, cx));
-                cx.notify();
-            },
-        ));
+        self.import_events =
+            Some(
+                cx.subscribe_in(&importer, window, |view, _, event, window, cx| {
+                    if let import::Event::Imported(skills, count) = event {
+                        view.skills = skills.clone();
+                        view.status = Some(format!(
+                            "已导入 {count} 个全局技能，可从下方应用到当前会话。"
+                        ));
+                    }
+                    view.importer = None;
+                    view.import_events = None;
+                    view.query
+                        .update(cx, |input, cx| input.focus(window, cx));
+                    cx.notify();
+                }),
+            );
         self.error = None;
         self.status = None;
         self.importer = Some(importer);
@@ -332,7 +459,7 @@ impl Render for Resources {
         }
         let (description, add, empty) = match self.kind {
             Kind::Skills => (
-                "管理当前工作区可用的技能。新技能保存到项目，保存后自动刷新。",
+                "在本机全局库中创建和导入技能，选择后应用到当前会话。",
                 "新建技能…",
                 "还没有技能。可以从仓库或目录导入，也可以新建技能。",
             ),
@@ -341,6 +468,15 @@ impl Render for Resources {
                 "添加记忆…",
                 "还没有保存的记忆。开始会话后，可在这里添加。",
             ),
+        };
+        let description = if matches!(self.kind, Kind::Skills) {
+            if self.session.is_some() {
+                format!("{} 个全局技能", self.skills.len())
+            } else {
+                format!("{} 个全局技能 · 连接会话后可应用", self.skills.len())
+            }
+        } else {
+            description.to_owned()
         };
         let mut content = v_flex()
             .w_full()
@@ -436,7 +572,7 @@ impl Render for Resources {
                     div()
                         .text_sm()
                         .text_color(cx.theme().muted_foreground)
-                        .child("导入的技能为只读；可复制内容并新建项目技能。"),
+                        .child("兼容目录中的技能为只读；可导入全局库后编辑。"),
                 );
             }
             return content.child(
@@ -484,7 +620,10 @@ impl Render for Resources {
                     Button::new("resource-add")
                         .icon(IconName::Plus)
                         .label(add)
-                        .disabled(self.busy || self.session.is_none())
+                        .disabled(
+                            self.busy
+                                || (matches!(self.kind, Kind::Memory) && self.session.is_none()),
+                        )
                         .on_click(cx.listener(|v, _, w, cx| v.new_item(w, cx))),
                 )
                 .when(matches!(self.kind, Kind::Skills), |row| {
@@ -493,7 +632,7 @@ impl Render for Resources {
                             .primary()
                             .icon(IconName::Download)
                             .label("从来源导入")
-                            .disabled(self.busy || self.session.is_none())
+                            .disabled(self.busy)
                             .on_click(
                                 cx.listener(|view, _, window, cx| view.import_skills(window, cx)),
                             ),
@@ -552,9 +691,13 @@ impl Render for Resources {
                                 )))
                                 .small()
                                 .outline()
-                                .label("加载到当前会话")
+                                .label(if self.applied.contains(&skill.name) {
+                                    "从会话移除"
+                                } else {
+                                    "应用到当前会话"
+                                })
                                 .accessibility_label(format!(
-                                    "将技能 /{} 加载到当前会话",
+                                    "将技能 /{} 应用到当前会话",
                                     skill.name
                                 ))
                                 .tooltip(format!(
@@ -564,7 +707,14 @@ impl Render for Resources {
                                         .unwrap_or("尚未连接"),
                                     self.workspace
                                 ))
-                                .disabled(self.busy || self.session.is_none())
+                                .disabled(
+                                    self.busy
+                                        || self.session.is_none()
+                                        || !self
+                                            .owner
+                                            .upgrade()
+                                            .is_some_and(|owner| owner.read(cx).connected),
+                                )
                                 .on_click(cx.listener(move |view, _, _, cx| {
                                     view.load_skill(load_name.clone(), cx);
                                 })),

@@ -204,13 +204,13 @@ impl Tab {
                 Some(orbit_protocol::plugins::Action::Add { source })
             } else {
                 self.state
-                    .pending_project_plugin_change
+                    .pending_session_plugin_change
                     .take()
                     .map(|change| match change {
-                        tui::dialogs::ProjectPluginChange::Enable(plugin) => {
+                        tui::dialogs::SessionPluginChange::Enable(plugin) => {
                             orbit_protocol::plugins::Action::Enable { plugin }
                         }
-                        tui::dialogs::ProjectPluginChange::Disable {
+                        tui::dialogs::SessionPluginChange::Disable {
                             marketplace_source,
                             plugin_name,
                             ..

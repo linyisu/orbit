@@ -4,6 +4,13 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Action {
     Skills,
+    AppliedExtensions,
+    ApplyExtension {
+        bundle: Box<super::library::Bundle>,
+    },
+    RemoveExtension {
+        key: String,
+    },
     ScanSkills {
         source: String,
     },
@@ -90,6 +97,7 @@ pub struct SkillCandidate {
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Snapshot {
     Skills(Vec<Skill>),
+    Extensions(Vec<super::library::Extension>),
     SkillSource {
         token: String,
         source: String,

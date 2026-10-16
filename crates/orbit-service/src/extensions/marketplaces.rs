@@ -146,17 +146,25 @@ fn enabled_skill_roots_from_markets(
     EnabledSkillRoots { roots, diagnostics }
 }
 
+pub(crate) fn plugin_skill_directories(
+    market: &Marketplace,
+    plugin: &Plugin,
+) -> Result<Vec<PathBuf>> {
+    verify_git_checkout(market)?;
+    Ok(package::inspect(market, plugin)?.skill_directories)
+}
+
 pub fn inspect_plugin(market: &Marketplace, plugin: &Plugin) -> Result<PluginPackage> {
     Ok(package::inspect(market, plugin)?.package)
 }
 
-struct Store {
+pub(crate) struct Store {
     root: PathBuf,
     index: PathBuf,
 }
 
 impl Store {
-    fn current() -> Result<Self> {
+    pub(crate) fn current() -> Result<Self> {
         let root = crate::session::data_directory()?.join("orbit/marketplaces");
         Ok(Self {
             index: root.join("marketplaces.json"),
@@ -165,14 +173,14 @@ impl Store {
     }
 
     #[cfg(test)]
-    fn at(root: PathBuf) -> Self {
+    pub(crate) fn at(root: PathBuf) -> Self {
         Self {
             index: root.join("marketplaces.json"),
             root,
         }
     }
 
-    fn lock(&self) -> Result<CatalogueLease> {
+    pub(crate) fn lock(&self) -> Result<CatalogueLease> {
         fs::create_dir_all(&self.root)?;
         let file = fs::OpenOptions::new()
             .create(true)
@@ -180,11 +188,11 @@ impl Store {
             .write(true)
             .open(self.root.join("marketplaces.lock"))?;
         file.try_lock()
-            .context("插件市场正在被其他会话更新，请稍后重试")?;
+            .context("全局扩展库正在更新，请稍后重试")?;
         Ok(CatalogueLease(file))
     }
 
-    fn list(&self) -> Result<Vec<Marketplace>> {
+    pub(crate) fn list(&self) -> Result<Vec<Marketplace>> {
         Ok(self.load()?.marketplaces)
     }
 
@@ -211,7 +219,7 @@ impl Store {
         Ok(())
     }
 
-    async fn add(&self, source: String) -> Result<Marketplace> {
+    pub(crate) async fn add(&self, source: String) -> Result<Marketplace> {
         let source = source.trim().to_owned();
         ensure!(!source.is_empty(), "marketplace source cannot be empty");
 
@@ -231,7 +239,7 @@ impl Store {
         self.register(market)
     }
 
-    async fn refresh(&self, source: String) -> Result<Marketplace> {
+    pub(crate) async fn refresh(&self, source: String) -> Result<Marketplace> {
         let source = source.trim().to_owned();
         ensure!(
             self.list()?
@@ -264,7 +272,7 @@ impl Store {
         Ok(market)
     }
 
-    fn remove(&self, source: &str) -> Result<()> {
+    pub(crate) fn remove(&self, source: &str) -> Result<()> {
         let mut stored = self.load()?;
         let previous_len = stored.marketplaces.len();
         stored

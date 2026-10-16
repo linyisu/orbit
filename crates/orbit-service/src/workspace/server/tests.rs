@@ -97,6 +97,7 @@ impl Fixture {
             .clients
             .store(1, Ordering::Release);
         let service = Service {
+            library: Mutex::new(super::super::library::Library::isolated(&options)),
             options,
             sessions: Mutex::new([(handle.info.id.clone(), handle.clone())].into()),
             opening: Mutex::new(()),
@@ -359,6 +360,7 @@ async fn sent_images_are_readable_only_through_the_owning_session() {
         .unwrap();
     assert!(!Path::new(&path).starts_with(&workspace));
     let service = Service {
+        library: Mutex::new(super::super::library::Library::isolated(&options)),
         options,
         sessions: Mutex::new(
             handles

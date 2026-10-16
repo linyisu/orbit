@@ -26,6 +26,7 @@ cp config.example.toml config.toml
 - `/model` 切换模型，`/model refresh` 更新可用列表；配置规则见 [orbit-config](crates/orbit-config/README.md)。
 - `/plan` 规划，`/plan view` 审阅，批准后执行；`/build` 返回执行模式，工具审批独立生效。
 - `/ssh HOST PATH`、`/wsl DISTRO PATH` 打开远端标签；连接与配置传递见 [orbit-client](crates/orbit-client/README.md)。
+- `/skills`、`/plugins` 管理本机全局扩展库；技能和插件按需应用到指定会话，SSH/WSL 使用独立快照。
 - `/file`、`/review`、`/tasks`、`/queue` 管理文件、变更、任务和暂存消息。两端入口见 [功能对照](FRONTEND_PARITY.md)。
 
 命令以目标用户权限执行；审批声明不提供操作系统隔离，内置文件工具另有路径保护。详见 [工具与审批](crates/orbit-tools/README.md)。

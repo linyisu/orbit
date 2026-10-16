@@ -677,8 +677,16 @@ impl Actor {
                     return Ok(());
                 }
                 let busy = self.active() || self.questions.running().await;
+                let extensions_changed = matches!(
+                    &action,
+                    orbit_protocol::resources::Action::ApplyExtension { .. }
+                        | orbit_protocol::resources::Action::RemoveExtension { .. }
+                );
                 let response =
                     crate::workspace::resources::execute(&mut self.setup, action, busy).await;
+                if extensions_changed && response.is_ok() {
+                    self.profile().await;
+                }
                 let _ = result.send(response);
             }
             Command::Files {

@@ -4,6 +4,7 @@
 pub mod accounts;
 pub mod attachments;
 mod bootstrap;
+pub mod library;
 mod local_server;
 #[cfg(feature = "test-support")]
 pub mod test_support;

@@ -148,6 +148,7 @@ pub async fn serve(
         editor_command: "vi".into(),
     };
     let service = Arc::new(Service {
+        library: Mutex::new(super::library::Library::new(&options)?),
         options,
         sessions: Mutex::new(HashMap::new()),
         opening: Mutex::new(()),
@@ -252,6 +253,7 @@ fn resolve_database(path: PathBuf, workspace: &Path) -> Result<PathBuf> {
 }
 
 struct Service {
+    library: Mutex<super::library::Library>,
     options: crate::WorkspaceOptions,
     sessions: Mutex<HashMap<String, Arc<Handle>>>,
     opening: Mutex<()>,
@@ -423,6 +425,13 @@ impl Service {
         viewer: u64,
     ) -> Result<Response> {
         match request {
+            Request::Library { action } => Ok(Response::Library(
+                self.library
+                    .lock()
+                    .await
+                    .execute(action)
+                    .await?,
+            )),
             Request::RestoreSessions => {
                 let store =
                     orbit_store::store::Store::open(connection_options.database.clone()).await?;
@@ -517,19 +526,7 @@ impl Service {
                     .insert(info.id.clone(), handle);
                 Ok(Response::Opened(info))
             }
-            Request::Plugins {
-                session,
-                expected_workspace,
-                action,
-            } => {
-                let handle = self.session(&session).await?;
-                let catalog =
-                    super::plugins::execute(&handle, action, expected_workspace.as_deref()).await?;
-                handle
-                    .action(orbit_protocol::SessionAction::RefreshSkills)
-                    .await?;
-                Ok(Response::Plugins(catalog))
-            }
+            Request::Plugins { .. } => bail!("插件管理已迁移至全局库，请更新客户端后重试"),
             Request::Resources {
                 session,
                 expected_workspace,

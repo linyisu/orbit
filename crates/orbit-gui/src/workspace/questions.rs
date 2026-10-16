@@ -544,7 +544,7 @@ impl Workspace {
                                         let owner = owner.clone();
                                         let session = session.clone();
                                         let workspace = workspace.clone();
-                                        let enabled = catalog.enabled.iter().any(|entry| {
+                                        let enabled = catalog.applied.iter().any(|entry| {
                                             entry.plugin_name == name
                                                 && entry.marketplace_source == source
                                         });
@@ -555,8 +555,7 @@ impl Workspace {
                                                 entry.source == source && entry.name == name
                                             })
                                             .and_then(|entry| entry.package.as_ref().ok());
-                                        let package = orbit_protocol::project::ProjectPlugin {
-                                            project_id: catalog.project_id.clone(),
+                                        let package = orbit_protocol::plugins::Selection {
                                             marketplace_source: source.clone(),
                                             plugin_name: name.clone(),
                                             package_source: plugin
@@ -566,7 +565,6 @@ impl Workspace {
                                             version: inspected
                                                 .and_then(|package| package.version.clone()),
                                             marketplace_revision: market.revision.clone(),
-                                            enabled_at: 0,
                                         };
                                         v_flex()
                                             .gap_1()

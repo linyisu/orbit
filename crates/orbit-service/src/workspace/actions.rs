@@ -86,26 +86,6 @@ pub(super) async fn execute(
             Ok(report("工作目录", directory.to_string_lossy().into_owned()))
         }
         SessionAction::RefreshSkills => {
-            let options = &setup.resources.options;
-            // A plugin can be enabled before an empty session is persisted.
-            // Resolve its workspace's current project, just as initial setup
-            // does; the draft snapshot may still have an empty project ID.
-            let enabled = match setup
-                .session
-                .store
-                .project_at(&setup.session.snapshot.session.workspace)
-                .await?
-            {
-                Some(project) => {
-                    setup
-                        .session
-                        .store
-                        .project_plugins(&project.id)
-                        .await?
-                }
-                None => Vec::new(),
-            };
-            let roots = crate::marketplaces::enabled_skill_roots(&enabled);
             let skills = if setup
                 .resources
                 .policy
@@ -113,12 +93,7 @@ pub(super) async fn execute(
             {
                 Default::default()
             } else {
-                crate::skills::Skills::discover_with_plugin_roots(
-                    std::path::Path::new(&setup.session.snapshot.session.workspace),
-                    options.home.clone(),
-                    options.config_home.clone(),
-                    roots.roots,
-                )
+                super::library::session_skills(&setup.session).await?
             };
             skills.register_tool(&mut setup.resources.tools);
             super::setup::filter_configured_tools(
@@ -130,7 +105,8 @@ pub(super) async fn execute(
             setup
                 .resources
                 .budget
-                .plugin_skill_diagnostics = roots.diagnostics;
+                .plugin_skill_diagnostics
+                .clear();
             Ok(report("Skills", setup.resources.budget.skills.render()))
         }
         SessionAction::Task { task } => {
@@ -263,15 +239,14 @@ mod tests {
         execute(&mut setup, SessionAction::RefreshSkills, false)
             .await
             .unwrap();
-        // Even the unavailable source must be found in the new project: an
-        // empty draft's stale project ID previously lost this plugin entirely.
+        // Legacy project enablement cannot opt a new session into a global package.
         assert_eq!(
             setup
                 .resources
                 .budget
                 .plugin_skill_diagnostics
                 .len(),
-            1
+            0
         );
         assert!(!setup.session.is_persisted());
     }
@@ -378,6 +353,20 @@ mod tests {
                 .await
                 .is_err()
         );
+        super::super::resources::execute(
+            &mut setup,
+            orbit_protocol::resources::Action::ApplyExtension {
+                bundle: super::super::library::test_bundle(
+                    "example",
+                    "---\ndescription: Session fixture\n---\nKeep identifiers stable.",
+                )
+                .into(),
+            },
+            false,
+        )
+        .await
+        .unwrap();
+
         assert!(
             execute(
                 &mut setup,
@@ -404,7 +393,7 @@ mod tests {
                 .store
                 .session(&id)
                 .await
-                .is_err()
+                .is_ok()
         );
         setup
             .session

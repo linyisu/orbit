@@ -1522,27 +1522,27 @@ fn settings_resources_round_trip_preserves_memory_category_and_workspace_scope()
         };
         assert_eq!(saved, content);
         assert!(editable);
-        assert!(
+        assert!(matches!(
             resources(
                 &backend,
                 &directory.path().join("previous"),
                 Action::SaveSkill {
-                    name: "stale".into(),
+                    name: "global-other".into(),
                     original: None,
                     content: content.into(),
-                }
+                },
             )
             .await
-            .unwrap_err()
-            .contains("工作区已切换")
-        );
+            .unwrap(),
+            Snapshot::Skills(skills) if skills.len() == 2
+        ));
         let Snapshot::Skills(skills) = resources(&backend, directory.path(), Action::Skills)
             .await
             .unwrap()
         else {
             panic!("skills expected")
         };
-        assert_eq!(skills.len(), 1);
+        assert_eq!(skills.len(), 2);
         for category in MemoryCategory::ALL {
             let Snapshot::Memories(memories) = resources(
                 &backend,

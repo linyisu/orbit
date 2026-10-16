@@ -1,5 +1,6 @@
-//! Project plugin catalogue and source management share one retained request owner.
+//! Global plugin catalogue and source management share one retained request owner.
 use super::super::*;
+use anyhow::Context as _;
 use gpui_kit::component::{
     InteractiveElementExt, StyledExt, VirtualListScrollHandle,
     input::{Input, InputState},
@@ -8,11 +9,13 @@ use gpui_kit::component::{
     tooltip::Tooltip,
     v_virtual_list,
 };
-use orbit_protocol::{plugins as protocol, project::ProjectPlugin};
+use orbit_protocol::{plugins as protocol, plugins::Selection};
 use std::rc::Rc;
 
 pub(super) struct Plugins {
     owner: WeakEntity<Workspace>,
+    library: orbit_client::library::Library,
+    runtime: Arc<tokio::runtime::Runtime>,
     session: Option<String>,
     workspace: String,
     catalog: Option<protocol::Catalog>,
@@ -20,9 +23,11 @@ pub(super) struct Plugins {
     busy: bool,
     error: Option<String>,
     task: Task<()>,
+    application_task: Task<()>,
+    application_error: Option<String>,
     scroll: VirtualListScrollHandle,
-    enabled_expanded: bool,
-    enabled_scroll: ScrollHandle,
+    applied_expanded: bool,
+    applied_scroll: ScrollHandle,
     _query: Subscription,
 }
 
@@ -41,9 +46,12 @@ impl Plugins {
         owner: WeakEntity<Workspace>,
         session: Option<String>,
         workspace: String,
+        library: super::GlobalLibrary,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        let runtime = library.runtime;
+        let library = library.service;
         let query = cx.new(|cx| InputState::new(window, cx).placeholder("搜索插件"));
         let subscription = cx.subscribe(&query, |view, _, event, cx| {
             if matches!(event, InputEvent::Change) {
@@ -60,6 +68,8 @@ impl Plugins {
         });
         Self {
             owner,
+            library,
+            runtime,
             session,
             workspace,
             catalog: None,
@@ -67,11 +77,32 @@ impl Plugins {
             busy: false,
             error: None,
             task: Task::ready(()),
+            application_task: Task::ready(()),
+            application_error: None,
             scroll: VirtualListScrollHandle::new(),
-            enabled_expanded: false,
-            enabled_scroll: ScrollHandle::new(),
+            applied_expanded: false,
+            applied_scroll: ScrollHandle::new(),
             _query: subscription,
         }
+    }
+
+    pub(super) fn bind_context(
+        &mut self,
+        session: Option<String>,
+        workspace: String,
+        cx: &mut Context<Self>,
+    ) {
+        self.session = session;
+        self.workspace = workspace;
+        if let Some(catalog) = &mut self.catalog {
+            catalog.session_id.clear();
+            catalog.applied.clear();
+        }
+        let owner = cx.weak_entity();
+        cx.defer(move |cx| {
+            let _ = owner.update(cx, |view, cx| view.refresh_applied(cx));
+        });
+        cx.notify();
     }
 
     fn request(
@@ -83,40 +114,52 @@ impl Plugins {
         if self.busy {
             return;
         }
-        let Some(session) = self.session.clone() else {
-            self.error = Some("请先打开工作区，再添加或启用插件。".into());
-            cx.notify();
-            return;
-        };
         let (result, receiver) = tokio::sync::oneshot::channel();
+        let session = self.session.clone();
         let workspace = self.workspace.clone();
-        let sent = self.owner.update(cx, |view, _| {
-            if !view
-                .info
-                .as_ref()
-                .is_some_and(|info| info.id == session && info.workspace == workspace)
+        let applying = matches!(
+            &action,
+            protocol::Action::Enable { .. } | protocol::Action::Disable { .. }
+        );
+        if !applying {
+            let library = self.library.clone();
+            self.runtime.spawn(async move {
+                let response = library
+                    .plugins(action)
+                    .await
+                    .map_err(|error| format!("{error:#}"));
+                let _ = result.send(response);
+            });
+        } else {
+            let sent = self.owner.update(cx, |view, _| {
+                anyhow::ensure!(view.connected, "请先连接会话，再应用插件。");
+                let session = session.context("请先打开会话，再应用插件")?;
+                anyhow::ensure!(
+                    view.info
+                        .as_ref()
+                        .is_some_and(|info| info.id == session && info.workspace == workspace),
+                    "目标会话已改变，请重试"
+                );
+                view.backend
+                    .as_ref()
+                    .context("请先连接会话")?
+                    .send(Command::Settings {
+                        request: Request::Plugins {
+                            session,
+                            expected_workspace: Some(workspace),
+                            action,
+                        },
+                        result,
+                    })
+            });
+            if let Err(error) = sent
+                .map_err(|e| e.to_string())
+                .and_then(|value| value.map_err(|e| e.to_string()))
             {
-                anyhow::bail!("工作区已切换，请重新打开当前工作区的插件市场。");
+                self.error = Some(error);
+                cx.notify();
+                return;
             }
-            view.backend
-                .as_ref()
-                .ok_or_else(|| anyhow::anyhow!("请先连接工作区"))?
-                .send(Command::Settings {
-                    request: Request::Plugins {
-                        session,
-                        expected_workspace: Some(workspace),
-                        action,
-                    },
-                    result,
-                })
-        });
-        if let Err(error) = sent
-            .map_err(|e| e.to_string())
-            .and_then(|v| v.map_err(|e| e.to_string()))
-        {
-            self.error = Some(error);
-            cx.notify();
-            return;
         }
         self.busy = true;
         self.error = None;
@@ -130,6 +173,7 @@ impl Plugins {
                 match result {
                     Ok(Response::Plugins(catalog)) => {
                         view.catalog = Some(catalog);
+                        view.refresh_applied(cx);
                         if let Some(dialog) = completion.and_then(|dialog| dialog.upgrade()) {
                             dialog.update(cx, |source, cx| {
                                 source.added = true;
@@ -146,6 +190,64 @@ impl Plugins {
             });
         });
         cx.notify();
+    }
+
+    fn refresh_applied(&mut self, cx: &mut Context<Self>) {
+        self.application_error = None;
+        let Some(session) = self.session.clone() else {
+            return;
+        };
+        let workspace = self.workspace.clone();
+        let (result, receiver) = tokio::sync::oneshot::channel();
+        let sent = self.owner.update(cx, |view, _| {
+            anyhow::ensure!(view.connected, "会话尚未连接");
+            view.backend
+                .as_ref()
+                .context("会话尚未连接")?
+                .send(Command::Settings {
+                    request: Request::Resources {
+                        session: session.clone(),
+                        expected_workspace: Some(workspace.clone()),
+                        action: orbit_protocol::resources::Action::AppliedExtensions,
+                    },
+                    result,
+                })
+        });
+        if !matches!(sent, Ok(Ok(()))) {
+            return;
+        }
+        self.application_task = cx.spawn(async move |owner, cx| {
+            let response = receiver.await;
+            let _ = owner.update(cx, |view, cx| {
+                if view.session.as_ref() != Some(&session) || view.workspace != workspace {
+                    return;
+                }
+                match response {
+                    Ok(Ok(Response::Resources(
+                        orbit_protocol::resources::Snapshot::Extensions(extensions),
+                    ))) => {
+                        if let Some(catalog) = &mut view.catalog {
+                            catalog.session_id = session;
+                            catalog.applied = extensions
+                                .into_iter()
+                                .filter_map(|extension| {
+                                    if let orbit_protocol::library::ExtensionKind::Plugin(plugin) =
+                                        extension.kind
+                                    {
+                                        Some(plugin)
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .collect();
+                        }
+                    }
+                    Ok(Err(error)) => view.application_error = Some(error),
+                    _ => view.application_error = Some("会话应用状态未能刷新，请重试。".into()),
+                }
+                cx.notify();
+            });
+        });
     }
 
     /// Let the dialog own scrolling for the entire source-management form.
@@ -273,7 +375,7 @@ impl Plugins {
         let market = &catalog.marketplaces[market_ix];
         let plugin = &market.plugins[plugin_ix];
         let enabled = catalog
-            .enabled
+            .applied
             .iter()
             .any(|p| p.plugin_name == plugin.name && p.marketplace_source == market.source);
         let inspection = catalog
@@ -282,8 +384,7 @@ impl Plugins {
             .find(|p| p.name == plugin.name && p.source == market.source);
         let package = inspection.and_then(|p| p.package.as_ref().ok());
         let unavailable = package.is_none() || plugin.source.is_none();
-        let pinned = ProjectPlugin {
-            project_id: catalog.project_id.clone(),
+        let pinned = Selection {
             marketplace_source: market.source.clone(),
             plugin_name: plugin.name.clone(),
             package_source: plugin
@@ -292,7 +393,6 @@ impl Plugins {
                 .unwrap_or_default(),
             version: package.and_then(|p| p.version.clone()),
             marketplace_revision: market.revision.clone(),
-            enabled_at: 0,
         };
         let name = plugin.name.clone();
         let source = market.source.clone();
@@ -346,8 +446,20 @@ impl Plugins {
             .child(
                 Button::new(SharedString::from(format!("plugin-toggle:{id}")))
                     .small()
-                    .label(if enabled { "停用" } else { "启用" })
-                    .disabled(self.busy || (!enabled && unavailable))
+                    .label(if enabled {
+                        "从会话移除"
+                    } else {
+                        "应用到当前会话"
+                    })
+                    .disabled(
+                        self.busy
+                            || (!enabled && unavailable)
+                            || self.session.is_none()
+                            || !self
+                                .owner
+                                .upgrade()
+                                .is_some_and(|owner| owner.read(cx).connected),
+                    )
                     .on_click(cx.listener(move |view, _, _, cx| {
                         view.request(
                             if enabled {
@@ -470,9 +582,7 @@ impl Plugins {
                                 div()
                                     .text_sm()
                                     .text_color(cx.theme().muted_foreground)
-                                    .child(
-                                        "扩展 Agent 的技能、命令与工具，为当前项目启用所需插件。",
-                                    ),
+                                    .child("在本机统一管理插件来源，将所需插件应用到当前会话。"),
                             ),
                     )
                     .child(
@@ -535,14 +645,19 @@ impl Plugins {
                         ),
                 )
             })
-            .when_some(self.error.clone(), |v, error| {
-                v.child(
-                    div()
-                        .text_sm()
-                        .text_color(cx.theme().danger)
-                        .child(error),
-                )
-            });
+            .when_some(
+                self.error
+                    .clone()
+                    .or_else(|| self.application_error.clone()),
+                |v, error| {
+                    v.child(
+                        div()
+                            .text_sm()
+                            .text_color(cx.theme().danger)
+                            .child(error),
+                    )
+                },
+            );
         let Some(catalog) = &self.catalog else {
             // Container-query roots are painted at the viewport origin; an
             // actual parent must distribute the content column's auto margins.
@@ -556,13 +671,13 @@ impl Plugins {
                             .child(if self.busy {
                                 "正在加载插件…"
                             } else {
-                                "尚未加载插件。连接工作区后重试。"
+                                "尚未加载全局插件库，请刷新重试。"
                             }),
                     ),
                 )
                 .into_any_element();
         };
-        if !catalog.enabled.is_empty() {
+        if !catalog.applied.is_empty() {
             content = content.child(
                 v_flex()
                     .gap_3()
@@ -571,19 +686,19 @@ impl Plugins {
                             Button::new("toggle-enabled-plugins")
                                 .ghost()
                                 .small()
-                                .icon(if self.enabled_expanded {
+                                .icon(if self.applied_expanded {
                                     IconName::ChevronDown
                                 } else {
                                     IconName::ChevronRight
                                 })
-                                .label(format!("当前项目已启用 · {}", catalog.enabled.len()))
+                                .label(format!("当前会话已应用 · {}", catalog.applied.len()))
                                 .on_click(cx.listener(|view, _, _, cx| {
-                                    view.enabled_expanded = !view.enabled_expanded;
+                                    view.applied_expanded = !view.applied_expanded;
                                     cx.notify();
                                 })),
                         ),
                     )
-                    .when(self.enabled_expanded, |view| {
+                    .when(self.applied_expanded, |view| {
                         view.child(
                             div()
                                 .relative()
@@ -594,9 +709,9 @@ impl Plugins {
                                         .max_h(rems(6.))
                                         .overflow_y_scroll()
                                         .lock_scroll_axis()
-                                        .track_scroll(&self.enabled_scroll)
+                                        .track_scroll(&self.applied_scroll)
                                         .child(h_flex().flex_wrap().gap_2().children(
-                                            catalog.enabled.iter().map(|plugin| {
+                                            catalog.applied.iter().map(|plugin| {
                                                 let name = plugin.plugin_name.clone();
                                                 let source = plugin.marketplace_source.clone();
                                                 Button::new(SharedString::from(format!(
@@ -622,7 +737,7 @@ impl Plugins {
                                             }),
                                         )),
                                 )
-                                .vertical_scrollbar(&self.enabled_scroll),
+                                .vertical_scrollbar(&self.applied_scroll),
                         )
                     }),
             );
@@ -633,7 +748,7 @@ impl Plugins {
             .value()
             .trim()
             .to_lowercase();
-        let columns = if width / window.rem_size() >= 40. {
+        let columns = if width / window.rem_size() >= 60. {
             2
         } else {
             1
@@ -1008,7 +1123,7 @@ impl Render for Sources {
                     div()
                         .text_xs()
                         .text_color(cx.theme().muted_foreground)
-                        .child("市场中的插件仍在项目中启用时，请先停用，再刷新或移除市场。"),
+                        .child("刷新或移除市场不会改变已有会话的扩展快照。"),
                 );
         }
         body.into_any_element()

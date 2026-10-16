@@ -98,10 +98,12 @@ async fn settings_workspace_guard_is_checked_by_the_resource_actor() {
             .contains("工作区已切换")
     );
 
-    let save = || resources::Action::SaveSkill {
-        name: "scope-check".into(),
-        original: None,
-        content: "---\ndescription: Check settings scope\n---\nReview the project.\n".into(),
+    let save = || resources::Action::ApplyExtension {
+        bundle: crate::workspace::library::test_bundle(
+            "scope-check",
+            "---\ndescription: Scope fixture\n---\nCheck generated boundaries.",
+        )
+        .into(),
     };
     let error = fixture
         .request(Request::Resources {
@@ -137,9 +139,17 @@ async fn settings_workspace_guard_is_checked_by_the_resource_actor() {
         .await
         .unwrap();
     assert!(
-        Path::new(&current)
+        !Path::new(&current)
             .join(relative)
-            .is_file()
+            .exists()
+    );
+    assert!(
+        fixture
+            .handle
+            .current_info()
+            .await
+            .persisted,
+        "applying an extension must publish the newly persisted session profile"
     );
     let Response::Resources(resources::Snapshot::Skills(skills)) = fixture
         .request(Request::Resources {
@@ -160,7 +170,7 @@ async fn settings_workspace_guard_is_checked_by_the_resource_actor() {
 }
 
 #[tokio::test]
-async fn settings_workspace_guard_rejects_stale_plugin_mutations() {
+async fn legacy_project_plugin_mutations_require_a_new_client() {
     let fixture = Fixture::new("https://example.com/v1").await;
     let previous = fixture.handle.info.workspace.clone();
     fixture
@@ -186,9 +196,5 @@ async fn settings_workspace_guard_rejects_stale_plugin_mutations() {
         })
         .await
         .unwrap_err();
-    assert!(
-        error
-            .to_string()
-            .contains("工作区已切换")
-    );
+    assert!(error.to_string().contains("全局库"));
 }

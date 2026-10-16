@@ -1,4 +1,4 @@
-//! Settings operations execute on the owning session, including remote workspaces.
+//! Session memory, MCP state and explicitly applied extension snapshots.
 mod import;
 mod mcp;
 pub(super) use import::Import;
@@ -10,7 +10,6 @@ use orbit_protocol::{
     Capability, SessionAction,
     resources::{Action, McpServer, McpTool, Skill, Snapshot},
 };
-use std::{fs, io::Write, path::Path};
 
 pub(super) async fn execute(
     setup: &mut PreparedWorkspace,
@@ -53,121 +52,82 @@ pub(super) async fn execute(
             .disabled(Capability::Skills),
         "技能功能已禁用"
     );
-    if matches!(
-        action,
-        Action::SaveSkill { .. } | Action::ImportSkills { .. }
-    ) {
-        ensure!(!setup.resources.policy.read_only, "只读会话不能修改技能");
-        ensure!(
-            !setup
-                .resources
-                .policy
-                .disabled(Capability::Write),
-            "文件写入已禁用"
-        );
-    }
-    super::actions::execute(setup, SessionAction::RefreshSkills, busy).await?;
     match action {
-        Action::ScanSkills { source } => {
-            ensure!(!busy, "请等待当前任务结束后获取技能来源");
-            setup.resources.skill_import = None;
-            let scan = super::skill_import::Scan::acquire(
-                setup.session.id().to_owned(),
-                Path::new(&setup.session.snapshot.session.workspace).to_path_buf(),
-                source,
-                setup.resources.options.home.clone(),
-                skill_names(setup),
-            )
-            .await?;
-            let snapshot = scan.snapshot();
-            setup.resources.skill_import = Some(scan);
-            Ok(snapshot)
+        Action::AppliedExtensions => super::library::applied(setup).await,
+        Action::ApplyExtension { bundle } => {
+            ensure!(!busy, "请等待当前任务结束后应用扩展");
+            super::library::package::validate(&bundle)?;
+            let mut bundles = setup
+                .session
+                .store
+                .session_extensions(setup.session.id())
+                .await?;
+            bundles.retain(|current| current.extension.key != bundle.extension.key);
+            bundles.push((*bundle).clone());
+            let skills = super::library::package::materialize(&bundles)?;
+            setup.start_session().await?;
+            setup
+                .session
+                .store
+                .apply_extension(setup.session.id(), &bundle)
+                .await?;
+            install_skills(setup, skills);
+            Ok(Snapshot::Extensions(
+                bundles
+                    .into_iter()
+                    .map(|bundle| bundle.extension)
+                    .collect(),
+            ))
         }
-        Action::ImportSkills { token, paths } => {
-            ensure!(!busy, "请等待当前任务结束后添加技能");
-            let scan = setup
-                .resources
-                .skill_import
-                .take()
-                .context("技能来源已过期，请重新扫描")?;
-            scan.install(
-                &token,
-                setup.session.id(),
-                Path::new(&setup.session.snapshot.session.workspace),
-                &paths,
-                &skill_names(setup),
-            )?;
-            super::actions::execute(setup, SessionAction::RefreshSkills, busy).await?;
-            Ok(skills(setup))
+        Action::RemoveExtension { key } => {
+            ensure!(!busy, "请等待当前任务结束后移除会话扩展");
+            let mut bundles = setup
+                .session
+                .store
+                .session_extensions(setup.session.id())
+                .await?;
+            bundles.retain(|bundle| bundle.extension.key != key);
+            let skills = super::library::package::materialize(&bundles)?;
+            setup
+                .session
+                .store
+                .remove_extension(setup.session.id(), &key)
+                .await?;
+            install_skills(setup, skills);
+            Ok(Snapshot::Extensions(
+                bundles
+                    .into_iter()
+                    .map(|bundle| bundle.extension)
+                    .collect(),
+            ))
         }
+        Action::Skills => Ok(skills(setup)),
         Action::ReadSkill { name } => {
             let skill = setup
                 .resources
                 .budget
                 .skills
                 .get(&name)
-                .context("技能不存在，请刷新列表")?;
+                .context("会话中未应用此技能")?;
             Ok(Snapshot::Skill {
                 name,
                 content: crate::skills::read_skill(&skill.path).map_err(anyhow::Error::msg)?,
-                editable: editable(skill.source),
+                editable: false,
             })
         }
-        Action::SaveSkill {
-            name,
-            original,
-            content,
-        } => {
-            ensure!(!busy, "请等待当前任务结束后保存技能");
-            let cwd = Path::new(&setup.session.snapshot.session.workspace);
-            let path = if original.is_some() {
-                let skill = setup
-                    .resources
-                    .budget
-                    .skills
-                    .get(&name)
-                    .context("技能不存在，请刷新列表")?;
-                ensure!(editable(skill.source), "导入的技能为只读，请新建项目技能");
-                skill.path.clone()
-            } else {
-                ensure!(
-                    setup
-                        .resources
-                        .budget
-                        .skills
-                        .get(&name)
-                        .is_none(),
-                    "技能名称已存在"
-                );
-                let root =
-                    crate::instructions::project_root(cwd).unwrap_or_else(|| cwd.to_path_buf());
-                root.join(".orbit/skills")
-                    .join(&name)
-                    .join("SKILL.md")
-            };
-            // Disk IO is bounded (1 MiB), off the GUI thread and serialized by the session actor.
-            save_skill(&path, &name, original.as_deref(), &content)?;
-            super::actions::execute(setup, SessionAction::RefreshSkills, busy).await?;
-            Ok(skills(setup))
-        }
-        Action::Skills => Ok(skills(setup)),
-        _ => unreachable!(),
+        _ => anyhow::bail!("技能管理已迁移至全局库，请更新客户端后重试"),
     }
 }
 
-fn skill_names(setup: &PreparedWorkspace) -> std::collections::HashSet<String> {
-    setup
-        .resources
-        .budget
-        .skills
-        .completions()
-        .into_iter()
-        .map(|(name, _)| name)
-        .collect()
-}
-
-fn editable(source: SkillSource) -> bool {
-    matches!(source, SkillSource::OrbitUser | SkillSource::OrbitProject)
+/// Replace the next-turn catalogue without broadening the session tool policy.
+fn install_skills(setup: &mut PreparedWorkspace, skills: crate::skills::Skills) {
+    skills.register_tool(&mut setup.resources.tools);
+    super::setup::filter_configured_tools(
+        &mut setup.resources.tools,
+        &setup.resources.policy,
+        &setup.resources.disabled_tools,
+    );
+    setup.resources.budget.skills = skills;
 }
 
 fn skills(setup: &PreparedWorkspace) -> Snapshot {
@@ -194,62 +154,22 @@ fn skills(setup: &PreparedWorkspace) -> Snapshot {
                         SkillSource::ClaudeUser => "个人 Claude 技能",
                         SkillSource::ClaudeProject => "项目 Claude 技能",
                         SkillSource::MarketplacePlugin => "插件技能",
+                        SkillSource::AppliedSession => "当前会话已应用",
                     }
                     .into(),
-                    editable: editable(skill.source),
+                    editable: false,
                 })
             })
             .collect(),
     )
 }
 
-fn save_skill(path: &Path, name: &str, original: Option<&str>, content: &str) -> Result<()> {
-    ensure!(
-        !name.is_empty()
-            && name.len() <= 64
-            && name
-                .bytes()
-                .all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_'),
-        "名称只能包含字母、数字、横线和下划线（最多 64 字符）"
-    );
-    ensure!(
-        !content.trim().is_empty() && content.len() <= crate::skills::MAX_SKILL_BYTES as usize,
-        "技能内容不能为空，且不能超过 1 MiB"
-    );
-    for part in path.ancestors() {
-        match fs::symlink_metadata(part) {
-            Ok(meta) => ensure!(!meta.file_type().is_symlink(), "不能编辑符号链接中的技能"),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error.into()),
-        }
-    }
-    let parent = path.parent().context("技能目录无效")?;
-    fs::create_dir_all(parent)?;
-    let mut file = tempfile::NamedTempFile::new_in(parent)?;
-    if let Ok(meta) = fs::metadata(path) {
-        file.as_file()
-            .set_permissions(meta.permissions())?;
-    }
-    file.write_all(content.as_bytes())?;
-    file.as_file().sync_all()?;
-    if let Some(original) = original {
-        ensure!(
-            crate::skills::read_skill(path).map_err(anyhow::Error::msg)? == original,
-            "技能已被其他程序修改，请重新打开后编辑"
-        );
-        file.persist(path)?;
-    } else {
-        file.persist_noclobber(path)
-            .context("技能已存在，请换一个名称")?;
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
     #[tokio::test]
-    async fn settings_round_trip_uses_the_target_workspace_and_session() {
+    async fn memory_and_mcp_operations_remain_session_scoped() {
         use orbit_config::test_support::{TestConfig, TestProvider};
         use orbit_protocol::project::{MemoryAction, MemoryCategory};
         let directory = tempfile::tempdir().unwrap();
@@ -311,100 +231,6 @@ mod tests {
                 .is_err()
         );
         setup.resources.policy.disabled.clear();
-        let save = || Action::SaveSkill {
-            name: "review".into(),
-            original: None,
-            content: "---\ndescription: Review code\n---\nRead the diff carefully.\n".into(),
-        };
-        assert!(
-            execute(&mut setup, save(), true)
-                .await
-                .is_err()
-        );
-        let Snapshot::Skills(skills) = execute(&mut setup, save(), false)
-            .await
-            .unwrap()
-        else {
-            panic!("skills expected")
-        };
-        assert_eq!(skills.len(), 1);
-        assert_eq!(skills[0].name, "review");
-        assert!(
-            root.join(".orbit/skills/review/SKILL.md")
-                .is_file()
-        );
-        let Snapshot::Skill {
-            content, editable, ..
-        } = execute(
-            &mut setup,
-            Action::ReadSkill {
-                name: "review".into(),
-            },
-            false,
-        )
-        .await
-        .unwrap()
-        else {
-            panic!("skill expected")
-        };
-        assert!(editable);
-        assert!(content.contains("Read the diff"));
-        let source = root.join("incoming/verification");
-        fs::create_dir_all(source.join("references")).unwrap();
-        fs::write(
-            source.join("SKILL.md"),
-            "---\nname: verification\ndescription: Verify changes\n---\nRun focused checks.",
-        )
-        .unwrap();
-        fs::write(source.join("references/checks.md"), "Check behavior.").unwrap();
-        let scan = || Action::ScanSkills {
-            source: source.display().to_string(),
-        };
-        assert!(
-            execute(&mut setup, scan(), true)
-                .await
-                .is_err()
-        );
-        let Snapshot::SkillSource { token, skills, .. } = execute(&mut setup, scan(), false)
-            .await
-            .unwrap()
-        else {
-            panic!("skill source expected")
-        };
-        assert_eq!(skills.len(), 1);
-        assert!(!skills[0].conflict);
-        let install = || Action::ImportSkills {
-            token: token.clone(),
-            paths: vec![".".into()],
-        };
-        assert!(
-            execute(&mut setup, install(), true)
-                .await
-                .is_err()
-        );
-        setup.resources.policy.read_only = true;
-        assert!(
-            execute(&mut setup, install(), false)
-                .await
-                .is_err()
-        );
-        setup.resources.policy.read_only = false;
-        let Snapshot::Skills(skills) = execute(&mut setup, install(), false)
-            .await
-            .unwrap()
-        else {
-            panic!("installed skills expected")
-        };
-        assert_eq!(skills.len(), 2);
-        assert!(
-            root.join(".orbit/skills/verification/references/checks.md")
-                .is_file()
-        );
-        assert!(
-            execute(&mut setup, install(), false)
-                .await
-                .is_err()
-        );
         setup
             .session
             .begin("settings test".into(), "test::mock".into())
@@ -438,18 +264,5 @@ mod tests {
             panic!("memories expected")
         };
         assert!(memories.is_empty());
-    }
-
-    #[test]
-    fn skill_edits_preserve_conflicts_and_reject_traversal() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("demo/SKILL.md");
-        assert!(save_skill(&path, "../bad", None, "hello").is_err());
-        save_skill(&path, "demo", None, "first").unwrap();
-        assert!(save_skill(&path, "demo", None, "replace").is_err());
-        assert!(save_skill(&path, "demo", Some("stale"), "replace").is_err());
-        assert_eq!(fs::read_to_string(&path).unwrap(), "first");
-        save_skill(&path, "demo", Some("first"), "second").unwrap();
-        assert_eq!(fs::read_to_string(&path).unwrap(), "second");
     }
 }

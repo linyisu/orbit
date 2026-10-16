@@ -38,6 +38,7 @@ mod m00000000000028_remove_demo;
 mod m00000000000029_task_collaboration;
 mod m00000000000030_attachments;
 mod m00000000000031_queued_images;
+mod m00000000000032_session_extensions;
 const LEGACY_VERSION: i64 = 27;
 /// SQLite expression defaults need parentheses; a single-item tuple supplies them.
 fn timestamp_default() -> SimpleExpr {
@@ -79,6 +80,7 @@ impl MigratorTrait for Migrator {
             Box::new(m00000000000029_task_collaboration::Migration),
             Box::new(m00000000000030_attachments::Migration),
             Box::new(m00000000000031_queued_images::Migration),
+            Box::new(m00000000000032_session_extensions::Migration),
         ]
     }
 }

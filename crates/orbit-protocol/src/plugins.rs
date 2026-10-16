@@ -37,6 +37,16 @@ pub struct PluginPackage {
     pub declares_mcp: bool,
 }
 
+/// Pinned global package identity; its application belongs to a session.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Selection {
+    pub marketplace_source: String,
+    pub plugin_name: String,
+    pub package_source: String,
+    pub version: Option<String>,
+    pub marketplace_revision: Option<String>,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum Action {
@@ -47,12 +57,12 @@ pub enum Action {
     Refresh {
         source: String,
     },
-    /// Unregister an unused source, preserving its directory and cached files.
+    /// Unregister a global source, preserving caches and applied session snapshots.
     Remove {
         source: String,
     },
     Enable {
-        plugin: super::project::ProjectPlugin,
+        plugin: Selection,
     },
     Disable {
         marketplace_source: String,
@@ -70,7 +80,7 @@ pub struct Inspection {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Catalog {
     pub marketplaces: Vec<Marketplace>,
-    pub project_id: String,
-    pub enabled: Vec<super::project::ProjectPlugin>,
+    pub session_id: String,
+    pub applied: Vec<Selection>,
     pub inspections: Vec<Inspection>,
 }

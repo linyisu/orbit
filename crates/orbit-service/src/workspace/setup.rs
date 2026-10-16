@@ -7,7 +7,7 @@ use orbit_model::client::ModelClient;
 
 use crate::{
     config::FileConfig, history, instructions, models::ModelOption, project_state, runtime,
-    session, skills, subagents, verification,
+    session, subagents, verification,
 };
 
 #[derive(Clone)]
@@ -53,7 +53,6 @@ impl PreparedWorkspace {
 }
 
 pub struct WorkspaceResources {
-    pub(super) skill_import: Option<super::skill_import::Scan>,
     pub(super) mcp_import: Option<super::mcp_import::Scan>,
     pub(super) mcp_startup: Option<super::resources::Startup>,
     pub(super) model_refresh:
@@ -267,26 +266,7 @@ async fn prepare_resolved_resources(
     let context_tokens = selected_model.context_tokens;
     let input_context_tokens = selected_model.input_context_tokens;
     let client = ModelClient::new(selected_model.config)?;
-    let enabled_plugins = match session
-        .store
-        .project_at(directory)
-        .await?
-    {
-        Some(project) => {
-            session
-                .store
-                .project_plugins(&project.id)
-                .await?
-        }
-        None => Vec::new(),
-    };
-    let plugin_skill_roots = crate::marketplaces::enabled_skill_roots(&enabled_plugins);
-    let mut skills = skills::Skills::discover_with_plugin_roots(
-        directory,
-        options.home.clone(),
-        options.config_home.clone(),
-        plugin_skill_roots.roots,
-    );
+    let mut skills = super::library::session_skills(session).await?;
     if policy.disabled(Capability::Skills) {
         skills = Default::default();
     }
@@ -410,7 +390,6 @@ async fn prepare_resolved_resources(
     };
     Ok(WorkspaceResources {
         subagents,
-        skill_import: None,
         mcp_import: None,
         mcp_startup,
         model_refresh,
@@ -453,7 +432,7 @@ async fn prepare_resolved_resources(
             instructions,
             model_options,
             skills,
-            plugin_skill_diagnostics: plugin_skill_roots.diagnostics,
+            plugin_skill_diagnostics: Vec::new(),
             mcp_statuses,
             memory_scope,
         },
@@ -553,14 +532,21 @@ mod tests {
         let mut setup = prepare_service(&options, None)
             .await
             .unwrap();
-        assert!(
-            setup
-                .resources
-                .budget
-                .skills
-                .get("example")
-                .is_some()
-        );
+        assert!(setup.resources.budget.skills.is_empty());
+        super::super::resources::execute(
+            &mut setup,
+            orbit_protocol::resources::Action::ApplyExtension {
+                bundle: super::super::library::test_bundle(
+                    "example",
+                    "---\ndescription: Tool ceiling fixture\n---\nKeep the tool policy.",
+                )
+                .into(),
+            },
+            false,
+        )
+        .await
+        .unwrap();
+
         for name in ["code_symbols", "load_skill"] {
             assert!(!setup.resources.tools.contains(name));
             assert!(matches!(
@@ -648,7 +634,7 @@ mod tests {
                 .contains("code_symbols")
         );
         drop(setup);
-        let fresh = prepare_service(&options, None)
+        let mut fresh = prepare_service(&options, None)
             .await
             .unwrap();
         assert!(
@@ -657,6 +643,19 @@ mod tests {
                 .tools
                 .contains("code_symbols")
         );
+        assert!(fresh.resources.budget.skills.is_empty());
+        super::super::resources::execute(
+            &mut fresh,
+            orbit_protocol::resources::Action::ApplyExtension {
+                bundle: Box::new(super::super::library::test_bundle(
+                    "example",
+                    "---\ndescription: New selection\n---\nCheck the configured ceiling.",
+                )),
+            },
+            false,
+        )
+        .await
+        .unwrap();
         assert!(
             fresh
                 .resources

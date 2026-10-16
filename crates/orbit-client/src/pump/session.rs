@@ -291,7 +291,7 @@ pub async fn observe(
                             .await?;
                     }
                     Command::Settings { request, result } => {
-                        if super::independent(&request) {
+                        if super::independent(&request) || crate::library::routed(&request) {
                             // Long settings requests use a separate connection so
                             // chat keeps polling events and accepting decisions.
                             let connection = connection.clone();
@@ -337,6 +337,22 @@ pub async fn observe(
                         let _ = result.send(response);
                     }
                     Command::Request(request) => {
+                        if crate::library::routed(&request) {
+                            let connection = connection.clone();
+                            let events = events.clone();
+                            review_tasks.spawn(async move {
+                                let response = async {
+                                    let mut client = connection.connect().await?;
+                                    Ok::<_, anyhow::Error>(client.request(request).await?)
+                                }.await;
+                                let event = match response {
+                                    Ok(response) => Event::Response(response),
+                                    Err(error) => Event::Error(format!("{error:#}")),
+                                };
+                                let _ = events.send(event).await;
+                            });
+                            continue;
+                        }
                         if matches!(request, Request::CloseQuestions { .. }) {
                             questions_revision = None;
                         }

@@ -1,5 +1,5 @@
 use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers, MouseEventKind};
-use orbit_protocol::{Session, project::ProjectPlugin};
+use orbit_protocol::{Session, plugins::Selection};
 use ratatui::{
     Frame,
     layout::Rect,
@@ -96,8 +96,8 @@ pub struct MarketplaceDialog {
     inspection: Option<Result<PluginPackage, String>>,
     selected_market: usize,
     selected_plugin: usize,
-    project_id: String,
-    enabled: std::collections::BTreeMap<(String, String), ProjectPlugin>,
+    session_id: String,
+    enabled: std::collections::BTreeMap<(String, String), Selection>,
     query: String,
     searching: bool,
     enabled_only: bool,
@@ -107,10 +107,10 @@ pub struct MarketplaceDialog {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum ProjectPluginChange {
-    Enable(ProjectPlugin),
+pub(crate) enum SessionPluginChange {
+    Enable(Selection),
     Disable {
-        project_id: String,
+        session_id: String,
         marketplace_source: String,
         plugin_name: String,
     },
@@ -118,15 +118,15 @@ pub(crate) enum ProjectPluginChange {
 
 impl MarketplaceDialog {
     pub fn from_catalog(catalog: orbit_protocol::plugins::Catalog) -> Self {
-        let mut dialog = Self::new(catalog.marketplaces, catalog.project_id, catalog.enabled);
+        let mut dialog = Self::new(catalog.marketplaces, catalog.session_id, catalog.applied);
         dialog.inspections = Some(catalog.inspections);
         dialog
     }
 
     pub fn new(
         marketplaces: Vec<Marketplace>,
-        project_id: String,
-        enabled: Vec<ProjectPlugin>,
+        session_id: String,
+        enabled: Vec<Selection>,
     ) -> Self {
         Self {
             request_identity: crate::workspace::request_id(),
@@ -140,7 +140,7 @@ impl MarketplaceDialog {
             inspection: None,
             selected_market: 0,
             selected_plugin: 0,
-            project_id,
+            session_id,
             enabled: enabled
                 .into_iter()
                 .map(|plugin| {
@@ -162,10 +162,10 @@ impl MarketplaceDialog {
         }
     }
 
-    /// A catalog is authoritative only for the project that opened this dialog.
+    /// A catalog is authoritative only for the session that opened this dialog.
     /// Preserve navigation by full source identity across refresh/reordering.
     pub fn update_catalog(&mut self, catalog: orbit_protocol::plugins::Catalog) -> bool {
-        if catalog.project_id != self.project_id {
+        if catalog.session_id != self.session_id {
             return false;
         }
         let source = self
@@ -310,7 +310,7 @@ impl MarketplaceDialog {
             })
     }
 
-    fn selected_change(&self) -> Option<ProjectPluginChange> {
+    fn selected_change(&self) -> Option<SessionPluginChange> {
         let (market, plugin) = self.selected_plugin()?;
         let package = self
             .inspection
@@ -324,8 +324,8 @@ impl MarketplaceDialog {
                 .get(&(market.source.clone(), plugin.name.clone()))
                 .is_some_and(|configured| configured.version == package.version)
         {
-            return Some(ProjectPluginChange::Disable {
-                project_id: self.project_id.clone(),
+            return Some(SessionPluginChange::Disable {
+                session_id: self.session_id.clone(),
                 marketplace_source: market.source.clone(),
                 plugin_name: plugin.name.clone(),
             });
@@ -333,14 +333,12 @@ impl MarketplaceDialog {
 
         let package_source = plugin.source.clone()?;
 
-        Some(ProjectPluginChange::Enable(ProjectPlugin {
-            project_id: self.project_id.clone(),
+        Some(SessionPluginChange::Enable(Selection {
             marketplace_source: market.source.clone(),
             plugin_name: plugin.name.clone(),
             package_source,
             version: package.version.clone(),
             marketplace_revision: market.revision.clone(),
-            enabled_at: 0,
         }))
     }
 
@@ -1290,17 +1288,17 @@ pub fn handle(state: &mut UiState, event: Event) -> Option<String> {
                 {
                     if let Some(change) = dialog.selected_change() {
                         let (operation, source, action) = match change {
-                            ProjectPluginChange::Enable(plugin) => (
-                                "正在启用插件",
+                            SessionPluginChange::Enable(plugin) => (
+                                "正在应用插件",
                                 plugin.marketplace_source.clone(),
                                 orbit_protocol::plugins::Action::Enable { plugin },
                             ),
-                            ProjectPluginChange::Disable {
+                            SessionPluginChange::Disable {
                                 marketplace_source,
                                 plugin_name,
                                 ..
                             } => (
-                                "正在停用插件",
+                                "正在移除会话插件",
                                 marketplace_source.clone(),
                                 orbit_protocol::plugins::Action::Disable {
                                     marketplace_source,
@@ -2076,8 +2074,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
             );
             frame.render_widget(
                 Paragraph::new(format!(
-                    "{}\n\n只移除市场登记，保留本地缓存与目录。\n项目正在使用的市场不能移除，请先停\
-                用其中的插件。",
+                    "{}\n\n只移除市场登记，保留本地缓存与目录。\n已有会话保留应用时的快照。",
                     clean(source)
                 ))
                 .wrap(Wrap { trim: false }),
@@ -2150,7 +2147,7 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
                                             dialog.is_enabled(market, plugin)
                                         })
                                     {
-                                        "当前项目已启用"
+                                        "当前会话已应用"
                                     } else {
                                         "包声明"
                                     }
@@ -2216,9 +2213,9 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
                                 .selected_plugin()
                                 .is_some_and(|(market, plugin)| dialog.is_enabled(market, plugin))
                             {
-                                "此包已为当前项目启用；Hook、MCP 和命令仍不会自动运行。"
+                                "此包已应用到当前会话；Hook、MCP 和命令仍不会自动运行。"
                             } else {
-                                "启用只记录当前项目的选择；Hook、MCP 和命令不会自动运行。"
+                                "应用只影响当前会话；Hook、MCP 和命令不会自动运行。"
                             },
                             Style::default().fg(crate::tui::theme::THEME.secondary),
                         ),

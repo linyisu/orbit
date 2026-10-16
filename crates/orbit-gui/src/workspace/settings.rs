@@ -46,13 +46,13 @@ const PAGES: [(&str, IconName, &str); 8] = [
     ),
 ];
 
-// Application preferences share the client configuration across every project;
-// resources below them are queried through the currently connected workspace.
-const GROUPS: [(&str, &[usize]); 3] = [
-    ("全局设置", &[0, 1, 3, 6, 7]),
-    ("工作区资源", &[2, 5]),
-    ("当前会话", &[4]),
-];
+#[derive(Clone)]
+struct GlobalLibrary {
+    service: orbit_client::library::Library,
+    runtime: Arc<tokio::runtime::Runtime>,
+}
+
+const GROUPS: [(&str, &[usize]); 2] = [("全局设置", &[0, 1, 2, 3, 5, 6, 7]), ("当前会话", &[4])];
 
 impl Workspace {
     pub(super) fn settings(
@@ -97,12 +97,24 @@ impl Workspace {
             .map(|info| info.id.clone());
         let workspace = self.location.to_string();
         let environment = self.environment();
+        let library = GlobalLibrary {
+            service: orbit_client::library::Library::for_options(
+                &self
+                    .options
+                    .connection_options()
+                    .expect("validated connection options"),
+                self.options.config.clone(),
+                self.options.auth_dir.clone(),
+            ),
+            runtime: self.runtime.clone(),
+        };
         let skills = cx.new(|cx| {
             resources::Resources::new(
                 owner.clone(),
                 session.clone(),
                 workspace.clone(),
                 resources::Kind::Skills,
+                library.clone(),
                 window,
                 cx,
             )
@@ -113,6 +125,7 @@ impl Workspace {
                 session.clone(),
                 workspace.clone(),
                 resources::Kind::Memory,
+                library.clone(),
                 window,
                 cx,
             )
@@ -122,6 +135,7 @@ impl Workspace {
                 owner.clone(),
                 session.clone(),
                 workspace.clone(),
+                library.clone(),
                 window,
                 cx,
             )
@@ -206,12 +220,11 @@ impl Workspace {
             let contexts = vec![ResourceContext {
                 session,
                 workspace,
-                skills: skills.clone(),
                 memory: memory.clone(),
-                plugins: plugins.clone(),
             }];
             SettingsPage {
                 owner,
+                library,
                 accounts,
                 appearance,
                 initial_page: usize::from(accounts_first),
@@ -239,6 +252,7 @@ impl Workspace {
 }
 
 pub(crate) struct SettingsPage {
+    library: GlobalLibrary,
     owner: WeakEntity<Workspace>,
     accounts: Entity<crate::accounts::Accounts>,
     appearance: Option<Entity<gpui_shell::ShellRoot>>,
@@ -263,9 +277,7 @@ pub(crate) struct SettingsPage {
 struct ResourceContext {
     session: Option<String>,
     workspace: String,
-    skills: Entity<resources::Resources>,
     memory: Entity<resources::Resources>,
-    plugins: Entity<plugins::Plugins>,
 }
 
 impl SettingsPage {
@@ -285,19 +297,13 @@ impl SettingsPage {
                 .shortcuts
                 .read(cx)
                 .has_pending_work(cx)
+            || self.skills.read(cx).has_pending_work()
+            || self.plugins.read(cx).has_pending_work()
             || self.contexts.iter().any(|context| {
                 context
-                    .skills
+                    .memory
                     .read(cx)
                     .has_pending_work()
-                    || context
-                        .memory
-                        .read(cx)
-                        .has_pending_work()
-                    || context
-                        .plugins
-                        .read(cx)
-                        .has_pending_work()
             })
     }
 
@@ -322,43 +328,33 @@ impl SettingsPage {
             .position(|context| context.session == session && context.workspace == workspace)
             .unwrap_or_else(|| {
                 let owner = self.owner.clone();
-                let skills = cx.new(|cx| {
-                    resources::Resources::new(
-                        owner.clone(),
-                        session.clone(),
-                        workspace.clone(),
-                        resources::Kind::Skills,
-                        window,
-                        cx,
-                    )
-                });
                 let memory = cx.new(|cx| {
                     resources::Resources::new(
                         owner.clone(),
                         session.clone(),
                         workspace.clone(),
                         resources::Kind::Memory,
+                        self.library.clone(),
                         window,
                         cx,
                     )
                 });
-                let plugins = cx.new(|cx| {
-                    plugins::Plugins::new(owner, session.clone(), workspace.clone(), window, cx)
-                });
                 self.contexts.push(ResourceContext {
-                    session,
-                    workspace,
-                    skills,
+                    session: session.clone(),
+                    workspace: workspace.clone(),
                     memory,
-                    plugins,
                 });
                 self.contexts.len() - 1
             });
         self.context = context;
         let resources = &self.contexts[context];
-        self.skills = resources.skills.clone();
         self.memory = resources.memory.clone();
-        self.plugins = resources.plugins.clone();
+        self.skills.update(cx, |skills, cx| {
+            skills.bind_context(session.clone(), workspace.clone(), cx)
+        });
+        self.plugins.update(cx, |plugins, cx| {
+            plugins.bind_context(session, workspace, cx)
+        });
         cx.notify();
     }
 
@@ -563,7 +559,10 @@ impl Render for SettingsPage {
                     "账号与模型",
                     "在本机管理账号、API 凭据与模型，供所有项目使用。",
                 ),
-                2 => ("技能", "浏览当前工作区可用的个人与项目技能。"),
+                2 => (
+                    "技能",
+                    "全局管理技能，按需应用到当前会话；其他会话保持独立。",
+                ),
                 3 => ("MCP 工具", "配置工具服务器，可应用到当前会话和新建会话。"),
                 4 => ("会话记忆", "管理当前会话保存的事实与偏好。"),
                 7 => (
@@ -618,11 +617,13 @@ impl Render for SettingsPage {
         };
         let back = self.owner.clone();
         let shortcuts = self.shortcuts.clone();
-        let scope = if matches!(self.initial_page, 2 | 4 | 5) {
+        let scope = if self.initial_page == 4 {
             format!(
                 "{} · {}",
                 self.environment, self.contexts[self.context].workspace
             )
+        } else if matches!(self.initial_page, 2 | 5) {
+            "全局库 · 按会话应用".to_owned()
         } else {
             "全局 · 对所有项目生效".to_owned()
         };

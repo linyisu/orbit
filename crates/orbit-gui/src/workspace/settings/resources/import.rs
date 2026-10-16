@@ -1,4 +1,4 @@
-//! Source discovery and installation stay on the connected workspace service.
+//! Global source discovery and installation use the client-host library service.
 use super::*;
 use gpui_kit::component::{StyledExt, checkbox::Checkbox, spinner::Spinner};
 use orbit_protocol::resources::SkillCandidate;
@@ -17,9 +17,8 @@ struct Scan {
 }
 
 pub(super) struct Importer {
-    owner: WeakEntity<Workspace>,
-    session: String,
-    workspace: String,
+    library: orbit_client::library::Library,
+    runtime: Arc<tokio::runtime::Runtime>,
     source: Entity<InputState>,
     scan: Option<Scan>,
     busy: bool,
@@ -33,14 +32,13 @@ impl EventEmitter<Event> for Importer {}
 
 impl Importer {
     pub(super) fn new(
-        owner: WeakEntity<Workspace>,
-        session: String,
-        workspace: String,
+        library: orbit_client::library::Library,
+        runtime: Arc<tokio::runtime::Runtime>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
         let source = cx.new(|cx| {
-            InputState::new(window, cx).placeholder("GitHub 仓库、Git URL 或工作区主机上的目录")
+            InputState::new(window, cx).placeholder("GitHub 仓库、Git URL 或本机上的绝对目录")
         });
         source.update(cx, |input, cx| input.focus(window, cx));
         let events = cx.subscribe(&source, |view: &mut Self, _, event, cx| {
@@ -56,9 +54,8 @@ impl Importer {
             }
         });
         Self {
-            owner,
-            session,
-            workspace,
+            library,
+            runtime,
             source,
             scan: None,
             busy: false,
@@ -103,36 +100,14 @@ impl Importer {
             _ => 0,
         };
         let (result, receiver) = tokio::sync::oneshot::channel();
-        let session = self.session.clone();
-        let workspace = self.workspace.clone();
-        let sent = self.owner.update(cx, |view, _| {
-            anyhow::ensure!(view.connected, "连接已断开，请重新连接后重试。");
-            anyhow::ensure!(
-                view.info
-                    .as_ref()
-                    .is_some_and(|info| info.id == session && info.workspace == workspace),
-                "工作区已切换，请在当前项目的设置中重新打开技能。"
-            );
-            view.backend
-                .as_ref()
-                .ok_or_else(|| anyhow::anyhow!("请先连接工作区"))?
-                .send(Command::Settings {
-                    request: Request::Resources {
-                        session: session.clone(),
-                        expected_workspace: Some(workspace.clone()),
-                        action,
-                    },
-                    result,
-                })
+        let library = self.library.clone();
+        self.runtime.spawn(async move {
+            let response = library
+                .skills(action)
+                .await
+                .map_err(|error| format!("{error:#}"));
+            let _ = result.send(response);
         });
-        if let Err(error) = sent
-            .map_err(|e| e.to_string())
-            .and_then(|result| result.map_err(|e| e.to_string()))
-        {
-            self.error = Some(error);
-            cx.notify();
-            return;
-        }
         self.busy = true;
         self.installing = count > 0;
         self.error = None;
@@ -144,23 +119,6 @@ impl Importer {
             let _ = entity.update(cx, |view, cx| {
                 view.busy = false;
                 view.installing = false;
-                let current = view
-                    .owner
-                    .upgrade()
-                    .is_some_and(|owner| {
-                        let owner = owner.read(cx);
-                        owner.connected
-                            && owner.info.as_ref().is_some_and(|info| {
-                                info.id == session && info.workspace == workspace
-                            })
-                    });
-                if !current {
-                    view.scan = None;
-                    view.error =
-                        Some("连接或工作区已改变。请返回原项目刷新技能列表，核对结果。".into());
-                    cx.notify();
-                    return;
-                }
                 match result {
                     Ok(Response::Resources(Snapshot::SkillSource {
                         token,
@@ -205,7 +163,7 @@ impl Render for Importer {
                     .on_click(cx.listener(|_, _, _, cx| cx.emit(Event::Closed))))
                 .child(div().font_semibold().child("从来源导入")))
             .child(div().text_sm().text_color(cx.theme().muted_foreground)
-                .child("填写来源，扫描其中的技能，再选择安装到当前项目。技能附带的脚本和参考文件会一起导入。"))
+                .child("填写来源，扫描其中的技能，再选择安装到全局库。技能附带的脚本和参考文件会一起导入。"))
             .child(v_flex().gap_2()
                 .child(div().text_sm().child("技能来源"))
                 .child(h_flex().gap_2()
@@ -223,7 +181,10 @@ impl Render for Importer {
                         .disabled(self.busy || self.source.read(cx).value().trim().is_empty())
                         .on_click(cx.listener(|view, _, _, cx| view.scan_source(cx)))))
                 .child(div().text_xs().text_color(cx.theme().muted_foreground)
-                    .child("支持 owner/repo、Git URL、GitHub 子目录链接和本地技能目录。远程项目中的路径由远程主机读取。")))
+                    .child(concat!(
+                        "支持 owner/repo、Git URL、GitHub 子目录链接和本机技能目录。",
+                        "导入全局库后，可应用到本地、SSH 或 WSL 会话。",
+                    ))))
             .when(self.busy, |view| view.child(h_flex().gap_2()
                 .child(Spinner::new().small())
                 .child(div()

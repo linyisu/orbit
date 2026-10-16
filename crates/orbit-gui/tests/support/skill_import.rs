@@ -12,13 +12,14 @@ pub(super) fn seed(skills: &mut HashMap<String, String>) {
         .or_insert_with(|| EXISTING_CONTENT.into());
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
 struct Preview {
     session: String,
     workspace: String,
     skills: Vec<SkillCandidate>,
 }
 
-#[derive(Default)]
+#[derive(Default, serde::Serialize, serde::Deserialize)]
 pub(super) struct FixtureImports {
     sequence: u64,
     previews: HashMap<String, Preview>,

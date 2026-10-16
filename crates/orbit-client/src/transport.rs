@@ -337,6 +337,7 @@ impl Connection {
             drain,
             failed: false,
             capabilities: None,
+            connection: Some(Arc::new(self.clone())),
         };
         let marker = super::interaction::timeout(CONNECT_TIMEOUT, progress.as_ref(), async {
             Ok(protocol::read_preamble(&mut client.stdout).await?)
@@ -414,6 +415,7 @@ impl std::error::Error for RequestError {
 }
 
 pub struct Client {
+    connection: Option<Arc<Connection>>,
     pub capabilities: Option<orbit_protocol::Capabilities>,
     process: Child,
     stdin: ChildStdin,
@@ -424,11 +426,29 @@ pub struct Client {
 }
 
 impl Client {
+    pub(crate) fn connection(&self) -> Option<Arc<Connection>> {
+        self.connection.clone()
+    }
+
     pub fn failed(&self) -> bool {
         self.failed
     }
 
     pub async fn request(
+        &mut self,
+        request: Request,
+    ) -> std::result::Result<Response, RequestError> {
+        if crate::library::routed(&request)
+            && let Some(connection) = self.connection.clone()
+        {
+            return Box::pin(crate::library::route(self, request, connection))
+                .await
+                .map_err(|error| RequestError::Remote(format!("{error:#}")));
+        }
+        self.raw_request(request).await
+    }
+
+    pub(crate) async fn raw_request(
         &mut self,
         request: Request,
     ) -> std::result::Result<Response, RequestError> {
@@ -514,6 +534,7 @@ pub(crate) mod tests {
             .await
             .unwrap();
         Client {
+            connection: None,
             capabilities: None,
             process,
             stdin,

@@ -28,18 +28,33 @@ pub(super) struct Scan {
     token: String,
     session: String,
     workspace: PathBuf,
+    destination: PathBuf,
     source: String,
     candidates: Vec<SkillCandidate>,
     created: Instant,
 }
 
 impl Scan {
+    #[cfg(test)]
     pub(super) async fn acquire(
         session: String,
         workspace: PathBuf,
         source: String,
         home: Option<PathBuf>,
         existing: HashSet<String>,
+    ) -> Result<Self> {
+        let destination = project_root(&workspace).join(".orbit/skills");
+        Self::acquire_to(session, workspace, source, home, existing, destination).await
+    }
+
+    /// Global imports use the same frozen-package validation with an explicit destination.
+    pub(super) async fn acquire_to(
+        session: String,
+        workspace: PathBuf,
+        source: String,
+        home: Option<PathBuf>,
+        existing: HashSet<String>,
+        destination: PathBuf,
     ) -> Result<Self> {
         ensure!(!source.trim().is_empty(), "请输入技能来源");
         ensure!(source.len() <= 4_096, "技能来源地址过长");
@@ -62,6 +77,7 @@ impl Scan {
                 storage,
                 session,
                 workspace,
+                destination,
                 source,
                 candidates: Vec::new(),
                 created: Instant::now(),
@@ -70,6 +86,10 @@ impl Scan {
             Ok(scan)
         })
         .await?
+    }
+
+    pub(super) fn expired(&self) -> bool {
+        self.created.elapsed() >= LIFETIME
     }
 
     pub(super) fn snapshot(&self) -> Snapshot {
@@ -164,9 +184,7 @@ impl Scan {
                     total <= MAX_SNAPSHOT_BYTES,
                     "技能来源总大小超过 128 MiB，请选择更具体的子目录"
                 );
-                let target = project_root(&self.workspace)
-                    .join(".orbit/skills")
-                    .join(&name);
+                let target = self.destination.join(&name);
                 let conflict = existing.contains(&name) || fs::symlink_metadata(target).is_ok();
                 self.candidates.push(SkillCandidate {
                     path,
@@ -242,7 +260,7 @@ impl Scan {
             !paths.is_empty() && paths.len() <= MAX_SKILLS,
             "请选择要添加的技能"
         );
-        let target = project_root(&self.workspace).join(".orbit/skills");
+        let target = self.destination.clone();
         reject_symlink_ancestors(&target)?;
         let mut selected = Vec::new();
         let mut names = HashSet::new();
@@ -315,6 +333,7 @@ impl Scan {
     }
 }
 
+#[cfg(test)]
 fn project_root(workspace: &Path) -> PathBuf {
     crate::instructions::project_root(workspace).unwrap_or_else(|| workspace.to_path_buf())
 }
@@ -336,7 +355,7 @@ fn validate_relative(path: &str) -> Result<()> {
     Ok(())
 }
 
-fn reject_symlink_ancestors(path: &Path) -> Result<()> {
+pub(super) fn reject_symlink_ancestors(path: &Path) -> Result<()> {
     for part in path.ancestors() {
         match fs::symlink_metadata(part) {
             Ok(metadata) => ensure!(

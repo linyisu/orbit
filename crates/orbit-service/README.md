@@ -9,6 +9,7 @@
 - [tools.rs](src/tools.rs)、[planning.rs](src/planning.rs)、[user_input.rs](src/user_input.rs)：工具装配、计划与问答。
 - [subagents.rs](src/subagents.rs)、[side_questions.rs](src/side_questions.rs)：子任务与旁路提问。子 Agent 的原生操作与模型工具共用类型化控制入口和授权规则。
 - [context/](src/context/)、[extensions/](src/extensions/)：指令、记忆、技能与插件。
+- [workspace/library.rs](src/workspace/library.rs)：无会话全局管理、有界资源快照与会话应用恢复。
 
 ## 生命周期
 
@@ -23,7 +24,12 @@
 
 Plan 只允许只读操作，批准后进入 Build，工具审批仍生效。MCP 可异步应用到已有会话；当前运行保留原工具集，后续发送使用新工具。
 
-技能和 MCP 导入先扫描来源，再按用户选择安装。配置、模型适配和持久化分别由对应 crate 负责。
+技能定义保存到本机 `$XDG_CONFIG_HOME/orbit/skills`（默认 `~/.config/orbit/skills`），插件市场登记与缓存保存在本机数据目录。全局管理接口不打开会话，也不加载模型。
+技能导入先冻结完整来源包，再按选择安装到全局库；现有项目技能不会被移动，可从来源显式导入。
+只有显式应用的扩展快照可供会话使用；应用前检查资源预算、相对路径、符号链接和技能重名。会话恢复使用数据库中的快照，全局编辑或市场刷新不影响它。
+插件目前应用其声明的技能；Hook、MCP、命令与 Agent 不自动执行。没有技能的插件只可查看声明。
+应用和移除须等待当前任务结束，移除不删除已有对话中的内容；能力与工具禁用策略始终保留。
+MCP 导入仍由目标服务处理。配置、模型适配和持久化分别由对应 crate 负责。
 额度池与当前模型的对应关系在 [workspace/usage/providers.rs](src/workspace/usage/providers.rs) 归一化，再通过协议提供给两端。
 
 ## 验证

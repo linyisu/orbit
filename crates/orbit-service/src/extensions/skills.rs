@@ -39,6 +39,7 @@ pub enum SkillSource {
     OrbitProject,
     ClaudeProject,
     MarketplacePlugin,
+    AppliedSession,
 }
 
 impl SkillSource {
@@ -48,7 +49,8 @@ impl SkillSource {
             Self::ClaudeUser => "Claude 用户目录",
             Self::OrbitProject => "Orbit 项目目录",
             Self::ClaudeProject => "Claude 项目目录",
-            Self::MarketplacePlugin => "当前项目已启用插件",
+            Self::MarketplacePlugin => "插件包",
+            Self::AppliedSession => "会话扩展快照",
         }
     }
 }
@@ -56,6 +58,7 @@ impl SkillSource {
 #[derive(Clone, Debug, Default)]
 pub struct Skills {
     entries: Vec<Skill>,
+    assets: Option<std::sync::Arc<tempfile::TempDir>>,
 }
 
 impl Skills {
@@ -106,10 +109,18 @@ impl Skills {
             roots.push((root.join(".orbit/skills"), SkillSource::OrbitProject));
         }
 
+        Self::from_roots(roots)
+    }
+
+    pub(crate) fn from_roots(roots: Vec<(PathBuf, SkillSource)>) -> Self {
         let mut entries = BTreeMap::new();
 
         for (directory, source) in roots {
-            if source == SkillSource::MarketplacePlugin && directory.join("SKILL.md").is_file() {
+            if matches!(
+                source,
+                SkillSource::MarketplacePlugin | SkillSource::AppliedSession
+            ) && directory.join("SKILL.md").is_file()
+            {
                 if let Some(skill) = discover_skill(&directory, source) {
                     entries.insert(skill.command.clone(), skill);
                 }
@@ -122,7 +133,24 @@ impl Skills {
 
         Self {
             entries: entries.into_values().collect(),
+            assets: None,
         }
+    }
+
+    /// Keep package assets alive while tools from this catalogue can still execute.
+    pub(crate) fn retain_assets(&mut self, assets: tempfile::TempDir) {
+        self.assets = Some(std::sync::Arc::new(assets));
+    }
+
+    pub(crate) fn global(home: Option<PathBuf>, config_home: Option<PathBuf>) -> Self {
+        let mut roots = Vec::new();
+        if let Some(home) = home {
+            roots.push((home.join(".claude/skills"), SkillSource::ClaudeUser));
+        }
+        if let Some(home) = config_home {
+            roots.push((home.join("orbit/skills"), SkillSource::OrbitUser));
+        }
+        Self::from_roots(roots)
     }
 
     pub fn get(&self, command: &str) -> Option<&Skill> {
@@ -171,11 +199,11 @@ impl Skills {
 
     pub fn render(&self) -> String {
         if self.entries.is_empty() {
-            return "没有发现 Skill。可在 ~/.config/orbit/skills/<名称>/SKILL.md 创建 Orbit Skill，或复用 \
-                ~/.claude/skills/<名称>/SKILL.md 与项目 .claude/skills/。".into();
+            return "当前会话没有可用 Skill。请在全局技能库中保存或导入技能，再显式应用到当前会话。"
+                .into();
         }
 
-        let mut output = String::from("已发现的 Skills\n");
+        let mut output = String::from("当前可用的 Skills\n");
 
         for skill in &self.entries {
             output.push_str(&format!(
@@ -197,6 +225,7 @@ impl Skills {
         }
 
         let entries = self.entries.clone();
+        let assets = self.assets.clone();
         let names: Vec<_> = entries
             .iter()
             .map(|skill| skill.command.clone())
@@ -222,8 +251,10 @@ impl Skills {
             }),
             move |arguments, cancellation| {
                 let entries = entries.clone();
+                let assets = assets.clone();
 
                 async move {
+                    let _assets = assets;
                     if cancellation.is_cancelled() {
                         return Err(ToolError::Cancelled);
                     }
@@ -481,6 +512,7 @@ mod tests {
         .unwrap();
         let skills = Skills {
             entries: discover_directory(dir.path(), SkillSource::OrbitProject),
+            assets: None,
         };
         let mut tools = ToolRegistry::new();
         skills.register_tool(&mut tools);

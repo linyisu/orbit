@@ -454,6 +454,7 @@ async fn shared_server_negotiates_released_clients_and_rejects_unknown_versions(
             editor_command: "vi".into(),
         };
         let service = Service {
+            library: Mutex::new(crate::workspace::library::Library::isolated(&options)),
             options: options.clone(),
             sessions: Mutex::new(HashMap::new()),
             opening: Mutex::new(()),

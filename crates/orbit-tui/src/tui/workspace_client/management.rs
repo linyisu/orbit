@@ -442,8 +442,8 @@ mod tests {
         let (mut tab, mut requests) = tab();
         let catalog = || orbit_protocol::plugins::Catalog {
             marketplaces: vec![],
-            project_id: "project".into(),
-            enabled: vec![],
+            session_id: "session".into(),
+            applied: vec![],
             inspections: vec![],
         };
         tab.state.marketplace_dialog = Some(crate::tui::dialogs::MarketplaceDialog::from_catalog(

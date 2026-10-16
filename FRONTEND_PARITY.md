@@ -14,6 +14,8 @@
 | 问答与子 Agent | 问答弹窗、子 Agent 面板 | 问答卡片、Agent 面板 |
 | 输入历史与快捷键 | Ctrl+Up / Ctrl+Down、`/keys` | Up / Down、快捷键设置 |
 
+技能和插件市场属于本机全局库，两端共用 `orbit-client::library`。显式应用的完整资源快照在目标会话中持久保存，其他会话不自动启用。
+
 配置与凭据在本机保存，工具在目标环境运行。MCP 可在 GUI 应用到已有会话；高级 Agent 配置用于新会话。问答、计划批准与工具审批相互独立。
 
 关闭标签视图不等于停止任务，计划批准和未确认请求重发需显式操作。GUI 支持图文暂存，编辑时撤回到输入框；TUI 使用 `/queue` 管理队列。
@@ -27,6 +29,7 @@ GUI 提供原生字体、图片灯箱和编辑器；TUI 的字体与图片协议
 | 职责 | 所属模块 |
 | --- | --- |
 | 账号授权、连接准备与恢复 | `orbit-client::accounts`、`connect`、`transport` |
+| 全局扩展管理、快照传输与会话应用 | `orbit-client::library`、`orbit-service::workspace::library` |
 | 会话轮询、后台请求分流与回执 | `orbit-client::pump` |
 | 窗口恢复、草稿与附件副本 | `orbit-client::windows` |
 | 附件识别、上传、下载与队列资产恢复 | `orbit-client::attachments`、`pump` |

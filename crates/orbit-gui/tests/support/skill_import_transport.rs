@@ -234,7 +234,7 @@ fn skill_source_transport_previews_conflicts_and_imports_only_selected_paths() {
 }
 
 #[test]
-fn skill_source_transport_rejects_failed_sources_stale_tokens_and_wrong_scope() {
+fn skill_source_transport_uses_one_global_scope_and_rejects_expired_tokens() {
     let directory = tempfile::tempdir().unwrap();
     std::fs::write(
         directory
@@ -291,17 +291,12 @@ fn skill_source_transport_rejects_failed_sources_stale_tokens_and_wrong_scope() 
             token: token.clone(),
             paths: vec!["skills/frontend-design".into()],
         };
-        assert!(
-            request(&backend, resources("demo", "previous-workspace", import()))
+        assert!(matches!(
+            request(&backend, resources("another-session", "previous-workspace", import()))
                 .await
-                .unwrap_err()
-                .contains("工作区已切换")
-        );
-        assert!(
-            request(&backend, resources("another-session", &workspace, import()))
-                .await
-                .is_err()
-        );
+                .unwrap(),
+            Snapshot::Skills(skills) if skills.len() == 2
+        ));
         assert!(
             request(
                 &backend,
@@ -322,14 +317,14 @@ fn skill_source_transport_rejects_failed_sources_stale_tokens_and_wrong_scope() 
         };
         assert_eq!(
             skills.len(),
-            1,
-            "rejected scope/token requests cannot modify skills"
+            2,
+            "expired tokens cannot modify the global library"
         );
-        assert!(matches!(
+        assert!(
             request(&backend, command(import()))
                 .await
-                .unwrap(),
-            Snapshot::Skills(skills) if skills.len() == 2
-        ));
+                .unwrap_err()
+                .contains("已过期")
+        );
     });
 }

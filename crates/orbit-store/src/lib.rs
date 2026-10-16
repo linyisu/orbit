@@ -30,6 +30,7 @@ pub mod workspace_requests;
 pub mod plans;
 pub mod user_input;
 
+mod extensions;
 mod memories;
 mod plugins;
 pub mod tasks;

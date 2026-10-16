@@ -13,6 +13,7 @@ pub(crate) mod project_tasks;
 pub(crate) mod projects;
 pub(crate) mod runs;
 pub(crate) mod session_attachments;
+pub(crate) mod session_extensions;
 pub(crate) mod session_git_baselines;
 pub(crate) mod session_log_gaps;
 pub(crate) mod session_memories;

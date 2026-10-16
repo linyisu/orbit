@@ -64,6 +64,7 @@ pub async fn pump(
     mut commands: mpsc::Receiver<Call>,
     responses: mpsc::Sender<Result<Response>>,
 ) {
+    let mut library_tasks = tokio::task::JoinSet::new();
     let mut cursor = 0;
     let mut state = PollState::default();
     let mut interval = tokio::time::interval(Duration::from_millis(75));
@@ -72,6 +73,27 @@ pub async fn pump(
         let Some(call) = next_call(&mut commands, &mut interval, &session, cursor).await else {
             break;
         };
+        while library_tasks.try_join_next().is_some() {}
+        if crate::library::routed(&call.request)
+            && let Some(connection) = client.connection()
+        {
+            let responses = responses.clone();
+            library_tasks.spawn(async move {
+                let response = async {
+                    let mut client = connection.connect().await?;
+                    Ok::<_, anyhow::Error>(client.request(call.request).await?)
+                }
+                .await;
+                if let Some(reply) = call.reply {
+                    let _ = reply.send(response);
+                } else {
+                    let response =
+                        response.unwrap_or_else(|error| Response::Error(format!("{error:#}")));
+                    let _ = responses.send(Ok(response)).await;
+                }
+            });
+            continue;
+        }
         let response = client.request(call.request).await;
         let response = match response {
             Ok(response) => response,

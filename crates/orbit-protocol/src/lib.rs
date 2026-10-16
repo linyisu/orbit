@@ -4,6 +4,7 @@
 pub mod admin;
 pub mod files;
 pub mod input_queue;
+pub mod library;
 pub mod plan;
 pub mod plugins;
 pub mod project;
@@ -20,7 +21,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 /// Current request and event schema version advertised during the handshake.
-pub const VERSION: u32 = 27;
+pub const VERSION: u32 = 28;
 /// Oldest peer schema accepted by this implementation.
 pub const MIN_COMPATIBLE_VERSION: u32 = 15;
 
@@ -89,6 +90,10 @@ pub enum Request {
     AllSessions,
     ListSessions {
         session: String,
+    },
+    /// Manage the client host library without opening a conversation.
+    Library {
+        action: library::Action,
     },
     Plugins {
         session: String,
@@ -432,6 +437,7 @@ pub enum Response<E, A> {
     Questions(Questions),
     UserInputs(user_input::History),
     Report(Report),
+    Library(library::Snapshot),
     Plugins(plugins::Catalog),
     Resources(resources::Snapshot),
     Tasks(project::TaskSnapshot),
