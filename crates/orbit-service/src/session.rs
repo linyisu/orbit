@@ -304,7 +304,12 @@ impl SessionState {
             title_task,
         } = prepared;
         Self {
-            command_output: Default::default(),
+            command_output: orbit_runtime::execution::output::CommandOutputs::persistent(
+                store
+                    .path()
+                    .with_extension("command-output")
+                    .join(&snapshot.session.id),
+            ),
             git_baseline,
             store,
             writer,

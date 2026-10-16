@@ -68,7 +68,7 @@ async fn project_resources_follow_the_destination_without_changing_process_cwd()
         .execute(
             orbit_model::types::ToolCall::function(
                 "read",
-                "read_file",
+                "ReadFile",
                 serde_json::json!({
                     "path": "marker.txt"
                 }),
@@ -171,7 +171,7 @@ async fn fresh_launch_uses_its_directory_instead_of_the_previous_session() {
         .execute(
             orbit_model::types::ToolCall::function(
                 "read",
-                "read_file",
+                "ReadFile",
                 serde_json::json!({
                     "path": "marker.txt"
                 }),
@@ -198,22 +198,27 @@ fn chat_capability_filter_removes_groups_before_request_assembly() {
     let mut tools = ToolRegistry::new();
 
     for name in [
-        "read_file",
-        "project_overview",
-        "write_file",
-        "request_capability",
-        "web_search",
-        "web_fetch",
-        "mcp__test__lookup",
-        "task_list",
-        "read_history",
+        "ReadFile",
+        "ProjectOverview",
+        "WriteFile",
+        "RequestAccess",
+        "WebSearch",
+        "WebFetch",
+        "MCP_Test_Lookup",
+        "ListTasks",
+        "ReadHistory",
     ] {
-        tools.register(ClosureTool::new(
-            name,
-            "test",
-            serde_json::json!({}),
-            |_, _| async { Ok::<_, orbit_agent::tool::ToolError>("ok".into()) },
-        ));
+        let origin = if name == "MCP_Test_Lookup" {
+            orbit_agent::tool::ToolOrigin::Mcp
+        } else {
+            orbit_agent::tool::ToolOrigin::Builtin
+        };
+        tools.register(
+            ClosureTool::new(name, "test", serde_json::json!({}), |_, _| async {
+                Ok::<_, orbit_agent::tool::ToolError>("ok".into())
+            })
+            .with_origin(origin),
+        );
     }
 
     let disabled = [
@@ -229,22 +234,22 @@ fn chat_capability_filter_removes_groups_before_request_assembly() {
 
     filter_tools(&mut tools, &disabled);
 
-    assert!(!tools.contains("read_file"));
-    assert!(!tools.contains("project_overview"));
-    assert!(!tools.contains("request_capability"));
-    assert!(!tools.contains("web_search"));
-    assert!(!tools.contains("web_fetch"));
-    assert!(!tools.contains("mcp__test__lookup"));
-    assert!(!tools.contains("task_list"));
-    assert!(!tools.contains("read_history"));
-    assert!(tools.contains("write_file"));
+    assert!(!tools.contains("ReadFile"));
+    assert!(!tools.contains("ProjectOverview"));
+    assert!(!tools.contains("RequestAccess"));
+    assert!(!tools.contains("WebSearch"));
+    assert!(!tools.contains("WebFetch"));
+    assert!(!tools.contains("MCP_Test_Lookup"));
+    assert!(!tools.contains("ListTasks"));
+    assert!(!tools.contains("ReadHistory"));
+    assert!(tools.contains("WriteFile"));
 }
 
 #[test]
 fn disabled_commands_hide_audit_and_export_tools() {
     let mut tools = ToolRegistry::new();
 
-    for name in ["run_command", "read_command_output", "verification_status"] {
+    for name in ["Exec", "CommandOutput", "CheckEvidence"] {
         tools.register(ClosureTool::new(
             name,
             "",
@@ -259,24 +264,6 @@ fn disabled_commands_hide_audit_and_export_tools() {
             .into_iter()
             .collect(),
     );
-
-    assert!(tools.definitions().is_empty());
-}
-
-#[test]
-fn disabled_git_hides_push_and_inspection() {
-    let mut tools = ToolRegistry::new();
-
-    for name in ["git_inspect", "git_push"] {
-        tools.register(ClosureTool::new(
-            name,
-            "",
-            serde_json::json!({}),
-            |_, _| async { Ok::<_, orbit_agent::tool::ToolError>("unused".into()) },
-        ));
-    }
-
-    filter_tools(&mut tools, &[Capability::Git].into_iter().collect());
 
     assert!(tools.definitions().is_empty());
 }

@@ -16,6 +16,7 @@ fn background_tools_finish_the_original_row_and_cancel_pending_rows() {
         "Other Orbit work".into(),
     )));
     state.apply(AgentEvent::ToolFinished {
+        outcome: None,
         call: first,
         content: "Orbit finished".into(),
         changes: vec![],
@@ -192,6 +193,7 @@ fn reducer_tracks_stream_and_tool_lifecycle() {
     state.apply(AgentEvent::Model(StreamEvent::TextDelta("hi".to_owned())));
     state.apply(AgentEvent::ToolStarted { call: call("one") });
     state.apply(AgentEvent::ToolFinished {
+        outcome: None,
         call: call("one"),
         content: "done".to_owned(),
         changes: Vec::new(),
@@ -287,7 +289,7 @@ fn archive_projection_explains_that_older_constraints_need_retrieval() {
             strategy: orbit_client::protocol::compaction::CompactionStrategy::ArchiveProjection,
             summary_requests: 1,
             summary_input_tokens: 2_048,
-            archive: Some("read_history archive_id=12; search with query".into()),
+            archive: Some("ReadHistory archive_id=12; search with query".into()),
             fallback: true,
             fallback_reason: None,
             summary: TaskSummary {
@@ -366,13 +368,14 @@ fn activity_tracks_compaction_and_concurrent_tools_without_background_completion
     )));
     assert_eq!(state.activity.label(), "正在思考");
     let mut read = call("read");
-    read.function.name = "read_file".into();
+    read.function.name = "ReadFile".into();
     let mut edit = call("edit");
-    edit.function.name = "edit_file".into();
+    edit.function.name = "EditFile".into();
     state.apply(AgentEvent::ToolStarted { call: read.clone() });
     state.apply(AgentEvent::ToolStarted { call: edit.clone() });
     assert_eq!(state.activity.label(), "正在调用工具");
     state.apply(AgentEvent::ToolFinished {
+        outcome: None,
         call: edit,
         content: String::new(),
         changes: vec![],
@@ -391,6 +394,7 @@ fn activity_tracks_compaction_and_concurrent_tools_without_background_completion
     state.apply(AgentEvent::TurnStarted { turn: 2 });
     state.apply(AgentEvent::Model(StreamEvent::TextDelta("answer".into())));
     state.apply(AgentEvent::ToolFinished {
+        outcome: None,
         call: read,
         content: String::new(),
         changes: vec![],

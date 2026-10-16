@@ -30,7 +30,7 @@ pub(super) fn events(workspace: &str, live: bool) -> VecDeque<Value> {
         let call = json!({
             "id": format!("disclosure-{index:02}"),
             "function": {
-                "name": if file { "read_file" } else { "run_command" },
+                "name": if file { "ReadFile" } else { "Exec" },
                 "arguments": serde_json::to_string(&arguments).unwrap(),
             },
         });
@@ -105,14 +105,14 @@ pub(super) fn flow_events() -> VecDeque<Value> {
     let first = json!({
         "id": "disclosure-flow-first",
         "function": {
-            "name": "read_file",
+            "name": "ReadFile",
             "arguments": "{\"path\":\"src/main.rs\"}"
         },
     });
     let resumed = json!({
         "id": "disclosure-flow-resumed",
         "function": {
-            "name": "read_file",
+            "name": "ReadFile",
             "arguments": "{\"path\":\"Cargo.toml\"}"
         },
     });
@@ -208,7 +208,7 @@ pub(super) fn chronological_events() -> VecDeque<Value> {
                 "id": format!("timeline-{stage}-{index}"),
                 "purpose": format!("检查生成条目 {stage}-{index}"),
                 "function": {
-                    "name": "read_file",
+                    "name": "ReadFile",
                     "arguments": json!({
                         "path": format!("generated/item-{stage}-{index}.txt")
                     })

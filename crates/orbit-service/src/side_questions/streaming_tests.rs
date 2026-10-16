@@ -142,7 +142,7 @@ async fn cancelling_and_tool_attempts_are_isolated_to_the_side_question() {
     let calls = MockModel::new([ChatCompletion {
         message: ChatMessage::assistant_tool_calls(vec![ToolCall::function(
             "orbit-call",
-            "write_file",
+            "WriteFile",
             serde_json::json!({
                 "path": "orbit.rs",
                 "content": "bad"

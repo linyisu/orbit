@@ -34,7 +34,7 @@ pub fn execute(workspace: &str, request: &Value) -> Value {
                     "--- a/{path}\n+++ b/{path}\n@@ -1 +1 @@\n-fn main() {{}}\n+fn main() {{ \
                         println!(\"Hello Orbit\"); }}\n"
                 ),
-                note: "Orbit 写入检查点 · write_file · run 7".into(),
+                note: "Orbit 写入检查点 · WriteFile · run 7".into(),
                 checkpoint: Some(Checkpoint {
                     run_id: 7,
                     call_id: "fixture-write".into(),

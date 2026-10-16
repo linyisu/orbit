@@ -307,7 +307,7 @@ fn tool_title_with_summary(
     };
     let title = |line| {
         let mut linked = LinkedLine::plain(line);
-        if row.name == "web_fetch" {
+        if row.name == "WebFetch" {
             linked.links.clear();
         }
         linked

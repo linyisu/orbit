@@ -37,7 +37,7 @@ impl ContextArchive for SessionArchive {
                 })?;
 
             Ok(format!(
-                "read_history archive_id={id}; search with query or read a source message by its \
+                "ReadHistory archive_id={id}; search with query or read a source message by its \
                     zero-based message index"
             ))
         })
@@ -77,7 +77,7 @@ struct Arguments {
 impl Arguments {
     async fn read(self, store: &Store, session_id: &str) -> Result<String, ToolError> {
         let invalid = |message: &str| ToolError::InvalidArguments {
-            tool: "read_history".into(),
+            tool: "ReadHistory".into(),
             message: message.into(),
         };
         let result = if let Some(archive_id) = self.archive_id {
@@ -107,7 +107,7 @@ impl Arguments {
                 || self.length.is_some()
             {
                 return Err(invalid(
-                    "reading messages requires archive_id; call read_history with {} first to list \
+                    "reading messages requires archive_id; call ReadHistory with {} first to list \
                         valid IDs",
                 ));
             }
@@ -126,7 +126,7 @@ impl Arguments {
 pub fn register(tools: &mut ToolRegistry, store: Store, scope: MemoryScope) {
     tools.register(
         ClosureTool::new(
-            "read_history",
+            "ReadHistory",
             "Discover, search or read original messages and tool evidence saved before context \
             compaction, in this conversation only. Call with {} to list available archive IDs, \
             newest first; before_archive continues the list using next_before_archive. An empty \
@@ -186,7 +186,7 @@ pub fn register(tools: &mut ToolRegistry, store: Store, scope: MemoryScope) {
                 async move {
                     let args: Arguments = serde_json::from_value(args).map_err(|error| {
                         ToolError::InvalidArguments {
-                            tool: "read_history".into(),
+                            tool: "ReadHistory".into(),
                             message: error.to_string(),
                         }
                     })?;
@@ -225,7 +225,7 @@ mod tests {
 
         let output = tools
             .execute(
-                ToolCall::function("list", "read_history", json!({})),
+                ToolCall::function("list", "ReadHistory", json!({})),
                 CancellationToken::new(),
             )
             .await
@@ -243,7 +243,7 @@ mod tests {
             .execute(
                 ToolCall::function(
                     "guess",
-                    "read_history",
+                    "ReadHistory",
                     json!({
                         "archive_id": 1
                     }),
@@ -256,7 +256,7 @@ mod tests {
         assert!(
             guessed
                 .to_string()
-                .contains("read_history with {}")
+                .contains("ReadHistory with {}")
         );
         for arguments in [
             json!({
@@ -272,7 +272,7 @@ mod tests {
         ] {
             let error = tools
                 .execute(
-                    ToolCall::function("invalid", "read_history", arguments),
+                    ToolCall::function("invalid", "ReadHistory", arguments),
                     CancellationToken::new(),
                 )
                 .await
@@ -286,7 +286,7 @@ mod tests {
         assert!(matches!(
             tools
                 .execute(
-                    ToolCall::function("cancel", "read_history", json!({})),
+                    ToolCall::function("cancel", "ReadHistory", json!({})),
                     token
                 )
                 .await,
@@ -318,14 +318,14 @@ mod tests {
         let call = || {
             ToolCall::function(
                 "read",
-                "read_history",
+                "ReadHistory",
                 json!({
                     "archive_id": id,
                     "query": "API"
                 }),
             )
         };
-        let list = || ToolCall::function("list", "read_history", json!({}));
+        let list = || ToolCall::function("list", "ReadHistory", json!({}));
         let discovered = tools
             .execute(list(), CancellationToken::new())
             .await

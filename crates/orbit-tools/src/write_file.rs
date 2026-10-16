@@ -106,7 +106,7 @@ impl WriteFile {
                 .before
                 .as_deref()
                 .ok_or_else(|| {
-                    failed("edit requires an existing file; use write_file to create one")
+                    failed("edit requires an existing file; use WriteFile to create one")
                 })?;
             let after = transform(before)?;
 
@@ -330,12 +330,12 @@ impl Tool for WriteFile {
 
     fn definition(&self) -> ToolDefinition {
         ToolDefinition::function(
-            "write_file",
+            "WriteFile",
             "Create a new UTF-8 file, or intentionally replace a whole file when that is the task. \
                 content is the entire new file, not a patch; omitted existing content is lost. \
                 For a small change to an existing file, read the relevant region and use \
-                edit_file instead. Parent directories must exist. Use workspace paths or outside \
-                paths granted via request_capability. Auto approves workspace-local writes; \
+                EditFile instead. Parent directories must exist. Use workspace paths or outside \
+                paths granted via RequestAccess. Auto approves workspace-local writes; \
                 external writes require approval. Old and new files are each limited to 1 MiB. \
                 Protected metadata, escaping symlinks and hard links are rejected; concurrent \
                 changes cause a conflict. Never retry a denied write without a new user request.",
@@ -359,7 +359,7 @@ impl Tool for WriteFile {
         Box::pin(async move {
             let args: Arguments = serde_json::from_str(&call.function.arguments).map_err(|e| {
                 ToolError::InvalidArguments {
-                    tool: "write_file".into(),
+                    tool: "WriteFile".into(),
                     message: e.to_string(),
                 }
             })?;

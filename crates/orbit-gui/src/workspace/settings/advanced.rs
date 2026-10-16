@@ -20,7 +20,7 @@ const FIELDS: [(&str, &str, &str); 11] = [
     ("最长命令超时（秒）", "不能小于默认命令超时。", "600"),
     (
         "单次文件扫描上限（字节）",
-        "用于 read_file；0 表示不限扫描量。",
+        "用于 ReadFile；0 表示不限扫描量。",
         "67108864",
     ),
     (
@@ -47,7 +47,7 @@ const FIELDS: [(&str, &str, &str); 11] = [
     ),
 ];
 
-const CAPABILITIES: [(Capability, &str, &str); 14] = [
+const CAPABILITIES: [(Capability, &str, &str); 13] = [
     (Capability::All, "all", "全部可选工具"),
     (Capability::Subagents, "subagents", "子 Agent"),
     (Capability::Web, "web", "网页搜索与抓取"),
@@ -56,7 +56,6 @@ const CAPABILITIES: [(Capability, &str, &str); 14] = [
     (Capability::Image, "image", "图片附件与读取"),
     (Capability::Document, "document", "文档读取"),
     (Capability::Files, "files", "文件读取、搜索与项目概览"),
-    (Capability::Git, "git", "Git 操作"),
     (Capability::Write, "write", "文件写入与编辑"),
     (Capability::Capability, "capability", "工作区外路径授权请求"),
     (Capability::Command, "command", "命令执行与验证"),
@@ -128,7 +127,7 @@ impl Advanced {
         let tools = cx.new(|cx| {
             TextareaState::new(window, cx)
                 .auto_grow(3, 8)
-                .placeholder("每行一个完整工具名，例如 read_file 或 mcp__server__tool")
+                .placeholder("每行一个完整工具名，例如 ReadFile 或 MCP_Server_Tool")
         });
         subscriptions.push(cx.subscribe(&tools, |view: &mut Self, _, event, cx| {
             if matches!(event, InputEvent::Change) {
@@ -490,7 +489,7 @@ impl Render for Advanced {
                 }))),
         )
         .child(
-            section("禁用指定工具", "每行填写一个完整工具名，按名称精确匹配；留空不增加限制。MCP 工具使用 mcp__服务器__工具 格式。", cx)
+            section("禁用指定工具", "每行填写一个完整工具名，按名称精确匹配；留空不增加限制。MCP 工具使用 MCP_服务器_工具 格式。", cx)
                 .child(Textarea::new(&self.tools).disabled(unavailable).aria_label("禁用指定工具")),
         )
     }
@@ -508,7 +507,7 @@ mod tests {
             command: Default::default(),
             subagents: Default::default(),
             disabled_capabilities: vec![Capability::Write, Capability::Web],
-            disabled_tools: vec!["read_file".into()],
+            disabled_tools: vec!["ReadFile".into()],
         }
     }
 

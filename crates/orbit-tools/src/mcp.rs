@@ -8,7 +8,9 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
-use orbit_agent::tool::{Tool, ToolError, ToolFuture, ToolOutcome, ToolOutput, ToolRegistry};
+use orbit_agent::tool::{
+    Tool, ToolError, ToolFuture, ToolOrigin, ToolOutcome, ToolOutput, ToolRegistry,
+};
 use orbit_model::types::{ToolCall, ToolDefinition};
 use orbit_runtime::execution::process::ProcessGroup;
 use serde::Deserialize;
@@ -23,11 +25,15 @@ use tokio_util::sync::CancellationToken;
 
 use crate::approval::{ApprovalPreview, ApprovalRequest, ApprovalSender, McpPreview};
 mod diagnostics;
+mod names;
+mod result;
 
 const MAX_MESSAGE_BYTES: usize = 4 * 1_024 * 1_024;
 const PROTOCOL_VERSION: &str = "2025-11-25";
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(2);
 const CANCELLATION_WRITE_TIMEOUT: Duration = Duration::from_millis(100);
+const MAX_CATALOG_PAGES: usize = 128;
+const MAX_CATALOG_BYTES: usize = 8 * 1_024 * 1_024;
 
 #[derive(Clone, Debug, Default, Deserialize, serde::Serialize)]
 pub struct McpConfig {
@@ -137,6 +143,11 @@ pub async fn register(
     allow_start: bool,
 ) -> Vec<McpServerStatus> {
     let mut statuses = Vec::new();
+    let server_names: Vec<_> = config
+        .servers
+        .keys()
+        .map(String::as_str)
+        .collect();
 
     for (name, config) in &config.servers {
         if !config.enabled {
@@ -173,7 +184,7 @@ pub async fn register(
         }
 
         match StdioClient::start(name, config, workspace).await {
-            Ok((client, definitions)) => {
+            Ok((mut client, definitions)) => {
                 let filtered = definitions
                     .into_iter()
                     .filter(|definition| {
@@ -185,18 +196,33 @@ pub async fn register(
                     })
                     .collect::<Vec<_>>();
                 let count = filtered.len();
+                let names = match names::catalog(name, &filtered, registry, &server_names) {
+                    Ok(names) => names,
+                    Err(error) => {
+                        client.shutdown().await;
+                        statuses.push(McpServerStatus {
+                            name: name.clone(),
+                            detail: format!("{error:#}"),
+                            tool_count: 0,
+                            connected: false,
+                            tools: Vec::new(),
+                        });
+                        continue;
+                    }
+                };
                 let tools = filtered
                     .iter()
-                    .map(|definition| McpToolStatus {
-                        name: exposed_name(name, &definition.name),
+                    .zip(&names)
+                    .map(|(definition, exposed_name)| McpToolStatus {
+                        name: exposed_name.clone(),
                         description: definition.description.clone(),
                     })
                     .collect();
                 let client = Arc::new(Mutex::new(client));
 
-                for definition in filtered {
+                for (definition, exposed_name) in filtered.into_iter().zip(names) {
                     registry.register(McpTool {
-                        exposed_name: exposed_name(name, &definition.name),
+                        exposed_name,
                         server: name.clone(),
                         definition,
                         client: client.clone(),
@@ -230,11 +256,12 @@ pub async fn register(
     statuses
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 struct RemoteTool {
     name: String,
     description: String,
     input_schema: Value,
+    output_schema: Option<Value>,
 }
 
 struct McpTool {
@@ -246,6 +273,10 @@ struct McpTool {
 }
 
 impl Tool for McpTool {
+    fn origin(&self) -> ToolOrigin {
+        ToolOrigin::Mcp
+    }
+
     fn definition(&self) -> ToolDefinition {
         ToolDefinition::function(
             self.exposed_name.clone(),
@@ -262,6 +293,21 @@ impl Tool for McpTool {
     }
 
     fn execute<'a>(&'a self, call: ToolCall, cancellation: CancellationToken) -> ToolFuture<'a> {
+        self.execute_with_context(
+            call,
+            cancellation,
+            orbit_agent::tool::ToolContext {
+                supports_vision: false,
+            },
+        )
+    }
+
+    fn execute_with_context<'a>(
+        &'a self,
+        call: ToolCall,
+        cancellation: CancellationToken,
+        context: orbit_agent::tool::ToolContext,
+    ) -> ToolFuture<'a> {
         Box::pin(async move {
             if cancellation.is_cancelled() {
                 return Err(ToolError::Cancelled);
@@ -316,7 +362,9 @@ impl Tool for McpTool {
                     }
                 })?;
 
-            Ok(result)
+            tokio::task::spawn_blocking(move || result::images(result, context.supports_vision))
+                .await
+                .map_err(|error| ToolError::ExecutionFailed(error.to_string()))?
         })
     }
 }
@@ -335,6 +383,8 @@ struct StdioClient {
     name: String,
     config: McpServerConfig,
     tools: Vec<RemoteTool>,
+    catalog_changed: bool,
+    catalog_notifications: bool,
 }
 
 impl StdioClient {
@@ -389,6 +439,8 @@ impl StdioClient {
             name: name.to_owned(),
             config: config.clone(),
             tools: Vec::new(),
+            catalog_changed: false,
+            catalog_notifications: false,
         };
         let tools = match client.initialize().await {
             Ok(tools) => tools,
@@ -441,6 +493,9 @@ impl StdioClient {
         {
             bail!("MCP initialize response has no capabilities");
         }
+        self.catalog_notifications = initialized["capabilities"]["tools"]["listChanged"]
+            .as_bool()
+            .unwrap_or(false);
 
         time::timeout(
             self.timeout,
@@ -448,19 +503,55 @@ impl StdioClient {
         )
         .await
         .context("MCP initialized notification timed out")??;
-        let listed = self
-            .request("tools/list", json!({}), CancellationToken::new())
+        self.list_tools(CancellationToken::new())
             .await
-            .context("MCP tools/list failed")?;
-        let tools = listed
-            .get("tools")
-            .and_then(Value::as_array)
-            .context("MCP tools/list response has no tools array")?
-            .iter()
-            .filter_map(parse_tool)
-            .collect::<Vec<_>>();
+    }
 
-        Ok(tools)
+    /// Read a complete catalog before exposing it; reject loops and ambiguous names.
+    async fn list_tools(&mut self, cancellation: CancellationToken) -> Result<Vec<RemoteTool>> {
+        let mut tools = Vec::new();
+        let mut names = std::collections::HashSet::new();
+        let mut cursors = std::collections::HashSet::new();
+        let mut params = json!({});
+        let mut bytes = 0usize;
+        let deadline = time::Instant::now() + self.timeout;
+        for _ in 0..MAX_CATALOG_PAGES {
+            let listed = match time::timeout_at(
+                deadline,
+                self.request("tools/list", params, cancellation.clone()),
+            )
+            .await
+            {
+                Ok(result) => result.context("MCP tools/list failed")?,
+                Err(_) => {
+                    self.shutdown().await;
+                    bail!("MCP catalog enumeration timed out");
+                }
+            };
+            bytes = bytes.saturating_add(serde_json::to_vec(&listed)?.len());
+            anyhow::ensure!(bytes <= MAX_CATALOG_BYTES, "MCP catalog exceeds 8 MiB");
+            let page = listed
+                .get("tools")
+                .and_then(Value::as_array)
+                .context("MCP tools/list response has no tools array")?;
+            for entry in page {
+                let tool = parse_tool(entry).context("MCP catalog contains an invalid tool")?;
+                anyhow::ensure!(
+                    names.insert(tool.name.clone()),
+                    "MCP catalog repeats a tool name"
+                );
+                tools.push(tool);
+            }
+            match listed.get("nextCursor") {
+                None | Some(Value::Null) => return Ok(tools),
+                Some(Value::String(cursor)) if !cursor.is_empty() => {
+                    anyhow::ensure!(cursors.insert(cursor.clone()), "MCP catalog cursor loop");
+                    params = json!({ "cursor": cursor });
+                }
+                _ => bail!("MCP catalog has an invalid nextCursor"),
+            }
+        }
+        bail!("MCP catalog exceeds {MAX_CATALOG_PAGES} pages")
     }
 
     /// Reconnect only for a new invocation; failed operations are never replayed here.
@@ -483,14 +574,30 @@ impl StdioClient {
                     result.context("MCP reconnect failed; previous call was not replayed")?
                 }
             };
-            if !self.tools.iter().all(|old| {
-                tools
-                    .iter()
-                    .any(|new| old.name == new.name && old.input_schema == new.input_schema)
-            }) {
+            if !self
+                .tools
+                .iter()
+                .all(|old| tools.iter().any(|new| old == new))
+            {
                 bail!("MCP tool changed during reconnect; apply MCP configuration again");
             }
             *self = replacement;
+        }
+        // Stdio notifications may be queued while idle. Servers advertising
+        // mutable catalogs are checked before issuing another effectful call.
+        if self.catalog_changed || self.catalog_notifications {
+            let tools = self
+                .list_tools(cancellation.clone())
+                .await?;
+            anyhow::ensure!(
+                self.tools.len() == tools.len()
+                    && self
+                        .tools
+                        .iter()
+                        .all(|old| tools.contains(old)),
+                "MCP tool catalog changed; apply MCP configuration again before calling tools"
+            );
+            self.catalog_changed = false;
         }
         let result = self
             .request(
@@ -502,10 +609,24 @@ impl StdioClient {
                 cancellation,
             )
             .await?;
+        anyhow::ensure!(result.is_object(), "MCP tool result must be an object");
         let content = result
             .get("content")
             .cloned()
             .unwrap_or_else(|| json!([]));
+        anyhow::ensure!(content.is_array(), "MCP tool content must be an array");
+        anyhow::ensure!(
+            result
+                .get("isError")
+                .is_none_or(Value::is_boolean),
+            "MCP tool isError must be a boolean"
+        );
+        anyhow::ensure!(
+            result
+                .get("structuredContent")
+                .is_none_or(Value::is_object),
+            "MCP structuredContent must be an object"
+        );
 
         let failed = result
             .get("isError")
@@ -513,6 +634,7 @@ impl StdioClient {
             .unwrap_or(false);
         let content = json!({
             "server_result": content,
+            "structured_content": result.get("structuredContent"),
             "is_error": failed,
             "source_kind": "untrusted_mcp_tool_result",
             "connection_restarted": reconnected
@@ -564,6 +686,14 @@ impl StdioClient {
             issued = true;
             loop {
                 let message = self.read().await?;
+                if message
+                    .get("method")
+                    .and_then(Value::as_str)
+                    == Some("notifications/tools/list_changed")
+                {
+                    self.catalog_changed = true;
+                }
+
                 if message
                     .get("jsonrpc")
                     .and_then(Value::as_str)
@@ -751,11 +881,8 @@ fn parse_tool(value: &Value) -> Option<RemoteTool> {
             .unwrap_or("No description provided by the MCP server.")
             .to_owned(),
         input_schema: schema,
+        output_schema: value.get("outputSchema").cloned(),
     })
-}
-
-fn exposed_name(server: &str, tool: &str) -> String {
-    format!("mcp__{server}__{tool}")
 }
 
 fn valid_component(value: &str) -> bool {

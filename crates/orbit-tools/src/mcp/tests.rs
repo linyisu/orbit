@@ -103,7 +103,6 @@ fn validates_stdio_configuration_and_namespaces_tools() {
     config.validate().unwrap();
 
     assert!(!config.servers["files"].enabled);
-    assert_eq!(exposed_name("files", "read_file"), "mcp__files__read_file");
 }
 
 #[test]
@@ -200,7 +199,7 @@ done
     assert_eq!(
         statuses[0].tools,
         vec![McpToolStatus {
-            name: "mcp__fixture__echo".into(),
+            name: "MCP_Fixture_Echo".into(),
             description: "Echo input".into(),
         }]
     );
@@ -209,7 +208,7 @@ done
         .execute(
             ToolCall::function(
                 "call",
-                "mcp__fixture__echo",
+                "MCP_Fixture_Echo",
                 json!({
                     "message": "hello"
                 }),

@@ -380,7 +380,7 @@ fn interrupted_tool_is_no_longer_running_after_restore() {
                 orbit_client::protocol::events::AgentEvent::ToolStarted {
                     call: orbit_client::protocol::model::ToolCall::function(
                         "call",
-                        "run_command",
+                        "Exec",
                         serde_json::json!({
                             "command": "sleep 1"
                         }),
@@ -662,7 +662,7 @@ fn replay_preserves_reading_position_and_finalizes_only_replayed_background_tool
     assert!(!tab.state.follow_bottom);
     let call = orbit_client::protocol::model::ToolCall::function(
         "background",
-        "run_command",
+        "Exec",
         serde_json::json!({}),
     );
     apply_page(
@@ -691,11 +691,8 @@ fn replay_preserves_reading_position_and_finalizes_only_replayed_background_tool
 #[test]
 fn running_command_card_updates_stdout_without_overwriting_a_finished_result() {
     let (mut tab, _rx) = tab("本地");
-    let call = orbit_client::protocol::model::ToolCall::function(
-        "command",
-        "run_command",
-        serde_json::json!({}),
-    );
+    let call =
+        orbit_client::protocol::model::ToolCall::function("command", "Exec", serde_json::json!({}));
     apply_page(
         &mut tab,
         vec![
@@ -733,6 +730,7 @@ fn running_command_card_updates_stdout_without_overwriting_a_finished_result() {
         &mut tab,
         vec![Update::Agent(Box::new(
             orbit_client::protocol::events::AgentEvent::ToolFinished {
+                outcome: None,
                 call: call.clone(),
                 content: "final result".into(),
                 changes: vec![],
@@ -804,7 +802,7 @@ fn user_input_completed_tool_click_releases_frozen_transcript_before_drawing_mod
             changes: Vec::new(),
             purpose: None,
             id: "ask-1".into(),
-            name: "ask_user".into(),
+            name: "AskUser".into(),
             arguments: output["form"].to_string(),
             output: output.to_string(),
             status: crate::tui::app::ToolStatus::Finished,

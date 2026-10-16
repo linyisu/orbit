@@ -57,7 +57,7 @@ async fn protected_files_and_hardlinks_cannot_be_accessed_even_with_capability()
         .execute(
             ToolCall::function(
                 "r1",
-                "read_file",
+                "ReadFile",
                 json!({
                     "path": secret.display().to_string()
                 }),
@@ -87,7 +87,7 @@ async fn ungranted_symlink_pointing_outside_is_blocked() {
         .execute(
             ToolCall::function(
                 "r2",
-                "read_file",
+                "ReadFile",
                 json!({
                     "path": "evil_link"
                 }),
@@ -110,7 +110,7 @@ async fn ungranted_symlink_pointing_outside_is_blocked() {
         .execute(
             ToolCall::function(
                 "w2",
-                "write_file",
+                "WriteFile",
                 json!({
                     "path": "evil_link",
                     "content": "attack"

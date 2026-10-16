@@ -19,7 +19,7 @@ async fn current_context_includes_streaming_text_and_unresolved_tools_without_re
     let journal = writer.execution_journal().unwrap();
     let call = ToolCall::function(
         "orbit-call",
-        "read_file",
+        "ReadFile",
         serde_json::json!({
             "path": "orbit.rs"
         }),
@@ -86,7 +86,7 @@ async fn current_context_includes_streaming_text_and_unresolved_tools_without_re
         ChatMessage::user("检查 Orbit"),
         ChatMessage::assistant_tool_calls(vec![ToolCall::function(
             "pending",
-            "read_file",
+            "ReadFile",
             serde_json::json!({
                 "path": "orbit.rs"
             }),

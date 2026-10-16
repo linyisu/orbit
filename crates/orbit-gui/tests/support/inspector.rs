@@ -27,7 +27,7 @@ pub(super) fn seed(workspace: &str) -> (Vec<Value>, VecDeque<Value>, Value) {
     for (id, name, arguments, content, changes) in [
         (
             "inspector-manifest",
-            "read_file",
+            "ReadFile",
             json!({
                 "path": "Cargo.toml"
             }),
@@ -36,7 +36,7 @@ pub(super) fn seed(workspace: &str) -> (Vec<Value>, VecDeque<Value>, Value) {
         ),
         (
             "inspector-status",
-            "run_command",
+            "Exec",
             json!({
                 "command": "git status --short --branch",
                 "cwd": workspace
@@ -46,7 +46,7 @@ pub(super) fn seed(workspace: &str) -> (Vec<Value>, VecDeque<Value>, Value) {
         ),
         (
             "inspector-search-failed",
-            "run_command",
+            "Exec",
             json!({
                 "command": "rg -n --glob '*.rs' 'execution_state|inspector_width' \
                     src/workspace/inspector.rs src/workbench/storage.rs",
@@ -62,7 +62,7 @@ pub(super) fn seed(workspace: &str) -> (Vec<Value>, VecDeque<Value>, Value) {
         ),
         (
             "inspector-layout",
-            "write_file",
+            "WriteFile",
             json!({
                 "path": "src/workspace/inspector.rs"
             }),
@@ -75,7 +75,7 @@ pub(super) fn seed(workspace: &str) -> (Vec<Value>, VecDeque<Value>, Value) {
         ),
         (
             "inspector-long-path",
-            "write_file",
+            "WriteFile",
             json!({
                 "path": "crates/orbit-gui/src/workspace/components/execution/very_long_panel_name_f\
                     or_truncation.rs"
@@ -90,7 +90,7 @@ pub(super) fn seed(workspace: &str) -> (Vec<Value>, VecDeque<Value>, Value) {
         ),
         (
             "inspector-docs",
-            "write_file",
+            "WriteFile",
             json!({
                 "path": "docs/界面设计/工作面板交互规范.md"
             }),
@@ -124,7 +124,7 @@ pub(super) fn seed(workspace: &str) -> (Vec<Value>, VecDeque<Value>, Value) {
     for index in 1..=8 {
         let call = call(
             &format!("inspector-source-{index}"),
-            "read_file",
+            "ReadFile",
             json!({
                 "path": format!("src/workspace/module_{index}.rs")
             }),
@@ -163,7 +163,7 @@ pub(super) fn seed(workspace: &str) -> (Vec<Value>, VecDeque<Value>, Value) {
     ] {
         let call = call(
             &format!("inspector-spawn-{id}"),
-            "spawn_agent",
+            "SpawnAgent",
             json!({
                 "role": role,
                 "task": task
@@ -206,7 +206,7 @@ pub(super) fn seed(workspace: &str) -> (Vec<Value>, VecDeque<Value>, Value) {
     }
     let call = call(
         "inspector-check",
-        "run_command",
+        "Exec",
         json!({
             "command": "cargo test -p orbit-gui --features test-support --locked",
             "cwd": workspace,

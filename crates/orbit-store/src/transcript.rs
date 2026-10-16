@@ -232,10 +232,11 @@ mod tests {
             // File activity is recovered from successful receipts even when the
             // containing message has already left the model's context window.
             let receipt = AgentEvent::ToolFinished {
+                outcome: None,
                 files: None,
                 call: ToolCall::function(
                     format!("read-{run}"),
-                    "read_file",
+                    "ReadFile",
                     serde_json::json!({
                         "path": "source.rs"
                     }),

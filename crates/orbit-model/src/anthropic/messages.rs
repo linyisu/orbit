@@ -568,14 +568,14 @@ mod tests {
                 ChatMessage::assistant_tool_calls(vec![
                     ToolCall::function(
                         "a",
-                        "read_file",
+                        "ReadFile",
                         json!({
                             "path": "a"
                         }),
                     ),
                     ToolCall::function(
                         "b",
-                        "read_file",
+                        "ReadFile",
                         json!({
                             "path": "b"
                         }),
@@ -587,7 +587,7 @@ mod tests {
                 ChatMessage::user("another request"),
                 ChatMessage::assistant_tool_calls(vec![ToolCall::function(
                     "c",
-                    "read_file",
+                    "ReadFile",
                     json!({
                         "path": "c"
                     }),
@@ -688,7 +688,7 @@ mod tests {
             ChatRequest::new(vec![
                 ChatMessage::assistant_tool_calls(vec![ToolCall::function(
                     "image-call",
-                    "read_image",
+                    "ReadImage",
                     json!({
                         "path": "scene.png"
                     }),

@@ -41,7 +41,7 @@ pub(super) async fn execute(
         Action::SessionStorage => {
             let footprint = store.storage_footprint().await?;
             let mut lines = vec![format!(
-                "文件大小快照（B）：数据库 {} · WAL {} · 共享内存 {} · 附件 {} · 旧命令日志 {}\n当前用户临时命令日志 {} \
+                "文件大小快照（B）：数据库 {} · WAL {} · 共享内存 {} · 附件 {} · 会话命令日志 {}\n当前用户临时命令日志 {} \
                     B（跨数据库，任务结束清理）\n会话 ID  数据库载荷 B  关联图片 B  \
                     标题\n载荷不包含索引及空闲页；共享图片会出现在各个引用会话中，不能直接相加。",
                 footprint.database_bytes,

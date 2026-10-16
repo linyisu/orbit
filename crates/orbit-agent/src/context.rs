@@ -194,7 +194,7 @@ mod tests {
                 content: None,
                 tool_calls: vec![ToolCall::function(
                     "call-1",
-                    "read_file",
+                    "ReadFile",
                     serde_json::json!({
                         "path": "file"
                     }),

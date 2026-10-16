@@ -1,6 +1,5 @@
-//! Task-scoped stdout/stderr. Drafts allocate nothing; the first command lazily
-//! opens a private directory under the system temporary directory. Leases protect active
-//! readers/writers.
+//! Scoped stdout/stderr storage. Persistent sessions retain bounded logs across runs;
+//! temporary callers release them when the run and outstanding I/O leases end.
 use std::{
     fs::{File, OpenOptions},
     os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt},
@@ -15,6 +14,14 @@ use crate::error::{RuntimeError, failed};
 struct State {
     generation: u64,
     active: Option<Active>,
+    storage: Storage,
+}
+
+#[derive(Default)]
+enum Storage {
+    #[default]
+    Temporary,
+    Persistent(PathBuf),
 }
 
 struct Active {
@@ -25,8 +32,8 @@ struct Active {
 #[derive(Clone, Default)]
 pub struct CommandOutputs(Arc<Mutex<State>>);
 
-/// Ends API access when dropped. Outstanding I/O leases keep files alive only
-/// until those operations finish; they cannot reopen an expired task's output.
+/// Ends log creation when dropped. Persistent stores remain readable; temporary
+/// stores expire after outstanding I/O leases finish.
 pub struct OutputRun {
     outputs: CommandOutputs,
     generation: u64,
@@ -35,12 +42,33 @@ pub struct OutputRun {
 #[derive(Clone)]
 pub struct OutputLease(Arc<RunDirectory>);
 
-pub(super) struct RunDirectory {
-    directory: tempfile::TempDir,
-    _lock: File,
+pub(super) enum RunDirectory {
+    Temporary {
+        directory: tempfile::TempDir,
+        _lock: File,
+    },
+    Persistent(PathBuf),
+}
+
+impl RunDirectory {
+    fn path(&self) -> &Path {
+        match self {
+            Self::Temporary { directory, .. } => directory.path(),
+            Self::Persistent(path) => path,
+        }
+    }
 }
 
 impl CommandOutputs {
+    /// Bind logs to a service-authorized session directory. Allocation stays lazy;
+    /// the owner must hold the session lease and remove logs when deleting the session.
+    pub fn persistent(directory: PathBuf) -> Self {
+        Self(Arc::new(Mutex::new(State {
+            storage: Storage::Persistent(directory),
+            ..State::default()
+        })))
+    }
+
     /// Native command execution is Unix-only. Include the effective user so separate OS accounts
     /// never share the maintenance directory.
     pub fn root() -> PathBuf {
@@ -70,14 +98,26 @@ impl CommandOutputs {
     }
 
     pub fn lease(&self) -> Option<OutputLease> {
-        self.0
+        let state = self
+            .0
             .lock()
-            .expect("command output lock poisoned")
+            .expect("command output lock poisoned");
+        if let Some(directory) = state
             .active
-            .as_ref()?
-            .directory
-            .clone()
-            .map(OutputLease)
+            .as_ref()
+            .and_then(|active| active.directory.clone())
+        {
+            return Some(OutputLease(directory));
+        }
+        match &state.storage {
+            Storage::Temporary => None,
+            Storage::Persistent(path) => {
+                validate_persistent(path).ok()?;
+                Some(OutputLease(Arc::new(RunDirectory::Persistent(
+                    path.clone(),
+                ))))
+            }
+        }
     }
 
     pub async fn create_log(&self) -> Result<OutputLog, RuntimeError> {
@@ -95,6 +135,10 @@ impl CommandOutputs {
                 .0
                 .lock()
                 .expect("command output lock poisoned");
+            let persistent = match &state.storage {
+                Storage::Temporary => None,
+                Storage::Persistent(path) => Some(path.clone()),
+            };
             let active = state
                 .active
                 .as_mut()
@@ -103,7 +147,11 @@ impl CommandOutputs {
                     failed("command output is available only during the current task")
                 })?;
             if active.directory.is_none() {
-                active.directory = Some(Arc::new(create_directory(&Self::root())?));
+                let directory = match persistent {
+                    Some(path) => create_persistent(path)?,
+                    None => create_directory(&Self::root())?,
+                };
+                active.directory = Some(Arc::new(directory));
             }
             Ok::<_, RuntimeError>(OutputLease(
                 active
@@ -121,11 +169,63 @@ impl CommandOutputs {
             .directory = Some(lease.0);
         Ok(log)
     }
+
+    /// Save the final capture receipt atomically; failure does not change the command exit.
+    pub async fn record_result(
+        &self,
+        result: &super::super::ExecutionResult,
+    ) -> Result<(), RuntimeError> {
+        let Some(id) = result.output_id.clone() else {
+            return Ok(());
+        };
+        let lease = self
+            .lease()
+            .ok_or_else(|| failed("command output store is unavailable"))?;
+        let bytes = serde_json::to_vec(&super::CaptureReceipt {
+            stdout_bytes: result.stdout_total_bytes,
+            stderr_bytes: result.stderr_total_bytes,
+            truncated: result.retained_output_truncated,
+            error: result.retained_output_error.clone(),
+        })
+        .map_err(failed)?;
+        tokio::task::spawn_blocking(move || {
+            use std::io::Write;
+            let budget = super::output_budget(lease.path())?;
+            let _active = budget
+                .active
+                .lock()
+                .expect("output log lock poisoned");
+            if !lease
+                .path()
+                .join(format!("{id}.stdout"))
+                .is_file()
+                || !lease
+                    .path()
+                    .join(format!("{id}.stderr"))
+                    .is_file()
+            {
+                return Err(failed(
+                    "command output was evicted before saving the capture receipt",
+                ));
+            }
+            let mut file = tempfile::NamedTempFile::new_in(lease.path())?;
+            file.write_all(&bytes)?;
+            file.as_file().sync_all()?;
+            file.persist_noclobber(lease.path().join(format!("{id}.json")))
+                .map_err(failed)?;
+            budget
+                .used
+                .fetch_add(bytes.len() as u64, std::sync::atomic::Ordering::AcqRel);
+            Ok::<_, RuntimeError>(())
+        })
+        .await
+        .map_err(failed)?
+    }
 }
 
 impl OutputLease {
     pub fn path(&self) -> &Path {
-        self.0.directory.path()
+        self.0.path()
     }
 }
 
@@ -194,10 +294,50 @@ fn create_directory(root: &Path) -> Result<RunDirectory, RuntimeError> {
         .tempdir_in(root)?;
     let lock = private_lock(&directory.path().join("owner.lock"), true)?;
     lock.lock()?;
-    Ok(RunDirectory {
+    Ok(RunDirectory::Temporary {
         directory,
         _lock: lock,
     })
+}
+
+fn validate_private_directory(path: &Path) -> Result<(), RuntimeError> {
+    let metadata = path.symlink_metadata()?;
+    if !metadata.is_dir()
+        || metadata.file_type().is_symlink()
+        || metadata.uid() != unsafe { libc::geteuid() }
+        || metadata.permissions().mode() & 0o077 != 0
+    {
+        return Err(failed(
+            "command output must be a private directory owned by this user",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_persistent(path: &Path) -> Result<(), RuntimeError> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| failed("missing command output parent"))?;
+    validate_private_directory(parent)?;
+    validate_private_directory(path)
+}
+
+fn create_persistent(path: PathBuf) -> Result<RunDirectory, RuntimeError> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| failed("missing command output parent"))?;
+    for directory in [parent, path.as_path()] {
+        match std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(directory)
+        {
+            Ok(()) => (),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => (),
+            Err(error) => return Err(error.into()),
+        }
+        validate_private_directory(directory)?;
+    }
+    Ok(RunDirectory::Persistent(path))
 }
 
 fn private_lock(path: &Path, create: bool) -> Result<File, RuntimeError> {

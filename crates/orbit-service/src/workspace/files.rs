@@ -33,7 +33,7 @@ pub(super) async fn execute(
                 .execute(
                     ToolCall::function(
                         orbit_protocol::request_id(),
-                        "list_files",
+                        "ListFiles",
                         serde_json::json!({
                             "path": path,
                             "offset": offset,

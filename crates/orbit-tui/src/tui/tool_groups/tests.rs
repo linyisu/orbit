@@ -7,9 +7,34 @@ use ratatui::layout::Rect;
 use serde_json::json;
 
 fn call(id: &str) -> ToolCall {
-    let mut call = ToolCall::function(id, "read_file", json!({"path": "generated.rs"}));
+    let mut call = ToolCall::function(id, "ReadFile", json!({"path": "generated.rs"}));
     call.purpose = Some(format!("Inspect generated section {id}"));
     call
+}
+
+#[test]
+fn completed_rows_use_canonical_names_without_success_markers() {
+    use super::super::app::{ToolRow, ToolStatus};
+    let mut row = ToolRow {
+        id: "sample".into(),
+        name: "ReadFile".into(),
+        purpose: None,
+        arguments: json!({"path": "alpha.txt"}).to_string(),
+        output: String::new(),
+        changes: vec![],
+        status: ToolStatus::Finished,
+    };
+    let text = super::section(&row, 80)[0]
+        .line
+        .to_string();
+    assert_eq!(text.trim(), "ReadFile · alpha.txt");
+    row.status = ToolStatus::Failed;
+    assert!(
+        super::section(&row, 80)[0]
+            .line
+            .to_string()
+            .contains('×')
+    );
 }
 
 #[test]
@@ -31,6 +56,7 @@ fn running_batches_reopen_and_background_completion_collapses_without_overriding
     assert!(state.expanded_tool_groups.contains(&0));
     state.manual_disclosures.insert(0);
     state.apply(AgentEvent::ToolFinished {
+        outcome: None,
         call: call("second"),
         content: "done".into(),
         changes: vec![],
@@ -65,14 +91,10 @@ fn interleaved_sources_keep_click_identity_without_reordering_after_resize() {
         assert!(!hits.contains(&1));
     }
     pointer::toggle_transcript_item(&mut state, 3);
-    assert!(
-        state
-            .info_dialog
-            .as_ref()
-            .unwrap()
-            .content
-            .contains("section second")
-    );
+    assert!(matches!(
+        &state.info_dialog.as_ref().unwrap().source,
+        Some(super::super::dialogs::ReportSource::Tool(id)) if id == "second"
+    ));
     assert!(state.expanded.is_empty());
 }
 
@@ -105,6 +127,7 @@ fn interleaved_batches_have_independent_running_and_manual_states() {
     state.apply(AgentEvent::ToolStarted { call: call("beta") });
     assert_eq!(state.expanded_tool_groups, [0, 2].into());
     state.apply(AgentEvent::ToolFinished {
+        outcome: None,
         call: call("alpha"),
         content: "first completed".into(),
         changes: vec![],
@@ -114,6 +137,7 @@ fn interleaved_batches_have_independent_running_and_manual_states() {
     state.expanded_tool_groups.insert(0);
     state.manual_disclosures.insert(0);
     state.apply(AgentEvent::ToolFinished {
+        outcome: None,
         call: call("beta"),
         content: "second completed".into(),
         changes: vec![],
@@ -137,6 +161,7 @@ fn manual_disclosures_keep_the_clicked_header_at_the_same_screen_row() {
                 let tool = call(&format!("generated-{index}"));
                 state.apply(AgentEvent::ToolStarted { call: tool.clone() });
                 state.apply(AgentEvent::ToolFinished {
+                    outcome: None,
                     call: tool,
                     content: "complete".into(),
                     changes: vec![],

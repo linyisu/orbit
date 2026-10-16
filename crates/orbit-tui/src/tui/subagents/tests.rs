@@ -16,7 +16,7 @@ fn mouse(kind: MouseEventKind, x: u16, y: u16) -> Event {
 #[test]
 fn task_cards_preserve_status_statistics_links_and_shared_markdown() {
     for (status, expected) in [
-        ("running", "read_file"),
+        ("running", "ReadFile"),
         ("completed", "完成"),
         ("failed", "失败"),
         ("cancelled", "已取消"),
@@ -27,7 +27,7 @@ fn task_cards_preserve_status_statistics_links_and_shared_markdown() {
             changes: Vec::new(),
             purpose: None,
             id: "orbit-child".into(),
-            name: "spawn_agent".into(),
+            name: "SpawnAgent".into(),
             arguments: json!({"task":"审查中文边界 🦀 和长文件名","role":"review"}).to_string(),
             status: if status == "running" {
                 ToolStatus::Running
@@ -41,7 +41,7 @@ fn task_cards_preserve_status_statistics_links_and_shared_markdown() {
                 "tool_calls": 3,
                 "elapsed_ms": 12_900,
                 "_activity": {
-                    "current": "read_file crates/orbit-tui/src/tui/很长很长很长的文件名.rs"
+                    "current": "ReadFile crates/orbit-tui/src/tui/很长很长很长的文件名.rs"
                 },
                 "summary": "**检查完成**\n\n[证据](https://orbit.example/evidence)"
             })
@@ -163,7 +163,7 @@ fn subagent_results_and_rules_stay_inside_the_shared_tool_frame() {
                 changes: Vec::new(),
                 purpose: None,
                 id: "orbit-report".into(),
-                name: "spawn_agent".into(),
+                name: "SpawnAgent".into(),
                 arguments: json!({"task":"检查 Orbit 报告"}).to_string(),
                 status: ToolStatus::Finished,
                 output: json!({

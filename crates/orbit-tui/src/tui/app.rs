@@ -170,7 +170,7 @@ pub struct UiState {
     pub link_tooltip_area: ratatui::layout::Rect,
     pub auto_compact: bool,
     /// Archive reference emitted immediately before a context compaction event.
-    pending_compaction_archive: Option<String>,
+    pending_compaction_archive: Option<i64>,
     pub max_output_tokens: u32,
     pub model: String,
     pub reasoning_efforts: Vec<orbit_client::protocol::model::ReasoningEffort>,
@@ -676,7 +676,7 @@ impl UiState {
             AgentEvent::RequestMetrics { .. } => {}
 
             AgentEvent::CompactionRecorded { record } => {
-                self.pending_compaction_archive = record.archive;
+                self.pending_compaction_archive = record.archive_id();
             }
             AgentEvent::VerificationRecorded { .. } => {}
             AgentEvent::CompactionStarted => {}
@@ -714,12 +714,7 @@ impl UiState {
                 {
                     self.pending_compaction_archive
                         .take()
-                        .and_then(|reference| {
-                            reference
-                                .strip_prefix("read_history archive_id=")
-                                .and_then(|value| value.split(';').next())
-                                .map(|id| format!(" · 归档 #{id} · 旧约束需按需回读"))
-                        })
+                        .map(|id| format!(" · 归档 #{id} · 旧约束需按需回读"))
                         .unwrap_or_else(|| " · 旧约束需按需回读".into())
                 } else {
                     self.pending_compaction_archive = None;

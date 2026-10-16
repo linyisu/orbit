@@ -57,6 +57,14 @@ pub enum ToolStatus {
 }
 
 impl ToolStatus {
+    pub(crate) fn from_outcome(outcome: orbit_agent::tool::ToolOutcome) -> Self {
+        match outcome {
+            orbit_agent::tool::ToolOutcome::Completed => Self::Complete,
+            orbit_agent::tool::ToolOutcome::Failed => Self::Failed,
+            orbit_agent::tool::ToolOutcome::Cancelled => Self::Stopped,
+        }
+    }
+
     pub fn label(self) -> &'static str {
         match self {
             Self::Running => "执行中",
@@ -130,42 +138,42 @@ impl ToolRun {
         let args = args.as_ref();
         let path = argument(args, &["path"]);
         let (label, target, directory, file) = match self.name.as_str() {
-            "run_command" => (
+            "Exec" => (
                 "命令",
                 argument(args, &["command", "cmd"]),
                 argument(args, &["cwd"]),
                 false,
             ),
-            "read_file" => ("读取文件", path, None, true),
-            "write_file" => ("写入文件", path, None, true),
-            "edit_file" => ("编辑文件", path, None, true),
-            "read_image" => ("查看图片", path, None, true),
-            "read_document" => ("读取文档", path, None, true),
-            "list_files" => ("浏览目录", path, None, true),
-            "project_overview" => ("项目概览", argument(args, &["query", "path"]), None, false),
-            "search_text" => (
+            "ReadFile" => ("读取文件", path, None, true),
+            "WriteFile" => ("写入文件", path, None, true),
+            "EditFile" => ("编辑文件", path, None, true),
+            "ReadImage" => ("查看图片", path, None, true),
+            "ReadDocument" => ("读取文档", path, None, true),
+            "ListFiles" => ("浏览目录", path, None, true),
+            "ProjectOverview" => ("项目概览", argument(args, &["query", "path"]), None, false),
+            "Grep" => (
                 "搜索代码",
                 argument(args, &["query", "pattern"]),
                 path,
                 false,
             ),
-            "web_search" => ("搜索网页", argument(args, &["query"]), None, false),
-            "web_fetch" => ("读取网页", argument(args, &["url"]), None, false),
-            "spawn_agent" => (
+            "WebSearch" => ("搜索网页", argument(args, &["query"]), None, false),
+            "WebFetch" => ("读取网页", argument(args, &["url"]), None, false),
+            "SpawnAgent" => (
                 "启动 Agent",
                 argument(args, &["task", "prompt"]),
                 None,
                 false,
             ),
-            "send_agent_message" => (
+            "SendAgentMessage" => (
                 "发送给 Agent",
                 argument(args, &["message", "prompt", "agent_id"]),
                 argument(args, &["agent_id"]),
                 false,
             ),
-            "read_agent" => ("查看 Agent", argument(args, &["agent_id"]), None, false),
-            "wait_agents" => ("等待 Agent", None, None, false),
-            "cancel_agents" => ("停止 Agent", None, None, false),
+            "ReadAgent" => ("查看 Agent", argument(args, &["agent_id"]), None, false),
+            "WaitAgents" => ("等待 Agent", None, None, false),
+            "StopAgents" => ("停止 Agent", None, None, false),
             _ => (self.name.as_str(), None, None, false),
         };
         let target = target.unwrap_or_default();
@@ -215,14 +223,14 @@ impl ToolRun {
     }
 
     pub fn is_foreground_command(&self) -> bool {
-        self.name == "run_command"
+        self.name == "Exec"
             && serde_json::from_str::<serde_json::Value>(&self.arguments)
                 .ok()
                 .is_some_and(|args| args["background"] != true)
     }
 
     pub fn command_result(&self) -> Option<CommandResult> {
-        (self.name == "run_command")
+        (self.name == "Exec")
             .then_some(())
             .and_then(|_| serde_json::from_str(self.output.as_deref()?).ok())
     }
@@ -242,6 +250,19 @@ impl ToolRun {
                     .as_millis()
                     .min(u64::MAX as u128) as u64,
             );
+        }
+    }
+
+    /// Explicit outcomes take precedence; legacy receipts still use their known command schema.
+    pub(crate) fn set_receipt(
+        &mut self,
+        status: ToolStatus,
+        output: String,
+        outcome: Option<orbit_agent::tool::ToolOutcome>,
+    ) {
+        self.set_output(status, output);
+        if let Some(outcome) = outcome {
+            self.status = ToolStatus::from_outcome(outcome);
         }
     }
 }
@@ -268,7 +289,7 @@ pub fn batch_label(statuses: impl Iterator<Item = ToolStatus>) -> String {
     } else if failed > 0 {
         format!("{failed} 次失败")
     } else {
-        "已结束".into()
+        return format!("工具调用 · {count} 次");
     };
     format!("工具调用 · {count} 次 · {status}")
 }
@@ -534,13 +555,14 @@ impl Execution {
                 call,
                 changes,
                 content,
+                outcome,
                 ..
             } => {
                 if !self.accepts(call) {
                     return;
                 }
                 self.tool(call, ToolStatus::Complete);
-                self.output(call, content);
+                self.output(call, content, *outcome);
                 if let Some(tool) = self
                     .tools
                     .iter_mut()
@@ -559,14 +581,14 @@ impl Execution {
                     return;
                 }
                 self.tool(call, ToolStatus::Failed);
-                self.output(call, error);
+                self.output(call, error, None);
             }
             AgentEvent::ToolBackgrounded { call, content, .. } => {
                 if !self.accepts(call) {
                     return;
                 }
                 self.tool(call, ToolStatus::Background);
-                self.output(call, content);
+                self.output(call, content, None);
             }
             AgentEvent::WaitingForCommands { .. } | AgentEvent::WaitingForTasks { .. } => {
                 self.phase = Phase::Background
@@ -588,15 +610,20 @@ impl Execution {
             })
     }
 
-    fn output(&mut self, call: &ToolCall, content: &str) {
+    fn output(
+        &mut self,
+        call: &ToolCall,
+        content: &str,
+        outcome: Option<orbit_agent::tool::ToolOutcome>,
+    ) {
         if let Some(tool) = self
             .tools
             .iter_mut()
             .find(|tool| tool.id == call.id)
         {
-            tool.set_output(tool.status, content.to_owned());
+            tool.set_receipt(tool.status, content.to_owned(), outcome);
         }
-        if call.function.name == "spawn_agent"
+        if call.function.name == "SpawnAgent"
             && let Ok(value) = serde_json::from_str::<serde_json::Value>(content)
             && let Some(id) = value["agent_id"].as_str()
         {
@@ -678,12 +705,33 @@ mod tests {
     use super::*;
 
     #[test]
+    fn explicit_tool_outcomes_override_legacy_command_and_mcp_text() {
+        use orbit_agent::tool::ToolOutcome;
+        for (outcome, status) in [
+            (ToolOutcome::Completed, ToolStatus::Complete),
+            (ToolOutcome::Failed, ToolStatus::Failed),
+            (ToolOutcome::Cancelled, ToolStatus::Stopped),
+        ] {
+            let mut state = Execution::default();
+            let call = ToolCall::function("receipt", "MCP_Fixture_Inspect", serde_json::json!({}));
+            state.agent(&AgentEvent::ToolFinished {
+                call,
+                content: "opaque result".into(),
+                outcome: Some(outcome),
+                changes: vec![],
+                files: Some(Default::default()),
+            });
+            assert_eq!(state.tools[0].status, status);
+        }
+    }
+
+    #[test]
     fn stored_child_runs_refresh_terminal_states_and_ignore_launch_replay() {
         use orbit_protocol::subagents::Agent;
         let mut state = Execution::default();
         let call = ToolCall::function(
             "spawn",
-            "spawn_agent",
+            "SpawnAgent",
             serde_json::json!({
                 "task": "检查项目"
             }),
@@ -695,6 +743,7 @@ mod tests {
         })
         .to_string();
         state.agent(&AgentEvent::ToolFinished {
+            outcome: None,
             call: call.clone(),
             content: running.clone(),
             changes: vec![],
@@ -718,6 +767,7 @@ mod tests {
             stored.status = status.into();
             state.sync_agents(&[stored.clone()]);
             state.agent(&AgentEvent::ToolFinished {
+                outcome: None,
                 call: call.clone(),
                 content: running.clone(),
                 changes: vec![],
@@ -754,7 +804,7 @@ mod tests {
     fn command_presentation_uses_first_nonempty_line_without_changing_the_request() {
         let command = "\n\t \n  python3  -c \"\nprint('已完成')\n\"";
         let tool = presented_tool(
-            "run_command",
+            "Exec",
             serde_json::json!({
                 "command": command,
                 "cwd": "/home/用户/项目"
@@ -778,7 +828,7 @@ mod tests {
     fn presentation_bounds_long_unicode_titles_but_keeps_the_complete_tooltip() {
         let command = format!("printf '{}'", "数据🦀".repeat(300));
         let tool = presented_tool(
-            "run_command",
+            "Exec",
             serde_json::json!({
                 "command": command
             }),
@@ -811,7 +861,7 @@ mod tests {
             ("C:\\", "C:\\", ""),
         ] {
             let tool = presented_tool(
-                "read_file",
+                "ReadFile",
                 serde_json::json!({
                     "path": path
                 }),
@@ -838,24 +888,24 @@ mod tests {
                 "command": " \n\t"
             }),
         ] {
-            let tool = presented_tool("run_command", arguments);
+            let tool = presented_tool("Exec", arguments);
             assert_eq!(tool.presentation().title(), "命令");
             assert!(
                 tool.presentation()
                     .tooltip()
-                    .contains("run_command")
+                    .contains("Exec")
             );
         }
         let mut tool = presented_tool(
-            "mcp__catalog__search",
+            "MCP_Catalog_Search",
             serde_json::json!({
                 "query": "齿轮"
             }),
         );
-        assert_eq!(tool.presentation().title(), "mcp__catalog__search");
+        assert_eq!(tool.presentation().title(), "MCP_Catalog_Search");
         assert_eq!(tool.presentation().subtitle(), "齿轮");
         tool.arguments = "not JSON".into();
-        assert_eq!(tool.presentation().title(), "mcp__catalog__search");
+        assert_eq!(tool.presentation().title(), "MCP_Catalog_Search");
         assert_eq!(tool.status, ToolStatus::Running);
     }
 
@@ -863,7 +913,7 @@ mod tests {
     fn search_and_delegation_present_the_actual_requested_target() {
         for (name, args, title, label) in [
             (
-                "search_text",
+                "Grep",
                 serde_json::json!({
                     "query": "渲染 错误",
                     "path": "src"
@@ -872,7 +922,7 @@ mod tests {
                 "搜索代码 · src",
             ),
             (
-                "web_search",
+                "WebSearch",
                 serde_json::json!({
                     "query": "GPUI tooltip"
                 }),
@@ -880,7 +930,7 @@ mod tests {
                 "搜索网页",
             ),
             (
-                "web_fetch",
+                "WebFetch",
                 serde_json::json!({
                     "url": "https://example.com/文档"
                 }),
@@ -888,7 +938,7 @@ mod tests {
                 "读取网页",
             ),
             (
-                "spawn_agent",
+                "SpawnAgent",
                 serde_json::json!({
                     "task": "检查布局\n保留用户改动"
                 }),
@@ -909,7 +959,7 @@ mod tests {
         let call = serde_json::json!({
             "id": "write-1",
             "function": {
-                "name": "write_file",
+                "name": "WriteFile",
                 "arguments": "{\"path\":\"src/main.rs\"}"
             }
         });
@@ -972,7 +1022,7 @@ mod tests {
                     "call": {
                         "id": "one",
                         "function": {
-                            "name": "run_command",
+                            "name": "Exec",
                             "arguments": "{}"
                         }
                     }
@@ -997,7 +1047,7 @@ mod tests {
         let call = serde_json::json!({
             "id": "delegate",
             "function": {
-                "name": "spawn_agent",
+                "name": "SpawnAgent",
                 "arguments": "{\"task\":\"review\"}"
             }
         });
@@ -1050,7 +1100,7 @@ mod tests {
         let mut state = Execution::default();
         let call = ToolCall::function(
             "spawn",
-            "spawn_agent",
+            "SpawnAgent",
             serde_json::json!({
                 "task": task
             }),
@@ -1076,13 +1126,15 @@ mod tests {
             Some("检查 侧栏布局")
         );
         state.agent(&AgentEvent::ToolFinished {
+            outcome: None,
             call,
             content: receipt("completed"),
             changes: vec![],
             files: None,
         });
-        for name in ["read_agent", "send_agent_message", "wait_agents"] {
+        for name in ["ReadAgent", "SendAgentMessage", "WaitAgents"] {
             state.agent(&AgentEvent::ToolFinished {
+                outcome: None,
                 call: ToolCall::function(
                     name,
                     name,
@@ -1099,7 +1151,8 @@ mod tests {
         }
         // Partial historical receipts must not erase an already known task.
         state.agent(&AgentEvent::ToolFinished {
-            call: ToolCall::function("historical", "spawn_agent", serde_json::json!({})),
+            outcome: None,
+            call: ToolCall::function("historical", "SpawnAgent", serde_json::json!({})),
             content: receipt("completed"),
             changes: vec![],
             files: None,
@@ -1128,7 +1181,8 @@ mod tests {
         ] {
             let mut state = Execution::default();
             state.agent(&AgentEvent::ToolFinished {
-                call: ToolCall::function("spawn", "spawn_agent", arguments),
+                outcome: None,
+                call: ToolCall::function("spawn", "SpawnAgent", arguments),
                 content: serde_json::json!({
                     "agent_id": "child",
                     "role": "review",
@@ -1179,13 +1233,14 @@ mod tests {
             let mut state = Execution::default();
             let call = ToolCall::function(
                 "command",
-                "run_command",
+                "Exec",
                 serde_json::json!({
                     "command": "example"
                 }),
             );
             state.agent(&AgentEvent::ToolStarted { call: call.clone() });
             state.agent(&AgentEvent::ToolFinished {
+                outcome: None,
                 call,
                 content: command_result(exit, timed_out, cancelled),
                 changes: vec![],
@@ -1201,7 +1256,7 @@ mod tests {
         let mut state = Execution::default();
         let call = ToolCall::function(
             "command",
-            "run_command",
+            "Exec",
             serde_json::json!({
                 "command": "example"
             }),
@@ -1229,6 +1284,7 @@ mod tests {
         );
         assert!(state.tools()[0].live);
         state.agent(&AgentEvent::ToolFinished {
+            outcome: None,
             call,
             content: command_result(0.into(), false, false),
             changes: vec![],
@@ -1256,7 +1312,7 @@ mod tests {
         let mut state = Execution::default();
         let old = ToolCall::function(
             "same-id",
-            "run_command",
+            "Exec",
             serde_json::json!({
                 "command": "first"
             }),
@@ -1270,7 +1326,7 @@ mod tests {
         let generation = state.tools()[0].generation;
         let background = ToolCall::function(
             "same-id",
-            "run_command",
+            "Exec",
             serde_json::json!({
                 "command": "next",
                 "background": true
@@ -1292,6 +1348,7 @@ mod tests {
         }]);
         assert!(!state.tools()[0].live);
         state.agent(&AgentEvent::ToolFinished {
+            outcome: None,
             call: old,
             content: command_result(0.into(), false, false),
             changes: vec![],

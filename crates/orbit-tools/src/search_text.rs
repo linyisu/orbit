@@ -5,8 +5,7 @@ use std::{
 
 use globset::{Glob, GlobMatcher};
 use ignore::WalkBuilder;
-use orbit_agent::tool::{Tool, ToolError, ToolFuture, ToolOutput};
-use orbit_model::types::{ToolCall, ToolDefinition};
+use orbit_agent::tool::{Tool, ToolError, ToolOutput};
 use orbit_runtime::filesystem::{Workspace, WorkspaceError};
 use regex::{Regex, RegexBuilder};
 use serde::Deserialize;
@@ -23,18 +22,25 @@ const DEFAULT_PAGE_MATCHES: usize = 100;
 const MAX_PAGE_MATCHES: usize = 500;
 const MAX_CONTEXT_LINES: usize = 10;
 
-#[derive(Deserialize)]
+#[derive(Deserialize, schemars::JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 struct Arguments {
+    /// Literal text by default; set regex=true for Rust regex syntax.
+    #[schemars(required, length(min = 1, max = MAX_QUERY_BYTES))]
     query: String,
     path: String,
     regex: bool,
     case_sensitive: bool,
     glob: Option<String>,
+    #[schemars(range(max = MAX_CONTEXT_LINES))]
     context_lines: usize,
+    #[schemars(range(max = MAX_DIRECTORY_ENTRIES))]
     offset: usize,
+    #[schemars(range(min = 1, max = MAX_PAGE_MATCHES))]
     limit: usize,
     include_hidden: bool,
+    /// content: matching lines; files: matching paths; count: occurrences per file.
+    output_mode: OutputMode,
 }
 
 impl Default for Arguments {
@@ -49,8 +55,18 @@ impl Default for Arguments {
             offset: 0,
             limit: DEFAULT_PAGE_MATCHES,
             include_hidden: false,
+            output_mode: OutputMode::Content,
         }
     }
+}
+
+#[derive(Clone, Copy, Default, Deserialize, serde::Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+enum OutputMode {
+    #[default]
+    Content,
+    Files,
+    Count,
 }
 
 pub struct SearchText {
@@ -68,121 +84,37 @@ impl Tool for SearchText {
         orbit_agent::tool::ToolCapabilities::READ
     }
 
-    fn definition(&self) -> ToolDefinition {
-        ToolDefinition::function(
-            "search_text",
-            concat!(
-                "Search UTF-8 text files in the workspace (or outside paths granted via \
-                    request_capability) without running a shell. ",
-                "IMPORTANT: regex defaults to false. With regex=false or omitted, the entire query \
-                    is literal: ",
-                "a|b searches for the actual text a|b, NOT either a or b. ",
-                "To search alternatives, send {\"query\":\"a|b\",\"regex\":true}; ",
-                "to find the literal pipe expression, send {\"query\":\"a|b\",\"regex\":false}. ",
-                "Set regex=true explicitly whenever using alternation, character classes, anchors \
-                    or other regex syntax. ",
-                "Regex uses Rust regex syntax and matches one line at a time; lookaround and \
-                    backreferences are unsupported. ",
-                "Both modes are case-insensitive unless case_sensitive=true. ",
-                "If a query returns no matches, check the returned regex mode and query before \
-                    concluding the text is absent. ",
-                "Uses .gitignore and .ignore rules, never follows symlinks, and excludes protected \
-                    metadata such as .git and .env. ",
-                "Optionally narrow with a workspace-relative path, outside granted path, or glob \
-                    such as **/*.rs. ",
-                "Results have path, 1-based line/column, text and surrounding lines. Paginate \
-                    matches with offset/next_offset. ",
-                "Large, binary and unreadable files are skipped; use read_file for full content \
-                    after locating a match."
-            ),
-            json!({
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "minLength": 1,
-                        "maxLength": MAX_QUERY_BYTES,
-                        "description": "Search text. Literal unless regex=true: a|b means the \
-                            literal pipe expression by default. For either term, use query=a|b \
-                            AND regex=true. Do not add shell quotes or /regex/ delimiters."
-                    },
-                    "path": {
-                        "type": "string",
-                        "default": ".",
-                        "description": "Workspace-relative directory or file, or outside path \
-                            granted via request_capability"
-                    },
-                    "regex": {
-                        "type": "boolean",
-                        "default": false,
-                        "description": "false or omitted: exact literal substring matching, \
-                            including | . * [ ] ^ $. true: interpret query as a Rust regular \
-                            expression. REQUIRED for alternatives such as foo|bar; never inferred \
-                            from query content."
-                    },
-                    "case_sensitive": {
-                        "type": "boolean",
-                        "default": false
-                    },
-                    "glob": {
-                        "type": "string",
-                        "description": "Optional glob filter, for example **/*.rs"
-                    },
-                    "context_lines": {
-                        "type": "integer",
-                        "minimum": 0,
-                        "maximum": MAX_CONTEXT_LINES,
-                        "default": 0
-                    },
-                    "offset": {
-                        "type": "integer",
-                        "minimum": 0,
-                        "maximum": MAX_DIRECTORY_ENTRIES,
-                        "default": 0
-                    },
-                    "limit": {
-                        "type": "integer",
-                        "minimum": 1,
-                        "maximum": MAX_PAGE_MATCHES,
-                        "default": DEFAULT_PAGE_MATCHES
-                    },
-                    "include_hidden": {
-                        "type": "boolean",
-                        "default": false
-                    }
-                },
-                "required": ["query"],
-                "additionalProperties": false
-            }),
-        )
-    }
-
-    fn execute<'a>(&'a self, call: ToolCall, cancellation: CancellationToken) -> ToolFuture<'a> {
-        Box::pin(async move {
-            let arguments: Arguments = serde_json::from_str(&call.function.arguments)
-                .map_err(|error| invalid(error.to_string()))?;
-            validate(&arguments)?;
-
-            if cancellation.is_cancelled() {
-                return Err(ToolError::Cancelled);
-            }
-
-            let workspace = self.workspace.clone();
-            let token = cancellation.clone();
-            let task = tokio::task::spawn_blocking(move || search(workspace, arguments, token));
-
-            tokio::select! {
-                _ = cancellation.cancelled() => Err(ToolError::Cancelled),
-                result = task => result.map_err(failed)?,
-            }
-            .map(ToolOutput::text)
-        })
+    /// Search UTF-8 files using a literal query (default) or regex=true. Case-insensitive
+    /// unless case_sensitive=true. Rust regex syntax is line-based; no lookaround or backreferences.
+    /// Narrow by path/glob. output_mode selects matching lines, file paths or occurrence counts.
+    /// offset/next_offset paginate returned entries, not individual occurrences within a line.
+    /// Respects .gitignore/.ignore; hidden files are opt-in, protected paths and symlinks excluded.
+    /// Large, binary or unreadable files are skipped; scan_truncated means search was incomplete.
+    /// Use ReadFile for full source around a hit. Paths may be workspace-relative or explicitly granted.
+    #[orbit_agent::tool(name = "Grep")]
+    async fn execute(
+        &self,
+        arguments: Arguments,
+        cancellation: CancellationToken,
+    ) -> Result<ToolOutput, ToolError> {
+        validate(&arguments)?;
+        if cancellation.is_cancelled() {
+            return Err(ToolError::Cancelled);
+        }
+        let workspace = self.workspace.clone();
+        let token = cancellation.clone();
+        let task = tokio::task::spawn_blocking(move || search(workspace, arguments, token));
+        tokio::select! {
+            _ = cancellation.cancelled() => Err(ToolError::Cancelled),
+            result = task => result.map_err(failed)?,
+        }
+        .map(ToolOutput::text)
     }
 }
 
 fn invalid(message: impl Into<String>) -> ToolError {
     ToolError::InvalidArguments {
-        tool: "search_text".into(),
+        tool: "Grep".into(),
         message: message.into(),
     }
 }
@@ -234,7 +166,6 @@ fn search(
         .hidden(!args.include_hidden)
         .parents(false)
         .follow_links(false)
-        .max_filesize(Some(MAX_FILE_BYTES))
         .sort_by_file_name(|left, right| left.cmp(right));
 
     if !is_external {
@@ -356,12 +287,20 @@ fn search(
 
         let mut bytes = Vec::with_capacity(file_size as usize);
 
-        if file.read_to_end(&mut bytes).is_err() {
+        let read_result = file
+            .by_ref()
+            .take((MAX_FILE_BYTES + 1).min(MAX_SCANNED_BYTES - scanned_bytes + 1))
+            .read_to_end(&mut bytes);
+        scanned_bytes += bytes.len() as u64;
+        if scanned_bytes > MAX_SCANNED_BYTES {
+            scan_truncated = true;
+            break;
+        }
+        if read_result.is_err() || bytes.len() as u64 > MAX_FILE_BYTES {
             skipped_files += 1;
             continue;
         }
 
-        scanned_bytes += bytes.len() as u64;
         scanned_files += 1;
         let text = match String::from_utf8(bytes) {
             Ok(text) if !text.contains('\0') => text,
@@ -373,38 +312,56 @@ fn search(
 
         let lines: Vec<_> = text.lines().collect();
 
+        let mut append = |entry: Value| {
+            matched += 1;
+            if matched <= args.offset {
+                return true;
+            }
+            let size = entry.to_string().len() + 1;
+            if matches.len() == args.limit
+                || output_bytes + size > MAX_TEXT_OUTPUT_BYTES - OUTPUT_METADATA_RESERVE_BYTES
+            {
+                has_more = true;
+                return false;
+            }
+            output_bytes += size;
+            matches.push(entry);
+            true
+        };
+        let mut occurrences = 0;
         for (line_index, line) in lines.iter().enumerate() {
             if token.is_cancelled() {
                 return Err(ToolError::Cancelled);
             }
-
-            for found in matcher.find_iter(line) {
-                matched += 1;
-
-                if matched <= args.offset {
-                    continue;
+            let mut found = matcher.find_iter(line);
+            let Some(first) = found.next() else { continue };
+            match args.output_mode {
+                OutputMode::Content => {
+                    if !append(match_entry(
+                        &relative_or_path,
+                        line_index,
+                        line,
+                        first.start(),
+                        &lines,
+                        &args,
+                    )) {
+                        break 'files;
+                    }
                 }
-
-                let entry = match_entry(
-                    &relative_or_path,
-                    line_index,
-                    line,
-                    found.start(),
-                    &lines,
-                    &args,
-                );
-                let size = entry.to_string().len() + 1;
-
-                if matches.len() == args.limit
-                    || output_bytes + size > MAX_TEXT_OUTPUT_BYTES - OUTPUT_METADATA_RESERVE_BYTES
-                {
-                    has_more = true;
-                    break 'files;
+                OutputMode::Files => {
+                    occurrences = 1;
+                    break;
                 }
-
-                output_bytes += size;
-                matches.push(entry);
+                OutputMode::Count => occurrences += 1 + found.count(),
             }
+        }
+        if occurrences > 0
+            && !append(match args.output_mode {
+                OutputMode::Files => json!({ "path": relative_or_path.to_string_lossy() }),
+                _ => json!({ "path": relative_or_path.to_string_lossy(), "count": occurrences }),
+            })
+        {
+            break 'files;
         }
     }
 
@@ -413,6 +370,7 @@ fn search(
         "path": args.path,
         "regex": args.regex,
         "case_sensitive": args.case_sensitive,
+        "output_mode": args.output_mode,
         "matches": matches,
         "next_offset": has_more.then_some(args.offset + matches.len()),
         "has_more": has_more,

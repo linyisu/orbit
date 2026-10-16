@@ -496,6 +496,20 @@ impl Tab {
     pub async fn poll(&mut self) -> bool {
         let mut changed = self.poll_reconnection();
         changed |= self.poll_usage().await;
+        if let (Some(dialog), Some(connection), Some(session)) =
+            (&mut self.state.info_dialog, &self.connection, &self.id)
+        {
+            changed |= dialog
+                .poll_output(connection, session, None)
+                .await;
+        }
+        if let (Some(viewer), Some(connection), Some(session)) =
+            (&mut self.state.subagent_dialog, &self.connection, &self.id)
+        {
+            changed |= viewer
+                .poll_output(connection, session)
+                .await;
+        }
         changed |= self
             .state
             .feedback
@@ -774,6 +788,9 @@ impl Tab {
         changed |= super::advance_tab_hover(&mut self.state);
         changed |= self.state.expire_footnote_focus();
         changed |= self.state.navigation.advance_preview();
+        if let Some(dialog) = &mut self.state.info_dialog {
+            changed |= dialog.tick(std::time::Instant::now());
+        }
         if let Some(picker) = &mut self.state.picker {
             changed |= picker.advance_title_scroll();
         }

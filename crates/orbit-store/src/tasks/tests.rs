@@ -346,7 +346,7 @@ async fn interrupted_child_finalization_requires_its_lease_and_matching_invocati
         .begin_agent_invocation(
             parent.id(),
             child.id(),
-            orbit_model::types::ToolCall::function("child", "spawn_agent", serde_json::json!({})),
+            orbit_model::types::ToolCall::function("child", "SpawnAgent", serde_json::json!({})),
         )
         .await
         .unwrap();
@@ -469,7 +469,7 @@ async fn child_worktrees_share_the_board_and_terminal_receipts_release_unfinishe
         .begin_agent_invocation(
             parent.id(),
             child.id(),
-            orbit_model::types::ToolCall::function("child", "spawn_agent", serde_json::json!({})),
+            orbit_model::types::ToolCall::function("child", "SpawnAgent", serde_json::json!({})),
         )
         .await
         .unwrap();

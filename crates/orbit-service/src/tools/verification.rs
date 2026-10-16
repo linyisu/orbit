@@ -24,7 +24,7 @@ pub fn register(
     limits: orbit_tools::run_command::CommandLimits,
 ) {
     tools.register(ClosureTool::new(
-        "verification_status",
+        "CheckEvidence",
         "Inspect this session's actual command evidence and compare input file fingerprints with \
             the current filtered workspace. Call after final edits before reporting verification. \
             A zero exit code is not proof of tests; input_unchanged means the current workspace \
@@ -46,7 +46,7 @@ pub fn register(
             async move {
                 if !args.as_object().is_some_and(|a| a.is_empty()) {
                     return Err(ToolError::InvalidArguments {
-                        tool: "verification_status".into(),
+                        tool: "CheckEvidence".into(),
                         message: "no arguments expected".into(),
                     });
                 }
@@ -78,7 +78,7 @@ pub async fn report(
 
     while orbit_agent::context::estimate_tokens(
         &[orbit_model::types::ChatMessage::tool(
-            "verification_status",
+            "CheckEvidence",
             result.to_string(),
         )],
         &[],
@@ -267,7 +267,7 @@ fn compare(
         "commands_omitted": commands.len().saturating_sub(20),
         "changes": paths,
         "changes_omitted": total.saturating_sub(100),
-        "limitations": "Source fingerprints cover the same filtered workspace as run_command, not \
+        "limitations": "Source fingerprints cover the same filtered workspace as Exec, not \
             ignored runtime directories or external system state. Commands execute in the real \
             workspace with the target user environment. Inspect the command and its output before \
             claiming tests passed; stale or unknown evidence does not verify current edits."
@@ -405,7 +405,7 @@ mod tests {
             run_id: 1,
             run_status: "completed".into(),
             call_id: "edit".into(),
-            tool: "edit_file".into(),
+            tool: "EditFile".into(),
             undone: false,
             change: FileChange {
                 path: "a.rs".into(),

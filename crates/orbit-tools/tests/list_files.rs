@@ -11,7 +11,7 @@ async fn run(tool: &ListFiles, args: Value) -> Value {
     serde_json::from_str(
         &tool
             .execute(
-                ToolCall::function("list", "list_files", args),
+                ToolCall::function("list", "ListFiles", args),
                 CancellationToken::new(),
             )
             .await
@@ -71,6 +71,14 @@ async fn paginates_breadth_first_and_supports_explicit_generated_directories() {
         ["README.md", "src", "target", "src/z.rs", "src/中文.rs"]
     );
     assert_eq!(second["next_offset"], Value::Null);
+    let filtered = run(&tool, json!({ "depth": 3, "glob": "**/*.rs" })).await;
+    assert_eq!(
+        filtered["entries"],
+        json!([
+            { "path": "src/z.rs", "kind": "file" },
+            { "path": "src/中文.rs", "kind": "file" }
+        ])
+    );
     assert_eq!(
         run(
             &tool,
@@ -164,7 +172,7 @@ async fn excludes_protected_aliases_symlinks_and_special_files() {
             tool.execute(
                 ToolCall::function(
                     "list",
-                    "list_files",
+                    "ListFiles",
                     json!({
                         "path": path
                     })
@@ -180,7 +188,7 @@ async fn excludes_protected_aliases_symlinks_and_special_files() {
     token.cancel();
 
     assert!(matches!(
-        tool.execute(ToolCall::function("list", "list_files", json!({})), token)
+        tool.execute(ToolCall::function("list", "ListFiles", json!({})), token)
             .await,
         Err(ToolError::Cancelled)
     ));
@@ -213,6 +221,7 @@ async fn validates_arguments_and_caps_serialized_output() {
     assert!(page["next_offset"].as_u64().unwrap() > 0);
 
     for args in [
+        json!({ "glob": "[" }),
         json!({
             "depth": 0
         }),
@@ -234,7 +243,7 @@ async fn validates_arguments_and_caps_serialized_output() {
     ] {
         assert!(matches!(
             tool.execute(
-                ToolCall::function("list", "list_files", args),
+                ToolCall::function("list", "ListFiles", args),
                 CancellationToken::new()
             )
             .await,

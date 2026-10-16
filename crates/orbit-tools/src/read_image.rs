@@ -43,9 +43,9 @@ impl Tool for ReadImage {
 
     fn definition(&self) -> ToolDefinition {
         ToolDefinition::function(
-            "read_image",
+            "ReadImage",
             "Load a PNG, JPEG, GIF or WebP image inside the workspace (or outside path granted via \
-                request_capability) into the model's native vision input. Use this whenever the \
+                RequestAccess) into the model's native vision input. Use this whenever the \
                 user asks about an image file; filesystem listing or shell pixel inspection does \
                 not show the image to the model. Use a relative path or granted outside path. The \
                 image is validated locally, copied to Orbit's global attachment store, and no \
@@ -56,7 +56,7 @@ impl Tool for ReadImage {
                     "path": {
                         "type": "string",
                         "description": "Path relative to the workspace root, or an outside path \
-                            granted via request_capability"
+                            granted via RequestAccess"
                     }
                 },
                 "required": ["path"],
@@ -128,7 +128,7 @@ impl Tool for ReadImage {
 
 fn invalid(message: impl Into<String>) -> ToolError {
     ToolError::InvalidArguments {
-        tool: "read_image".into(),
+        tool: "ReadImage".into(),
         message: message.into(),
     }
 }
@@ -155,7 +155,7 @@ mod tests {
             .execute(
                 ToolCall::function(
                     "image-1",
-                    "read_image",
+                    "ReadImage",
                     json!({
                         "path": "scene.png"
                     }),
@@ -191,7 +191,7 @@ mod tests {
             .execute(
                 ToolCall::function(
                     "image-1",
-                    "read_image",
+                    "ReadImage",
                     json!({
                         "path": "scene.png"
                     }),

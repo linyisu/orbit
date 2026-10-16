@@ -79,7 +79,7 @@ fn apply(setup: &mut PreparedWorkspace, (tools, statuses): Catalog) {
     setup
         .resources
         .tools
-        .replace_prefix("mcp__", &tools);
+        .replace_origin(orbit_agent::tool::ToolOrigin::Mcp, &tools);
     super::super::setup::filter_configured_tools(
         &mut setup.resources.tools,
         &setup.resources.policy,

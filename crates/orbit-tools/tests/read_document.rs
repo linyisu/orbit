@@ -77,7 +77,7 @@ async fn pdf_images_work_in_the_native_document_worker() {
         .execute(
             ToolCall::function(
                 "doc",
-                "read_document",
+                "ReadDocument",
                 json!({
                     "path": "mixed.pdf",
                     "start_page": 2,
@@ -118,7 +118,7 @@ async fn pdf_images_reach_attachments_with_page_numbers_and_bounded_continuation
         args.as_object_mut()
             .unwrap()
             .extend(extra.as_object().unwrap().clone());
-        ToolCall::function("document", "read_document", args)
+        ToolCall::function("document", "ReadDocument", args)
     };
     let output = tool
         .execute(call(json!({})), CancellationToken::new())
@@ -260,7 +260,7 @@ async fn render_failure_preserves_extracted_text() {
         .execute(
             ToolCall::function(
                 "doc",
-                "read_document",
+                "ReadDocument",
                 json!({
                     "path": "mixed.pdf"
                 }),
@@ -294,7 +294,7 @@ async fn standalone_worker_returns_paginated_content_and_invalidates_source_cach
     std::fs::write(&path, "name,value\nalpha,1\nbeta,2\n").unwrap();
     let tool = ReadDocument::new(Workspace::new(dir.path()).unwrap())
         .with_worker(env!("CARGO_BIN_EXE_orbit-document-worker").into());
-    let call = |arguments| ToolCall::function("document", "read_document", arguments);
+    let call = |arguments| ToolCall::function("document", "ReadDocument", arguments);
     let first: Value = serde_json::from_str(
         &tool
             .execute(

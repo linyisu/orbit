@@ -82,7 +82,7 @@ async fn catalogue_discovers_stored_children_and_their_own_workspace_without_exe
     setup
         .resources
         .tools
-        .remove("read_agent");
+        .remove("ReadAgent");
     let Snapshot::List { agents, next } = execute(&mut setup, Action::List { offset: 0 })
         .await
         .unwrap()
@@ -158,7 +158,7 @@ async fn native_mutations_check_parent_and_run_without_executing_untyped_tools()
         .resources
         .tools
         .register(ClosureTool::new(
-            "cancel_agents",
+            "StopAgents",
             "test routing",
             serde_json::json!({}),
             move |arguments, _| {
@@ -234,7 +234,7 @@ async fn native_mutations_check_parent_and_run_without_executing_untyped_tools()
     setup
         .resources
         .tools
-        .remove("send_agent_message");
+        .remove("SendAgentMessage");
     assert!(
         execute(
             &mut setup,

@@ -978,6 +978,29 @@ impl Service {
                     .await?;
                 Ok(Response::Ok)
             }
+            Request::ReadToolOutput {
+                session,
+                agent,
+                source,
+                offset,
+            } => {
+                let handle = self.session(&session).await?;
+                if let Some(agent) = &agent {
+                    handle.authorize_subagent(agent).await?;
+                }
+                let directory = handle
+                    .store
+                    .path()
+                    .with_extension("command-output")
+                    .join(
+                        agent
+                            .as_deref()
+                            .unwrap_or(&handle.info.id),
+                    );
+                Ok(Response::ToolOutput(
+                    super::tool_output::read(directory, source, offset).await?,
+                ))
+            }
             Request::ReadFile {
                 session,
                 path,
@@ -1094,6 +1117,7 @@ async fn capabilities() -> orbit_protocol::Capabilities {
                     "approvals",
                     "cancel",
                     "files",
+                    "retained_tool_output",
                     "subagents",
                     "images",
                     "compact",

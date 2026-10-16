@@ -115,7 +115,7 @@ pub(super) async fn inspect(setup: &PreparedWorkspace, section: Inspection) -> R
             });
             let definitions =
                 orbit_agent::context::estimate_tokens(&[], &resources.tools.definitions());
-            let overview = tool_context_tokens(&history, "project_overview");
+            let overview = tool_context_tokens(&history, "ProjectOverview");
             let project_state = estimate_part(&history, |message| {
                 matches!(
                     message,
@@ -194,9 +194,9 @@ async fn status(setup: &PreparedWorkspace) -> Result<String> {
     let resources = &setup.resources;
     let budget = &resources.budget;
     let output = if session.command_output.lease().is_some() {
-        "临时保留，可通过 read_command_output 分页读取；任务结束后删除"
+        "按会话保留，可通过 CommandOutput 分页读取；超出容量时回收旧日志"
     } else {
-        "无临时日志；完整输出不跨任务或重启保留"
+        "当前会话尚无保留日志"
     };
     let baseline = session
         .git_baseline
@@ -289,20 +289,20 @@ mod tests {
     fn overview_budget_counts_only_matching_tool_results_in_effective_history() {
         use orbit_model::types::ToolCall;
 
-        let call = ToolCall::function("map", "project_overview", serde_json::json!({}));
+        let call = ToolCall::function("map", "ProjectOverview", serde_json::json!({}));
         let output = ChatMessage::tool("map", "repository map");
         let messages = vec![
-            ChatMessage::user("project_overview"),
+            ChatMessage::user("ProjectOverview"),
             ChatMessage::assistant_tool_calls(vec![call]),
             output.clone(),
             ChatMessage::tool("other", "unrelated output"),
         ];
 
         assert_eq!(
-            tool_context_tokens(&messages, "project_overview"),
+            tool_context_tokens(&messages, "ProjectOverview"),
             orbit_agent::context::estimate_tokens(&[output], &[])
         );
-        assert_eq!(tool_context_tokens(&[], "project_overview"), 0);
+        assert_eq!(tool_context_tokens(&[], "ProjectOverview"), 0);
         assert_eq!(tool_context_tokens(&messages, "missing"), 0);
     }
 }

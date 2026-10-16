@@ -50,14 +50,14 @@ impl Tool for RequestCapability {
                 workspace ancestors, protected files/directories and these exact host paths: {}; \
                 these host directories and all descendants: {}. The whole host /tmp is reserved, \
                 but an existing specific /tmp child may be eligible. File-tool grants do not \
-                isolate shell commands; run_command uses real host paths. Approved grants last \
+                isolate shell commands; Exec uses real host paths. Approved grants last \
                 for this session.",
             RESERVED_CAPABILITY_PATHS.join(", "),
             RESERVED_CAPABILITY_TREES.join(", ")
         );
 
         ToolDefinition::function(
-            "request_capability",
+            "RequestAccess",
             description,
             json!({
                 "type": "object",
@@ -176,7 +176,7 @@ impl Tool for RequestCapability {
                 PolicyDecision::Denied(reason) => Err(ToolError::ExecutionFailed(format!(
                     "permission permanently denied: {reason}. This policy denial cannot be \
                         overridden by user approval; do not retry the same request. Use an \
-                        eligible external path, the workspace, or run_command's isolated \
+                        eligible external path, the workspace, or Exec's isolated \
                         temporary directories."
                 ))),
 
@@ -268,7 +268,7 @@ fn expand_user_path(path: &str) -> String {
 
 fn invalid(message: impl Into<String>) -> ToolError {
     ToolError::InvalidArguments {
-        tool: "request_capability".into(),
+        tool: "RequestAccess".into(),
         message: message.into(),
     }
 }

@@ -28,7 +28,7 @@ async fn auxiliary_completion_wakes_parent_without_polling_or_duplicate_tool_res
     jobs.restore_result(
         ToolCall::function(
             "child",
-            "spawn_agent",
+            "SpawnAgent",
             serde_json::json!({
                 "task": "review"
             }),
@@ -77,7 +77,7 @@ async fn inbox_wakes_waiting_agent_and_cancellation_reaps_auxiliary_jobs() {
             let done = done.clone();
             async move {
                 jobs.start(
-                    ToolCall::function("child", "spawn_agent", serde_json::json!({})),
+                    ToolCall::function("child", "SpawnAgent", serde_json::json!({})),
                     "child".into(),
                     None,
                     token,
@@ -156,7 +156,7 @@ async fn progress_reminders_wake_parent_and_idle_launched_children_join_the_next
     let child_release = release.clone();
     let receipt = jobs
         .start(
-            ToolCall::function("ui-followup", "send_agent_message", serde_json::json!({})),
+            ToolCall::function("ui-followup", "SendAgentMessage", serde_json::json!({})),
             "continued child".into(),
             None,
             CancellationToken::new(),

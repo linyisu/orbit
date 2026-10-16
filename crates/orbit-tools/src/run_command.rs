@@ -175,13 +175,13 @@ impl Tool for RunCommand {
 
     fn definition(&self) -> ToolDefinition {
         ToolDefinition::function(
-            "run_command",
+            "Exec",
             format!(
                 "Run builds, tests, Git, local processing or operations that need a shell. Prefer \
-                    web_search/web_fetch for ordinary public web research, edit_file for \
-                    localized text edits and write_file for new files. Scripts remain appropriate \
+                    WebSearch/WebFetch for ordinary public web research, EditFile for \
+                    localized text edits and WriteFile for new files. Scripts remain appropriate \
                     for bulk transformations or requests needing authentication/custom headers \
-                    that web_fetch cannot provide. Uses the target user's shell, HOME, \
+                    that WebFetch cannot provide. Uses the target user's shell, HOME, \
                     environment and real working directory, without a filesystem or network \
                     sandbox. workspace_access and network declare intended effects for approval, \
                     not OS restrictions. Auto approves all commands started in the workspace, \
@@ -189,9 +189,10 @@ impl Tool for RunCommand {
                     automatically. Approval does not confine a command to its starting directory. \
                     Save generated files in the project or a user-specified location; these \
                     outputs belong to the user. Timeout, cancellation and resource/output limits \
-                    apply. background=true returns a job_id; use wait_commands when idle and \
-                    read_command_output for temporary raw logs. Raw logs are deleted at task end; \
-                    bounded results remain in history. Jobs do not survive a service restart. \
+                    apply. background=true returns a job_id; use WaitCommands when idle and \
+                    CommandOutput for retained stdout/stderr. Logs survive task completion \
+                    and restart within this session, subject to bounded retention and eviction. \
+                    Jobs do not survive a service restart. \
                     Verification commands: {}.",
                 serde_json::to_string(&self.limits.verification_commands).unwrap_or_default()
             ),
@@ -206,7 +207,7 @@ impl Tool for RunCommand {
                         "type": "boolean",
                         "default": false,
                         "description": "Run independently and immediately return a job_id; \
-                            wait_commands sleeps without model requests and completions are \
+                            WaitCommands sleeps without model requests and completions are \
                             delivered automatically"
                     },
                     "network": {
@@ -448,6 +449,7 @@ impl Tool for RunCommand {
                 .map(|log| log.id().to_owned());
             let command = request.command.clone();
             let background = args.background;
+            let output_store = self.output_store.clone();
             let execute = move |token: CancellationToken| async move {
                 let mut result = backend
                     .execute(
@@ -507,6 +509,18 @@ impl Tool for RunCommand {
 
                 result.verification_error = verification_error;
                 let evidence = result.verification.take();
+                if let Some(outputs) = output_store
+                    && let Err(error) = outputs.record_result(&result).await
+                {
+                    let message = format!("capture receipt unavailable: {error}");
+                    match &mut result.retained_output_error {
+                        Some(previous) => {
+                            previous.push_str("; ");
+                            previous.push_str(&message);
+                        }
+                        None => result.retained_output_error = Some(message),
+                    }
+                }
                 let outcome = if result.cancelled {
                     ToolOutcome::Cancelled
                 } else if result.is_success() {
@@ -539,7 +553,7 @@ impl Tool for RunCommand {
                     "running": true,
                     "status": job.status,
                     "message": "Command started in the background. Completion will be delivered \
-                        automatically; use wait_commands when there is no independent work."
+                        automatically; use WaitCommands when there is no independent work."
                 }).to_string());
 
                 output.background_job = Some(job.job_id);
@@ -553,7 +567,7 @@ impl Tool for RunCommand {
 
 fn invalid(message: impl Into<String>) -> ToolError {
     ToolError::InvalidArguments {
-        tool: "run_command".into(),
+        tool: "Exec".into(),
         message: message.into(),
     }
 }

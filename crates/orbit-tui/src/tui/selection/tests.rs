@@ -184,7 +184,7 @@ fn copying_message_and_tool_frames_keeps_literal_borders_and_body_blank_lines() 
         changes: Vec::new(),
         purpose: None,
         id: "read".into(),
-        name: "read_file".into(),
+        name: "ReadFile".into(),
         arguments: json!({
             "path": "example.txt"
         })
@@ -344,7 +344,7 @@ fn selection_leaves_frames_table_grid_and_padding_unchanged() {
                 changes: Vec::new(),
                 purpose: None,
                 id: "orbit-read".into(),
-                name: "read_file".into(),
+                name: "ReadFile".into(),
                 arguments: json!({
                     "path": "ORBIT.md"
                 })

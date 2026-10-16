@@ -129,8 +129,9 @@ fn text(value: &str) -> AgentEvent {
 
 fn write_receipt(path: &str, before: Option<&str>, after: &str) -> AgentEvent {
     AgentEvent::ToolFinished {
+        outcome: None,
         files: None,
-        call: ToolCall::function("write-1", "write_file", serde_json::json!({})),
+        call: ToolCall::function("write-1", "WriteFile", serde_json::json!({})),
         content: format!(r#"{{"path":"{path}"}}"#),
         changes: vec![FileChange {
             path: path.into(),
@@ -142,10 +143,11 @@ fn write_receipt(path: &str, before: Option<&str>, after: &str) -> AgentEvent {
 
 fn command_receipt(command: &str, exit_code: i32) -> AgentEvent {
     AgentEvent::ToolFinished {
+        outcome: None,
         files: None,
         call: ToolCall::function(
             "command-1",
-            "run_command",
+            "Exec",
             serde_json::json!({
                 "command": command
             }),
@@ -259,7 +261,7 @@ async fn workspace_change_ledger_keeps_only_successful_write_receipts() {
         .unwrap();
 
     assert_eq!(changes.len(), 1);
-    assert_eq!(changes[0].tool, "write_file");
+    assert_eq!(changes[0].tool, "WriteFile");
     assert_eq!(changes[0].change.before.as_deref(), Some("old"));
     assert_eq!(changes[0].change.after, "new");
     assert!(!changes[0].undone);
@@ -1350,7 +1352,7 @@ async fn checkpoint_receipts_survive_restart_without_replaying_tools() {
         .unwrap();
     let journal = writer.execution_journal().unwrap();
     let calls: Vec<_> = (0..3)
-        .map(|i| ToolCall::function(i.to_string(), "write_file", serde_json::json!({})))
+        .map(|i| ToolCall::function(i.to_string(), "WriteFile", serde_json::json!({})))
         .collect();
     let history = vec![
         ChatMessage::user("repair"),
@@ -1372,6 +1374,7 @@ async fn checkpoint_receipts_survive_restart_without_replaying_tools() {
                 attachments: vec![],
             },
             Some(AgentEvent::ToolFinished {
+                outcome: None,
                 files: None,
                 call: calls[0].clone(),
                 content: "saved first file".into(),
@@ -2008,7 +2011,8 @@ async fn runtime_recovery_prefers_typed_file_evidence_to_tool_text() {
         .await
         .unwrap();
     let receipt = |id: &str, path: &str, files| AgentEvent::ToolFinished {
-        call: ToolCall::function(id, "read_file", serde_json::json!({ "path": path })),
+        outcome: None,
+        call: ToolCall::function(id, "ReadFile", serde_json::json!({ "path": path })),
         content: serde_json::json!({ "path": path, "content": "source", "total_lines": 1 })
             .to_string(),
         changes: vec![],

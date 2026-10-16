@@ -130,13 +130,13 @@ impl Tool for ReadDocument {
 
     fn definition(&self) -> ToolDefinition {
         ToolDefinition::function(
-            "read_document",
+            "ReadDocument",
             "Preferred tool for reading local PDFs and office documents: use this before shell \
                 commands, pdftotext, Python packages or tool discovery. Reads documents up to 256 \
-                MiB inside the workspace (or outside paths granted via request_capability). PDFs \
+                MiB inside the workspace (or outside paths granted via RequestAccess). PDFs \
                 use 1-based start_page/end_page (default first 20 pages, at most 100 per call); \
                 extraction is restricted to that range. Supports PDF, Word, PowerPoint, Excel, \
-                OpenDocument, RTF, EPUB and CSV. Use read_file for source code and ordinary text. \
+                OpenDocument, RTF, EPUB and CSV. Use ReadFile for source code and ordinary text. \
                 Mixed text/image PDFs return available text with physical page headings and \
                 per-page status in pdf.pages. Image-only, empty and undecodable portions are \
                 marked in place instead of failing the whole range. pdf.partial describes \
@@ -157,7 +157,7 @@ impl Tool for ReadDocument {
                     "path": {
                         "type": "string",
                         "description": "Path relative to the workspace root, or an outside path \
-                            granted via request_capability"
+                            granted via RequestAccess"
                     },
                     "start_page": {
                         "type": "integer",
@@ -356,7 +356,7 @@ impl Tool for ReadDocument {
 
 fn invalid(message: impl Into<String>) -> ToolError {
     ToolError::InvalidArguments {
-        tool: "read_document".into(),
+        tool: "ReadDocument".into(),
         message: message.into(),
     }
 }
@@ -718,7 +718,7 @@ mod tests {
         tool.worker = None;
         let call = ToolCall::function(
             "doc-1",
-            "read_document",
+            "ReadDocument",
             json!({
                 "path": "data.csv",
                 "max_chars": 12

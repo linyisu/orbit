@@ -107,7 +107,7 @@ impl Drop for Client {
 
 async fn mock_model() -> (String, tokio::task::JoinHandle<()>) {
     mock_tool_model(
-        "write_file",
+        "WriteFile",
         json!({
             "path": "result.txt",
             "content": "written remotely"
@@ -1071,7 +1071,7 @@ async fn workspace_controls_follow_directory_and_preserve_saved_profile() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();
     let (url, model) = mock_tool_model(
-        "read_file",
+        "ReadFile",
         json!({
             "path": "proof.txt"
         }),
@@ -1416,7 +1416,7 @@ async fn native_execution_and_model_inheritance_use_the_packaged_local_service()
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();
     let (url, model) = mock_tool_model(
-        "run_command",
+        "Exec",
         json!({
             "command": "echo native-command-ok; pwd"
         }),

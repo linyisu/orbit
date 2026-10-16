@@ -220,7 +220,7 @@ impl Store {
                 .is_some();
             ensure!(
                 exists,
-                "history archive not found in this session; call read_history with \
+                "history archive not found in this session; call ReadHistory with \
                 {{}} to discover available archive IDs instead of guessing"
             );
             // Slice in SQLite so a preview never materializes a whole large message.

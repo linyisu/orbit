@@ -85,7 +85,7 @@ fn child_session_links_open_a_dialog_without_switching_tabs() {
             changes: Vec::new(),
             purpose: None,
             id: "child".into(),
-            name: "spawn_agent".into(),
+            name: "SpawnAgent".into(),
             arguments: "{\"task\":\"inspect\"}".into(),
             output: serde_json::json!({
                 "agent_id": id,

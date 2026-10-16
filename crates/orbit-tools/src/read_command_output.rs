@@ -1,4 +1,4 @@
-use std::{io::Read, path::PathBuf};
+use std::{io::Read, os::unix::fs::OpenOptionsExt, path::PathBuf};
 
 use orbit_agent::tool::{Tool, ToolError, ToolOutput};
 use orbit_runtime::execution::{MAX_RETAINED_OUTPUT_PER_STREAM, output::CommandOutputs};
@@ -11,7 +11,7 @@ use crate::limits::MAX_TEXT_OUTPUT_BYTES;
 #[derive(Deserialize, schemars::JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 struct Arguments {
-    /// Opaque output_id from run_command.
+    /// Opaque output_id from Exec.
     #[schemars(required)]
     output_id: String,
     stream: Stream,
@@ -49,7 +49,7 @@ impl Stream {
     }
 }
 
-/// Read a bounded page of a command in the current task's temporary log store.
+/// Read a bounded page from the owning session's retained command logs.
 pub struct ReadCommandOutput {
     outputs: CommandOutputs,
 }
@@ -65,14 +65,13 @@ impl Tool for ReadCommandOutput {
         orbit_agent::tool::ToolCapabilities::READ
     }
 
-    /// Read one page of a run_command stdout or stderr log from the CURRENT task. run_command
-    /// returns an opaque output_id; never guess file paths. offset and max_bytes are byte
-    /// counts; use next_offset to continue across UTF-8 boundaries. Logs are private temporary
-    /// files under /tmp, capped at 16 MiB per stream and 128 MiB per task, and may be evicted
-    /// when newer logs need space. They are deleted when the task finishes, fails or is
-    /// cancelled, and are unavailable after restart or in a later task. Do not retry expired
-    /// IDs; use the bounded result already in history or ask before rerunning a command.
-    #[orbit_agent::tool(name = "read_command_output")]
+    /// Read retained stdout or stderr using output_id from Exec. Logs belong to the
+    /// current session and survive task completion and service restart. Use next_offset for
+    /// UTF-8-safe continuation; has_more refers only to bytes already retained. capture_complete
+    /// distinguishes complete capture from missing output; null means no final capture receipt
+    /// is available yet. Storage is capped at 16 MiB per stream and 128 MiB per session; older
+    /// logs may be evicted. Missing logs must not trigger automatic command re-execution.
+    #[orbit_agent::tool(name = "CommandOutput")]
     async fn execute(
         &self,
         arguments: Arguments,
@@ -84,12 +83,10 @@ impl Tool for ReadCommandOutput {
             return Err(ToolError::Cancelled);
         }
 
-        let lease = self.outputs.lease().ok_or_else(|| {
-            failed(
-                "command output is unavailable or expired; raw logs exist only during their \
-                    originating task",
-            )
-        })?;
+        let lease = self
+            .outputs
+            .lease()
+            .ok_or_else(|| failed("command output is unavailable or expired in this session"))?;
         let token = cancellation.clone();
         let task =
             tokio::task::spawn_blocking(move || read(lease.path().to_owned(), arguments, token));
@@ -142,7 +139,7 @@ fn read(
     let path = directory.join(name);
     let metadata = std::fs::symlink_metadata(&path).map_err(|_| {
         ToolError::ExecutionFailed(
-            "command output was not found in the current task; it may have expired, been evicted \
+            "command output was not found in this session; it may have expired, been evicted \
                 or was not retained. Do not automatically rerun the command"
                 .into(),
         )
@@ -154,6 +151,15 @@ fn read(
         ));
     }
 
+    let mut file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)
+        .map_err(failed)?;
+    let metadata = file.metadata().map_err(failed)?;
+    if !metadata.is_file() {
+        return Err(failed("command output file is invalid"));
+    }
     let total_bytes = metadata.len();
 
     if arguments.offset > total_bytes {
@@ -162,8 +168,6 @@ fn read(
             arguments.stream.suffix()
         )));
     }
-
-    let mut file = std::fs::File::open(path).map_err(failed)?;
 
     use std::io::Seek;
 
@@ -211,6 +215,7 @@ fn read(
 
     bytes.truncate(page_len);
     let next_offset = arguments.offset + bytes.len() as u64;
+    let receipt = capture_receipt(&directory.join(format!("{}.json", arguments.output_id)));
 
     Ok(json!({
         "output_id": arguments.output_id,
@@ -218,15 +223,46 @@ fn read(
         "offset": arguments.offset,
         "next_offset": next_offset,
         "total_retained_bytes": total_bytes,
+        "total_captured_bytes": receipt.as_ref().map(|receipt| match arguments.stream {
+            Stream::Stdout => receipt.stdout_bytes,
+            Stream::Stderr => receipt.stderr_bytes,
+        }),
         "truncated": next_offset < total_bytes,
+        "has_more": next_offset < total_bytes,
+        "capture_complete": receipt.as_ref().map(|receipt| {
+            !receipt.truncated && receipt.error.is_none()
+        }),
+        "capture_error": receipt.as_ref().and_then(|receipt| receipt.error.as_deref()),
         "content": String::from_utf8_lossy(&bytes)
     })
     .to_string())
 }
 
+fn capture_receipt(
+    path: &std::path::Path,
+) -> Option<orbit_runtime::execution::output::CaptureReceipt> {
+    const MAX_RECEIPT_BYTES: u64 = 16 * 1_024;
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)
+        .ok()?;
+    if !file.metadata().ok()?.is_file() {
+        return None;
+    }
+    let mut bytes = Vec::new();
+    file.take(MAX_RECEIPT_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    if bytes.len() as u64 > MAX_RECEIPT_BYTES {
+        return None;
+    }
+    serde_json::from_slice(&bytes).ok()
+}
+
 fn invalid(message: impl Into<String>) -> ToolError {
     ToolError::InvalidArguments {
-        tool: "read_command_output".into(),
+        tool: "CommandOutput".into(),
         message: message.into(),
     }
 }
@@ -239,6 +275,65 @@ fn failed(error: impl std::fmt::Display) -> ToolError {
 mod tests {
     use super::*;
     use orbit_model::types::ToolCall;
+
+    #[tokio::test]
+    async fn completed_commands_remain_readable_after_reopening_the_session_store() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("logs").join("session");
+        let outputs = CommandOutputs::persistent(path.clone());
+        let run = outputs.begin_run().unwrap();
+        let (sender, mut approvals) = crate::approval::channel();
+        let approver = tokio::spawn(async move {
+            approvals
+                .recv()
+                .await
+                .unwrap()
+                .decision
+                .send(true)
+                .unwrap();
+        });
+        let command = crate::run_command::RunCommand::new(
+            orbit_runtime::filesystem::Workspace::new(root.path()).unwrap(),
+            sender,
+        )
+        .with_output_store(outputs);
+        let output = command
+            .execute(
+                ToolCall::function(
+                    "capture",
+                    "Exec",
+                    json!({
+                        "command": "printf 'sample output'"
+                    }),
+                ),
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+        approver.await.unwrap();
+        let result: serde_json::Value = serde_json::from_str(&output.content).unwrap();
+        drop(command);
+        drop(run);
+        let reader = ReadCommandOutput::new(CommandOutputs::persistent(path));
+        let page = reader
+            .execute(
+                ToolCall::function(
+                    "reopen",
+                    "CommandOutput",
+                    json!({
+                        "output_id": result["output_id"], "max_bytes": 6
+                    }),
+                ),
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+        let page: serde_json::Value = serde_json::from_str(&page.content).unwrap();
+        assert_eq!(page["content"], "sample");
+        assert_eq!(page["has_more"], true);
+        assert_eq!(page["capture_complete"], true);
+        assert_eq!(page["total_captured_bytes"], 13);
+    }
 
     #[tokio::test]
     async fn temporary_output_api_is_task_scoped_and_does_not_reopen_expired_ids() {
@@ -257,7 +352,7 @@ mod tests {
         let call = |offset| {
             ToolCall::function(
                 "page",
-                "read_command_output",
+                "CommandOutput",
                 json!({
                     "output_id": id,
                     "offset": offset,

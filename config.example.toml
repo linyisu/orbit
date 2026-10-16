@@ -6,11 +6,11 @@
 # max_tool_calls = 0
 
 # 对新建或重新打开的会话收紧能力；与调用方原有的会话限制合并。
-# 可选能力：all、subagents、web、mcp、skills、image、document、files、git、write、
+# 可选能力：all、subagents、web、mcp、skills、image、document、files、write、
 # capability、command、history、project_state。all 禁用全部可选工具。
 # disabled_capabilities = ["web", "mcp"]
-# 完整工具名精确匹配；MCP 工具名称为 mcp__服务器__工具。
-# disabled_tools = ["read_file", "mcp__filesystem__read_file"]
+# 完整工具名精确匹配；MCP 工具名称为 MCP_服务器_工具。
+# disabled_tools = ["ReadFile", "MCP_Files_ReadFile"]
 
 # 输入光标默认使用短拖尾；也可关闭并使用终端自身的光标动画。
 # [tui]

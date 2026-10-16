@@ -64,7 +64,7 @@ pub(super) fn normalize_arguments(args: &mut SearchArguments) -> Result<(), Tool
         || !(1..=10).contains(&args.max_results)
     {
         return Err(ToolError::InvalidArguments {
-            tool: "web_search".into(),
+            tool: "WebSearch".into(),
             message:
                 "query must be 1–512 characters (at most 2048 bytes) and max_results must be 1–10"
                     .into(),
@@ -78,7 +78,7 @@ pub(super) fn normalize_arguments(args: &mut SearchArguments) -> Result<(), Tool
         .join(" ");
     if args.query.is_empty() {
         return Err(ToolError::InvalidArguments {
-            tool: "web_search".into(),
+            tool: "WebSearch".into(),
             message: "query must not be blank".into(),
         });
     }
@@ -97,7 +97,7 @@ pub(super) fn normalize_arguments(args: &mut SearchArguments) -> Result<(), Tool
                         .all(|b| b.is_ascii_alphabetic())))
         {
             return Err(ToolError::InvalidArguments {
-                tool: "web_search".into(),
+                tool: "WebSearch".into(),
                 message: "language must be a language code such as en or zh-CN".into(),
             });
         }
@@ -112,7 +112,7 @@ pub(super) fn normalize_arguments(args: &mut SearchArguments) -> Result<(), Tool
                 .all(|b| b.is_ascii_alphabetic())
         {
             return Err(ToolError::InvalidArguments {
-                tool: "web_search".into(),
+                tool: "WebSearch".into(),
                 message: "region must be a two-letter country code".into(),
             });
         }

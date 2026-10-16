@@ -45,7 +45,7 @@ pub(super) async fn start(
     let crate::PreparedWorkspace { session, resources } = setup;
     let mut tools = resources.tools.clone();
     if !resources.model.supports_vision() {
-        tools.remove("read_image");
+        tools.remove("ReadImage");
     }
     anyhow::ensure!(
         !compact || (uploads.is_empty() && files.is_empty()),

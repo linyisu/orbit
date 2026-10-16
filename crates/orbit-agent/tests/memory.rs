@@ -41,10 +41,10 @@ fn backend() -> MockModel {
 
 #[test]
 fn only_confirmed_file_receipts_are_recorded_not_failed_tools_or_model_claims() {
-    let read = call("r", "read_file", "source.rs");
-    let edit = call("e", "edit_file", "source.rs");
-    let rejected = call("denied", "write_file", "secret.txt");
-    let shell = call("sh", "run_command", "shell.txt");
+    let read = call("r", "ReadFile", "source.rs");
+    let edit = call("e", "EditFile", "source.rs");
+    let rejected = call("denied", "WriteFile", "secret.txt");
+    let shell = call("sh", "Exec", "shell.txt");
     let events = vec![
         AgentEvent::ToolStarted {
             call: rejected.clone(),
@@ -54,25 +54,29 @@ fn only_confirmed_file_receipts_are_recorded_not_failed_tools_or_model_claims() 
             error: "denied".into(),
         },
         AgentEvent::ToolFinished {
+            outcome: None,
             call: read.clone(),
             content: r#"{"path":"source.rs","total_lines":12,"content":"1: source"}"#.into(),
             changes: Vec::new(),
             files: None,
         },
         AgentEvent::ToolFinished {
+            outcome: None,
             call: edit.clone(),
             content: r#"{"path":"source.rs","written_bytes":0}"#.into(),
             changes: Vec::new(),
             files: None,
         },
         AgentEvent::ToolFinished {
+            outcome: None,
             call: shell,
             content: r#"{"path":"shell.txt","written_bytes":99}"#.into(),
             changes: Vec::new(),
             files: None,
         },
         AgentEvent::ToolFinished {
-            call: call("fake", "write_file", "fake.txt"),
+            outcome: None,
+            call: call("fake", "WriteFile", "fake.txt"),
             content: "I wrote fake.txt".into(),
             changes: Vec::new(),
             files: None,
@@ -118,13 +122,15 @@ fn typed_file_evidence_survives_events_without_interpreting_tool_text() {
     };
     let events = [
         AgentEvent::ToolFinished {
+            outcome: None,
             call: call("typed", "custom_file_adapter", "unrelated"),
             content: "a human-readable receipt".into(),
             changes: Vec::new(),
             files: Some(receipt.clone()),
         },
         AgentEvent::ToolFinished {
-            call: call("plain", "write_file", "claimed.dat"),
+            outcome: None,
+            call: call("plain", "WriteFile", "claimed.dat"),
             content: r#"{"path":"claimed.dat","written_bytes":12}"#.into(),
             changes: Vec::new(),
             files: Some(FileActivity::default()),
@@ -170,13 +176,13 @@ fn structured_summary_rejects_missing_fields_and_accepts_fenced_json() {
 async fn repeated_compaction_and_event_reload_keep_confirmed_files_and_cut_metadata() {
     let mut activity = FileActivity::default();
     activity.observe_legacy_receipt(
-        &call("old", "edit_file", "original.rs"),
+        &call("old", "EditFile", "original.rs"),
         r#"{"path":"original.rs","written_bytes":80}"#,
     );
     let mut history = vec![
         ChatMessage::system("system"),
         ChatMessage::user("exact current goal"),
-        ChatMessage::assistant_tool_calls(vec![call("r", "read_file", "large.rs")]),
+        ChatMessage::assistant_tool_calls(vec![call("r", "ReadFile", "large.rs")]),
         ChatMessage::tool(
             "r",
             serde_json::json!({
@@ -186,7 +192,7 @@ async fn repeated_compaction_and_event_reload_keep_confirmed_files_and_cut_metad
             })
             .to_string(),
         ),
-        ChatMessage::assistant_tool_calls(vec![call("last", "read_file", "recent.rs")]),
+        ChatMessage::assistant_tool_calls(vec![call("last", "ReadFile", "recent.rs")]),
         ChatMessage::tool(
             "last",
             r#"{"path":"recent.rs","total_lines":1,"content":"recent"}"#,

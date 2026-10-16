@@ -221,7 +221,7 @@ pub(super) async fn write_model(listener: tokio::net::TcpListener, outside: std:
                             "id": format!("write-{step}"),
                             "type": "function",
                             "function": {
-                                "name": "write_file",
+                                "name": "WriteFile",
                                 "arguments": args.to_string()
                             }
                         }]

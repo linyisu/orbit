@@ -538,7 +538,7 @@ mod tests {
             .unwrap();
         let call = ToolCall::function(
             "child",
-            "spawn_agent",
+            "SpawnAgent",
             serde_json::json!({
                 "task": "inspect Orbit"
             }),
@@ -614,6 +614,7 @@ mod tests {
             .unwrap();
         assert_eq!(pending[0].result, Some(result.clone()));
         let finished = AgentEvent::ToolFinished {
+            outcome: None,
             files: None,
             call,
             content: result.to_string(),

@@ -317,9 +317,10 @@ impl Transcript {
                 call,
                 content,
                 changes,
+                outcome,
                 ..
             } => {
-                let change = self.finish(call, content, ToolStatus::Complete)?;
+                let change = self.finish(call, content, ToolStatus::Complete, outcome)?;
                 if let Some(part) = change.part
                     && let Some(tool) = &mut self.turns[change.turn].parts[part].tool
                 {
@@ -328,9 +329,11 @@ impl Transcript {
                 Some(change)
             }
             AgentEvent::ToolBackgrounded { call, content, .. } => {
-                self.finish(call, content, ToolStatus::Background)
+                self.finish(call, content, ToolStatus::Background, None)
             }
-            AgentEvent::ToolFailed { call, error } => self.finish(call, error, ToolStatus::Failed),
+            AgentEvent::ToolFailed { call, error } => {
+                self.finish(call, error, ToolStatus::Failed, None)
+            }
             _ => None,
         }
     }
@@ -386,7 +389,13 @@ impl Transcript {
     }
 
     /// Keep the owning turn even when a background tool completes after new input.
-    fn finish(&mut self, call: ToolCall, text: String, status: ToolStatus) -> Option<Change> {
+    fn finish(
+        &mut self,
+        call: ToolCall,
+        text: String,
+        status: ToolStatus,
+        outcome: Option<orbit_agent::tool::ToolOutcome>,
+    ) -> Option<Change> {
         let (turn, part) = if let Some(location) = self.tools.get(&call.id) {
             *location
         } else {
@@ -397,12 +406,12 @@ impl Transcript {
             (turn, part)
         };
         let record = &mut self.turns[turn].parts[part];
-        record.title = format!("{} · {}", status.label(), call.function.name);
         record.running = false;
         let tool = record
             .tool
             .get_or_insert_with(|| ToolRun::new(&call));
-        tool.set_output(status, text);
+        tool.set_receipt(status, text, outcome);
+        record.title = format!("{} · {}", tool.status.label(), tool.name);
         Some(Change {
             turn,
             part: Some(part),
@@ -423,7 +432,7 @@ mod tests {
         json!({
             "id": id,
             "function": {
-                "name": "read_file",
+                "name": "ReadFile",
                 "arguments": "{}"
             }
         })
@@ -448,6 +457,7 @@ mod tests {
         });
         assert!(!transcript.turns[0].tools_running());
         transcript.agent(AgentEvent::ToolFinished {
+            outcome: None,
             call,
             content: "done".into(),
             changes: vec![],
@@ -625,7 +635,7 @@ mod tests {
                 .iter()
                 .all(|part| part.tool.is_some() || !part.content.trim().is_empty())
         );
-        assert_eq!(turn.label(), "工具调用 · 12 次 · 已结束");
+        assert_eq!(turn.label(), "工具调用 · 12 次");
     }
 
     #[test]
@@ -910,7 +920,7 @@ mod tests {
         );
         assert_eq!(transcript.turns.len(), 2);
         assert!(transcript.turns[1].parts.is_empty());
-        assert_eq!(transcript.turns[0].parts[0].title, "已返回 · read_file");
+        assert_eq!(transcript.turns[0].parts[0].title, "已返回 · ReadFile");
         assert_eq!(
             transcript.turns[0].parts[0]
                 .tool
@@ -920,6 +930,6 @@ mod tests {
                 .as_deref(),
             Some("检查成功")
         );
-        assert_eq!(transcript.turns[0].parts[1].title, "已停止 · read_file");
+        assert_eq!(transcript.turns[0].parts[1].title, "已停止 · ReadFile");
     }
 }

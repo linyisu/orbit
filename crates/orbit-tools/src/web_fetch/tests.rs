@@ -55,6 +55,7 @@ async fn redirect_loop_stops_before_replaying_a_seen_url() {
     let url = Url::parse("http://example.org/same").unwrap();
     let result = fetch(
         Arguments {
+            snapshot_id: None,
             url: url.to_string(),
             start_char: 0,
             max_chars: 100,
@@ -113,6 +114,100 @@ fn url_validation_reports_the_specific_constraint() {
 }
 
 use super::*;
+
+#[tokio::test]
+async fn snapshot_continuation_works_after_the_http_server_has_closed() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .unwrap();
+    let proxy = reqwest::Proxy::all(format!("http://{}", listener.local_addr().unwrap())).unwrap();
+    let server = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut request = [0; 4_096];
+        assert!(stream.read(&mut request).await.unwrap() > 0);
+        stream
+            .write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 10\r\n\
+                Connection: close\r\n\r\nalpha beta",
+            )
+            .await
+            .unwrap();
+    });
+    let tool = WebFetch::with_client(WebClient::for_test(Some(&proxy)));
+    let first = tool
+        .execute(
+            ToolCall::function(
+                "first",
+                "WebFetch",
+                json!({
+                    "url": "http://fixture.invalid/document", "max_chars": 5
+                }),
+            ),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    server.await.unwrap();
+    let first: serde_json::Value = serde_json::from_str(&first.content).unwrap();
+    assert_eq!(first["content"], "alpha");
+    assert_eq!(first["has_more"], true);
+    let second = tool
+        .execute(
+            ToolCall::function(
+                "second",
+                "WebFetch",
+                json!({
+                    "snapshot_id": first["snapshot_id"], "start_char": first["next_start_char"]
+                }),
+            ),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    let second: serde_json::Value = serde_json::from_str(&second.content).unwrap();
+    assert_eq!(second["content"], " beta");
+    assert_eq!(second["has_more"], false);
+}
+
+#[test]
+fn semantic_main_content_omits_navigation_and_link_footnotes_are_not_duplicated() {
+    let text = decode(
+        b"<nav>Navigation</nav><main><p>Read <a href='/guide'>guide</a>.</p></main><footer>Footer</footer>",
+        true,
+    ).unwrap();
+    let result: serde_json::Value = serde_json::from_str(
+        &page(
+            "https://example.org/",
+            "https://example.org/",
+            "text/html",
+            text,
+            0,
+            100,
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let content = result["content"].as_str().unwrap();
+    assert!(content.contains("guide"));
+    assert!(!content.contains("Navigation") && !content.contains("Footer"));
+    assert!(!content.contains("[1]:"));
+    assert_eq!(result["links"][0]["url"], "https://example.org/guide");
+    for start in 0..content.chars().count() {
+        if content.chars().nth(start) == Some('1') {
+            assert_eq!(
+                page_links(
+                    result["links"].as_array().unwrap(),
+                    content,
+                    start,
+                    start + 1
+                )
+                .len(),
+                1
+            );
+        }
+    }
+}
 
 #[tokio::test]
 async fn trusted_proxy_resolves_domains_without_local_dns() {
@@ -201,6 +296,7 @@ async fn javascript_shell_without_browser_is_not_reported_as_page_content() {
     let url = Url::parse("http://public.invalid/page").unwrap();
     let result = fetch(
         Arguments {
+            snapshot_id: None,
             url: url.to_string(),
             start_char: 0,
             max_chars: 8_000,
@@ -373,7 +469,7 @@ async fn cancellation_and_invalid_arguments_do_not_start_network_requests() {
     token.cancel();
     let call = ToolCall::function(
         "web",
-        "web_fetch",
+        "WebFetch",
         json!({
             "url": "https://example.com"
         }),
@@ -399,7 +495,7 @@ async fn cancellation_and_invalid_arguments_do_not_start_network_requests() {
         assert!(matches!(
             WebFetch::default()
                 .execute(
-                    ToolCall::function("web", "web_fetch", args),
+                    ToolCall::function("web", "WebFetch", args),
                     CancellationToken::new()
                 )
                 .await,
@@ -510,7 +606,7 @@ async fn explicit_proxy_fetches_html_and_cannot_redirect_to_loopback() {
             .execute(
                 ToolCall::function(
                     "web",
-                    "web_fetch",
+                    "WebFetch",
                     json!({
                         "url": "http://1.1.1.1/"
                     }),
@@ -630,7 +726,7 @@ async fn fetches_a_real_public_page() {
     .execute(
         ToolCall::function(
             "web",
-            "web_fetch",
+            "WebFetch",
             json!({
                 "url": "https://example.com",
                 "max_chars": 1_000
@@ -664,7 +760,7 @@ async fn fetches_a_real_public_page() {
             .execute(
                 ToolCall::function(
                     "web",
-                    "web_fetch",
+                    "WebFetch",
                     json!({
                         "url": "https://www.rust-lang.org/learn",
                         "start_char": start,
@@ -709,7 +805,7 @@ async fn browser_challenge_reads_the_requested_wiki_page() {
     .execute(
         ToolCall::function(
             "wiki",
-            "web_fetch",
+            "WebFetch",
             json!({
                 "url": "https://isaac.huijiwiki.com/wiki/%E9%81%93%E5%85%B7",
                 "max_chars": 2_000

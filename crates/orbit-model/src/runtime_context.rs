@@ -87,7 +87,7 @@ mod tests {
         let before = ChatRequest::new(history.clone());
         history.push(ChatMessage::assistant_tool_calls(vec![ToolCall::function(
             "read",
-            "read_file",
+            "ReadFile",
             json!({
                 "path": "src/lib.rs"
             }),

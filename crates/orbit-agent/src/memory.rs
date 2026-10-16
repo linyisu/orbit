@@ -27,7 +27,7 @@ impl FileActivity {
         };
 
         match call.function.name.as_str() {
-            "read_file"
+            "ReadFile"
                 if value
                     .get("content")
                     .is_some_and(|v| v.is_string())
@@ -38,7 +38,7 @@ impl FileActivity {
                 self.read.insert(path.into());
             }
 
-            "write_file" | "edit_file"
+            "WriteFile" | "EditFile"
                 if value
                     .get("written_bytes")
                     .is_some_and(|v| v.is_u64()) =>
@@ -269,4 +269,23 @@ pub struct CompactionRecord {
     pub summary: TaskSummary,
     /// Cumulative, confirmed observations; not a claim about current file contents.
     pub files: FileActivity,
+}
+
+impl CompactionRecord {
+    /// Reads the retained archive identifier, including references persisted before tool renaming.
+    pub fn archive_id(&self) -> Option<i64> {
+        let (tool, reference) = self
+            .archive
+            .as_deref()?
+            .split_once(" archive_id=")?;
+        if !matches!(tool, "ReadHistory" | "read_history") {
+            return None;
+        }
+        reference
+            .split(';')
+            .next()?
+            .parse::<i64>()
+            .ok()
+            .filter(|id| *id > 0)
+    }
 }

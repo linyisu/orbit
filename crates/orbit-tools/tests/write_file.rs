@@ -51,7 +51,7 @@ impl Drop for Fixture {
 fn call(path: &str, content: &str) -> ToolCall {
     ToolCall::function(
         "write-1",
-        "write_file",
+        "WriteFile",
         json!({
             "path": path,
             "content": content

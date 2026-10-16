@@ -374,7 +374,7 @@ struct DocumentImageTool;
 
 impl Tool for DocumentImageTool {
     fn definition(&self) -> orbit_model::types::ToolDefinition {
-        orbit_model::types::ToolDefinition::function("read_document", "", json!({}))
+        orbit_model::types::ToolDefinition::function("ReadDocument", "", json!({}))
     }
 
     fn execute<'a>(&'a self, _call: ToolCall, _cancellation: CancellationToken) -> ToolFuture<'a> {
@@ -411,7 +411,7 @@ impl Tool for DocumentImageTool {
 async fn document_vision_respects_model_and_image_capability_and_reaches_next_request() {
     for (supports_vision, image_enabled) in [(true, true), (false, true), (true, false)] {
         let backend = MockModel::new(vec![
-            assistant_tool_call("doc", "read_document", "{}"),
+            assistant_tool_call("doc", "ReadDocument", "{}"),
             assistant_text("done"),
         ])
         .with_vision(supports_vision);
@@ -440,7 +440,7 @@ async fn document_vision_respects_model_and_image_capability_and_reaches_next_re
                 requests[1].messages.last(),
                 Some(ChatMessage::User { content, .. })
                     if content.contains("page 3.png")
-                        && !content.contains("read_image tool")
+                        && !content.contains("ReadImage tool")
             ));
         }
     }
@@ -449,7 +449,7 @@ async fn document_vision_respects_model_and_image_capability_and_reaches_next_re
 #[tokio::test]
 async fn temporary_document_images_are_consumed_once_and_never_saved_as_dead_paths() {
     let backend = MockModel::new(vec![
-        assistant_tool_call("doc", "read_document", "{}"),
+        assistant_tool_call("doc", "ReadDocument", "{}"),
         assistant_tool_call("later", "echo", "{}"),
         assistant_text("done"),
     ])
@@ -512,7 +512,7 @@ async fn temporary_document_images_are_consumed_once_and_never_saved_as_dead_pat
 
 impl Tool for ImageTool {
     fn definition(&self) -> orbit_model::types::ToolDefinition {
-        orbit_model::types::ToolDefinition::function("read_image", "", json!({}))
+        orbit_model::types::ToolDefinition::function("ReadImage", "", json!({}))
     }
 
     fn execute<'a>(&'a self, _call: ToolCall, _cancellation: CancellationToken) -> ToolFuture<'a> {
@@ -533,7 +533,7 @@ impl Tool for ImageTool {
 #[tokio::test]
 async fn image_tool_output_is_added_to_the_next_model_request() {
     let backend = MockModel::new(vec![
-        assistant_tool_call("image-call", "read_image", "{}"),
+        assistant_tool_call("image-call", "ReadImage", "{}"),
         assistant_text("I can see it"),
     ])
     .with_vision(true);
@@ -564,7 +564,7 @@ async fn image_tool_output_is_added_to_the_next_model_request() {
 #[tokio::test]
 async fn scenario_1_text_only_model_removes_read_image_and_fails_fast_on_invocation() {
     let backend = MockModel::new(vec![
-        assistant_tool_call("image-call", "read_image", "{}"),
+        assistant_tool_call("image-call", "ReadImage", "{}"),
         assistant_text("I see it failed"),
     ])
     .with_vision(false);
@@ -572,13 +572,13 @@ async fn scenario_1_text_only_model_removes_read_image_and_fails_fast_on_invocat
     tools.register(ImageTool);
     let agent = Agent::new(backend.clone(), tools, AgentConfig::default());
 
-    assert!(!agent.tools.contains("read_image"));
+    assert!(!agent.tools.contains("ReadImage"));
     assert!(
         !agent
             .tools
             .definitions()
             .iter()
-            .any(|d| d.function.name == "read_image")
+            .any(|d| d.function.name == "ReadImage")
     );
 
     let result = agent
@@ -617,7 +617,7 @@ async fn scenario_2_model_failure_preserves_attachments_in_checkpoint_losslessly
         fail_receipt: false,
     });
     let backend = MockModel::from_results(vec![
-        Ok(assistant_tool_call("image-call", "read_image", "{}")),
+        Ok(assistant_tool_call("image-call", "ReadImage", "{}")),
         Err(orbit_model::error::ModelError::Protocol(
             "HTTP 500: rate limit or transient failure".into(),
         )),
@@ -661,7 +661,7 @@ async fn scenario_3_retry_after_model_failure_retains_image_attachment() {
         fail_receipt: false,
     });
     let backend = MockModel::from_results(vec![
-        Ok(assistant_tool_call("image-call", "read_image", "{}")),
+        Ok(assistant_tool_call("image-call", "ReadImage", "{}")),
         Err(orbit_model::error::ModelError::Protocol(
             "HTTP 500: transient error".into(),
         )),
@@ -723,7 +723,7 @@ async fn scenario_4_resuming_failed_conversation_with_text_only_model() {
         ChatMessage::system("system"),
         ChatMessage::user("look at 1.jpg"),
         ChatMessage::user_with_attachments(
-            "The read_image tool loaded the following local image into this model request: 1.jpg. \
+            "The ReadImage tool loaded the following local image into this model request: 1.jpg. \
                 Analyze the actual image content directly.",
             vec![Attachment::Image {
                 lease: None,
@@ -784,7 +784,7 @@ async fn scenario_4_resuming_failed_conversation_with_text_only_model() {
 async fn scenario_5_switching_conversation_with_historical_images_to_text_only_and_back_to_vision()
 {
     let vision_backend = MockModel::new(vec![
-        assistant_tool_call("image-call", "read_image", "{}"),
+        assistant_tool_call("image-call", "ReadImage", "{}"),
         assistant_text("I see a blue square in scene.png."),
     ])
     .with_vision(true);

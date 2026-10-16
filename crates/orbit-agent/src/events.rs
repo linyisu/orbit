@@ -106,6 +106,9 @@ pub enum AgentEvent {
     ToolFinished {
         call: ToolCall,
         content: String,
+        /// Absent only in legacy receipts; new tools report their outcome explicitly.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        outcome: Option<crate::tool::ToolOutcome>,
         /// Old event records omit this field; they remain readable and simply
         /// have no reversible workspace mutation attached.
         #[serde(default)]
@@ -167,7 +170,7 @@ mod tests {
                 "call": {
                     "id": "call-1",
                     "function": {
-                        "name": "write_file",
+                        "name": "WriteFile",
                         "arguments": "{}"
                     }
                 },

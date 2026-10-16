@@ -6,14 +6,14 @@ pub(super) fn seed(workspace: &str) -> (Vec<Value>, VecDeque<Value>, Value) {
     let read = json!({
         "id": "plan-read",
         "function": {
-            "name": "read_file",
+            "name": "ReadFile",
             "arguments": "{\"path\":\"src/main.rs\"}"
         }
     });
     let submit = json!({
         "id": "plan-submit",
         "function": {
-            "name": "submit_plan",
+            "name": "SubmitPlan",
             "arguments": "{\"generation\":7}"
         }
     });

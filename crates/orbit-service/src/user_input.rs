@@ -211,7 +211,7 @@ impl Tool for AskUser {
 
     fn definition(&self) -> ToolDefinition {
         ToolDefinition::function(
-            "ask_user",
+            "AskUser",
             "Ask the user a group of related clarification questions. Prefer 1–4 questions. \
                 Supports single choice, multiple choice and free text. The UI supplies a \
                 custom-answer option; do not add an Other option yourself. No answer is \
@@ -282,12 +282,12 @@ impl Tool for AskUser {
         Box::pin(async move {
             let form: Form = serde_json::from_value(call.arguments_json().map_err(|e| {
                 ToolError::InvalidArguments {
-                    tool: "ask_user".into(),
+                    tool: "AskUser".into(),
                     message: e.to_string(),
                 }
             })?)
             .map_err(|e| ToolError::InvalidArguments {
-                tool: "ask_user".into(),
+                tool: "AskUser".into(),
                 message: e.to_string(),
             })?;
             let result = self

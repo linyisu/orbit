@@ -370,8 +370,8 @@ async fn switching_restores_context_preserves_old_session_and_checks_scope_and_l
         })
         .await
         .unwrap();
-    assert!(command_output.lease().is_none());
-    assert!(!first_command_output.exists());
+    assert!(command_output.lease().is_some());
+    assert!(first_command_output.exists());
     state.resume(&first).await.unwrap();
 
     assert_eq!(state.snapshot.history, history);
@@ -383,7 +383,7 @@ async fn switching_restores_context_preserves_old_session_and_checks_scope_and_l
     let second = state.id().to_owned();
 
     assert_ne!(first, second);
-    assert!(command_output.lease().is_none());
+    assert!(command_output.lease().is_some());
     assert!(state.snapshot.history.is_empty());
 
     let foreign_path = tmp.path().join("foreign");
@@ -429,7 +429,7 @@ async fn switching_restores_context_preserves_old_session_and_checks_scope_and_l
     drop(locked);
     state.resume(&first).await.unwrap();
 
-    assert!(command_output.lease().is_none());
+    assert!(command_output.lease().is_some());
     assert_eq!(state.snapshot.history, history);
     assert_eq!(state.snapshot.runs.len(), 1);
     assert!(state.store.load(&second).await.is_err());
@@ -450,7 +450,7 @@ async fn switching_restores_context_preserves_old_session_and_checks_scope_and_l
         reopened
             .command_output
             .lease()
-            .is_none()
+            .is_some()
     );
     assert!(
         reopened
@@ -462,7 +462,7 @@ async fn switching_restores_context_preserves_old_session_and_checks_scope_and_l
 }
 
 #[tokio::test]
-async fn failed_cancelled_and_dropped_tasks_release_temporary_command_logs() {
+async fn failed_cancelled_and_dropped_tasks_preserve_session_command_logs() {
     let temporary = tempfile::tempdir().unwrap();
     let database = temporary.path().join("sessions.db");
     let mut session = SessionState::open(database.clone(), None, "model".into())
@@ -489,11 +489,11 @@ async fn failed_cancelled_and_dropped_tasks_release_temporary_command_logs() {
             .finish(completion)
             .await
             .unwrap();
-        assert!(session.command_output.lease().is_none());
-        assert!(!directory.exists());
+        assert!(session.command_output.lease().is_some());
+        assert!(directory.exists());
     }
     assert!(
-        !database
+        database
             .with_extension("command-output")
             .exists()
     );
@@ -510,8 +510,8 @@ async fn failed_cancelled_and_dropped_tasks_release_temporary_command_logs() {
         .to_owned();
     drop(log);
     drop(session);
-    assert!(outputs.lease().is_none());
-    assert!(!directory.exists());
+    assert!(outputs.lease().is_some());
+    assert!(directory.exists());
 }
 
 #[tokio::test]

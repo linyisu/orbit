@@ -126,7 +126,7 @@ impl Journal {
                         AgentEvent::ToolFinished { call, content, .. }
                             if matches!(
                                 call.function.name.as_str(),
-                                "spawn_agent" | "send_agent_message"
+                                "SpawnAgent" | "SendAgentMessage"
                             ) =>
                         {
                             if let Ok(value) = serde_json::from_str::<serde_json::Value>(content)

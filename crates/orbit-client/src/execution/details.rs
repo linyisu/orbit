@@ -2,6 +2,10 @@
 use super::{ToolRun, ToolStatus};
 use serde_json::Value;
 
+mod request;
+pub mod retained;
+pub use request::Request;
+
 #[cfg(test)]
 mod streams_tests;
 
@@ -27,11 +31,11 @@ impl Target {
 pub fn target(tool: &ToolRun) -> Option<Target> {
     let output: Value = serde_json::from_str(tool.output.as_deref()?).ok()?;
     match tool.name.as_str() {
-        "read_image" if tool.status == ToolStatus::Complete => output["path"]
+        "ReadImage" if tool.status == ToolStatus::Complete => output["path"]
             .as_str()
             .filter(|path| !path.is_empty())
             .map(|path| Target::Image(path.to_owned())),
-        "spawn_agent" | "send_agent_message" => {
+        "SpawnAgent" | "SendAgentMessage" => {
             let id = output["agent_id"].as_str()?;
             (id.len() == 32
                 && id
@@ -39,7 +43,7 @@ pub fn target(tool: &ToolRun) -> Option<Target> {
                     .all(|byte| byte.is_ascii_hexdigit()))
             .then(|| Target::Agent(id.to_owned()))
         }
-        "ask_user" if tool.status == ToolStatus::Complete => Some(Target::Question),
+        "AskUser" if tool.status == ToolStatus::Complete => Some(Target::Question),
         _ => None,
     }
 }
@@ -72,43 +76,43 @@ impl Stream {
 /// Available pages are derived once for both frontends, including dynamic tools.
 pub fn streams(tool: &ToolRun) -> &'static [Stream] {
     if !tool.changes.is_empty() {
-        &[
-            Stream::Changes,
-            Stream::Result,
-            Stream::Arguments,
-            Stream::Raw,
-        ]
-    } else if tool.name == "run_command" {
-        &[
-            Stream::Stdout,
-            Stream::Stderr,
-            Stream::Command,
-            Stream::Result,
-            Stream::Arguments,
-            Stream::Raw,
-        ]
+        &[Stream::Changes, Stream::Raw]
+    } else if tool.command_result().is_some()
+        || (tool.is_foreground_command()
+            && (tool.status == ToolStatus::Running || tool.stdout_preview.is_some()))
+    {
+        if tool
+            .command_result()
+            .is_some_and(|result| result.stderr.is_empty())
+        {
+            &[Stream::Stdout, Stream::Raw]
+        } else {
+            &[Stream::Stdout, Stream::Stderr, Stream::Raw]
+        }
+    } else if tool
+        .output
+        .as_deref()
+        .is_some_and(|output| {
+            serde_json::from_str::<Value>(output).is_ok()
+                && structured(&tool.name, output) != pretty(output)
+        })
+    {
+        &[Stream::Result, Stream::Raw]
     } else {
-        &[Stream::Result, Stream::Arguments, Stream::Raw]
+        &[Stream::Result]
     }
 }
 
 pub fn default_stream(tool: &ToolRun) -> Stream {
-    if !tool.changes.is_empty() {
-        return Stream::Changes;
-    }
-    if tool.name == "run_command" && tool.is_foreground_command() {
-        if tool
+    let pages = streams(tool);
+    if pages.contains(&Stream::Stderr)
+        && tool
             .command_result()
             .is_some_and(|result| result.stdout.is_empty() && !result.stderr.is_empty())
-        {
-            Stream::Stderr
-        } else if tool.status != ToolStatus::Failed || tool.command_result().is_some() {
-            Stream::Stdout
-        } else {
-            Stream::Raw
-        }
+    {
+        Stream::Stderr
     } else {
-        Stream::Result
+        pages[0]
     }
 }
 
@@ -165,7 +169,7 @@ pub fn content(tool: &ToolRun, stream: Stream) -> String {
         return String::new();
     };
     if stream != Stream::Raw
-        && tool.name == "read_command_output"
+        && tool.name == "CommandOutput"
         && let Ok(value) = serde_json::from_str::<serde_json::Value>(output)
         && let Some(content) = value["content"].as_str()
     {
@@ -203,6 +207,50 @@ pub fn request_directory(tool: &ToolRun, workspace: &str) -> String {
         )
 }
 
+/// Complete request fields for the fixed inspector header. Multiline strings stay literal;
+/// nested values keep their JSON structure. Display metadata never becomes executable input.
+pub fn parameters(tool: &ToolRun, workspace: &str) -> String {
+    let Ok(Value::Object(mut fields)) = serde_json::from_str::<Value>(&tool.arguments) else {
+        return tool.arguments.clone();
+    };
+    if tool.name == "Exec" && !workspace.is_empty() {
+        fields.insert(
+            "cwd".into(),
+            Value::String(request_directory(tool, workspace)),
+        );
+    }
+    let mut lines = Vec::new();
+    if let Some(purpose) = tool
+        .purpose
+        .as_deref()
+        .filter(|purpose| !purpose.is_empty())
+    {
+        lines.push(format!("目的: {purpose}"));
+    }
+    for key in ["command", "path", "url"] {
+        if let Some(value) = fields.remove(key) {
+            lines.push(parameter(key, &value));
+        }
+    }
+    lines.extend(
+        fields
+            .iter()
+            .map(|(key, value)| parameter(key, value)),
+    );
+    if lines.is_empty() {
+        "无参数".into()
+    } else {
+        lines.join("\n")
+    }
+}
+
+fn parameter(key: &str, value: &Value) -> String {
+    let value = value
+        .as_str()
+        .map_or_else(|| pretty(&value.to_string()), str::to_owned);
+    format!("{key}: {value}")
+}
+
 pub fn status(tool: &ToolRun) -> String {
     if let Some(result) = tool.command_result() {
         let label = if result.cancelled {
@@ -212,72 +260,74 @@ pub fn status(tool: &ToolRun) -> String {
         } else {
             result
                 .exit_code
-                .map_or_else(|| "进程已结束".into(), |code| format!("退出码 {code}"))
+                .map_or_else(String::new, |code| format!("退出码 {code}"))
         };
-        return format!("{label} · {} ms", result.elapsed.as_millis());
+        return [label, format!("{} ms", result.elapsed.as_millis())]
+            .into_iter()
+            .filter(|part| !part.is_empty())
+            .collect::<Vec<_>>()
+            .join(" · ");
     }
-    if tool.name == "run_command" && tool.status == ToolStatus::Background && tool.run_finished {
+    if tool.name == "Exec" && tool.status == ToolStatus::Background && tool.run_finished {
         return "结果未确认".into();
     }
-    tool.elapsed_ms.map_or_else(
-        || tool.status.label().into(),
-        |elapsed| format!("{} · {elapsed} ms", tool.status.label()),
-    )
+    if tool.status == ToolStatus::Complete {
+        String::new()
+    } else {
+        tool.elapsed_ms.map_or_else(
+            || tool.status.label().into(),
+            |elapsed| format!("{} · {elapsed} ms", tool.status.label()),
+        )
+    }
 }
 
 pub fn note(tool: &ToolRun, stream: Stream) -> String {
-    if stream == Stream::Changes {
-        return "工具已提交的文件变更；此页只展示执行收据。".into();
-    }
-    if stream == Stream::Command {
-        return "完整请求命令，可选择和复制。".into();
-    }
-    if stream == Stream::Arguments {
-        return "工具调用的完整参数，可选择和复制。".into();
-    }
-    if stream == Stream::Raw {
-        return "工具返回的原始数据，可选择和复制。".into();
-    }
-    if tool.name == "read_command_output"
+    if tool.name == "CommandOutput"
         && let Some(output) = &tool.output
         && let Ok(value) = serde_json::from_str::<serde_json::Value>(output)
     {
         return format!(
-            "{} 单页快照 · 字节 {}–{} / 已保留 {}{}",
+            "{} · 字节 {}–{} / {}{}{}",
             value["stream"]
                 .as_str()
                 .unwrap_or("输出"),
             value["offset"],
             value["next_offset"],
             value["total_retained_bytes"],
-            if value["truncated"] == true {
-                " · 仍有后页"
+            if value["has_more"] == true || value["truncated"] == true {
+                " · 可续读"
+            } else {
+                ""
+            },
+            if value["capture_complete"] == false {
+                " · 原始采集不完整"
             } else {
                 ""
             },
         );
     }
-    if tool.name != "run_command" {
+    if tool.name != "Exec" {
         if tool.output.is_none() && tool.status == ToolStatus::Running {
             return "工具调用正在进行，尚未收到结果。".into();
         }
-        return "已接收的工具结果，可选择和复制。".into();
+        return tool
+            .output
+            .as_deref()
+            .and_then(|output| serde_json::from_str::<Value>(output).ok())
+            .map_or_else(String::new, |value| pagination(&value));
     }
     if let Some(result) = tool.command_result() {
-        let mut note = format!(
-            "工具返回的有界结果 · stdout {} 字节 · stderr {} 字节",
-            result.stdout_total_bytes, result.stderr_total_bytes,
-        );
+        let mut notes = Vec::new();
         if result.output_truncated {
-            note.push_str(" · 仅显示每路最多 32KiB 的尾部");
+            notes.push("输出为每路最多 32KiB 的尾部".to_owned());
         }
         if result.retained_output_truncated {
-            note.push_str(" · 原始日志保留不完整");
+            notes.push("原始日志保留不完整".to_owned());
         }
         if let Some(error) = result.retained_output_error {
-            note.push_str(&format!(" · {error}"));
+            notes.push(error);
         }
-        return note;
+        return notes.join(" · ");
     }
     if tool.status == ToolStatus::Background || !tool.is_foreground_command() {
         if tool.run_finished {
@@ -286,7 +336,7 @@ pub fn note(tool: &ToolRun, stream: Stream) -> String {
         return "后台启动回执；等待完成事件，此页不提供后台实时日志。".into();
     }
     if tool.status != ToolStatus::Running {
-        return "已接收的结果；未识别为命令结果结构，可在“结果”中查看原文。".into();
+        return String::new();
     }
     if stream == Stream::Stderr {
         return "stderr 将在命令结束后显示工具返回的结果。".into();
@@ -304,47 +354,61 @@ fn structured(name: &str, output: &str) -> String {
         return output.to_owned();
     };
     match name {
-        "read_file" | "read_document" | "read_command_output" | "web_fetch" => {
+        "ReadFile" | "ReadDocument" | "CommandOutput" | "WebFetch" => {
             if let Some(content) = value["content"].as_str() {
-                let mut text = String::new();
-                for key in ["path", "url", "title"] {
-                    if let Some(label) = value[key].as_str() {
-                        text.push_str(label);
-                        text.push('\n');
-                    }
-                }
-                text.push('\n');
-                text.push_str(content);
-                append_pagination(&value, &mut text);
-                return text;
+                return content.to_owned();
             }
         }
-        "search_text" => {
+        "Grep" => {
             if let Some(matches) = value["matches"].as_array() {
                 let mut text = String::new();
                 for found in matches {
-                    text.push_str(&format!(
-                        "{}:{}:{}\n{}\n\n",
-                        found["path"]
-                            .as_str()
-                            .unwrap_or_default(),
-                        found["line"],
-                        found["column"],
-                        found["text"]
-                            .as_str()
-                            .unwrap_or_default(),
-                    ));
+                    let path = found["path"]
+                        .as_str()
+                        .unwrap_or_default();
+                    match value["output_mode"].as_str() {
+                        Some("files") => text.push_str(&format!("{path}\n")),
+                        Some("count") => text.push_str(&format!("{path}: {}\n", found["count"])),
+                        _ => {
+                            text.push_str(&format!(
+                                "{path}:{}:{}\n",
+                                found["line"], found["column"]
+                            ));
+                            let mut lines = std::collections::BTreeMap::new();
+                            if let Some(context) = found["context"].as_array() {
+                                for line in context {
+                                    if let (Some(number), Some(content)) =
+                                        (line["line"].as_u64(), line["text"].as_str())
+                                    {
+                                        lines.insert(number, content);
+                                    }
+                                }
+                            }
+                            if let Some(number) = found["line"].as_u64() {
+                                lines.insert(
+                                    number,
+                                    found["text"]
+                                        .as_str()
+                                        .unwrap_or_default(),
+                                );
+                            }
+                            for (number, content) in lines {
+                                let marker = if found["line"] == number { '>' } else { ' ' };
+                                text.push_str(&format!("{marker} {number}: {content}\n"));
+                            }
+                            text.push('\n');
+                        }
+                    }
                 }
                 if matches.is_empty() {
                     text.push_str("没有匹配项");
                 }
-                append_pagination(&value, &mut text);
                 return text;
             }
         }
-        "list_files" => {
+        "ListFiles" => {
             if let Some(entries) = value["entries"].as_array() {
-                let mut text = entries
+                let text = entries
                     .iter()
                     .map(|entry| {
                         format!(
@@ -359,7 +423,6 @@ fn structured(name: &str, output: &str) -> String {
                     })
                     .collect::<Vec<_>>()
                     .join("\n");
-                append_pagination(&value, &mut text);
                 return text;
             }
         }
@@ -370,13 +433,22 @@ fn structured(name: &str, output: &str) -> String {
     text.trim_end().to_owned()
 }
 
-fn append_pagination(value: &Value, text: &mut String) {
+fn pagination(value: &Value) -> String {
+    let mut parts = Vec::new();
     if value["truncated"] == true || value["has_more"] == true {
-        text.push_str("\n\n仅显示本次返回的内容，仍有后续内容。");
+        let next = ["next_start_char", "next_offset", "next_start_line"]
+            .iter()
+            .find_map(|key| {
+                value[key]
+                    .as_u64()
+                    .map(|offset| format!("{key}={offset}"))
+            });
+        parts.push(next.map_or_else(|| "结果有后页".into(), |next| format!("可续读 · {next}")));
     }
     if value["scan_truncated"] == true {
-        text.push_str("\n扫描达到上限，结果可能不完整。");
+        parts.push("扫描达到上限".into());
     }
+    parts.join(" · ")
 }
 
 /// Expands text blocks without JSON escapes while keeping arbitrary structured fields visible.
@@ -433,8 +505,26 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn search_modes_and_context_lines_survive_shared_projection() {
+        let rows = json!({
+            "matches": [{
+                "path": "sample.rs", "line": 2, "column": 1, "text": "hit",
+                "context": [{ "line": 1, "text": "before" }, { "line": 3, "text": "after" }]
+            }]
+        });
+        let content = structured("Grep", &rows.to_string());
+        assert!(content.find("1: before").unwrap() < content.find("2: hit").unwrap());
+        assert!(content.find("2: hit").unwrap() < content.find("3: after").unwrap());
+        for (mode, expected) in [("files", "sample.rs\n"), ("count", "sample.rs: 3\n")] {
+            let result =
+                json!({"output_mode": mode, "matches": [{"path": "sample.rs", "count": 3}]});
+            assert_eq!(structured("Grep", &result.to_string()), expected);
+        }
+    }
+
+    #[test]
     fn diff_uses_confirmed_changes_instead_of_requested_text() {
-        let call = ToolCall::function("change-1", "edit_file", json!({"path": "generated.rs"}));
+        let call = ToolCall::function("change-1", "EditFile", json!({"path": "generated.rs"}));
         let mut tool = ToolRun::new(&call);
         tool.changes
             .push(super::super::FileChange {
@@ -467,7 +557,7 @@ mod tests {
 
     #[test]
     fn default_page_always_exists_for_running_and_finished_tools() {
-        for name in ["run_command", "read_file", "mcp_generated_inspect"] {
+        for name in ["Exec", "ReadFile", "mcp_generated_inspect"] {
             for background in [false, true] {
                 for status in [
                     ToolStatus::Running,
@@ -491,7 +581,7 @@ mod tests {
     fn navigation_requires_confirmed_tool_output_and_valid_session_ids() {
         let mut tool = ToolRun::new(&ToolCall::function(
             "generated",
-            "read_image",
+            "ReadImage",
             json!({"path": "sample.png"}),
         ));
         assert!(target(&tool).is_none());
@@ -500,7 +590,7 @@ mod tests {
             json!({"path": "sample.png"}).to_string(),
         );
         assert_eq!(target(&tool), Some(Target::Image("sample.png".into())));
-        tool.name = "spawn_agent".into();
+        tool.name = "SpawnAgent".into();
         tool.output = Some(json!({"agent_id": "../unrelated"}).to_string());
         assert!(target(&tool).is_none());
         tool.output = Some(json!({"agent_id": "a".repeat(32)}).to_string());

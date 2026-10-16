@@ -21,7 +21,7 @@ fn tool(name: &str, arguments: serde_json::Value, output: Option<serde_json::Val
 #[test]
 fn command_streams_use_actual_result_and_preserve_literal_markdown_and_unicode() {
     let tool = tool(
-        "run_command",
+        "Exec",
         serde_json::json!({
             "command": "example"
         }),
@@ -55,7 +55,7 @@ fn command_streams_use_actual_result_and_preserve_literal_markdown_and_unicode()
 fn command_view_preserves_the_complete_multiline_request() {
     let command = "python3 - <<'PY'\nprint('甲乙 `code`')\nPY\n";
     let tool = tool(
-        "run_command",
+        "Exec",
         serde_json::json!({
             "command": command,
             "cwd": "/project/with spaces"
@@ -69,7 +69,7 @@ fn command_view_preserves_the_complete_multiline_request() {
 #[test]
 fn received_output_page_is_a_snapshot_and_more_pages_does_not_mean_retention_loss() {
     let tool = tool(
-        "read_command_output",
+        "CommandOutput",
         serde_json::json!({
             "output_id": "cmd-1"
         }),
@@ -85,14 +85,14 @@ fn received_output_page_is_a_snapshot_and_more_pages_does_not_mean_retention_los
     );
     assert_eq!(content(&tool, Stream::Result), "甲乙");
     let note = note(&tool, Stream::Result);
-    assert!(note.contains("单页快照") && note.contains("12–18") && note.contains("仍有后页"));
+    assert!(note.contains("字节") && note.contains("12–18") && note.contains("可续读"));
     assert!(!note.contains("丢失") && !note.contains("实时"));
 }
 
 #[test]
 fn background_receipts_never_become_realtime_even_if_they_contain_preview_like_fields() {
     let mut tool = tool(
-        "run_command",
+        "Exec",
         serde_json::json!({
             "command": "background",
             "background": true
@@ -118,7 +118,7 @@ fn background_receipts_never_become_realtime_even_if_they_contain_preview_like_f
 #[test]
 fn malformed_or_legacy_outputs_remain_inspectable_without_markdown_wrapping() {
     let mut tool = tool(
-        "read_file",
+        "ReadFile",
         serde_json::json!({
             "path": "source.rs"
         }),
@@ -130,9 +130,52 @@ fn malformed_or_legacy_outputs_remain_inspectable_without_markdown_wrapping() {
         tool.output.as_deref().unwrap()
     );
     assert!(content(&tool, Stream::Arguments).contains("source.rs"));
-    tool.name = "run_command".into();
+    tool.name = "Exec".into();
     tool.status = ToolStatus::Failed;
     assert!(tool.command_result().is_none());
     assert_eq!(status(&tool), "失败");
     assert_eq!(content(&tool, Stream::Result), tool.output.unwrap());
+}
+
+#[test]
+fn headers_preserve_all_arguments_without_duplicate_result_pages() {
+    let command = "printf 'first\\n'\nprintf 'second\\n'";
+    let mut record = tool(
+        "Exec",
+        serde_json::json!({
+            "command": command, "cwd": "src", "timeout_seconds": 10,
+            "environment": {"MODE": "test"}
+        }),
+        Some(serde_json::json!({
+            "exit_code": 0, "elapsed": {"secs": 0, "nanos": 0},
+            "stdout": "actual output", "stderr": "", "timed_out": false,
+            "stdout_total_bytes": 13, "stderr_total_bytes": 0,
+            "cancelled": false, "output_truncated": false
+        })),
+    );
+    record.purpose = Some("Inspect generated output".into());
+    let parameters = super::parameters(&record, "/generated/project");
+    assert_eq!(parameters.matches(command).count(), 1);
+    assert!(parameters.contains("cwd: /generated/project/src"));
+    assert!(parameters.contains("timeout_seconds: 10") && parameters.contains("MODE"));
+    assert_eq!(super::streams(&record), &[Stream::Stdout, Stream::Raw]);
+    assert_eq!(content(&record, Stream::Stdout), "actual output");
+    record.name = "mcp_fixture".into();
+    record.arguments = serde_json::json!({"_orbit_purpose": 4}).to_string();
+    assert!(super::parameters(&record, "").contains("_orbit_purpose: 4"));
+}
+
+#[test]
+fn file_pages_contain_only_the_received_text_and_completed_status_is_empty() {
+    let record = tool(
+        "ReadFile",
+        serde_json::json!({"path": "fixture.rs"}),
+        Some(serde_json::json!({
+            "path": "fixture.rs", "content": "1: fn generated() {}", "has_more": true,
+            "next_start_line": 2
+        })),
+    );
+    assert_eq!(content(&record, Stream::Result), "1: fn generated() {}");
+    assert!(status(&record).is_empty());
+    assert_eq!(super::streams(&record), &[Stream::Result, Stream::Raw]);
 }

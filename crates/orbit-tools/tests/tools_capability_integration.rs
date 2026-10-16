@@ -42,7 +42,7 @@ async fn external_path_integration_across_all_tools() {
         .execute(
             ToolCall::function(
                 "r1",
-                "read_file",
+                "ReadFile",
                 json!({
                     "path": &ext_file_str
                 }),
@@ -60,14 +60,14 @@ async fn external_path_integration_across_all_tools() {
     assert!(
         read_err
             .to_string()
-            .contains("request_capability")
+            .contains("RequestAccess")
     );
 
     let write_err = write_tool
         .execute(
             ToolCall::function(
                 "w1",
-                "write_file",
+                "WriteFile",
                 json!({
                     "path": &ext_file_str,
                     "content": "forbidden"
@@ -86,14 +86,14 @@ async fn external_path_integration_across_all_tools() {
     assert!(
         write_err
             .to_string()
-            .contains("request_capability")
+            .contains("RequestAccess")
     );
 
     let edit_err = edit_tool
         .execute(
             ToolCall::function(
                 "e1",
-                "edit_file",
+                "EditFile",
                 json!({
                     "path": &ext_file_str,
                     "old_text": "initial line",
@@ -113,14 +113,14 @@ async fn external_path_integration_across_all_tools() {
     assert!(
         edit_err
             .to_string()
-            .contains("request_capability")
+            .contains("RequestAccess")
     );
 
     let list_err = list_tool
         .execute(
             ToolCall::function(
                 "l1",
-                "list_files",
+                "ListFiles",
                 json!({
                     "path": &ext_dir_str
                 }),
@@ -138,14 +138,14 @@ async fn external_path_integration_across_all_tools() {
     assert!(
         list_err
             .to_string()
-            .contains("request_capability")
+            .contains("RequestAccess")
     );
 
     let search_err = search_tool
         .execute(
             ToolCall::function(
                 "s1",
-                "search_text",
+                "Grep",
                 json!({
                     "path": &ext_dir_str,
                     "query": "second"
@@ -164,7 +164,7 @@ async fn external_path_integration_across_all_tools() {
     assert!(
         search_err
             .to_string()
-            .contains("request_capability")
+            .contains("RequestAccess")
     );
 
     let resolved_ext_dir = ResolvedPath::resolve(&ext_dir, None).unwrap();
@@ -179,7 +179,7 @@ async fn external_path_integration_across_all_tools() {
         .execute(
             ToolCall::function(
                 "r2",
-                "read_file",
+                "ReadFile",
                 json!({
                     "path": &ext_file_str
                 }),
@@ -198,7 +198,7 @@ async fn external_path_integration_across_all_tools() {
     let write_fut = write_tool.execute(
         ToolCall::function(
             "w2",
-            "write_file",
+            "WriteFile",
             json!({
                 "path": &ext_file_str,
                 "content": "replaced external content\nsecond line\n"
@@ -254,7 +254,7 @@ async fn external_path_integration_across_all_tools() {
         .execute(
             ToolCall::function(
                 "e2",
-                "edit_file",
+                "EditFile",
                 json!({
                     "path": &ext_file_str,
                     "old_text": "second line",
@@ -282,7 +282,7 @@ async fn external_path_integration_across_all_tools() {
         .execute(
             ToolCall::function(
                 "l2",
-                "list_files",
+                "ListFiles",
                 json!({
                     "path": &ext_dir_str
                 }),
@@ -303,7 +303,7 @@ async fn external_path_integration_across_all_tools() {
         .execute(
             ToolCall::function(
                 "s2",
-                "search_text",
+                "Grep",
                 json!({
                     "path": &ext_dir_str,
                     "query": "edited external"
@@ -366,7 +366,7 @@ async fn external_special_readers_integration() {
         .execute(
             ToolCall::function(
                 "d1",
-                "read_document",
+                "ReadDocument",
                 json!({
                     "path": &ext_doc_str
                 }),
@@ -384,14 +384,14 @@ async fn external_special_readers_integration() {
     assert!(
         doc_err
             .to_string()
-            .contains("request_capability")
+            .contains("RequestAccess")
     );
 
     let rtf_err = doc_tool
         .execute(
             ToolCall::function(
                 "d_rtf",
-                "read_document",
+                "ReadDocument",
                 json!({
                     "path": &ext_rtf_str
                 }),
@@ -409,14 +409,14 @@ async fn external_special_readers_integration() {
     assert!(
         rtf_err
             .to_string()
-            .contains("request_capability")
+            .contains("RequestAccess")
     );
 
     let img_err = img_tool
         .execute(
             ToolCall::function(
                 "i1",
-                "read_image",
+                "ReadImage",
                 json!({
                     "path": &ext_img_str
                 }),
@@ -434,7 +434,7 @@ async fn external_special_readers_integration() {
     assert!(
         img_err
             .to_string()
-            .contains("request_capability")
+            .contains("RequestAccess")
     );
 
     let resolved_ext_dir = ResolvedPath::resolve(&ext_dir, None).unwrap();
@@ -449,7 +449,7 @@ async fn external_special_readers_integration() {
         .execute(
             ToolCall::function(
                 "d2",
-                "read_document",
+                "ReadDocument",
                 json!({
                     "path": &ext_doc_str
                 }),
@@ -470,7 +470,7 @@ async fn external_special_readers_integration() {
         .execute(
             ToolCall::function(
                 "d2_rtf",
-                "read_document",
+                "ReadDocument",
                 json!({
                     "path": &ext_rtf_str
                 }),
@@ -495,7 +495,7 @@ async fn external_special_readers_integration() {
         .execute(
             ToolCall::function(
                 "i2",
-                "read_image",
+                "ReadImage",
                 json!({
                     "path": &ext_img_str
                 }),
@@ -521,7 +521,7 @@ async fn external_special_readers_integration() {
         .execute(
             ToolCall::function(
                 "d3_rel",
-                "read_document",
+                "ReadDocument",
                 json!({
                     "path": rel_doc
                 }),

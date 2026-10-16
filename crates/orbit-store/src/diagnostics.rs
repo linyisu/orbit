@@ -28,6 +28,8 @@ pub struct RunDiagnostic {
     pub tool_started: usize,
     pub tool_finished: usize,
     pub tool_failed: usize,
+    #[serde(default)]
+    pub tool_cancelled: usize,
     pub compactions: usize,
     pub compaction_failures: usize,
     /// Sanitized fallback reason, when recorded by the original run.
@@ -103,6 +105,7 @@ fn summarize(
         tool_started: 0,
         tool_finished: 0,
         tool_failed: 0,
+        tool_cancelled: 0,
         compactions: 0,
         compaction_failures: 0,
         compaction_fallback: None,
@@ -152,6 +155,18 @@ fn summarize(
             }
 
             AgentEvent::ToolStarted { .. } => result.tool_started += 1,
+            AgentEvent::ToolFinished {
+                call,
+                outcome: Some(orbit_agent::tool::ToolOutcome::Failed),
+                ..
+            } => {
+                result.tool_failed += 1;
+                result.failure = Some(format!("工具 {} 返回失败结果", call.function.name));
+            }
+            AgentEvent::ToolFinished {
+                outcome: Some(orbit_agent::tool::ToolOutcome::Cancelled),
+                ..
+            } => result.tool_cancelled += 1,
             AgentEvent::ToolFinished { .. } => result.tool_finished += 1,
             AgentEvent::ToolFailed { error, .. } => {
                 result.tool_failed += 1;
@@ -246,7 +261,7 @@ pub fn text(diagnostics: &SessionDiagnostics) -> String {
             .unwrap_or_else(|| "耗时未记录".into());
         let _ = writeln!(
             output,
-            "\n#{}  {} · {}\n  轮次 {} · 模型事件 {} · 正文 {} 字 · 思考 {} 字\n  工具 启动 {} / 成功 {} / 失败 {} · \
+            "\n#{}  {} · {}\n  轮次 {} · 模型事件 {} · 正文 {} 字 · 思考 {} 字\n  工具 启动 {} / 完成 {} / 失败 {} / 取消 {} · \
                 上下文整理 {}{}",
             run.run_id,
             run.status,
@@ -258,6 +273,7 @@ pub fn text(diagnostics: &SessionDiagnostics) -> String {
             run.tool_started,
             run.tool_finished,
             run.tool_failed,
+            run.tool_cancelled,
             run.compactions,
             if run.compaction_failures > 0 {
                 format!("，失败 {}", run.compaction_failures)
@@ -329,6 +345,25 @@ mod tests {
 
     use super::*;
 
+    #[test]
+    fn explicit_failed_receipts_are_not_counted_as_successful_returns() {
+        let event = AgentEvent::ToolFinished {
+            call: ToolCall::function("sample", "mcp_sample", json!({})),
+            content: "opaque result".into(),
+            outcome: Some(orbit_agent::tool::ToolOutcome::Failed),
+            changes: Vec::new(),
+            files: None,
+        };
+        let run = summarize(
+            1,
+            "completed".into(),
+            None,
+            vec![(serde_json::to_string(&event).unwrap(), None)],
+        );
+        assert_eq!(run.tool_failed, 1);
+        assert_eq!(run.tool_finished, 0);
+    }
+
     #[tokio::test]
     async fn diagnostics_distinguish_model_tool_and_compaction_events() {
         let directory = tempdir().unwrap();
@@ -352,7 +387,7 @@ mod tests {
             .unwrap();
         let call = ToolCall::function(
             "call",
-            "read_file",
+            "ReadFile",
             json!({
                 "path": "missing"
             }),

@@ -97,12 +97,22 @@ impl TranscriptDialog {
         self.close_hover_tick = tick;
         let focus_expired = self.ui.expire_footnote_focus();
         let feedback_expired = self.ui.feedback.expire(Instant::now());
+        let copy_expired = self
+            .ui
+            .info_dialog
+            .as_mut()
+            .is_some_and(|dialog| dialog.tick(Instant::now()));
         let preview_changed = self
             .ui
             .media_preview
             .as_ref()
             .is_some_and(|preview| preview.tick());
-        direction != 0 || hover_changed || focus_expired || feedback_expired || preview_changed
+        direction != 0
+            || hover_changed
+            || focus_expired
+            || feedback_expired
+            || preview_changed
+            || copy_expired
     }
 
     pub fn draw(
@@ -544,9 +554,9 @@ mod tests {
         use serde_json::json;
 
         let mut view = TranscriptDialog::new("fixture");
-        let mut tool = ToolRun::new(&ToolCall::function("generated", "spawn_agent", json!({})));
+        let mut tool = ToolRun::new(&ToolCall::function("generated", "SpawnAgent", json!({})));
         tool.output = Some(json!({"agent_id": "b".repeat(32)}).to_string());
-        view.ui.info_dialog = Some(super::super::dialogs::InfoDialog::tool(&tool));
+        view.ui.info_dialog = Some(super::super::dialogs::InfoDialog::tool(&tool, ""));
         view.handle(&Event::Key(KeyEvent::new(
             KeyCode::Char('a'),
             KeyModifiers::NONE,

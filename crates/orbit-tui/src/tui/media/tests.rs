@@ -302,7 +302,7 @@ async fn restored_read_image_results_upload_complete_rgba_with_selection_and_row
         .unwrap();
     let call = ToolCall::function(
         "image",
-        "read_image",
+        "ReadImage",
         serde_json::json!({
             "path": "image.png"
         }),
@@ -321,6 +321,7 @@ async fn restored_read_image_results_upload_complete_rgba_with_selection_and_row
             },
             orbit_protocol::Update::Agent(Box::new(AgentEvent::ToolStarted { call: call.clone() })),
             orbit_protocol::Update::Agent(Box::new(AgentEvent::ToolFinished {
+                outcome: None,
                 call,
                 content: serde_json::json!({
                     "path": "image.png",
@@ -340,7 +341,7 @@ async fn restored_read_image_results_upload_complete_rgba_with_selection_and_row
         .position(|item| {
             matches!(
                 item,
-                TranscriptItem::Tool(row) if row.name == "read_image"
+                TranscriptItem::Tool(row) if row.name == "ReadImage"
             )
         })
         .unwrap();

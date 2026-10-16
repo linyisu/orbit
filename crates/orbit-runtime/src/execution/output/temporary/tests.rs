@@ -1,6 +1,54 @@
 use super::*;
 
 #[tokio::test]
+async fn session_logs_survive_runs_and_reopening_without_crossing_session_boundaries() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root
+        .path()
+        .join("logs")
+        .join("session-a");
+    let outputs = CommandOutputs::persistent(path.clone());
+    assert!(outputs.lease().is_none());
+    let run = outputs.begin_run().unwrap();
+    let log = outputs.create_log().await.unwrap();
+    let (id, mut stdout, stderr) = log.split();
+    stdout
+        .append(b"retained result")
+        .await
+        .unwrap();
+    drop((stdout, stderr, run));
+    assert!(outputs.lease().is_some());
+    assert!(outputs.create_log().await.is_err());
+    drop(outputs);
+    let reopened = CommandOutputs::persistent(path);
+    assert_eq!(
+        std::fs::read(
+            reopened
+                .lease()
+                .unwrap()
+                .path()
+                .join(format!("{id}.stdout"))
+        )
+        .unwrap(),
+        b"retained result"
+    );
+    let other = CommandOutputs::persistent(root.path().join("logs/session-b"));
+    assert!(other.lease().is_none());
+    let next = reopened.begin_run().unwrap();
+    let log = reopened.create_log().await.unwrap();
+    assert_ne!(id, log.id());
+    assert!(
+        reopened
+            .lease()
+            .unwrap()
+            .path()
+            .join(format!("{id}.stdout"))
+            .exists()
+    );
+    drop((next, log));
+}
+
+#[tokio::test]
 async fn task_end_expires_access_but_keeps_outstanding_io_alive() {
     let outputs = CommandOutputs::default();
     assert!(outputs.lease().is_none());
@@ -72,8 +120,10 @@ fn orphan_collection_keeps_live_directories_unknown_files_and_symlinks() {
     let temporary = tempfile::tempdir().unwrap();
     let root = temporary.path().join("outputs");
     let live = create_directory(&root).unwrap();
-    let live_path = live.directory.path().to_owned();
-    let RunDirectory { directory, _lock } = create_directory(&root).unwrap();
+    let live_path = live.path().to_owned();
+    let RunDirectory::Temporary { directory, _lock } = create_directory(&root).unwrap() else {
+        panic!("expected temporary logs")
+    };
     let orphan = directory.keep();
     std::fs::write(orphan.join("cmd-old.stdout"), b"orphan").unwrap();
     // Model abrupt process exit while leaving the files behind.

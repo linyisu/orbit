@@ -1,5 +1,58 @@
 use super::*;
 
+#[tokio::test]
+async fn discovery_reads_all_pages_and_rejects_ambiguous_catalogs() {
+    let (_directory, client) = peer("pages").await;
+    assert_eq!(
+        client
+            .tools
+            .iter()
+            .map(|tool| tool.name.as_str())
+            .collect::<Vec<_>>(),
+        ["work", "second"]
+    );
+    for mode in ["cursor_loop", "duplicates"] {
+        let directory = tempfile::tempdir().unwrap();
+        assert!(
+            StdioClient::start("synthetic", &config(mode), directory.path())
+                .await
+                .is_err()
+        );
+    }
+}
+
+#[tokio::test]
+async fn structured_results_survive_and_catalog_changes_block_stale_calls() {
+    let (_directory, mut client) = peer("structured").await;
+    let output = client
+        .call_tool("work", json!({}), CancellationToken::new())
+        .await
+        .unwrap();
+    let content: Value = serde_json::from_str(&output.content).unwrap();
+    assert_eq!(content["structured_content"]["count"], 3);
+    let (directory, mut client) = peer("list_changed").await;
+    client
+        .call_tool("work", json!({}), CancellationToken::new())
+        .await
+        .unwrap();
+    let error = client
+        .call_tool("work", json!({}), CancellationToken::new())
+        .await
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("catalog changed")
+    );
+    assert_eq!(
+        messages(directory.path())
+            .iter()
+            .filter(|entry| entry["method"] == "tools/call")
+            .count(),
+        1
+    );
+}
+
 async fn peer(mode: &str) -> (tempfile::TempDir, StdioClient) {
     let directory = tempfile::tempdir().unwrap();
     let config = config(mode);
@@ -144,7 +197,7 @@ async fn registered_tool_preserves_business_failure_without_restarting_the_peer(
     {
         let output = registry
             .execute(
-                ToolCall::function(format!("call-{index}"), "mcp__synthetic__work", json!({})),
+                ToolCall::function(format!("call-{index}"), "MCP_Synthetic_Work", json!({})),
                 CancellationToken::new(),
             )
             .await
@@ -366,7 +419,7 @@ async fn cancellation_while_waiting_for_the_connection_returns_without_a_request
     let _lock = client.lock().await;
     let (approvals, mut receiver) = crate::approval::channel();
     let tool = McpTool {
-        exposed_name: "mcp__synthetic__work".into(),
+        exposed_name: "MCP_Synthetic_Work".into(),
         server: "synthetic".into(),
         definition,
         client: client.clone(),
@@ -385,7 +438,7 @@ async fn cancellation_while_waiting_for_the_connection_returns_without_a_request
         token.cancel();
     };
     let call = tool.execute(
-        ToolCall::function("queued", "mcp__synthetic__work", json!({})),
+        ToolCall::function("queued", "MCP_Synthetic_Work", json!({})),
         token.clone(),
     );
     let (result, ()) = time::timeout(Duration::from_secs(1), async { tokio::join!(call, cancel) })
@@ -437,7 +490,7 @@ async fn timed_out_mcp_calls_emit_failure_receipts_and_later_calls_still_need_ap
             model: None,
             message: ChatMessage::assistant_tool_calls(vec![ToolCall::function(
                 id,
-                "mcp__synthetic__work",
+                "MCP_Synthetic_Work",
                 json!({}),
             )]),
             finish_reason: Some("tool_calls".into()),

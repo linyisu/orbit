@@ -11,10 +11,30 @@ use orbit_tools::search_text::SearchText;
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
+#[tokio::test]
+async fn output_modes_avoid_repeating_matching_lines_and_count_occurrences() {
+    let root = tempfile::tempdir().unwrap();
+    fs::write(root.path().join("a.txt"), "term term\nterm\n").unwrap();
+    fs::write(root.path().join("b.txt"), "no hit\n").unwrap();
+    let tool = SearchText::new(Workspace::new(root.path()).unwrap());
+    let content = run(&tool, json!({"query": "term"})).await;
+    assert_eq!(
+        content["matches"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    let files = run(&tool, json!({"query": "term", "output_mode": "files"})).await;
+    assert_eq!(files["matches"], json!([{ "path": "a.txt" }]));
+    let counts = run(&tool, json!({"query": "term", "output_mode": "count"})).await;
+    assert_eq!(counts["matches"], json!([{ "path": "a.txt", "count": 3 }]));
+}
+
 async fn run(tool: &SearchText, arguments: Value) -> Value {
     let output = tool
         .execute(
-            ToolCall::function("search", "search_text", arguments),
+            ToolCall::function("search", "Grep", arguments),
             CancellationToken::new(),
         )
         .await
@@ -211,7 +231,7 @@ async fn rejects_invalid_patterns_paths_and_cancelled_searches() {
         assert!(
             matches!(
                 tool.execute(
-                    ToolCall::function("search", "search_text", arguments.clone()),
+                    ToolCall::function("search", "Grep", arguments.clone()),
                     CancellationToken::new(),
                 )
                 .await,
@@ -228,7 +248,7 @@ async fn rejects_invalid_patterns_paths_and_cancelled_searches() {
         tool.execute(
             ToolCall::function(
                 "search",
-                "search_text",
+                "Grep",
                 json!({
                     "query": "text"
                 })

@@ -45,6 +45,13 @@ pub enum Command {
         request: Request,
         result: tokio::sync::oneshot::Sender<Result<Response, String>>,
     },
+    ToolOutput {
+        session: String,
+        tool: Box<crate::execution::ToolRun>,
+        result: tokio::sync::oneshot::Sender<
+            Result<crate::execution::details::retained::Contents, String>,
+        >,
+    },
     Send {
         session: String,
         id: String,
@@ -289,6 +296,24 @@ pub async fn observe(
                         events
                             .send(Event::Tasks { session, result })
                             .await?;
+                    }
+                    Command::ToolOutput {
+                        session,
+                        tool,
+                        result,
+                    } => {
+                        let connection = connection.clone();
+                        review_tasks.spawn(async move {
+                            let response = crate::execution::details::retained::fetch(
+                                &connection,
+                                session,
+                                None,
+                                &tool,
+                            )
+                            .await
+                            .map_err(|error| format!("{error:#}"));
+                            let _ = result.send(response);
+                        });
                     }
                     Command::Settings { request, result } => {
                         if super::independent(&request) || crate::library::routed(&request) {

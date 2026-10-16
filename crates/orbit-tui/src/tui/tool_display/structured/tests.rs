@@ -25,7 +25,7 @@ fn text(lines: &[Line<'_>]) -> String {
 #[test]
 fn directory_preview_preserves_nested_paths_and_separates_paging_from_expansion() {
     let mut row = tool(
-        "list_files",
+        "ListFiles",
         json!({
             "entries": [
                 {
@@ -174,7 +174,7 @@ fn structured_results_fit_narrow_screens_escape_controls_and_keep_model_payload(
     let long = format!("中文👩‍💻e\u{301}{}\u{1b}[31m", "很长的路径/".repeat(15));
     let rows = [
         tool(
-            "list_files",
+            "ListFiles",
             json!({
                 "entries": [{
                     "path": long,
@@ -190,7 +190,7 @@ fn structured_results_fit_narrow_screens_escape_controls_and_keep_model_payload(
             }),
         ),
         tool(
-            "read_command_output",
+            "CommandOutput",
             json!({
                 "output_id": "p-0",
                 "stream": "stdout",
@@ -202,7 +202,7 @@ fn structured_results_fit_narrow_screens_escape_controls_and_keep_model_payload(
             }),
         ),
         tool(
-            "web_search",
+            "WebSearch",
             json!({
                 "query": "test",
                 "provider": "Parallel",
@@ -215,7 +215,7 @@ fn structured_results_fit_narrow_screens_escape_controls_and_keep_model_payload(
             }),
         ),
         tool(
-            "read_document",
+            "ReadDocument",
             json!({
                 "path": "doc.csv",
                 "format": "csv",
@@ -226,7 +226,7 @@ fn structured_results_fit_narrow_screens_escape_controls_and_keep_model_payload(
             }),
         ),
         tool(
-            "request_capability",
+            "RequestAccess",
             json!({
                 "status": "granted",
                 "capability": {
@@ -236,7 +236,7 @@ fn structured_results_fit_narrow_screens_escape_controls_and_keep_model_payload(
             }),
         ),
         tool(
-            "read_image",
+            "ReadImage",
             json!({
                 "path": long,
                 "loaded": true
@@ -296,7 +296,7 @@ fn expansion_wraps_with_a_stable_gutter_and_preserves_text() {
 #[test]
 fn command_output_view_formats_stream_range_and_truncation() {
     let row = tool(
-        "read_command_output",
+        "CommandOutput",
         json!({
             "output_id": "proc-0",
             "stream": "stdout",
@@ -318,7 +318,7 @@ fn command_output_view_formats_stream_range_and_truncation() {
 #[test]
 fn web_search_view_formats_results_and_links() {
     let row = tool(
-        "web_search",
+        "WebSearch",
         json!({
             "query": "rust lang",
             "provider": "DuckDuckGo",
@@ -342,7 +342,7 @@ fn web_search_view_formats_results_and_links() {
 #[test]
 fn web_search_warns_before_suspect_results_and_expands_diagnostics() {
     let row = tool(
-        "web_search",
+        "WebSearch",
         json!({
             "provider": "Parallel",
             "query_match_unconfirmed": true,
@@ -370,7 +370,7 @@ fn web_search_warns_before_suspect_results_and_expands_diagnostics() {
 #[test]
 fn document_view_shows_pdf_page_range_and_encoding_warning() {
     let row = tool(
-        "read_document",
+        "ReadDocument",
         json!({
             "path": "book.pdf",
             "format": "pdf",
@@ -415,7 +415,7 @@ fn document_view_shows_pdf_page_range_and_encoding_warning() {
 #[test]
 fn document_view_formats_format_and_characters() {
     let row = tool(
-        "read_document",
+        "ReadDocument",
         json!({
             "path": "data.csv",
             "format": "csv",
@@ -434,7 +434,7 @@ fn document_view_formats_format_and_characters() {
 #[test]
 fn capability_view_formats_granted_and_denied() {
     let granted_row = tool(
-        "request_capability",
+        "RequestAccess",
         json!({
             "status": "granted",
             "capability": {
@@ -449,7 +449,7 @@ fn capability_view_formats_granted_and_denied() {
     assert!(rendered.contains("读写"));
 
     let denied_row = tool(
-        "request_capability",
+        "RequestAccess",
         json!({
             "status": "denied",
             "message": "User denied permission"
@@ -463,7 +463,7 @@ fn capability_view_formats_granted_and_denied() {
 #[test]
 fn image_view_formats_cleanly() {
     let image_row = tool(
-        "read_image",
+        "ReadImage",
         json!({
             "path": "img.png",
             "loaded": true

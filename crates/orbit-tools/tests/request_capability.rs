@@ -19,7 +19,7 @@ async fn reserved_paths_never_prompt_and_nested_missing_paths_suggest_an_eligibl
             .execute(
                 ToolCall::function(
                     "reserved",
-                    "request_capability",
+                    "RequestAccess",
                     json!({
                         "path": path,
                         "access": "read",
@@ -47,7 +47,7 @@ async fn reserved_paths_never_prompt_and_nested_missing_paths_suggest_an_eligibl
         .execute(
             ToolCall::function(
                 "missing",
-                "request_capability",
+                "RequestAccess",
                 json!({
                     "path": outside
                         .path()
@@ -91,7 +91,7 @@ async fn request_capability_prompts_approval_and_enables_subsequent_reads() {
         .execute(
             ToolCall::function(
                 "call_1",
-                "read_file",
+                "ReadFile",
                 json!({
                     "path": outside_file.display().to_string()
                 }),
@@ -112,7 +112,7 @@ async fn request_capability_prompts_approval_and_enables_subsequent_reads() {
         tool.execute(
             ToolCall::function(
                 "call_2",
-                "request_capability",
+                "RequestAccess",
                 json!({
                     "path": req_file,
                     "access": "read",
@@ -153,7 +153,7 @@ async fn request_capability_prompts_approval_and_enables_subsequent_reads() {
         .execute(
             ToolCall::function(
                 "call_3",
-                "read_file",
+                "ReadFile",
                 json!({
                     "path": outside_file.display().to_string()
                 }),
@@ -190,7 +190,7 @@ async fn request_capability_handles_user_denial_and_cancellation() {
             tool.execute(
                 ToolCall::function(
                     "call_deny",
-                    "request_capability",
+                    "RequestAccess",
                     json!({
                         "path": req_file,
                         "access": "write",
@@ -222,7 +222,7 @@ async fn request_capability_handles_user_denial_and_cancellation() {
         .execute(
             ToolCall::function(
                 "call_cancel",
-                "request_capability",
+                "RequestAccess",
                 json!({
                     "path": outside_file.display().to_string(),
                     "access": "read",
@@ -251,7 +251,7 @@ async fn request_capability_validates_arguments() {
         .execute(
             ToolCall::function(
                 "bad_path",
-                "request_capability",
+                "RequestAccess",
                 json!({
                     "path": "   ",
                     "access": "read",
@@ -272,7 +272,7 @@ async fn request_capability_validates_arguments() {
         .execute(
             ToolCall::function(
                 "bad_access",
-                "request_capability",
+                "RequestAccess",
                 json!({
                     "path": "/tmp",
                     "access": "execute",
@@ -293,7 +293,7 @@ async fn request_capability_validates_arguments() {
         .execute(
             ToolCall::function(
                 "bad_reason",
-                "request_capability",
+                "RequestAccess",
                 json!({
                     "path": "/tmp",
                     "access": "read",
@@ -328,7 +328,7 @@ async fn request_capability_supports_read_write_access() {
         tool.execute(
             ToolCall::function(
                 "call_rw",
-                "request_capability",
+                "RequestAccess",
                 json!({
                     "path": req_file,
                     "access": "read_write",
@@ -378,7 +378,7 @@ async fn ordinary_system_file_requires_user_consent_and_grants_only_requested_ac
     for allowed in [false, true] {
         let request = ToolCall::function(
             "system",
-            "request_capability",
+            "RequestAccess",
             json!({
                 "path": path,
                 "access": "read",

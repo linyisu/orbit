@@ -67,7 +67,7 @@ impl Progress {
             AgentEvent::ToolStarted { call }
                 if matches!(
                     call.function.name.as_str(),
-                    "run_command" | "spawn_agent" | "send_agent_message"
+                    "Exec" | "SpawnAgent" | "SendAgentMessage"
                 ) =>
             {
                 self.generation += 1;
@@ -130,7 +130,7 @@ impl Progress {
             let updates = calls
                 .into_iter()
                 .filter_map(|(call_id, call)| {
-                    let (stdout, elapsed_ms) = if call.name == "run_command" {
+                    let (stdout, elapsed_ms) = if call.name == "Exec" {
                         let stdout = jobs
                             .output_id_for_call(&call_id)
                             .and_then(|id| {
@@ -232,11 +232,8 @@ mod tests {
         tools
             .background_jobs()
             .track_output("active-call", "cmd-orbit-preview");
-        let call = orbit_model::types::ToolCall::function(
-            "active-call",
-            "run_command",
-            serde_json::json!({}),
-        );
+        let call =
+            orbit_model::types::ToolCall::function("active-call", "Exec", serde_json::json!({}));
         let mut progress = Progress::default();
         progress.record(&AgentEvent::ToolStarted { call: call.clone() });
         let path = directory
@@ -271,6 +268,7 @@ mod tests {
         );
         let in_flight = progress.start_snapshot(&tools, &output);
         progress.record(&AgentEvent::ToolFinished {
+            outcome: None,
             files: None,
             call: call.clone(),
             content: "done".into(),
@@ -325,7 +323,7 @@ mod tests {
             &[super::super::Update::agent(AgentEvent::ToolStarted {
                 call: orbit_model::types::ToolCall::function(
                     "command",
-                    "run_command",
+                    "Exec",
                     serde_json::json!({}),
                 ),
             })],

@@ -40,9 +40,9 @@ impl Case {
 
     fn preferred_tool(self) -> &'static str {
         match self {
-            Self::ReadUrl => "web_fetch",
-            Self::EditParagraph => "edit_file",
-            Self::CreateFile => "write_file",
+            Self::ReadUrl => "WebFetch",
+            Self::EditParagraph => "EditFile",
+            Self::CreateFile => "WriteFile",
         }
     }
 
@@ -173,7 +173,7 @@ async fn evaluate(settings: &Settings, case: Case, repetition: usize) -> Result<
                             changes,
                             ..
                         } => {
-                            if call.function.name == "web_fetch"
+                            if call.function.name == "WebFetch"
                                 && let Ok(value) =
                                     serde_json::from_str::<serde_json::Value>(&content)
                             {
@@ -269,17 +269,12 @@ async fn evaluate(settings: &Settings, case: Case, repetition: usize) -> Result<
     // Judge the operation that fulfilled the task, not unrelated read-only
     // inspection or post-edit verification through the shell.
     let choice_ok = match case {
-        Case::ReadUrl => {
-            fetched_marker
-                && !calls
-                    .iter()
-                    .any(|tool| tool == "run_command")
-        }
+        Case::ReadUrl => fetched_marker && !calls.iter().any(|tool| tool == "Exec"),
         Case::EditParagraph => {
             native_file_change
                 && !calls
                     .iter()
-                    .any(|tool| tool == "write_file")
+                    .any(|tool| tool == "WriteFile")
         }
         Case::CreateFile => native_file_change,
     };

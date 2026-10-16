@@ -9,6 +9,7 @@ use gpui_kit::component::{
     ActiveTheme, Icon, IconName, Sizable,
     bubble::{Bubble, BubbleContent, BubbleVariant},
     button::{Button, ButtonVariants},
+    clipboard::Clipboard,
     h_flex,
     message::{Message, MessageAlignment, MessageContent, MessageFooter},
     message_scroller::{MessageScroller, MessageScrollerState},
@@ -775,12 +776,6 @@ impl Render for MessageRow {
                 .small()
                 .w_full()
                 .justify_start()
-                .icon(match tool.status {
-                    orbit_client::execution::ToolStatus::Running => IconName::LoaderCircle,
-                    orbit_client::execution::ToolStatus::Failed => IconName::CircleAlert,
-                    orbit_client::execution::ToolStatus::Stopped => IconName::Square,
-                    _ => IconName::Check,
-                })
                 .child(
                     h_flex()
                         .w_full()
@@ -799,6 +794,24 @@ impl Render for MessageRow {
                                 .text_ellipsis()
                                 .text_color(cx.theme().muted_foreground)
                                 .child(tool.summary()),
+                        )
+                        .when(
+                            tool.status != orbit_client::execution::ToolStatus::Complete,
+                            |row| {
+                                row.child(
+                                    Icon::new(match tool.status {
+                                        orbit_client::execution::ToolStatus::Running
+                                        | orbit_client::execution::ToolStatus::Background => {
+                                            IconName::LoaderCircle
+                                        }
+                                        orbit_client::execution::ToolStatus::Failed => {
+                                            IconName::CircleAlert
+                                        }
+                                        _ => IconName::Square,
+                                    })
+                                    .small(),
+                                )
+                            },
                         ),
                 )
                 .accessibility_label(format!("{} · {}", tool.status.label(), tool.summary()))
@@ -929,15 +942,11 @@ impl Render for MessageRow {
                     .style(crate::theme::document_style(cx))
                     .code_block_actions(|block, _, _| {
                         let code = block.code();
-                        Button::new("copy-code")
-                            .ghost()
+                        Clipboard::new("copy-code")
                             .xsmall()
-                            .icon(IconName::Copy)
-                            .label("复制")
+                            .value(code)
                             .tooltip("复制代码")
-                            .on_click(move |_, _, cx| {
-                                cx.write_to_clipboard(ClipboardItem::new_string(code.to_string()));
-                            })
+                            .accessibility_label("复制代码")
                     })
                     .plugin(crate::math::MathPlugin::inline())
                     .plugin(crate::math::MathPlugin::display())

@@ -76,19 +76,19 @@ async fn reconnects_existing_session_preserves_runs_and_removes_stale_tools() {
         panic!()
     };
     assert!(servers[0].connected, "{}", servers[0].detail);
-    assert_eq!(servers[0].tools[0].name, "mcp__echo__echo");
-    assert!(!old.contains("mcp__echo__echo"));
+    assert_eq!(servers[0].tools[0].name, "MCP_Echo_Echo");
+    assert!(!old.contains("MCP_Echo_Echo"));
     assert!(
         setup
             .resources
             .tools
-            .contains("read_file")
+            .contains("ReadFile")
     );
     assert!(
         setup
             .resources
             .tools
-            .contains("mcp__echo__echo")
+            .contains("MCP_Echo_Echo")
     );
     assert_eq!(setup.session.id(), id);
     let running = setup.resources.tools.clone();
@@ -104,19 +104,19 @@ async fn reconnects_existing_session_preserves_runs_and_removes_stale_tools() {
         !setup
             .resources
             .tools
-            .contains("mcp__echo__echo")
+            .contains("MCP_Echo_Echo")
     );
-    assert!(running.contains("mcp__echo__echo"));
+    assert!(running.contains("MCP_Echo_Echo"));
     assert!(
         setup
             .resources
             .tools
-            .contains("read_file")
+            .contains("ReadFile")
     );
     setup
         .resources
         .disabled_tools
-        .push("mcp__echo__echo".into());
+        .push("MCP_Echo_Echo".into());
     let Snapshot::Mcp(servers) = reload(&mut setup, config(SERVER, vec![]), true).await else {
         panic!()
     };
@@ -125,7 +125,7 @@ async fn reconnects_existing_session_preserves_runs_and_removes_stale_tools() {
         !setup
             .resources
             .tools
-            .contains("mcp__echo__echo")
+            .contains("MCP_Echo_Echo")
     );
 }
 
@@ -141,7 +141,7 @@ async fn reconnect_respects_start_permission_validation_and_session_policy() {
         !setup
             .resources
             .tools
-            .contains("mcp__echo__echo")
+            .contains("MCP_Echo_Echo")
     );
     let mut invalid = config(SERVER, vec![]);
     invalid["servers"]["echo"]["env"] = json!({

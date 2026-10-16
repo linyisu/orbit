@@ -134,7 +134,7 @@ async fn fixture(
         jobs: BackgroundJobs::with_capacity(limits.max_concurrent).unwrap(),
         slots: Arc::new(Semaphore::new(limits.max_concurrent)),
         limits,
-        allowed_tools: ["read_file".into(), "read_history".into()]
+        allowed_tools: ["ReadFile".into(), "ReadHistory".into()]
             .into_iter()
             .collect(),
         active: Mutex::new(HashMap::new()),
@@ -165,7 +165,7 @@ fn install(service: &Arc<Service>) -> ToolRegistry {
 async fn spawn(service: &Arc<Service>, name: &str, token: CancellationToken) -> Value {
     let call = ToolCall::function(
         name,
-        "spawn_agent",
+        "SpawnAgent",
         json!({
             "task": format!("inspect {name}")
         }),
@@ -191,7 +191,7 @@ async fn read(service: &Arc<Service>, args: Value) -> Result<Value> {
         .clone()
         .execute(
             Action::Read,
-            ToolCall::function("orbit-read", "read_agent", args.clone()),
+            ToolCall::function("orbit-read", "ReadAgent", args.clone()),
             args,
             CancellationToken::new(),
         )
@@ -340,7 +340,7 @@ async fn final_results_are_direct_unicode_pages_with_stable_completion_cursors()
         .clone()
         .execute(
             Action::Send,
-            ToolCall::function("orbit-continue", "send_agent_message", continued.clone()),
+            ToolCall::function("orbit-continue", "SendAgentMessage", continued.clone()),
             continued,
             CancellationToken::new(),
         )
@@ -413,7 +413,7 @@ async fn eight_children_overlap_while_parent_works_and_waits_without_polling() {
         .map(|n| {
             ToolCall::function(
                 format!("child-{n}"),
-                "spawn_agent",
+                "SpawnAgent",
                 json!({
                     "task": format!("inspect Orbit module {n}")
                 }),
@@ -476,7 +476,7 @@ async fn eight_children_overlap_while_parent_works_and_waits_without_polling() {
             .map(|t| t.function.name.as_str())
             .collect::<Vec<_>>();
 
-        assert_eq!(names, ["read_file", "read_history"]);
+        assert_eq!(names, ["ReadFile", "ReadHistory"]);
     }
 
     child_model.gate.add_permits(8);
@@ -542,7 +542,7 @@ async fn running_input_and_finished_continuation_keep_identity_and_canonical_his
         "agent_id": id,
         "message": "补充检查 Unicode"
     });
-    let call = ToolCall::function("input", "send_agent_message", args.clone());
+    let call = ToolCall::function("input", "SendAgentMessage", args.clone());
     assert_eq!(
         serde_json::from_str::<Value>(
             &service
@@ -593,7 +593,7 @@ async fn running_input_and_finished_continuation_keep_identity_and_canonical_his
         "agent_id": id,
         "message": "再次核对 Orbit"
     });
-    let call = ToolCall::function("continue", "send_agent_message", args.clone());
+    let call = ToolCall::function("continue", "SendAgentMessage", args.clone());
     let receipt: Value = serde_json::from_str(
         &service
             .clone()
@@ -656,7 +656,7 @@ async fn running_input_and_finished_continuation_keep_identity_and_canonical_his
         "agent_id": id,
         "length": 1
     });
-    let call = ToolCall::function("read", "read_agent", args.clone());
+    let call = ToolCall::function("read", "ReadAgent", args.clone());
     let read: Value = serde_json::from_str(
         &service
             .clone()
@@ -699,7 +699,7 @@ async fn configurable_limit_and_cancellation_isolate_siblings() {
     model.received(12).await;
     let call = ToolCall::function(
         "overflow",
-        "spawn_agent",
+        "SpawnAgent",
         json!({
             "task": "overflow"
         }),
@@ -824,7 +824,7 @@ async fn recovery_delivers_finished_results_once_and_never_replays_interrupted_w
             interrupted.id(),
             ToolCall::function(
                 "interrupted",
-                "spawn_agent",
+                "SpawnAgent",
                 json!({
                     "task": "review"
                 }),
@@ -951,16 +951,16 @@ async fn child_views_remain_read_only_when_delegation_is_disabled() {
         .unwrap();
     let mut tools = ToolRegistry::new();
     for (name, capabilities) in [
-        ("read_file", orbit_agent::tool::ToolCapabilities::READ),
-        ("write_file", orbit_agent::tool::ToolCapabilities::WRITE),
-        ("run_command", orbit_agent::tool::ToolCapabilities::COMMAND),
+        ("ReadFile", orbit_agent::tool::ToolCapabilities::READ),
+        ("WriteFile", orbit_agent::tool::ToolCapabilities::WRITE),
+        ("Exec", orbit_agent::tool::ToolCapabilities::COMMAND),
         (
-            "spawn_agent",
+            "SpawnAgent",
             orbit_agent::tool::ToolCapabilities::AGENT_CONTROL,
         ),
-        ("memory_list", orbit_agent::tool::ToolCapabilities::READ),
+        ("ListMemories", orbit_agent::tool::ToolCapabilities::READ),
         (
-            "mcp__orbit__write",
+            "MCP_Orbit_Write",
             orbit_agent::tool::ToolCapabilities::UNKNOWN,
         ),
     ] {
@@ -994,7 +994,7 @@ async fn child_views_remain_read_only_when_delegation_is_disabled() {
             .iter()
             .map(|t| t.function.name.as_str())
             .collect::<Vec<_>>(),
-        ["memory_list", "read_file"]
+        ["ListMemories", "ReadFile"]
     );
 }
 
@@ -1066,7 +1066,7 @@ async fn delegation_effects_follow_role_and_unknown_roles_cannot_bypass_plan() {
         }),
     ] {
         assert!(
-            tool.call_capabilities(&ToolCall::function("spawn", "spawn_agent", args))
+            tool.call_capabilities(&ToolCall::function("spawn", "SpawnAgent", args))
                 .in_plan()
         );
     }
@@ -1079,7 +1079,7 @@ async fn delegation_effects_follow_role_and_unknown_roles_cannot_bypass_plan() {
         }),
     ] {
         assert_eq!(
-            tool.call_capabilities(&ToolCall::function("spawn", "spawn_agent", args)),
+            tool.call_capabilities(&ToolCall::function("spawn", "SpawnAgent", args)),
             ToolCapabilities::WRITE
         );
     }
@@ -1183,7 +1183,7 @@ async fn development_writes_use_parent_approvals_and_capability_ceiling() {
         "role": "develop",
         "workspace_strategy": "shared"
     });
-    let call = ToolCall::function("develop", "spawn_agent", args.clone());
+    let call = ToolCall::function("develop", "SpawnAgent", args.clone());
     assert!(
         service
             .clone()
@@ -1199,7 +1199,7 @@ async fn development_writes_use_parent_approvals_and_capability_ceiling() {
     let model = MockModel::new([
         response(ChatMessage::assistant_tool_calls(vec![ToolCall::function(
             "write",
-            "write_file",
+            "WriteFile",
             json!({
                 "path": "child.txt",
                 "content": "verified child"
@@ -1212,7 +1212,7 @@ async fn development_writes_use_parent_approvals_and_capability_ceiling() {
     inner.approvals = Some(approvals);
     inner
         .allowed_tools
-        .insert("write_file".into());
+        .insert("WriteFile".into());
     let backend = model.clone();
     inner.backend = Arc::new(move |_| Arc::new(backend.clone()));
     let output = service
@@ -1255,11 +1255,11 @@ async fn development_writes_use_parent_approvals_and_capability_ceiling() {
             .iter()
             .map(|tool| tool.function.name.as_str())
             .collect();
-        assert!(names.contains(&"write_file"));
+        assert!(names.contains(&"WriteFile"));
         assert!(
             !names
                 .iter()
-                .any(|name| ["run_command", "request_capability", "spawn_agent"].contains(name))
+                .any(|name| ["Exec", "RequestAccess", "SpawnAgent"].contains(name))
         );
     }
 }

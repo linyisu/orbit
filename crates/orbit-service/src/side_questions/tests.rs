@@ -10,7 +10,7 @@ fn tool_less_requests_preserve_context_without_unresolved_protocol_calls() {
             content: Some("读取文件".into()),
             tool_calls: vec![ToolCall::function(
                 "orbit-call",
-                "read_file",
+                "ReadFile",
                 serde_json::json!({
                     "path": "orbit.rs"
                 }),
@@ -19,7 +19,7 @@ fn tool_less_requests_preserve_context_without_unresolved_protocol_calls() {
         ChatMessage::tool("orbit-call", "Orbit 文件内容"),
         ChatMessage::assistant_tool_calls(vec![ToolCall::function(
             "pending",
-            "read_file",
+            "ReadFile",
             serde_json::json!({
                 "path": "orbit.md"
             }),

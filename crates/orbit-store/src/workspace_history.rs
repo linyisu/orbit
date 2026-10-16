@@ -94,7 +94,7 @@ impl Store {
         .await
     }
 
-    /// Reconstruct successful `run_command` invocations from durable tool
+    /// Reconstruct successful `Exec` invocations from durable tool
     /// results. This deliberately excludes model prose and failed requests
     /// that never started execution.
     pub async fn verification_records(&self, session_id: &str) -> Result<Vec<VerificationRecord>> {
@@ -117,7 +117,7 @@ impl Store {
                 let AgentEvent::ToolFinished { call, content, .. } = event else {
                     continue;
                 };
-                if call.function.name != "run_command" {
+                if call.function.name != "Exec" {
                     continue;
                 }
 

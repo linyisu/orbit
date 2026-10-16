@@ -89,7 +89,7 @@ fn auto_keeps_file_targets_mcp_and_new_capabilities_separate_from_command_trust(
     assert!(!auto_allows(
         &ApprovalPreview::Mcp(McpPreview {
             server: "files".into(),
-            tool: "read_file".into(),
+            tool: "ReadFile".into(),
             arguments: "{}".into(),
         }),
         root

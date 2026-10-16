@@ -25,7 +25,8 @@ pub struct ToolOutput {
 }
 
 /// Terminal outcome reported by a tool that returns a receipt rather than an error.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ToolOutcome {
     #[default]
     Completed,
@@ -162,6 +163,10 @@ pub fn typed_definition<T: schemars::JsonSchema>(name: &str, description: &str) 
 pub trait Tool: Send + Sync {
     fn definition(&self) -> ToolDefinition;
 
+    fn origin(&self) -> ToolOrigin {
+        ToolOrigin::Builtin
+    }
+
     /// Unknown tools are exclusive and unavailable in read-only modes.
     fn capabilities(&self) -> ToolCapabilities {
         ToolCapabilities::UNKNOWN
@@ -182,6 +187,13 @@ pub trait Tool: Send + Sync {
     ) -> ToolFuture<'a> {
         self.execute(call, cancellation)
     }
+}
+
+/// Host-owned catalog membership, independent of model-facing names and effects.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ToolOrigin {
+    Builtin,
+    Mcp,
 }
 
 /// A server-owned policy rechecked immediately before every execution.
@@ -286,6 +298,23 @@ impl ToolRegistry {
         }
 
         removed
+    }
+
+    pub fn remove_origin(&mut self, origin: ToolOrigin) {
+        Arc::make_mut(&mut self.tools).retain(|_, tool| tool.origin() != origin);
+    }
+
+    /// Replaces a catalog without modifying snapshots held by running agents.
+    pub fn replace_origin(&mut self, origin: ToolOrigin, catalog: &Self) {
+        let tools = Arc::make_mut(&mut self.tools);
+        tools.retain(|_, tool| tool.origin() != origin);
+        tools.extend(
+            catalog
+                .tools
+                .iter()
+                .filter(|(_, tool)| tool.origin() == origin)
+                .map(|(name, tool)| (name.clone(), tool.clone())),
+        );
     }
 
     /// Replace one namespaced catalog without disturbing unrelated tools or
@@ -415,6 +444,7 @@ impl ToolRegistry {
 pub struct ClosureTool<F> {
     definition: ToolDefinition,
     capabilities: ToolCapabilities,
+    origin: ToolOrigin,
     execute: F,
 }
 
@@ -432,12 +462,18 @@ where
         Self {
             definition: ToolDefinition::function(name, description, parameters),
             capabilities: ToolCapabilities::UNKNOWN,
+            origin: ToolOrigin::Builtin,
             execute,
         }
     }
 
     pub fn with_capabilities(mut self, capabilities: ToolCapabilities) -> Self {
         self.capabilities = capabilities;
+        self
+    }
+
+    pub fn with_origin(mut self, origin: ToolOrigin) -> Self {
+        self.origin = origin;
         self
     }
 }
@@ -453,6 +489,10 @@ where
 
     fn capabilities(&self) -> ToolCapabilities {
         self.capabilities
+    }
+
+    fn origin(&self) -> ToolOrigin {
+        self.origin
     }
 
     fn execute<'a>(&'a self, call: ToolCall, cancellation: CancellationToken) -> ToolFuture<'a> {
@@ -539,13 +579,13 @@ mod tests {
     fn removes_named_and_namespaced_tools_from_definitions() {
         let mut registry = registry();
         registry.register(ClosureTool::new(
-            "mcp__files__search",
+            "MCP_Files_Search",
             "search",
             json!({}),
             |_, _| async { Ok("ok".into()) },
         ));
         registry.register(ClosureTool::new(
-            "mcp__files__read",
+            "MCP_Files_Read",
             "read",
             json!({}),
             |_, _| async { Ok("ok".into()) },
@@ -553,7 +593,7 @@ mod tests {
 
         assert!(registry.remove("echo"));
         assert!(!registry.contains("echo"));
-        assert_eq!(registry.remove_prefix("mcp__files__"), 2);
+        assert_eq!(registry.remove_prefix("MCP_Files_"), 2);
         assert!(registry.definitions().is_empty());
     }
 

@@ -1533,7 +1533,7 @@ mod tests {
             ChatMessage::user("earlier work"),
             ChatMessage::assistant_tool_calls(vec![ToolCall::function(
                 "legacy",
-                "write_file",
+                "WriteFile",
                 serde_json::json!({}),
             )]),
             ChatMessage::tool("legacy", r#"{"path":"legacy.dat","written_bytes":1}"#),

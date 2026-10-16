@@ -76,12 +76,12 @@ async fn plan_read_only_checks_executions_not_only_tool_definitions() {
     let (_dir, plan, _writer) = fixture().await;
     let mut registry = ToolRegistry::new();
     for (name, capabilities) in [
-        ("write_file", ToolCapabilities::WRITE),
-        ("run_command", ToolCapabilities::COMMAND),
-        ("mcp__unsafe", ToolCapabilities::UNKNOWN),
-        ("request_capability", ToolCapabilities::PERMISSION),
-        ("read_file", ToolCapabilities::READ),
-        ("ask_user", ToolCapabilities::INTERACTION),
+        ("WriteFile", ToolCapabilities::WRITE),
+        ("Exec", ToolCapabilities::COMMAND),
+        ("MCP_Unsafe", ToolCapabilities::UNKNOWN),
+        ("RequestAccess", ToolCapabilities::PERMISSION),
+        ("ReadFile", ToolCapabilities::READ),
+        ("AskUser", ToolCapabilities::INTERACTION),
     ] {
         registry.register(
             ClosureTool::new(name, "test", json!({}), |_, _| async {
@@ -93,17 +93,12 @@ async fn plan_read_only_checks_executions_not_only_tool_definitions() {
     plan.install_policy(&mut registry);
     let copy = registry.clone();
     let pending = copy.execute(
-        ToolCall::function("queued", "write_file", json!({})),
+        ToolCall::function("queued", "WriteFile", json!({})),
         CancellationToken::new(),
     );
     plan.enter().await.unwrap();
     assert!(pending.await.is_err());
-    for name in [
-        "write_file",
-        "run_command",
-        "mcp__unsafe",
-        "request_capability",
-    ] {
+    for name in ["WriteFile", "Exec", "MCP_Unsafe", "RequestAccess"] {
         assert!(
             !copy
                 .definitions()
@@ -119,7 +114,7 @@ async fn plan_read_only_checks_executions_not_only_tool_definitions() {
             .is_err()
         );
     }
-    for name in ["read_file", "ask_user"] {
+    for name in ["ReadFile", "AskUser"] {
         assert!(
             copy.execute(
                 ToolCall::function("c", name, json!({})),
@@ -135,7 +130,7 @@ async fn plan_read_only_checks_executions_not_only_tool_definitions() {
         plan.0
             .gate
             .acquire(
-                &ToolCall::function("c", "spawn_agent", json!({})),
+                &ToolCall::function("c", "SpawnAgent", json!({})),
                 ToolCapabilities::WRITE
             )
             .is_err()
@@ -144,7 +139,7 @@ async fn plan_read_only_checks_executions_not_only_tool_definitions() {
         plan.0
             .gate
             .acquire(
-                &ToolCall::function("c", "spawn_agent", json!({})),
+                &ToolCall::function("c", "SpawnAgent", json!({})),
                 ToolCapabilities::AGENT_CONTROL,
             )
             .unwrap(),
@@ -152,7 +147,7 @@ async fn plan_read_only_checks_executions_not_only_tool_definitions() {
     // A child's cloned policy observes the same transitions.
     let mut child = ToolRegistry::new();
     child.register(ClosureTool::new(
-        "write_file",
+        "WriteFile",
         "test",
         json!({}),
         |_, _| async { Ok("write".into()) },
@@ -161,7 +156,7 @@ async fn plan_read_only_checks_executions_not_only_tool_definitions() {
     assert!(
         child
             .execute(
-                ToolCall::function("c", "write_file", json!({})),
+                ToolCall::function("c", "WriteFile", json!({})),
                 CancellationToken::new()
             )
             .await
@@ -176,7 +171,7 @@ async fn plan_cannot_enter_until_mutating_tool_lease_finishes() {
         .0
         .gate
         .acquire(
-            &ToolCall::function("write", "write_file", json!({})),
+            &ToolCall::function("write", "WriteFile", json!({})),
             ToolCapabilities::WRITE,
         )
         .unwrap();
@@ -356,11 +351,11 @@ async fn plan_client_without_review_support_gets_error_instead_of_waiting_foreve
         .store(false, Ordering::Release);
     let tool = PlanTool {
         planning: plan,
-        name: "enter_plan",
+        name: "EnterPlan",
     };
     assert!(
         tool.execute(
-            ToolCall::function("p", "enter_plan", json!({})),
+            ToolCall::function("p", "EnterPlan", json!({})),
             CancellationToken::new()
         )
         .await
@@ -376,7 +371,7 @@ async fn plan_waits_for_background_jobs_before_entering() {
     plan.register(&mut registry);
     let cancel = CancellationToken::new();
     jobs.start(
-        ToolCall::function("background", "run_command", json!({})),
+        ToolCall::function("background", "Exec", json!({})),
         "test".into(),
         None,
         cancel.clone(),

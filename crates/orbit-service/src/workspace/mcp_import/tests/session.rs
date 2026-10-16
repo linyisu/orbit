@@ -74,7 +74,7 @@ async fn imports_while_awaiting_an_answer_without_blocking_the_session() {
             .execute(
                 orbit_model::types::ToolCall::function(
                     "ask",
-                    "ask_user",
+                    "AskUser",
                     serde_json::json!({
                         "questions": [{
                             "id": "q",

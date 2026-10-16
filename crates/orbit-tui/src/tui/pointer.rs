@@ -248,7 +248,10 @@ pub(super) fn toggle_transcript_at(state: &mut UiState, point: (u16, u16)) -> bo
 
 pub(super) fn toggle_transcript_item(state: &mut UiState, index: usize) {
     if let Some(super::app::TranscriptItem::Tool(row)) = state.transcript.get(index) {
-        state.info_dialog = Some(super::dialogs::InfoDialog::tool(&row.record()));
+        state.info_dialog = Some(super::dialogs::InfoDialog::tool(
+            &row.record(),
+            &state.workspace,
+        ));
         return;
     }
 

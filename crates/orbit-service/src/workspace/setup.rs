@@ -303,6 +303,13 @@ async fn prepare_resolved_resources(
         },
         options.allow_mcp_start,
         Some(session.command_output.clone()),
+        Some(
+            session
+                .store
+                .path()
+                .with_extension("command-output")
+                .join(session.id()),
+        ),
         Some(file_config.permissions.clone()),
     )
     .await?;
@@ -354,7 +361,7 @@ async fn prepare_resolved_resources(
         None
     };
     if policy.disabled(Capability::Files) {
-        tools.remove("verification_status");
+        tools.remove("CheckEvidence");
     }
 
     if !policy.disabled(Capability::All)
@@ -497,6 +504,152 @@ mod tests {
     use orbit_protocol::{Capability, SessionPolicy};
 
     #[tokio::test]
+    async fn tool_catalog_dispatches_canonical_names_without_old_aliases() {
+        use orbit_agent::tool::ToolError;
+        use orbit_model::types::ToolCall;
+        use tokio_util::sync::CancellationToken;
+
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        TestConfig::new()
+            .provider(TestProvider::new("test").models([TestModel::new("mock").vision(true)]))
+            .write(root.join("config.toml"))
+            .unwrap();
+        std::fs::write(root.join("notes.txt"), "catalog dispatch fixture\n").unwrap();
+        let options = WorkspaceOptions {
+            model: Some("test::mock".into()),
+            initial_directory: root.into(),
+            config: root.join("config.toml"),
+            auth_directory: root.join("auth"),
+            database: root.join("sessions.db"),
+            allow_mcp_start: false,
+            home: Some(root.into()),
+            config_home: Some(root.join("config")),
+            instruction_dir: Some(root.join("instructions")),
+            editor_command: "vi".into(),
+        };
+        let mut setup = prepare_service(&options, None)
+            .await
+            .unwrap();
+        super::super::resources::execute(
+            &mut setup,
+            orbit_protocol::resources::Action::ApplyExtension {
+                bundle: Box::new(super::super::library::test_bundle(
+                    "example",
+                    "---\ndescription: Catalog fixture\n---\nInspect the fixture.\n",
+                )),
+            },
+            false,
+        )
+        .await
+        .unwrap();
+        let tools = &setup.resources.tools;
+        let names: Vec<_> = tools
+            .definitions()
+            .into_iter()
+            .map(|definition| definition.function.name)
+            .collect();
+        assert_eq!(
+            names,
+            [
+                "AskUser",
+                "CheckEvidence",
+                "CodeSymbols",
+                "CommandOutput",
+                "CommandStatus",
+                "EditFile",
+                "EnterPlan",
+                "Exec",
+                "ForgetMemory",
+                "Grep",
+                "ListFiles",
+                "ListMemories",
+                "ListTasks",
+                "LoadSkill",
+                "ProjectOverview",
+                "ReadAgent",
+                "ReadDocument",
+                "ReadFile",
+                "ReadHistory",
+                "ReadImage",
+                "RequestAccess",
+                "SaveMemory",
+                "SearchMemory",
+                "SendAgentMessage",
+                "SpawnAgent",
+                "StopAgents",
+                "StopCommands",
+                "SubmitPlan",
+                "UpdatePlan",
+                "UpdateTask",
+                "WaitAgents",
+                "WaitCommands",
+                "WebFetch",
+                "WebSearch",
+                "WriteFile"
+            ]
+        );
+        for old in [
+            "run_command",
+            "read_file",
+            "write_file",
+            "edit_file",
+            "list_files",
+            "search_text",
+            "web_fetch",
+            "web_search",
+            "read_image",
+            "read_document",
+            "project_overview",
+            "code_symbols",
+            "read_command_output",
+            "get_command_status",
+            "wait_commands",
+            "cancel_commands",
+            "spawn_agent",
+            "read_agent",
+            "send_agent_message",
+            "wait_agents",
+            "cancel_agents",
+            "ask_user",
+            "enter_plan",
+            "update_plan",
+            "submit_plan",
+            "request_capability",
+            "verification_status",
+            "read_history",
+            "load_skill",
+            "task_list",
+            "task_update",
+            "memory_list",
+            "memory_search",
+            "memory_save",
+            "memory_forget",
+            "shell",
+        ] {
+            let result = tools
+                .execute(
+                    ToolCall::function("unknown", old, serde_json::json!({})),
+                    CancellationToken::new(),
+                )
+                .await;
+            assert_eq!(result.unwrap_err(), ToolError::UnknownTool(old.into()));
+        }
+        let result = tools
+            .execute(
+                ToolCall::function("read", "ReadFile", serde_json::json!({"path": "notes.txt"})),
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+        assert!(
+            result
+                .content
+                .contains("catalog dispatch fixture")
+        );
+    }
+
+    #[tokio::test]
     async fn refreshed_skill_and_source_tools_keep_the_startup_ceiling() {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path();
@@ -513,7 +666,7 @@ mod tests {
         configuration
             .config
             .disabled_capabilities = vec![Capability::Files];
-        configuration.config.disabled_tools = vec!["load_skill".into()];
+        configuration.config.disabled_tools = vec!["LoadSkill".into()];
         configuration
             .write(root.join("config.toml"))
             .unwrap();
@@ -547,7 +700,7 @@ mod tests {
         .await
         .unwrap();
 
-        for name in ["code_symbols", "load_skill"] {
+        for name in ["CodeSymbols", "LoadSkill"] {
             assert!(!setup.resources.tools.contains(name));
             assert!(matches!(
                 setup
@@ -602,13 +755,13 @@ mod tests {
                     .iter()
                     .any(|skill| skill.name == "example")
         ));
-        for name in ["code_symbols", "load_skill"] {
+        for name in ["CodeSymbols", "LoadSkill"] {
             assert!(
                 !setup.resources.tools.contains(name),
                 "refresh reintroduced {name}"
             );
         }
-        assert_eq!(setup.resources.disabled_tools, ["load_skill"]);
+        assert_eq!(setup.resources.disabled_tools, ["LoadSkill"]);
         let moved = root.join("moved");
         std::fs::create_dir(&moved).unwrap();
         super::super::actions::execute(
@@ -620,18 +773,18 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(setup.resources.disabled_tools, ["load_skill"]);
+        assert_eq!(setup.resources.disabled_tools, ["LoadSkill"]);
         assert!(
             !setup
                 .resources
                 .tools
-                .contains("load_skill")
+                .contains("LoadSkill")
         );
         assert!(
             !setup
                 .resources
                 .tools
-                .contains("code_symbols")
+                .contains("CodeSymbols")
         );
         drop(setup);
         let mut fresh = prepare_service(&options, None)
@@ -641,7 +794,7 @@ mod tests {
             fresh
                 .resources
                 .tools
-                .contains("code_symbols")
+                .contains("CodeSymbols")
         );
         assert!(fresh.resources.budget.skills.is_empty());
         super::super::resources::execute(
@@ -660,7 +813,7 @@ mod tests {
             fresh
                 .resources
                 .tools
-                .contains("load_skill")
+                .contains("LoadSkill")
         );
     }
 
@@ -676,7 +829,7 @@ mod tests {
             .config
             .disabled_capabilities = vec![Capability::Web, Capability::Mcp];
         configuration.config.disabled_tools =
-            vec!["read_file".into(), "spawn_agent".into(), "task_list".into()];
+            vec!["ReadFile".into(), "SpawnAgent".into(), "ListTasks".into()];
         configuration
             .write(root.join("config.toml"))
             .unwrap();
@@ -713,19 +866,14 @@ mod tests {
         }
         assert_eq!(setup.resources.budget.max_turns, 12);
         assert_eq!(setup.resources.budget.max_tool_calls, 99);
-        assert!(
-            setup
-                .resources
-                .tools
-                .contains("search_text")
-        );
+        assert!(setup.resources.tools.contains("Grep"));
         for name in [
-            "web_fetch",
-            "load_skill",
-            "read_file",
-            "spawn_agent",
-            "task_list",
-            "write_file",
+            "WebFetch",
+            "LoadSkill",
+            "ReadFile",
+            "SpawnAgent",
+            "ListTasks",
+            "WriteFile",
         ] {
             assert!(
                 !setup.resources.tools.contains(name),
@@ -796,16 +944,16 @@ mod tests {
         .await
         .unwrap();
         let tools = &setup.resources.tools;
-        assert!(tools.contains("read_file"));
+        assert!(tools.contains("ReadFile"));
         for name in [
-            "write_file",
-            "edit_file",
-            "run_command",
+            "WriteFile",
+            "EditFile",
+            "Exec",
             "git_push",
-            "request_capability",
-            "web_fetch",
-            "web_search",
-            "load_skill",
+            "RequestAccess",
+            "WebFetch",
+            "WebSearch",
+            "LoadSkill",
         ] {
             assert!(!tools.contains(name), "unexpected tool: {name}");
         }

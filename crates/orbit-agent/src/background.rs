@@ -747,7 +747,7 @@ mod tests {
             .start(
                 ToolCall::function(
                     name,
-                    "run_command",
+                    "Exec",
                     serde_json::json!({
                         "command": name
                     }),
@@ -828,7 +828,7 @@ mod tests {
         let (release, cleanup) = oneshot::channel();
         let job = jobs
             .start(
-                ToolCall::function("orbit-cleanup", "run_command", serde_json::json!({})),
+                ToolCall::function("orbit-cleanup", "Exec", serde_json::json!({})),
                 "orbit-cleanup".into(),
                 None,
                 CancellationToken::new(),
@@ -867,7 +867,7 @@ mod tests {
         let parent = CancellationToken::new();
         let job = jobs
             .start(
-                ToolCall::function("orbit-finished", "run_command", serde_json::json!({})),
+                ToolCall::function("orbit-finished", "Exec", serde_json::json!({})),
                 "orbit-finished".into(),
                 None,
                 parent.clone(),
@@ -921,7 +921,7 @@ mod tests {
 
         assert!(
             jobs.start(
-                ToolCall::function("overflow", "run_command", serde_json::json!({})),
+                ToolCall::function("overflow", "Exec", serde_json::json!({})),
                 "orbit-overflow".into(),
                 None,
                 CancellationToken::new(),
@@ -941,7 +941,7 @@ mod tests {
         );
         let panic = jobs
             .start(
-                ToolCall::function("panic", "run_command", serde_json::json!({})),
+                ToolCall::function("panic", "Exec", serde_json::json!({})),
                 "orbit-panic".into(),
                 None,
                 CancellationToken::new(),

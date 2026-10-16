@@ -246,7 +246,7 @@ mod tests {
         assert!(defaults.disabled_tools.is_empty());
         let configured = FileConfig::parse(
             "disabled_capabilities = ['all', 'write']\ndisabled_tools = \
-                ['mcp__server__tool']\n[providers]\n",
+                ['MCP_Server_Tool']\n[providers]\n",
             auth.path(),
         )
         .unwrap();
@@ -254,10 +254,10 @@ mod tests {
             configured.disabled_capabilities,
             [Capability::All, Capability::Write]
         );
-        assert_eq!(configured.disabled_tools, ["mcp__server__tool"]);
+        assert_eq!(configured.disabled_tools, ["MCP_Server_Tool"]);
         for invalid in [
             "disabled_capabilities = ['web', 'web']",
-            "disabled_tools = ['read_file', 'read_file']",
+            "disabled_tools = ['ReadFile', 'ReadFile']",
             "disabled_tools = ['']",
             "disabled_tools = ['read file']",
             "disabled_capabilities = ['unknown']",
@@ -287,7 +287,7 @@ mod tests {
         settings.max_turns = 25;
         settings.max_tool_calls = 500;
         settings.disabled_capabilities = vec![Capability::Mcp, Capability::Write];
-        settings.disabled_tools = vec!["read_file".into(), "mcp__server__tool".into()];
+        settings.disabled_tools = vec!["ReadFile".into(), "MCP_Server_Tool".into()];
         settings.subagents.max_concurrent = 3;
         settings.subagents.max_tool_calls = 80;
         settings.subagents.explore_model = Some("demo::model".into());
@@ -306,7 +306,7 @@ mod tests {
             config.permissions.read_templates,
             vec![std::path::PathBuf::from(".env.example")]
         );
-        assert_eq!(config.disabled_tools, ["read_file", "mcp__server__tool"]);
+        assert_eq!(config.disabled_tools, ["ReadFile", "MCP_Server_Tool"]);
         let source = std::fs::read_to_string(&path).unwrap();
         assert!(source.starts_with("# retain this"));
         assert!(source.contains("# retain inline"));
@@ -347,7 +347,7 @@ mod tests {
                 .is_err()
         );
         let mut values = draft.settings().clone();
-        values.disabled_tools = vec!["read_file".into(), "read_file".into()];
+        values.disabled_tools = vec!["ReadFile".into(), "ReadFile".into()];
         assert!(
             draft
                 .save(&path, &auth, values)

@@ -65,7 +65,7 @@ async fn compact_retry_restores_the_original_history_after_a_failed_retry() {
         strategy: CompactionStrategy::ArchiveProjection,
         summary_requests: 1,
         summary_input_tokens: 4_096,
-        archive: Some(format!("read_history archive_id={id}; search with query")),
+        archive: Some(format!("ReadHistory archive_id={id}; search with query")),
         fallback: true,
         fallback_reason: None,
         summary: TaskSummary {
@@ -102,7 +102,7 @@ async fn compact_retry_restores_the_original_history_after_a_failed_retry() {
             "current policy",
         ),
         ChatMessage::user(format!(
-            "BEGIN_UNTRUSTED_COMPACTION_RECORD\nread_history archive_id={id}; search with query"
+            "BEGIN_UNTRUSTED_COMPACTION_RECORD\nReadHistory archive_id={id}; search with query"
         )),
     ];
 
@@ -134,6 +134,20 @@ async fn compact_retry_restores_the_original_history_after_a_failed_retry() {
         retry_archive_id(std::slice::from_ref(&archive_run), &[]),
         None
     );
+
+    let mut legacy_run = archive_run.clone();
+    let AgentEvent::CompactionRecorded { record } = &mut legacy_run.events[0] else {
+        unreachable!();
+    };
+    record.archive = Some(format!("read_history archive_id={id}; search with query"));
+    let legacy_projection = vec![ChatMessage::user(format!(
+        "BEGIN_UNTRUSTED_COMPACTION_RECORD\nread_history archive_id={id}; search with query"
+    ))];
+    assert_eq!(
+        retry_archive_id(std::slice::from_ref(&legacy_run), &legacy_projection),
+        Some(id)
+    );
+    assert_eq!(retry_archive_id(&[legacy_run], &projected), None);
 
     let later_reply = Run {
         files: Vec::new(),

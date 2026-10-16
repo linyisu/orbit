@@ -23,7 +23,7 @@ fn symbol_lookup_uses_shared_evidence_view_without_requiring_an_inventory() {
         }],
         "truncated": {}
     });
-    let tool = row("code_symbols", value);
+    let tool = row("CodeSymbols", value);
     for expanded in [false, true] {
         let rendered = lines(&tool, expanded, 80)
             .unwrap()
@@ -70,7 +70,7 @@ fn overview_preview_has_readable_evidence_and_expand_controls() {
             "output": false
         }
     });
-    let tool = row("project_overview", value);
+    let tool = row("ProjectOverview", value);
 
     for width in [1, 20, 80] {
         for expanded in [false, true] {
@@ -124,7 +124,7 @@ fn agent_read_summaries_show_task_and_content_instead_of_internal_cursors() {
     })
     .to_string();
     let mut tool = row(
-        "read_agent",
+        "ReadAgent",
         json!({
             "agent": {
                 "id": "orbit-agent",
@@ -181,7 +181,7 @@ fn agent_read_summaries_show_task_and_content_instead_of_internal_cursors() {
                         "signature": "orbit-signature"
                     },
                     "function": {
-                        "name": "read_file",
+                        "name": "ReadFile",
                         "arguments": json!({
                             "path": "src/orbit.rs"
                         })
@@ -190,7 +190,7 @@ fn agent_read_summaries_show_task_and_content_instead_of_internal_cursors() {
                 }]
             })
             .to_string(),
-            "工具调用 · read_file src/orbit.rs",
+            "工具调用 · ReadFile src/orbit.rs",
         ),
         (
             json!({
@@ -271,7 +271,7 @@ fn memory_save_shows_title_and_scoped_preview_without_changing_the_result() {
         "中文内容".repeat(50)
     );
     let mut tool = row(
-        "memory_save",
+        "SaveMemory",
         json!({
             "memory": {
                 "id": 12,
@@ -347,7 +347,7 @@ fn highlighted(lines: &[Line<'static>]) -> String {
 #[test]
 fn search_title_includes_query_and_scope_even_before_results_arrive() {
     let mut tool = row(
-        "search_text",
+        "Grep",
         json!({
             "matches": []
         }),
@@ -367,7 +367,7 @@ fn search_title_includes_query_and_scope_even_before_results_arrive() {
     assert!(
         view[0]
             .to_string()
-            .contains("search_text \"workspace snapshot\"(crates/orbit-tools/src)")
+            .contains("Grep \"workspace snapshot\"(crates/orbit-tools/src)")
     );
     assert_eq!(search_summary(r#"{"query":"foo"}"#), "\"foo\"(.)");
 }
@@ -491,7 +491,7 @@ fn highlight_survives_wrapping_and_focuses_long_line_previews() {
 #[test]
 fn search_groups_files_and_merges_overlapping_context_without_mutating_results() {
     let row = row(
-        "search_text",
+        "Grep",
         json!({
             "matches": [
                 {
@@ -554,7 +554,7 @@ fn search_groups_files_and_merges_overlapping_context_without_mutating_results()
 #[test]
 fn search_retains_syntax_state_in_context_and_resets_it_across_gaps() {
     let row = row(
-        "search_text",
+        "Grep",
         json!({
             "query": "orbit",
             "matches": [
@@ -601,7 +601,7 @@ fn search_retains_syntax_state_in_context_and_resets_it_across_gaps() {
 fn file_preview_clips_by_cells_and_expansion_keeps_source_and_gutter() {
     let source = "    中文👩‍💻e\u{301}\tlet value = 123456789;".repeat(3);
     let row = row(
-        "read_file",
+        "ReadFile",
         json!({
             "content": format!("744: {source}\n745: end\n"),
             "start_line": 744,
@@ -646,7 +646,7 @@ fn file_preview_clips_by_cells_and_expansion_keeps_source_and_gutter() {
 
     for end in [4, 92, 168, 1_024] {
         let file = self::row(
-            "read_file",
+            "ReadFile",
             json!({
                 "content": "1: first\n2: second\n",
                 "start_line": 1,
@@ -665,7 +665,7 @@ fn file_preview_clips_by_cells_and_expansion_keeps_source_and_gutter() {
 #[test]
 fn empty_search_and_invalid_or_failed_results_stay_distinct() {
     let empty = row(
-        "search_text",
+        "Grep",
         json!({
             "matches": []
         }),
@@ -678,7 +678,7 @@ fn empty_search_and_invalid_or_failed_results_stay_distinct() {
     );
 
     let mut invalid = row(
-        "read_file",
+        "ReadFile",
         json!({
             "error": "cannot read"
         }),
@@ -686,7 +686,7 @@ fn empty_search_and_invalid_or_failed_results_stay_distinct() {
 
     assert!(lines(&invalid, false, 80).is_none());
 
-    invalid.name = "search_text".into();
+    invalid.name = "Grep".into();
     invalid.output = "tool execution failed: denied".into();
     invalid.status = ToolStatus::Failed;
 

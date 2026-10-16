@@ -324,13 +324,13 @@ fn is_shell_preamble(line: &str) -> bool {
 
 pub(super) fn tool_summary(name: &str, arguments: &str, output: &str) -> String {
     match name {
-        "enter_plan" | "update_plan" | "submit_plan" => {
+        "EnterPlan" | "UpdatePlan" | "SubmitPlan" => {
             let record = serde_json::from_str::<orbit_protocol::plan::State>(output).ok();
             let status = record
                 .as_ref()
                 .and_then(|s| s.plan.as_ref())
                 .map_or(
-                    if name == "submit_plan" {
+                    if name == "SubmitPlan" {
                         "待确认"
                     } else {
                         "只读规划"
@@ -343,7 +343,7 @@ pub(super) fn tool_summary(name: &str, arguments: &str, output: &str) -> String 
                 );
             format!("{} · 查看当前计划", status)
         }
-        "ask_user" => {
+        "AskUser" => {
             let form = serde_json::from_str::<orbit_protocol::user_input::Form>(arguments).ok();
             let record = serde_json::from_str::<orbit_protocol::user_input::Record>(output).ok();
             let status = record
@@ -361,16 +361,16 @@ pub(super) fn tool_summary(name: &str, arguments: &str, output: &str) -> String 
                 status
             )
         }
-        "search_text" => search_summary(arguments),
-        "memory_save" => memory_summary(arguments),
+        "Grep" => search_summary(arguments),
+        "SaveMemory" => memory_summary(arguments),
         "git_inspect" => git_summary(arguments),
-        "read_file" => super::render::read_file_summary(arguments, output),
-        "read_command_output" => command_output_summary(arguments),
-        "web_search" => web_search_summary(arguments, Some(output)),
-        "read_document" => document_summary(arguments, Some(output)),
-        "request_capability" => capability_summary(arguments),
-        "read_image" => read_image_summary(arguments),
-        "read_agent" => agent_read_summary(arguments, output),
+        "ReadFile" => super::render::read_file_summary(arguments, output),
+        "CommandOutput" => command_output_summary(arguments),
+        "WebSearch" => web_search_summary(arguments, Some(output)),
+        "ReadDocument" => document_summary(arguments, Some(output)),
+        "RequestAccess" => capability_summary(arguments),
+        "ReadImage" => read_image_summary(arguments),
+        "ReadAgent" => agent_read_summary(arguments, output),
         _ => super::render::default_tool_summary(arguments),
     }
 }
@@ -604,7 +604,7 @@ pub(super) fn linked_lines(row: &ToolRow, expanded: bool, width: u16) -> Option<
         return None;
     }
     match row.name.as_str() {
-        "read_image" => {
+        "ReadImage" => {
             let value: Value = serde_json::from_str(&row.output).ok()?;
             let path = value["path"].as_str()?;
             let label = super::render::safe_output(path);
@@ -616,9 +616,9 @@ pub(super) fn linked_lines(row: &ToolRow, expanded: bool, width: u16) -> Option<
             return Some(vec![line]);
         }
 
-        "web_fetch" => return web_fetch_preview(&row.output, width),
-        "read_document" => return structured::document_with_links(row, expanded, width),
-        "read_file" => {
+        "WebFetch" => return web_fetch_preview(&row.output, width),
+        "ReadDocument" => return structured::document_with_links(row, expanded, width),
+        "ReadFile" => {
             return read_linked(
                 &serde_json::from_str::<Value>(&row.output).ok()?,
                 expanded,
@@ -626,8 +626,8 @@ pub(super) fn linked_lines(row: &ToolRow, expanded: bool, width: u16) -> Option<
             );
         }
 
-        "write_file" => return write_file_linked(&row.arguments, width),
-        "search_text" => {
+        "WriteFile" => return write_file_linked(&row.arguments, width),
+        "Grep" => {
             return search_linked(
                 &serde_json::from_str::<Value>(&row.output).ok()?,
                 expanded,
@@ -652,45 +652,45 @@ pub(super) fn lines(row: &ToolRow, expanded: bool, width: u16) -> Option<Vec<Lin
     }
 
     match row.name.as_str() {
-        "write_file" => write_file_preview(&row.arguments, width),
-        "edit_file" => edit_file_preview(&row.arguments, width),
-        "list_files" => structured::files(row, expanded, width),
+        "WriteFile" => write_file_preview(&row.arguments, width),
+        "EditFile" => edit_file_preview(&row.arguments, width),
+        "ListFiles" => structured::files(row, expanded, width),
         "git_inspect" => structured::git(row, expanded, width),
-        "project_overview" | "code_symbols" => overview(
+        "ProjectOverview" | "CodeSymbols" => overview(
             &serde_json::from_str::<Value>(&row.output).ok()?,
             expanded,
             width,
         ),
 
-        "search_text" => search(
+        "Grep" => search(
             &serde_json::from_str::<Value>(&row.output).ok()?,
             expanded,
             width,
         ),
 
-        "read_file" => read(
+        "ReadFile" => read(
             &serde_json::from_str::<Value>(&row.output).ok()?,
             expanded,
             width,
         ),
 
-        "memory_save" => memory(
+        "SaveMemory" => memory(
             &serde_json::from_str::<Value>(&row.output).ok()?,
             expanded,
             width,
         ),
 
-        "web_fetch" => web_fetch_preview(&row.output, width).map(|lines| {
+        "WebFetch" => web_fetch_preview(&row.output, width).map(|lines| {
             lines
                 .into_iter()
                 .map(|linked| linked.line)
                 .collect()
         }),
-        "web_search" => structured::web_search(row, expanded, width),
-        "read_command_output" => structured::command_output(row, expanded, width),
-        "read_document" => structured::document(row, expanded, width),
-        "request_capability" => structured::capability(row, expanded, width),
-        "read_image" => structured::read_image(row, expanded, width),
+        "WebSearch" => structured::web_search(row, expanded, width),
+        "CommandOutput" => structured::command_output(row, expanded, width),
+        "ReadDocument" => structured::document(row, expanded, width),
+        "RequestAccess" => structured::capability(row, expanded, width),
+        "ReadImage" => structured::read_image(row, expanded, width),
         _ => structured::fallback(row, expanded, width),
     }
 }
@@ -1619,7 +1619,7 @@ mod subagent_tests {
                 changes: Vec::new(),
                 purpose: None,
                 id: "orbit-child-call".into(),
-                name: "spawn_agent".into(),
+                name: "SpawnAgent".into(),
                 arguments: json!({
                     "task": "审查 Orbit 中文标题与很长的补充上下文"
                 })

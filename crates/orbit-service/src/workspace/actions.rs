@@ -298,7 +298,7 @@ mod tests {
         .unwrap();
         assert!(status.text.contains("普通执行"));
         for field in [
-            "命令原始输出：无临时日志",
+            "命令原始输出：当前会话尚无保留日志",
             "Git 基线：",
             "模型流空闲",
             "审批：",

@@ -24,85 +24,80 @@ pub(crate) fn filter_tools(
     }
     if capability_is_disabled(disabled, Capability::Subagents) {
         for name in [
-            "spawn_agent",
-            "send_agent_message",
-            "wait_agents",
-            "read_agent",
-            "cancel_agents",
+            "SpawnAgent",
+            "SendAgentMessage",
+            "WaitAgents",
+            "ReadAgent",
+            "StopAgents",
         ] {
             tools.remove(name);
         }
     }
 
     if capability_is_disabled(disabled, Capability::History) {
-        tools.remove("read_history");
+        tools.remove("ReadHistory");
     }
 
     if capability_is_disabled(disabled, Capability::Web) {
-        tools.remove("web_search");
-        tools.remove("web_fetch");
+        tools.remove("WebSearch");
+        tools.remove("WebFetch");
     }
 
     if capability_is_disabled(disabled, Capability::Mcp) {
-        tools.remove_prefix("mcp__");
+        tools.remove_origin(orbit_agent::tool::ToolOrigin::Mcp);
     }
 
     if capability_is_disabled(disabled, Capability::Skills) {
-        tools.remove("load_skill");
+        tools.remove("LoadSkill");
     }
 
     if capability_is_disabled(disabled, Capability::Image) {
-        tools.remove("read_image");
+        tools.remove("ReadImage");
     }
 
     if capability_is_disabled(disabled, Capability::Document) {
-        tools.remove("read_document");
+        tools.remove("ReadDocument");
     }
 
     if capability_is_disabled(disabled, Capability::Files) {
         for name in [
-            "read_file",
-            "list_files",
-            "search_text",
-            "project_overview",
-            "code_symbols",
-            "verification_status",
+            "ReadFile",
+            "ListFiles",
+            "Grep",
+            "ProjectOverview",
+            "CodeSymbols",
+            "CheckEvidence",
         ] {
             tools.remove(name);
         }
     }
 
-    if capability_is_disabled(disabled, Capability::Git) {
-        tools.remove("git_inspect");
-        tools.remove("git_push");
-    }
-
     if capability_is_disabled(disabled, Capability::Write) {
-        tools.remove("write_file");
-        tools.remove("edit_file");
+        tools.remove("WriteFile");
+        tools.remove("EditFile");
     }
 
     if capability_is_disabled(disabled, Capability::Capability) {
-        tools.remove("request_capability");
+        tools.remove("RequestAccess");
     }
 
     if capability_is_disabled(disabled, Capability::Command) {
-        tools.remove("run_command");
-        tools.remove("read_command_output");
-        tools.remove("get_command_status");
-        tools.remove("wait_commands");
-        tools.remove("cancel_commands");
-        tools.remove("verification_status");
+        tools.remove("Exec");
+        tools.remove("CommandOutput");
+        tools.remove("CommandStatus");
+        tools.remove("WaitCommands");
+        tools.remove("StopCommands");
+        tools.remove("CheckEvidence");
     }
 
     if capability_is_disabled(disabled, Capability::ProjectState) {
         for name in [
-            "task_list",
-            "task_update",
-            "memory_list",
-            "memory_search",
-            "memory_save",
-            "memory_forget",
+            "ListTasks",
+            "UpdateTask",
+            "ListMemories",
+            "SearchMemory",
+            "SaveMemory",
+            "ForgetMemory",
         ] {
             tools.remove(name);
         }

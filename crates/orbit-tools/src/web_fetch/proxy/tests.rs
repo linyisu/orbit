@@ -193,7 +193,7 @@ async fn automatic_proxy_serves_pages_search_and_images_without_local_dns() {
         .execute(
             ToolCall::function(
                 "page",
-                "web_fetch",
+                "WebFetch",
                 json!({
                     "url": "http://proxy-only.invalid/page"
                 }),
@@ -244,7 +244,7 @@ async fn automatic_proxy_cannot_access_private_targets_or_private_redirects() {
     ] {
         let call = ToolCall::function(
             "page",
-            "web_fetch",
+            "WebFetch",
             json!({
                 "url": value
             }),

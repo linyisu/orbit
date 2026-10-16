@@ -11,6 +11,8 @@ use ratatui::{
 use super::{ModelOption, app::UiState, commands::COMMANDS, icons};
 use crate::marketplaces::{Marketplace, PluginPackage};
 
+mod tool;
+
 #[derive(Debug)]
 pub struct SessionPicker {
     offset: usize,
@@ -716,43 +718,10 @@ pub struct InfoDialog {
     selected_page: usize,
     page_areas: Vec<(Rect, usize)>,
     target: Option<orbit_client::execution::details::Target>,
+    tool_header: Option<tool::Header>,
 }
 
 impl InfoDialog {
-    pub(super) fn tool(record: &orbit_client::execution::ToolRun) -> Self {
-        let mut dialog = Self::new("工具详情", String::new());
-        dialog.source = Some(ReportSource::Tool(record.id.clone()));
-        dialog.update_tool(record);
-        let initial = orbit_client::execution::details::default_stream(record);
-        if let Some(index) = orbit_client::execution::details::streams(record)
-            .iter()
-            .position(|stream| *stream == initial)
-        {
-            dialog.select_page(index);
-        }
-        dialog
-    }
-
-    pub(super) fn update_tool(&mut self, record: &orbit_client::execution::ToolRun) {
-        use orbit_client::execution::details;
-        self.title = format!("{} · {}", record.name, details::status(record));
-        self.target = details::target(record);
-        self.pages(
-            details::streams(record)
-                .iter()
-                .map(|stream| ReportPage {
-                    label: stream.label().into(),
-                    content: Text::from(format!(
-                        "{}\n\n{}\n\n{}",
-                        record.summary(),
-                        details::content(record, *stream),
-                        details::note(record, *stream)
-                    )),
-                })
-                .collect(),
-        );
-    }
-
     /// Embedded transcripts expose evidence without borrowing the outer session's actions.
     pub(super) fn disable_navigation(&mut self) {
         self.target = None;
@@ -771,6 +740,7 @@ impl InfoDialog {
             selected_page: 0,
             page_areas: Vec::new(),
             target: None,
+            tool_header: None,
         }
     }
 
@@ -787,14 +757,22 @@ impl InfoDialog {
 
     fn select_page(&mut self, index: usize) {
         if let Some(page) = self.pages.get(index) {
+            if let Some(header) = &mut self.tool_header {
+                header.select_result();
+                self.content = header.content(index);
+            } else {
+                self.content = page.content.to_string();
+            }
             self.selected_page = index;
-            self.content = page.content.to_string();
             self.scroll = 0;
             self.max_scroll = 0;
         }
     }
 
     fn handle(&mut self, event: &Event) -> bool {
+        if self.handle_parameters(event) {
+            return false;
+        }
         match event {
             Event::Key(key) if key.kind != KeyEventKind::Release => match key.code {
                 KeyCode::Esc | KeyCode::Enter => return true,
@@ -936,19 +914,17 @@ pub fn handle(state: &mut UiState, event: Event) -> Option<String> {
                 } else {
                     (index + 1).min(records.len() - 1)
                 };
-                state.info_dialog = Some(InfoDialog::tool(&records[next].record()));
+                state.info_dialog =
+                    Some(InfoDialog::tool(&records[next].record(), &state.workspace));
             }
             return None;
         }
     }
     if let Some(dialog) = &mut state.info_dialog {
-        if let Event::Key(key) = &event
-            && key.kind != KeyEventKind::Release
-            && key.code == KeyCode::Char('y')
-            && matches!(dialog.source, Some(ReportSource::Tool(_)))
-        {
-            if let Err(error) = super::selection::copy_text(&dialog.content) {
-                state.feedback.error(error.to_string());
+        if let Some(content) = dialog.copy_request(&event) {
+            match super::selection::copy_text(content) {
+                Ok(()) => dialog.copied(std::time::Instant::now()),
+                Err(error) => state.feedback.error(error.to_string()),
             }
             return None;
         }
@@ -1673,6 +1649,9 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
 
     if let Some(dialog) = &mut state.info_dialog {
         state.ime_cursor = None;
+        if dialog.draw_tool(frame, inner) {
+            return;
+        }
         dialog.page_areas.clear();
         let page_header_rows = u16::from(!dialog.pages.is_empty());
         let title = Rect::new(

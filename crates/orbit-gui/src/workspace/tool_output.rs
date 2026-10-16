@@ -3,14 +3,13 @@
 use super::*;
 use crate::execution::{ToolRun, ToolStatus};
 use gpui_kit::component::{
+    clipboard::Clipboard,
     input::{Editor, EditorState},
-    scroll::ScrollableElement,
     tab::{Tab, TabBar},
-    tooltip::Tooltip,
 };
 
 use orbit_client::execution::details::{
-    Stream, content, default_stream, note, request_directory, status,
+    Request as ToolRequest, Stream, content, default_stream, retained::Retained, status,
 };
 
 pub(super) struct ToolOutput {
@@ -21,7 +20,11 @@ pub(super) struct ToolOutput {
     tool: ToolRun,
     stream: Stream,
     editor: Entity<EditorState>,
-    command: String,
+    request_editor: Entity<EditorState>,
+    request: ToolRequest,
+    pages: &'static [Stream],
+    status: String,
+    retained: Retained,
     displayed: String,
     paused: bool,
     disconnected: bool,
@@ -40,7 +43,7 @@ impl ToolOutput {
     ) -> Self {
         let stream = default_stream(&tool);
         let displayed = content(&tool, stream);
-        let command = content(&tool, Stream::Command);
+        let request = ToolRequest::new(&tool, &workspace);
         Self {
             owner,
             options,
@@ -49,11 +52,23 @@ impl ToolOutput {
             editor: cx.new(|cx| {
                 EditorState::new(window, cx)
                     .language("plaintext")
-                    .line_number(false)
-                    .soft_wrap(false)
+                    .line_number(true)
+                    .folding(false)
+                    .soft_wrap(true)
                     .default_value(displayed.clone())
             }),
-            command,
+            request_editor: cx.new(|cx| {
+                EditorState::new(window, cx)
+                    .language(request.language())
+                    .line_number(true)
+                    .folding(false)
+                    .soft_wrap(true)
+                    .default_value(request.content())
+            }),
+            request,
+            pages: orbit_client::execution::details::streams(&tool),
+            status: status(&tool),
+            retained: Retained::default(),
             tool,
             stream,
             displayed,
@@ -87,13 +102,6 @@ impl ToolOutput {
             return;
         }
         self.tool = tool.clone();
-        if self.tool.status == ToolStatus::Failed
-            && self.tool.command_result().is_none()
-            && self.tool.stdout_preview.is_none()
-            && self.stream == Stream::Stdout
-        {
-            self.stream = Stream::Result;
-        }
         if !self.paused && !self.closed {
             self.refresh(window, cx);
         }
@@ -107,7 +115,49 @@ impl ToolOutput {
     }
 
     fn refresh(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let next = content(&self.tool, self.stream);
+        self.pages = orbit_client::execution::details::streams(&self.tool);
+        if !self.pages.contains(&self.stream) {
+            self.stream = default_stream(&self.tool);
+        }
+        self.status = status(&self.tool);
+        if !self.disconnected && self.retained.begin(&self.tool) {
+            let (result, response) = tokio::sync::oneshot::channel();
+            let session = self.session.clone();
+            let tool = Box::new(self.tool.clone());
+            let output = self
+                .tool
+                .output
+                .clone()
+                .unwrap_or_default();
+            let owner = self.owner.clone();
+            cx.spawn_in(window, async move |view, cx| {
+                // Opening and syncing can run inside the workspace's update.
+                // Dispatch after that update releases its entity borrow.
+                let _ = owner.update(cx, |workspace, cx| {
+                    workspace.command(
+                        Command::ToolOutput {
+                            session,
+                            tool,
+                            result,
+                        },
+                        cx,
+                    );
+                });
+                let result = response
+                    .await
+                    .unwrap_or_else(|_| Err("读取已取消或连接已断开".into()));
+                let _ = view.update_in(cx, |view, window, cx| {
+                    if view.retained.receive(&output, result) && !view.closed {
+                        view.refresh(window, cx);
+                    }
+                    cx.notify();
+                });
+            })
+            .detach();
+        }
+        let next = self
+            .retained
+            .content(&self.tool, self.stream);
         if next != self.displayed {
             self.editor.update(cx, |editor, cx| {
                 editor.set_value(next.clone(), window, cx);
@@ -118,17 +168,10 @@ impl ToolOutput {
 
     fn select(&mut self, stream: Stream, window: &mut Window, cx: &mut Context<Self>) {
         self.stream = stream;
-        self.editor.update(cx, |editor, cx| {
-            editor.set_soft_wrap(stream == Stream::Command, window, cx);
-        });
         self.refresh(window, cx);
         self.editor
             .update(cx, |editor, cx| editor.focus(window, cx));
         cx.notify();
-    }
-
-    fn streams(&self) -> &'static [Stream] {
-        orbit_client::execution::details::streams(&self.tool)
     }
 
     fn inspect_target(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -229,17 +272,10 @@ pub(super) fn present(panel: Entity<ToolOutput>, window: &mut Window, cx: &mut A
     });
     crate::dialog::open(window, cx, move |dialog, window, cx| {
         let close = panel.downgrade();
-        let rows = panel
-            .read(cx)
-            .displayed
-            .lines()
-            .count()
-            .clamp(8, 28);
-        let height =
-            (window.rem_size() * (rows as f32 * 1.3 + 9.)).min(window.viewport_size().height * 0.8);
+        let height = (window.rem_size() * 46.).min(window.viewport_size().height * 0.8);
         let content = panel.clone();
         dialog
-            .title("工具详情")
+            .title(panel.read(cx).tool.name.clone())
             .h(height)
             // The editor owns scrolling; Dialog's ordinary child slot adds
             // a second scroll viewport around the entire inspector.
@@ -261,16 +297,16 @@ pub(super) fn present(panel: Entity<ToolOutput>, window: &mut Window, cx: &mut A
 }
 
 impl Render for ToolOutput {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let has_owner = self.owner.upgrade().is_some();
-        let note = if self.disconnected || !has_owner {
-            "已停止跟随当前调用，保留已接收输出。可从执行列表重新打开当前调用。".into()
+        let status = if self.disconnected || !has_owner {
+            "连接已断开，保留已接收输出".to_owned()
         } else if self.paused {
-            "已暂停更新，选择和复制保留在当前内容；继续更新后显示最新输出。".into()
+            "已暂停更新".to_owned()
         } else {
-            note(&self.tool, self.stream)
+            self.status.clone()
         };
-        let streams = self.streams();
+        let streams = self.pages;
         let target = orbit_client::execution::details::target(&self.tool)
             .filter(|_| !self.disconnected && has_owner)
             .filter(|target| !matches!(target, orbit_client::execution::details::Target::Question));
@@ -278,196 +314,232 @@ impl Render for ToolOutput {
             .iter()
             .position(|stream| *stream == self.stream)
             .unwrap_or(0);
-        let directory = request_directory(&self.tool, &self.workspace);
-        let summary = self
-            .command
+        let request_lines = self
+            .request
+            .content()
             .lines()
-            .find(|line| !line.trim().is_empty())
-            .unwrap_or(&self.tool.name)
-            .to_owned();
+            .count()
+            .clamp(2, 6) as f32;
+        let header_height = (window.rem_size() * (request_lines * 1.5 + 1.))
+            .min(window.viewport_size().height * 0.20);
+        let copy = (!matches!(self.retained, Retained::Loading(_))).then(|| {
+            Clipboard::new(("copy-tool-output", self.stream as usize))
+                .small()
+                .value_fn({
+                    let view = cx.entity().downgrade();
+                    move |_, cx| {
+                        view.upgrade()
+                            .map(|view| view.read(cx).displayed.clone())
+                            .unwrap_or_default()
+                            .into()
+                    }
+                })
+                .tooltip("复制结果")
+                .accessibility_label(format!("复制{}", self.stream.label()))
+        });
         v_flex()
             .size_full()
             .min_w_0()
             .min_h_0()
-            // Editors resolve Escape to Input's action. Forward an unhandled
-            // one to the same Dialog cancellation path as its native close X.
+            .gap_3()
+            // Forward the editor's unhandled Escape to the native dialog close path.
             .on_action(|_: &gpui_kit::component::input::Escape, window, cx| {
                 window.dispatch_action(Box::new(gpui_kit::base::actions::Cancel), cx)
             })
             .child(
                 v_flex()
                     .flex_shrink_0()
-                    .py_2()
-                    .gap_1()
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_ellipsis()
-                            .child(self.tool.summary()),
-                    )
+                    .min_h_0()
+                    .min_w_0()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(cx.theme().border)
+                    .overflow_hidden()
                     .child(
                         h_flex()
+                            .px_3()
+                            .h(rems(2.))
+                            .flex_shrink_0()
                             .gap_2()
+                            .text_xs()
+                            .child(self.request.heading())
                             .child(
                                 div()
                                     .flex_1()
                                     .min_w_0()
-                                    .text_sm()
                                     .text_ellipsis()
-                                    .child(self.tool.name.clone()),
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(status),
                             )
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .child(status(&self.tool)),
-                            ),
-                    )
-                    .when(self.tool.name == "run_command", |view| {
-                        view.child(
-                            h_flex()
-                                .w_full()
-                                .min_w_0()
-                                .gap_2()
-                                .child(Icon::new(IconName::SquareTerminal).small())
-                                .child(
-                                    div()
-                                        .flex_1()
-                                        .min_w_0()
-                                        .text_sm()
-                                        .text_ellipsis()
-                                        .child(summary),
-                                )
-                                .child(
-                                    Button::new("view-full-command")
+                            .when_some(target, |bar, target| {
+                                bar.child(
+                                    Button::new("inspect-tool-target")
                                         .small()
                                         .ghost()
-                                        .label("完整命令")
+                                        .label(target.label())
                                         .on_click(cx.listener(|view, _, window, cx| {
-                                            view.select(Stream::Command, window, cx)
+                                            view.inspect_target(window, cx)
                                         })),
-                                ),
-                        )
-                    })
+                                )
+                            }),
+                    )
                     .child(
                         div()
-                            .id("tool-output-directory")
-                            .w_full()
+                            .h(header_height)
+                            .min_h_0()
                             .min_w_0()
-                            .text_xs()
-                            .text_color(cx.theme().muted_foreground)
-                            .text_ellipsis()
-                            .tooltip({
-                                let directory = directory.clone();
-                                move |window, cx| Tooltip::new(directory.clone()).build(window, cx)
-                            })
-                            .child(format!("目录：{directory}")),
-                    ),
-            )
-            .child(
-                h_flex()
-                    .w_full()
-                    .min_w_0()
-                    .flex_shrink_0()
-                    .flex_wrap()
-                    .gap_2()
-                    .pb_2()
-                    .when_some(target, |bar, target| {
-                        bar.child(
-                            Button::new("inspect-tool-target")
-                                .small()
-                                .outline()
-                                .label(target.label())
-                                .on_click(cx.listener(|view, _, window, cx| {
-                                    view.inspect_target(window, cx)
-                                })),
+                            .child(editor_content(
+                                &self.request_editor,
+                                Some(
+                                    Clipboard::new("copy-tool-request")
+                                        .small()
+                                        .value(self.request.content().to_owned())
+                                        .tooltip("复制调用内容")
+                                        .accessibility_label("复制调用内容"),
+                                ),
+                                self.request.heading().into(),
+                            )),
+                    )
+                    .when(!self.request.context().is_empty(), |view| {
+                        view.child(
+                            div()
+                                .id("tool-request-context")
+                                .max_h(rems(4.))
+                                .overflow_y_scroll()
+                                .px_3()
+                                .py_2()
+                                .text_sm()
+                                .text_color(cx.theme().muted_foreground)
+                                .whitespace_normal()
+                                .child(self.request.context().to_owned()),
                         )
-                    })
-                    .child(
-                        TabBar::new("tool-output-streams")
-                            .small()
-                            .underline()
-                            .flex_1()
-                            .min_w_0()
-                            .menu(true)
-                            .selected_index(selected)
-                            .children(
-                                streams
-                                    .iter()
-                                    .map(|stream| Tab::new().label(stream.label())),
-                            )
-                            .on_click(cx.listener(move |view, ix: &usize, window, cx| {
-                                view.select(streams[*ix], window, cx)
-                            })),
-                    )
-                    .when(
-                        self.paused
-                            || (!self.disconnected
-                                && self.tool.status == ToolStatus::Running
-                                && self.tool.is_foreground_command()),
-                        |bar| {
-                            bar.child(
-                                Button::new("pause-output-updates")
-                                    .small()
-                                    .ghost()
-                                    .label(if self.paused {
-                                        "继续更新"
-                                    } else {
-                                        "暂停更新"
-                                    })
-                                    .on_click(cx.listener(|view, _, window, cx| {
-                                        view.paused = !view.paused;
-                                        if !view.paused {
-                                            view.refresh(window, cx);
-                                        }
-                                        cx.notify();
-                                    })),
-                            )
-                        },
-                    )
-                    .child(
-                        Button::new("copy-tool-output")
-                            .small()
-                            .outline()
-                            .icon(IconName::Copy)
-                            .label("复制")
-                            .accessibility_label(format!("复制{}", self.stream.label()))
-                            .disabled(self.displayed.is_empty())
-                            .on_click(cx.listener(|view, _, _, cx| {
-                                cx.write_to_clipboard(ClipboardItem::new_string(
-                                    view.displayed.clone(),
-                                ))
-                            })),
-                    ),
+                    }),
             )
             .child(
-                div()
-                    .id("tool-output-content")
-                    .occlude()
+                v_flex()
                     .flex_1()
                     .min_h_0()
                     .min_w_0()
-                    .overflow_hidden()
-                    .border_y_1()
+                    .rounded_md()
+                    .border_1()
                     .border_color(cx.theme().border)
+                    .overflow_hidden()
                     .child(
-                        Editor::new(&self.editor)
-                            .readonly(true)
-                            .bordered(false)
-                            .h_full()
-                            .aria_label(format!("工具输出 {}", self.stream.label())),
+                        h_flex()
+                            .px_2()
+                            .h(rems(2.5))
+                            .flex_shrink_0()
+                            .min_w_0()
+                            .gap_2()
+                            .child(
+                                TabBar::new("tool-output-streams")
+                                    .small()
+                                    .underline()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .menu(false)
+                                    .selected_index(selected)
+                                    .children(
+                                        streams
+                                            .iter()
+                                            .map(|stream| Tab::new().label(stream.label())),
+                                    )
+                                    .on_click(cx.listener(move |view, ix: &usize, window, cx| {
+                                        view.select(streams[*ix], window, cx)
+                                    })),
+                            )
+                            .when(
+                                self.paused
+                                    || (!self.disconnected
+                                        && self.tool.status == ToolStatus::Running
+                                        && self.tool.is_foreground_command()),
+                                |bar| {
+                                    bar.child(
+                                        Button::new("pause-output-updates")
+                                            .small()
+                                            .ghost()
+                                            .icon(if self.paused {
+                                                IconName::Play
+                                            } else {
+                                                IconName::Pause
+                                            })
+                                            .tooltip(if self.paused {
+                                                "继续更新"
+                                            } else {
+                                                "暂停更新"
+                                            })
+                                            .on_click(cx.listener(|view, _, window, cx| {
+                                                view.paused = !view.paused;
+                                                if !view.paused {
+                                                    view.refresh(window, cx);
+                                                }
+                                                cx.notify();
+                                            })),
+                                    )
+                                },
+                            )
+                            .when(matches!(self.retained, Retained::Failed { .. }), |bar| {
+                                bar.child(
+                                    Button::new("retry-tool-output")
+                                        .small()
+                                        .ghost()
+                                        .icon(IconName::RefreshCw)
+                                        .tooltip("重新读取结果")
+                                        .accessibility_label("重新读取结果")
+                                        .on_click(cx.listener(|view, _, window, cx| {
+                                            view.retained = Retained::default();
+                                            view.refresh(window, cx);
+                                            cx.notify();
+                                        })),
+                                )
+                            }),
+                    )
+                    .child(
+                        div()
+                            .id("tool-output-content")
+                            .occlude()
+                            .flex_1()
+                            .min_h_0()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .border_t_1()
+                            .border_color(cx.theme().border)
+                            .child(editor_content(
+                                &self.editor,
+                                copy,
+                                format!("工具输出 {}", self.stream.label()).into(),
+                            )),
                     ),
             )
-            .child(
-                div()
-                    .flex_shrink_0()
-                    .w_full()
-                    .h_auto()
-                    .py_2()
-                    .text_xs()
-                    .text_color(cx.theme().muted_foreground)
-                    .max_h(rems(4.))
-                    .overflow_y_scrollbar()
-                    .child(note),
-            )
     }
+}
+
+/// The copy control belongs to the viewport, so editor scrolling cannot move it.
+fn editor_content(
+    editor: &Entity<EditorState>,
+    copy: Option<Clipboard>,
+    label: SharedString,
+) -> impl IntoElement {
+    div()
+        .relative()
+        .size_full()
+        .min_w_0()
+        .min_h_0()
+        .child(
+            Editor::new(editor)
+                .readonly(true)
+                .bordered(false)
+                .h_full()
+                .pr_10()
+                .aria_label(label),
+        )
+        .when_some(copy, |body, copy| {
+            body.child(
+                div()
+                    .absolute()
+                    .top_2()
+                    .right_2()
+                    .child(copy),
+            )
+        })
 }

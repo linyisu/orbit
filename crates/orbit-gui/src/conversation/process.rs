@@ -50,7 +50,7 @@ mod tests {
         let call = json!({
             "id": "read",
             "function": {
-                "name": "read_file",
+                "name": "ReadFile",
                 "arguments": "{}"
             }
         });

@@ -210,7 +210,7 @@ fn main() -> anyhow::Result<()> {
                 match session {
                     "demo" => "请检查当前项目结构，读取 Cargo.toml 和完整的依赖关系并给出建议",
                     "navigation" => {
-                        "请直接使用 read_file 读取 src/main.rs，然后运行 pwd，继续检查项目"
+                        "请直接使用 ReadFile 读取 src/main.rs，然后运行 pwd，继续检查项目"
                     }
                     _ => "",
                 }
@@ -266,6 +266,7 @@ fn main() -> anyhow::Result<()> {
             .as_str()
             .unwrap_or_default()
         {
+            "read_tool_output" => tool_output::retained_page(&request),
             "complete" => {
                 let input = request["input"]
                     .as_str()
@@ -402,7 +403,7 @@ fn main() -> anyhow::Result<()> {
                                 "workspace": catalog_root,
                                 "project_id": "fixture",
                                 "model": model,
-                                "title": "请直接使用 read_file 读取 /tmp\n/orbit-e2e/README.md\n并继续检查",
+                                "title": "请直接使用 ReadFile 读取 /tmp\n/orbit-e2e/README.md\n并继续检查",
                                 "updated_at": 2
                             },
                             {
@@ -673,7 +674,7 @@ fn main() -> anyhow::Result<()> {
                         let call = json!({
                             "id": format!("short-{index}"),
                             "function": {
-                                "name": "run_command",
+                                "name": "Exec",
                                 "arguments": "{\"command\":\"pwd\"}"
                             }
                         });
@@ -720,6 +721,14 @@ fn main() -> anyhow::Result<()> {
                     history.insert(session.clone(), events);
                     pending = remaining;
                     planning = plan;
+                }
+                if session == "demo"
+                    && std::path::Path::new(&workspace)
+                        .join(".fixture-complete-output")
+                        .exists()
+                {
+                    history.insert(session.clone(), tool_output::complete_history(&workspace));
+                    pending.clear();
                 }
                 if session == "navigation" {
                     let rounds = if std::path::Path::new(&workspace)
@@ -1516,7 +1525,7 @@ fn main() -> anyhow::Result<()> {
                                 connected: true,
                                 detail: "已连接".into(),
                                 tools: vec![orbit_protocol::resources::McpTool {
-                                    name: "mcp__fixture__echo".into(),
+                                    name: "MCP_Fixture_Echo".into(),
                                     description: "Echo input".into(),
                                 }],
                             }
@@ -1559,21 +1568,21 @@ fn workbench_events() -> VecDeque<Value> {
     let read = json!({
         "id": "read-entry",
         "function": {
-            "name": "read_file",
+            "name": "ReadFile",
             "arguments": "{\"path\":\"src/main.rs\"}"
         }
     });
     let write = json!({
         "id": "write-entry",
         "function": {
-            "name": "write_file",
+            "name": "WriteFile",
             "arguments": "{\"path\":\"src/workbench.rs\"}"
         }
     });
     let child = json!({
         "id": "spawn-review",
         "function": {
-            "name": "spawn_agent",
+            "name": "SpawnAgent",
             "arguments": "{\"task\":\"审查任务切换与状态保留\"}"
         }
     });
@@ -1652,7 +1661,7 @@ fn tool_history() -> Vec<Value> {
         let call = json!({
             "id": format!("read-{index}"),
             "function": {
-                "name": "read_file",
+                "name": "ReadFile",
                 "arguments": format!("{{\"path\":\"src/module_{index}.rs\"}}")
             }
         });
@@ -1712,7 +1721,7 @@ fn process_tail() -> Vec<Value> {
         let call = json!({
             "id": format!("tail-{index}"),
             "function": {
-                "name": "run_command",
+                "name": "Exec",
                 "arguments": "{\"command\":\"pwd\"}"
             }
         });

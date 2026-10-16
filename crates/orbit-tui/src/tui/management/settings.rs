@@ -37,7 +37,7 @@ const LABELS: [&str; 11] = [
     "探索子 Agent 模型（空白继承）",
     "审查子 Agent 模型（空白继承）",
 ];
-const CAPABILITIES: [(Capability, &str); 14] = [
+const CAPABILITIES: [(Capability, &str); 13] = [
     (Capability::All, "全部可选工具"),
     (Capability::Subagents, "子 Agent"),
     (Capability::Web, "网页搜索与抓取"),
@@ -46,7 +46,6 @@ const CAPABILITIES: [(Capability, &str); 14] = [
     (Capability::Image, "图片"),
     (Capability::Document, "文档"),
     (Capability::Files, "文件读取与搜索"),
-    (Capability::Git, "Git"),
     (Capability::Write, "文件写入"),
     (Capability::Capability, "工作区外路径授权"),
     (Capability::Command, "命令执行"),
@@ -62,7 +61,8 @@ const MCP_LABELS: [&str; 7] = [
     "允许的工具（空白全部）",
     "启用服务器",
 ];
-const AGENT_FIELDS: usize = 29;
+const TOOLS_FIELD: usize = 14 + CAPABILITIES.len();
+const AGENT_FIELDS: usize = TOOLS_FIELD + 1;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Page {
@@ -190,7 +190,7 @@ impl AgentForm {
             11 => self.compact = !self.compact,
             12 => self.network = !self.network,
             13 => self.subagents = !self.subagents,
-            14..=27 => {
+            index if (14..TOOLS_FIELD).contains(&index) => {
                 let capability = CAPABILITIES[self.focus - 14].0;
                 if !self.disabled.remove(&capability) {
                     self.disabled.insert(capability);
@@ -499,7 +499,7 @@ impl State {
                     form.focus = index;
                     form.reveal = true;
                     form.tools_follow = true;
-                    if (11..28).contains(&index) {
+                    if (11..TOOLS_FIELD).contains(&index) {
                         form.toggle();
                     }
                 }
@@ -552,7 +552,7 @@ impl State {
                     _ => form::edit(&mut form.fields[form.focus], key.code, key.modifiers),
                 }
                 form.reveal = true;
-            } else if form.focus == 28 {
+            } else if form.focus == TOOLS_FIELD {
                 form.tools_follow = true;
                 if key.code == KeyCode::Enter {
                     form.tools.insert("\n");
@@ -578,7 +578,7 @@ impl State {
         } else if let Event::Paste(text) = event {
             if form.focus < 11 {
                 form::paste(&mut form.fields[form.focus], text);
-            } else if form.focus == 28 {
+            } else if form.focus == TOOLS_FIELD {
                 form.tools.insert(text);
                 form.tools_follow = true;
             }
@@ -728,7 +728,7 @@ impl Panel for State {
                 let down = mouse.kind == MouseEventKind::ScrollDown;
                 if self.page == Page::Agent {
                     if let Some(form) = &mut self.agent_form {
-                        if self.editor.contains(point) && form.focus == 28 {
+                        if self.editor.contains(point) && form.focus == TOOLS_FIELD {
                             form.tools_offset = if down {
                                 form.tools_offset.saturating_add(3)
                             } else {
@@ -883,12 +883,12 @@ impl State {
             );
             return;
         };
-        let tools_start = 11 * 2 + 3 + 14;
+        let tools_start = 11 * 2 + 3 + CAPABILITIES.len();
         let total = tools_start + 7;
         let focus_row = match form.focus {
             0..=10 => form.focus * 2 + 1,
             11..=13 => 22 + form.focus - 11,
-            14..=27 => 25 + form.focus - 14,
+            index if (14..TOOLS_FIELD).contains(&index) => 25 + form.focus - 14,
             _ => tools_start + 6,
         };
         if form.reveal {
@@ -983,12 +983,12 @@ impl State {
                 rect,
                 &form.tools,
                 &mut form.tools_offset,
-                form.focus == 28,
+                form.focus == TOOLS_FIELD,
                 std::mem::take(&mut form.tools_follow),
             );
             self.editor = rect;
             self.hits
-                .push((rect, Hit::AgentField(28)));
+                .push((rect, Hit::AgentField(TOOLS_FIELD)));
         }
     }
 
@@ -1217,8 +1217,7 @@ mod tests {
         form.fields[5].set("3".into());
         form.network = false;
         form.disabled.insert(Capability::Write);
-        form.tools
-            .set("read_file\nmcp__demo__tool".into());
+        form.tools.set("Read\nDemo_Tool".into());
         state.save();
         assert!(state.error.is_none(), "{:?}", state.error);
         let content = std::fs::read_to_string(&state.path).unwrap();

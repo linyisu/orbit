@@ -75,7 +75,7 @@ impl<B: ModelBackend> Agent<B> {
                 .map(|call| {
                     let cancellation = cancellation.clone();
                     async move {
-                        let output = if call.function.name == "read_image"
+                        let output = if call.function.name == "ReadImage"
                             && !self.backend.supports_vision()
                         {
                             Err(ToolError::ExecutionFailed(
@@ -88,7 +88,7 @@ impl<B: ModelBackend> Agent<B> {
                                     cancellation,
                                     ToolContext {
                                         supports_vision: self.backend.supports_vision()
-                                            && self.tools.contains("read_image"),
+                                            && self.tools.contains("ReadImage"),
                                     },
                                 )
                                 .await
@@ -131,12 +131,26 @@ impl<B: ModelBackend> Agent<B> {
                             None => AgentEvent::ToolFinished {
                                 call: call.clone(),
                                 content: output.content.clone(),
+                                outcome: Some(output.outcome),
                                 changes: output.changes,
                                 files: Some(output.files),
                             },
                         };
                         loaded_attachments.extend(output.attachments);
                         (event, output.content)
+                    }
+                    Err(ToolError::Cancelled) => {
+                        let content = "tool execution cancelled".to_owned();
+                        (
+                            AgentEvent::ToolFinished {
+                                call: call.clone(),
+                                content: content.clone(),
+                                outcome: Some(crate::tool::ToolOutcome::Cancelled),
+                                changes: Vec::new(),
+                                files: None,
+                            },
+                            content,
+                        )
                     }
                     Err(error) => {
                         let message = error.to_string();

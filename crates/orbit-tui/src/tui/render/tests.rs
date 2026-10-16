@@ -13,7 +13,7 @@ fn tool_inspectors_switch_calls_without_mutating_the_transcript() {
             .transcript
             .push(TranscriptItem::Tool(super::super::app::ToolRow {
             id: index.to_string(),
-            name: "run_command".into(),
+            name: "Exec".into(),
             purpose: None,
             arguments:
                 serde_json::json!({"command": format!("echo {} end-{index}", "long ".repeat(30))})
@@ -30,13 +30,13 @@ fn tool_inspectors_switch_calls_without_mutating_the_transcript() {
             Event::Key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)),
         );
     }
-    assert!(
+    assert_eq!(
         state
             .info_dialog
             .as_ref()
             .unwrap()
-            .content
-            .contains("end-0")
+            .content,
+        "first\nsecond"
     );
     super::super::dialogs::handle(
         &mut state,
@@ -226,7 +226,7 @@ fn collapsed_tool_cards_fit_width_and_bound_the_preview() {
             changes: Vec::new(),
             purpose: None,
             id: "call".into(),
-            name: "run_command".into(),
+            name: "Exec".into(),
             status,
             arguments: serde_json::json!({
                 "command": format!("中文\t{}", "command ".repeat(50))
@@ -601,7 +601,7 @@ fn tool_previews_bound_single_line_payloads_without_changing_results() {
         changes: Vec::new(),
         purpose: None,
         id: "write".into(),
-        name: "write_file".into(),
+        name: "WriteFile".into(),
         arguments: serde_json::json!({
             "path": "report.md",
             "content": output
@@ -655,7 +655,7 @@ fn incomplete_command_logs_are_not_presented_as_complete() {
         changes: Vec::new(),
         purpose: None,
         id: "command".into(),
-        name: "run_command".into(),
+        name: "Exec".into(),
         arguments: serde_json::json!({
             "command": "example"
         })
@@ -688,7 +688,7 @@ fn command_cards_show_all_returned_output_without_internal_log_instructions() {
         changes: Vec::new(),
         purpose: None,
         id: "command".into(),
-        name: "run_command".into(),
+        name: "Exec".into(),
         arguments: serde_json::json!({
             "command": "example"
         })
@@ -712,7 +712,7 @@ fn command_cards_show_all_returned_output_without_internal_log_instructions() {
         assert!(text.contains(&format!("output line {n}")));
     }
     assert!(text.contains("stderr content"));
-    assert!(!text.contains("read_command_output") && !text.contains("cmd-example"));
+    assert!(!text.contains("output_id") && !text.contains("cmd-example"));
 }
 
 #[test]
@@ -722,7 +722,7 @@ fn tool_card_collapsed_single_line_and_expanded_box_click_behavior() {
         changes: Vec::new(),
         purpose: None,
         id: "write_1".into(),
-        name: "write_file".into(),
+        name: "WriteFile".into(),
         arguments: serde_json::json!({
             "path": "hello.py",
             "content": "print(\"Hello, world!\")"
@@ -741,7 +741,7 @@ fn tool_card_collapsed_single_line_and_expanded_box_click_behavior() {
     assert!(
         collapsed[0]
             .to_string()
-            .starts_with("  write_file hello.py")
+            .starts_with("  WriteFile hello.py")
     );
     assert!(
         !collapsed[0]
@@ -765,7 +765,7 @@ fn tool_card_collapsed_single_line_and_expanded_box_click_behavior() {
     assert!(
         expanded[1]
             .to_string()
-            .contains("write_file hello.py")
+            .contains("WriteFile hello.py")
     );
     assert!(
         expanded[2]
@@ -794,7 +794,7 @@ fn tool_card_edit_file_renders_diff_backgrounds_across_row() {
         changes: Vec::new(),
         purpose: None,
         id: "edit_1".into(),
-        name: "edit_file".into(),
+        name: "EditFile".into(),
         arguments: serde_json::json!({
             "path": "hello.py",
             "old_text": "x = 1",
@@ -854,7 +854,7 @@ fn file_previews_keep_markdown_source_while_fetched_documents_render_structure()
         .map(|(index, line)| format!("{}: {line}\n", index + 40))
         .collect::<String>();
 
-    for name in ["read_file", "write_file", "web_fetch", "read_document"] {
+    for name in ["ReadFile", "WriteFile", "WebFetch", "ReadDocument"] {
         let row = ToolRow {
             changes: Vec::new(),
             purpose: None,
@@ -869,7 +869,7 @@ fn file_previews_keep_markdown_source_while_fetched_documents_render_structure()
             output: serde_json::json!({
                 "path": "docs/Orbit Guide.MD",
                 "format": "pdf",
-                "content": if name == "read_file" {
+                "content": if name == "ReadFile" {
                     &numbered
                 } else {
                     content
@@ -895,7 +895,7 @@ fn file_previews_keep_markdown_source_while_fetched_documents_render_structure()
                 .map(|linked| linked.line.to_string())
                 .collect::<Vec<_>>()
                 .join("\n");
-            let source = matches!(name, "read_file" | "write_file");
+            let source = matches!(name, "ReadFile" | "WriteFile");
             let links: Vec<_> = card
                 .iter()
                 .flat_map(|line| &line.links)
@@ -965,7 +965,7 @@ fn web_fetch_resolves_relative_and_paginated_reference_links_against_final_url()
             changes: Vec::new(),
             purpose: None,
             id: "fetch".into(),
-            name: "web_fetch".into(),
+            name: "WebFetch".into(),
             arguments: serde_json::json!({
                 "url": "https://docs.orbit.example/redirect"
             })
@@ -1012,7 +1012,7 @@ fn web_fetch_title_is_not_a_link_but_wrapped_body_urls_keep_the_full_target() {
         changes: Vec::new(),
         purpose: None,
         id: "orbit-fetch".into(),
-        name: "web_fetch".into(),
+        name: "WebFetch".into(),
         arguments: serde_json::json!({
             "url": url
         })
@@ -1082,7 +1082,7 @@ fn source_colors_and_multiline_state_match_across_code_previews() {
         .enumerate()
         .map(|(index, line)| format!("{}: {line}\n", index + 1))
         .collect::<String>();
-    let tools: Vec<_> = ["read_file", "write_file", "edit_file"]
+    let tools: Vec<_> = ["ReadFile", "WriteFile", "EditFile"]
         .into_iter()
         .map(|name| ToolRow {
             changes: Vec::new(),
@@ -1176,7 +1176,7 @@ fn collapsed_tools_keep_one_blank_line_between_them() {
         changes: Vec::new(),
         purpose: None,
         id: "1".into(),
-        name: "run_command".into(),
+        name: "Exec".into(),
         arguments: serde_json::json!({
             "command": "git status"
         })
@@ -1188,7 +1188,7 @@ fn collapsed_tools_keep_one_blank_line_between_them() {
         changes: Vec::new(),
         purpose: None,
         id: "2".into(),
-        name: "read_file".into(),
+        name: "ReadFile".into(),
         arguments: serde_json::json!({
             "path": "main.rs"
         })
@@ -1199,16 +1199,12 @@ fn collapsed_tools_keep_one_blank_line_between_them() {
     let items = vec![TranscriptItem::Tool(row1), TranscriptItem::Tool(row2)];
     let lines = transcript_lines(&items, false);
     assert_eq!(lines.len(), 4);
-    assert!(
-        lines[0]
-            .to_string()
-            .contains("run_command")
-    );
+    assert!(lines[0].to_string().contains("Exec"));
     assert!(lines[1].to_string().is_empty());
     assert!(
         lines[2]
             .to_string()
-            .contains("read_file")
+            .contains("ReadFile")
     );
     assert!(lines[3].to_string().is_empty());
 
@@ -1270,7 +1266,7 @@ fn tool_rows_remain_compact_at_narrow_widths() {
             .transcript
             .push(TranscriptItem::Tool(super::super::app::ToolRow {
                 id: "compact".into(),
-                name: "read_file".into(),
+                name: "ReadFile".into(),
                 purpose: Some("Inspect generated source ".repeat(30)),
                 arguments: "{}".into(),
                 output: "RESULT_MARKER".into(),
@@ -1279,7 +1275,7 @@ fn tool_rows_remain_compact_at_narrow_widths() {
             }));
         state.expanded_tool_groups.insert(0);
         let screen = render(&mut state, width, 30);
-        assert!(screen.contains("read_file"));
+        assert_eq!(screen.matches("ReadFile ·").count(), 1);
         assert!(!screen.contains("RESULT_MARKER"));
         assert_eq!(state.transcript_layout.height(), 3);
         super::super::toggle_transcript_item(&mut state, 0);
@@ -1309,7 +1305,7 @@ fn collapsed_multiline_command_titles_fill_the_row_instead_of_stopping_at_quotes
         changes: Vec::new(),
         purpose: None,
         id: "multiline".into(),
-        name: "run_command".into(),
+        name: "Exec".into(),
         arguments: arguments.clone(),
         output: String::new(),
         status: ToolStatus::Finished,
@@ -1450,13 +1446,10 @@ fn opening_details_does_not_change_reasoning_or_composer() {
     state.apply(AgentEvent::Model(StreamEvent::ReasoningDelta(
         "generated reasoning".into(),
     )));
-    let call = ToolCall::function(
-        "call",
-        "read_file",
-        serde_json::json!({"path": "sample.rs"}),
-    );
+    let call = ToolCall::function("call", "ReadFile", serde_json::json!({"path": "sample.rs"}));
     state.apply(AgentEvent::ToolStarted { call: call.clone() });
     state.apply(AgentEvent::ToolFinished {
+        outcome: None,
         call,
         content: "generated output".into(),
         changes: vec![],
@@ -1485,7 +1478,7 @@ fn clicking_a_tool_row_opens_that_call_instead_of_the_last_one() {
             .transcript
             .push(TranscriptItem::Tool(super::super::app::ToolRow {
                 id: format!("call-{index}"),
-                name: "memory_save".into(),
+                name: "SaveMemory".into(),
                 purpose: None,
                 arguments: "{}".into(),
                 output: format!("generated result {index}"),
@@ -1527,7 +1520,7 @@ fn tool_controls_expand_read_search_and_generic_outputs_and_keep_the_draft() {
 
     let cases = [
         (
-            "read_file",
+            "ReadFile",
             serde_json::json!({
                 "start_line": 1,
                 "end_line": 1,
@@ -1536,7 +1529,7 @@ fn tool_controls_expand_read_search_and_generic_outputs_and_keep_the_draft() {
             .to_string(),
         ),
         (
-            "search_text",
+            "Grep",
             serde_json::json!({
                 "matches": [{
                     "path": "src/main.rs",
@@ -1551,7 +1544,7 @@ fn tool_controls_expand_read_search_and_generic_outputs_and_keep_the_draft() {
             .to_string(),
         ),
         (
-            "run_command",
+            "Exec",
             serde_json::json!({
                 "stdout": "first\nsecond\nthird\n",
                 "stderr": "",
@@ -1601,7 +1594,7 @@ fn tool_controls_expand_read_search_and_generic_outputs_and_keep_the_draft() {
                     },
                     orbit_client::execution::details::Stream::Result,
                 ))
-                || name == "run_command"
+                || name == "Exec"
         );
         assert_eq!(state.input.text, "unfinished draft");
         let TranscriptItem::Tool(row) = &state.transcript[0] else {
@@ -3090,7 +3083,7 @@ fn activity_animates_only_in_footer_and_stops_when_completed() {
         metadata: None,
         purpose: None,
         function: FunctionCall {
-            name: "run_command".into(),
+            name: "Exec".into(),
             arguments: r#"{"command":"echo stable"}"#.into(),
         },
     };
@@ -3121,6 +3114,7 @@ fn activity_animates_only_in_footer_and_stops_when_completed() {
             .contains("正在调用工具")
     );
     state.apply(AgentEvent::ToolFinished {
+        outcome: None,
         call,
         content: "stable output".into(),
         changes: vec![],

@@ -377,7 +377,7 @@ mod input_tests {
                     ChatMessage::assistant("hello back"),
                     ChatMessage::assistant_tool_calls(vec![ToolCall::function(
                         "call-1",
-                        "web_search",
+                        "WebSearch",
                         json!({
                             "query": "rust"
                         }),
@@ -400,7 +400,7 @@ mod input_tests {
                 .unwrap();
             assert_eq!(calls.len(), 1);
             assert_eq!(calls[0]["id"], "call-1");
-            assert_eq!(calls[0]["function"]["name"], "web_search");
+            assert_eq!(calls[0]["function"]["name"], "WebSearch");
         }
     }
 

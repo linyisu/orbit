@@ -446,3 +446,41 @@ async fn missing_file_response_is_opt_in_and_never_masks_access_errors() {
             .is_err()
     );
 }
+
+#[tokio::test]
+async fn tool_output_reads_are_session_scoped_and_do_not_start_a_run() {
+    let fixture = Fixture::new("http://127.0.0.1:1/v1").await;
+    let root = fixture
+        .handle
+        .store
+        .path()
+        .with_extension("command-output");
+    let directory = root.join(&fixture.handle.info.id);
+    std::fs::create_dir_all(&directory).unwrap();
+    let id = format!("web-{}", "b".repeat(64));
+    std::fs::write(
+        directory.join(format!("{id}.json")),
+        serde_json::json!({"content": "complete generated document"}).to_string(),
+    )
+    .unwrap();
+    let request = |session| Request::ReadToolOutput {
+        session,
+        agent: None,
+        source: orbit_protocol::tool_output::Source::Web {
+            snapshot_id: id.clone(),
+        },
+        offset: 0,
+    };
+    assert!(matches!(
+        fixture.request(request(fixture.handle.info.id.clone())).await.unwrap(),
+        Response::ToolOutput(page)
+            if page.content == "complete generated document" && page.next_offset.is_none()
+    ));
+    assert!(
+        fixture
+            .request(request("unrelated".into()))
+            .await
+            .is_err()
+    );
+    assert!(!fixture.handle.view.lock().await.busy);
+}

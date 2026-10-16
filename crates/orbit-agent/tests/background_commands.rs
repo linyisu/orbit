@@ -20,7 +20,7 @@ struct GatedCommand {
 impl Tool for GatedCommand {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition::function(
-            "run_command",
+            "Exec",
             "Orbit test command",
             json!({
                 "type": "object"
@@ -81,7 +81,7 @@ fn response(message: ChatMessage) -> ChatCompletion {
 fn launch(id: &str, command: &str) -> ToolCall {
     ToolCall::function(
         id,
-        "run_command",
+        "Exec",
         json!({
             "command": command,
             "background": true
@@ -232,7 +232,7 @@ async fn commands_overlap_other_work_and_wait_all_does_not_duplicate_results() {
     let (waiting_sender, waiting_receiver) = oneshot::channel();
     let waiting_sender = std::sync::Arc::new(Mutex::new(Some(waiting_sender)));
     tools.register(ClosureTool::new(
-        "wait_commands",
+        "poll",
         "Wait for commands",
         json!({
             "type": "object"
@@ -261,7 +261,7 @@ async fn commands_overlap_other_work_and_wait_all_does_not_duplicate_results() {
         )])),
         response(ChatMessage::assistant_tool_calls(vec![ToolCall::function(
             "wait",
-            "wait_commands",
+            "poll",
             json!({}),
         )])),
         response(ChatMessage::assistant("Build, tests and docs passed.")),

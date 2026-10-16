@@ -41,7 +41,7 @@ async fn commands_run_in_parallel_and_keep_their_own_logs_and_verification() {
             command.execute(
                 ToolCall::function(
                     name,
-                    "run_command",
+                    "Exec",
                     json!({
                         "command": script,
                         "background": true,
@@ -158,7 +158,7 @@ async fn background_launch_still_requires_approval_and_denial_creates_no_job() {
             .execute(
                 ToolCall::function(
                     "denied",
-                    "run_command",
+                    "Exec",
                     json!({
                         "command": "touch orbit-denied",
                         "background": true,
@@ -200,7 +200,7 @@ async fn job_tools_validate_schema_and_cancellation_is_session_scoped() {
     let second = BackgroundJobs::default();
     let job = first
         .start(
-            ToolCall::function("orbit-job", "run_command", json!({})),
+            ToolCall::function("orbit-job", "Exec", json!({})),
             "orbit-job".into(),
             None,
             CancellationToken::new(),
@@ -216,7 +216,7 @@ async fn job_tools_validate_schema_and_cancellation_is_session_scoped() {
             .execute(
                 ToolCall::function(
                     "foreign",
-                    "cancel_commands",
+                    "StopCommands",
                     json!({
                         "job_ids": [job.job_id]
                     })
@@ -234,10 +234,27 @@ async fn job_tools_validate_schema_and_cancellation_is_session_scoped() {
         JobStatus::Running
     );
     let cancel = CommandJobs::new(first.clone(), CommandJobAction::Cancel);
+    let wait = CommandJobs::new(first.clone(), CommandJobAction::Wait);
+    let timed_out = wait
+        .execute(
+            ToolCall::function(
+                "bounded-wait",
+                "WaitCommands",
+                json!({
+                    "job_ids": [job.job_id], "timeout_seconds": 0
+                }),
+            ),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    let timed_out: Value = serde_json::from_str(&timed_out.content).unwrap();
+    assert_eq!(timed_out["wait_timed_out"], true);
+    assert_eq!(timed_out["jobs"][0]["status"], "running");
     assert!(
         cancel
             .execute(
-                ToolCall::function("empty", "cancel_commands", json!({})),
+                ToolCall::function("empty", "StopCommands", json!({})),
                 CancellationToken::new()
             )
             .await
@@ -249,7 +266,7 @@ async fn job_tools_validate_schema_and_cancellation_is_session_scoped() {
             .execute(
                 ToolCall::function(
                     "bad",
-                    "get_command_status",
+                    "CommandStatus",
                     json!({
                         "mode": "all"
                     })
@@ -263,7 +280,7 @@ async fn job_tools_validate_schema_and_cancellation_is_session_scoped() {
         .execute(
             ToolCall::function(
                 "cancel",
-                "cancel_commands",
+                "StopCommands",
                 json!({
                     "job_ids": [job.job_id]
                 }),
@@ -277,7 +294,7 @@ async fn job_tools_validate_schema_and_cancellation_is_session_scoped() {
         .execute(
             ToolCall::function(
                 "wait",
-                "wait_commands",
+                "WaitCommands",
                 json!({
                     "job_ids": [job.job_id],
                     "mode": "all"
@@ -289,6 +306,7 @@ async fn job_tools_validate_schema_and_cancellation_is_session_scoped() {
         .unwrap();
     let value: Value = serde_json::from_str(&result.content).unwrap();
     assert_eq!(value["jobs"][0]["status"], "cancelled");
+    assert_eq!(value["wait_timed_out"], false);
 }
 
 #[tokio::test]
@@ -314,7 +332,7 @@ async fn cancelling_a_live_native_command_waits_for_process_cleanup() {
         .execute(
             ToolCall::function(
                 "orbit-cancel",
-                "run_command",
+                "Exec",
                 json!({
                     "command": "touch orbit.started; sleep 30; touch orbit.finished",
                     "background": true,
@@ -406,7 +424,7 @@ async fn background_completion_emits_original_verification_evidence() {
     let model = MockModel::new([
         response(ChatMessage::assistant_tool_calls(vec![ToolCall::function(
             "orbit-verify",
-            "run_command",
+            "Exec",
             json!({
                 "command": "printf 'Orbit verified\\n'",
                 "background": true

@@ -179,7 +179,7 @@ fn collapsed_disclosures_use_text_width_and_expanded_thinking_uses_the_full_area
         changes: Vec::new(),
         purpose: None,
         id: "tool_1".into(),
-        name: "read_file".into(),
+        name: "ReadFile".into(),
         arguments: serde_json::json!({
             "path": "src/main.rs"
         })
@@ -240,7 +240,7 @@ fn tool_title_and_output_are_clickable() {
         changes: Vec::new(),
         purpose: None,
         id: "web".into(),
-        name: "web_search".into(),
+        name: "WebSearch".into(),
         arguments: serde_json::json!({
             "query": "papers"
         })
@@ -441,7 +441,7 @@ fn plain_output_and_wrapped_table_cells_keep_their_own_link_targets() {
             changes: Vec::new(),
             purpose: None,
             id: "tool".into(),
-            name: "run_command".into(),
+            name: "Exec".into(),
             arguments: "{}".into(),
             status: ToolStatus::Finished,
             output: "地址 https://example.com/tool".into(),
@@ -745,7 +745,7 @@ fn batched_assistant_completion_matches_fresh_layout_after_trimming() {
                         id: "orbit-check".into(),
                         kind: "function".into(),
                         function: FunctionCall {
-                            name: "run_command".into(),
+                            name: "Exec".into(),
                             arguments: r#"{"command":"orbit --version"}"#.into(),
                         },
                     },

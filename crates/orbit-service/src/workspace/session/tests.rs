@@ -732,7 +732,7 @@ async fn user_input_shared_session_pages_wait_for_explicit_answer_in_yolo() {
         .unwrap();
     let call = orbit_model::types::ToolCall::function(
         "ask",
-        "ask_user",
+        "AskUser",
         serde_json::json!({
             "questions": [{
                 "id": "q",
@@ -849,7 +849,7 @@ async fn planning_tool_review_and_client_decisions_share_authoritative_session_s
         .unwrap();
     tools
         .execute(
-            ToolCall::function("enter", "enter_plan", serde_json::json!({})),
+            ToolCall::function("enter", "EnterPlan", serde_json::json!({})),
             CancellationToken::new(),
         )
         .await
@@ -883,7 +883,7 @@ async fn planning_tool_review_and_client_decisions_share_authoritative_session_s
             .execute(
                 ToolCall::function(
                     "write",
-                    "write_file",
+                    "WriteFile",
                     serde_json::json!({
                         "path": "should-not-exist",
                         "content": "forbidden"
@@ -899,7 +899,7 @@ async fn planning_tool_review_and_client_decisions_share_authoritative_session_s
         .execute(
             ToolCall::function(
                 "draft",
-                "update_plan",
+                "UpdatePlan",
                 serde_json::json!({
                     "generation": generation,
                     "title": "Feature plan",
@@ -917,7 +917,7 @@ async fn planning_tool_review_and_client_decisions_share_authoritative_session_s
             .execute(
                 ToolCall::function(
                     "review",
-                    "submit_plan",
+                    "SubmitPlan",
                     serde_json::json!({
                         "generation": state.generation
                     }),

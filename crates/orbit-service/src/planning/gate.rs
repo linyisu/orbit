@@ -80,7 +80,7 @@ impl ToolPolicy for Gate {
         let mut access = self.access.lock().unwrap();
         let name = call.function.name.as_str();
         // Planning controls acquire their own transition guard; counting the
-        // enter_plan call itself would prevent the transition from ever being idle.
+        // EnterPlan call itself would prevent the transition from ever being idle.
         if capabilities.effect == ToolEffect::Planning {
             return Ok(Box::new(()));
         }

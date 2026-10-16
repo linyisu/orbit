@@ -28,6 +28,8 @@ GUI 与 TUI 使用同一路由。全局保存成功不依赖远程会话在线�
 
 - [conversation.rs](src/conversation.rs)、[activity.rs](src/activity.rs)、[execution.rs](src/execution.rs)：
   共享会话分段、进度状态、调用记录与详情页数据。分段保留思考、正文和调用的原始顺序，只合并连续工具；后台返回更新原记录，不改分组或位置。两端不自行解释工具结果。
+  新收据的状态优先使用服务返回的明确结果；旧命令记录兼容原有格式。搜索详情支持匹配行及上下文、文件列表与计数。
+  `execution/details/request` 按用途投影命令、路径、查询和替换差异，未知工具保留完整调用内容；界面直接使用服务记录的工具名称。`execution/details/retained` 在独立连接上拼接已保存的完整命令日志、网页快照，校验游标并拒绝过期响应；不扩大模型上下文、不重新执行工具。
 - [lib.rs](src/lib.rs)、[connect.rs](src/connect.rs)：准备连接与打开会话。
 - [library.rs](src/library.rs)：本机全局库访问、所选扩展快照同步与会话应用。
 - [transport.rs](src/transport.rs)、[bootstrap.rs](src/bootstrap.rs)：传输、部署与握手。

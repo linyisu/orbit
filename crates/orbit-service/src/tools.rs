@@ -33,6 +33,7 @@ pub async fn workspace_tools(
     mcp: orbit_tools::mcp::McpConfig,
     allow_mcp_start: bool,
     command_output: Option<orbit_runtime::execution::output::CommandOutputs>,
+    snapshot_directory: Option<std::path::PathBuf>,
     permissions: Option<orbit_runtime::policy::WorkspacePermissions>,
 ) -> Result<WorkspaceRuntime> {
     let workspace = protected_workspace(
@@ -68,12 +69,14 @@ pub async fn workspace_tools(
         workspace.clone(),
         index,
     ));
-    // Model-facing Git commands use run_command; GitInspect supplies internal snapshots.
+    // Model-facing Git commands use Exec; GitInspect supplies internal snapshots.
 
     let web_client = std::sync::Arc::new(orbit_tools::web_fetch::WebClient::new(&web)?);
-    tools.register(orbit_tools::web_fetch::WebFetch::with_client(
-        (*web_client).clone(),
-    ));
+    let mut web_fetch = orbit_tools::web_fetch::WebFetch::with_client((*web_client).clone());
+    if let Some(directory) = snapshot_directory {
+        web_fetch = web_fetch.with_snapshot_directory(directory);
+    }
+    tools.register(web_fetch);
     tools.register(orbit_tools::web_fetch::WebSearch::with_client(
         (*web_client).clone(),
         web.search_providers,
@@ -93,10 +96,6 @@ pub async fn workspace_tools(
             ));
         }
 
-        tools.register(
-            orbit_tools::git_push::GitPush::new(workspace.clone(), approvals.clone())
-                .with_limits(&command_limits),
-        );
         tools.register(WriteFile::new(workspace.clone(), approvals.clone()));
         tools.register(EditFile::new(workspace.clone(), approvals.clone()));
         tools.register(RequestCapability::new(workspace.clone(), approvals.clone()));

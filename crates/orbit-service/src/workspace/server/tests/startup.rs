@@ -346,7 +346,7 @@ async fn first_send_waits_for_mcp_tools_without_blocking_control_commands() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|tool| tool["function"]["name"] == "mcp__echo__echo")
+            .any(|tool| tool["function"]["name"] == "MCP_Echo_Echo")
     );
     let body = "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"done\"}}]}\n\ndata: \
         {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n";

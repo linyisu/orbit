@@ -12,6 +12,7 @@ pub mod resources;
 pub mod review;
 pub mod search;
 pub mod subagents;
+pub mod tool_output;
 pub mod usage;
 pub mod user_input;
 
@@ -33,6 +34,7 @@ pub fn supports_version(version: u32) -> bool {
 pub const PREAMBLE: &[u8] = b"\0ORBIT-WORKSPACE/1\n";
 /// Maximum encoded JSON payload accepted for one transport frame.
 pub const MAX_FRAME_BYTES: usize = 32 * 1_024 * 1_024;
+
 /// Default byte budget for paginated history responses.
 pub const PAGE_BYTES: usize = 1_024 * 1_024;
 /// Default event count requested in one history page.
@@ -243,6 +245,13 @@ pub enum Request {
         #[serde(default)]
         allow_missing: bool,
     },
+    ReadToolOutput {
+        session: String,
+        #[serde(default)]
+        agent: Option<String>,
+        source: tool_output::Source,
+        offset: u64,
+    },
     ReadSubagent {
         session: String,
         agent: String,
@@ -446,6 +455,7 @@ pub enum Response<E, A> {
     InputQueue(input_queue::Snapshot),
     Files(files::Snapshot),
     File(String),
+    ToolOutput(tool_output::Page),
     /// Sent only in response to ReadFile with allow_missing set.
     FileMissing,
     InputQueued {
@@ -777,25 +787,25 @@ pub enum Capability {
     All,
     /// Independent read-only delegated sessions.
     Subagents,
-    /// web_search and web_fetch.
+    /// WebSearch and WebFetch.
     Web,
     /// Configured local MCP processes and their tools.
     Mcp,
-    /// Installed skill catalogue and load_skill.
+    /// Installed skill catalogue and LoadSkill.
     Skills,
-    /// Native image attachments and read_image.
+    /// Native image attachments and ReadImage.
     Image,
-    /// read_document.
+    /// ReadDocument.
     Document,
-    /// read_file, list_files, search_text and project_overview.
+    /// ReadFile, ListFiles, Grep and ProjectOverview.
     Files,
-    /// Git operations.
+    /// Reserved for legacy configurations; Git commands use the Command capability.
     Git,
-    /// write_file and edit_file.
+    /// WriteFile and EditFile.
     Write,
-    /// request_capability for paths outside the workspace.
+    /// RequestAccess for paths outside the workspace.
     Capability,
-    /// run_command, read_command_output, verification_status.
+    /// Exec, CommandOutput, CheckEvidence.
     Command,
     /// Archived context retrieval and tool-output pruning.
     History,

@@ -27,6 +27,8 @@ struct Arguments {
     #[schemars(range(min = 1, max = MAX_PAGE_ENTRIES))]
     limit: usize,
     include_hidden: bool,
+    /// Optional path glob, e.g. **/*.rs. Directories are traversed even when they do not match.
+    glob: Option<String>,
 }
 
 impl Default for Arguments {
@@ -37,6 +39,7 @@ impl Default for Arguments {
             offset: 0,
             limit: DEFAULT_PAGE_ENTRIES,
             include_hidden: false,
+            glob: None,
         }
     }
 }
@@ -57,15 +60,15 @@ impl Tool for ListFiles {
     }
 
     /// Browse files and directories in the workspace (or outside paths granted via
-    /// request_capability) without running a shell. Paths are relative to the workspace root,
-    /// or absolute paths granted via request_capability. Defaults to one directory level; depth
+    /// RequestAccess) without running a shell. Paths are relative to the workspace root,
+    /// or absolute paths granted via RequestAccess. Defaults to one directory level; depth
     /// 1–8, deterministic breadth-first ordering, paginated with offset/next_offset. Hidden
     /// entries are omitted by default; include_hidden includes hidden entries but never
     /// protected paths. Generated directories are listed but not recursively traversed; select
     /// their path explicitly to browse them. Does not apply .gitignore. Symlinks and special
     /// files are omitted. Results are bounded to 32 KiB and 20000 examined entries; narrow path
     /// if scan_truncated is true.
-    #[orbit_agent::tool(name = "list_files")]
+    #[orbit_agent::tool(name = "ListFiles")]
     async fn execute(
         &self,
         arguments: Arguments,
@@ -99,7 +102,7 @@ impl Tool for ListFiles {
 
 fn invalid(message: impl Into<String>) -> ToolError {
     ToolError::InvalidArguments {
-        tool: "list_files".into(),
+        tool: "ListFiles".into(),
         message: message.into(),
     }
 }
@@ -113,6 +116,15 @@ fn list(
     args: Arguments,
     token: CancellationToken,
 ) -> Result<String, ToolError> {
+    let glob = args
+        .glob
+        .as_deref()
+        .map(|pattern| {
+            globset::Glob::new(pattern)
+                .map(|glob| glob.compile_matcher())
+                .map_err(|error| invalid(error.to_string()))
+        })
+        .transpose()?;
     let target_path = Path::new(&args.path);
 
     if target_path
@@ -256,6 +268,12 @@ fn list(
                 }
             };
 
+            if glob
+                .as_ref()
+                .is_some_and(|glob| !glob.is_match(&path))
+            {
+                continue;
+            }
             eligible += 1;
 
             if eligible <= args.offset {

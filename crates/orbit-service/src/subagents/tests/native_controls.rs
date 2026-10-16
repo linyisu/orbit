@@ -27,7 +27,7 @@ async fn stale_native_run_guard_never_cancels_a_later_follow_up() {
             .clone()
             .execute(
                 Action::Send,
-                ToolCall::function("native-follow-up", "send_agent_message", args.clone()),
+                ToolCall::function("native-follow-up", "SendAgentMessage", args.clone()),
                 args,
                 CancellationToken::new(),
             )
@@ -49,7 +49,7 @@ async fn stale_native_run_guard_never_cancels_a_later_follow_up() {
         .clone()
         .execute(
             Action::Cancel,
-            ToolCall::function("native-stale-cancel", "cancel_agents", cancel(first_run)),
+            ToolCall::function("native-stale-cancel", "StopAgents", cancel(first_run)),
             cancel(first_run),
             CancellationToken::new(),
         )
@@ -92,11 +92,7 @@ async fn stale_native_run_guard_never_cancels_a_later_follow_up() {
         .clone()
         .execute(
             Action::Cancel,
-            ToolCall::function(
-                "native-current-cancel",
-                "cancel_agents",
-                cancel(current_run),
-            ),
+            ToolCall::function("native-current-cancel", "StopAgents", cancel(current_run)),
             cancel(current_run),
             CancellationToken::new(),
         )
@@ -147,7 +143,7 @@ async fn run_guard_requires_one_owned_child_and_never_means_cancel_all() {
                 .clone()
                 .execute(
                     Action::Cancel,
-                    ToolCall::function("native-invalid-guard", "cancel_agents", args.clone()),
+                    ToolCall::function("native-invalid-guard", "StopAgents", args.clone()),
                     args,
                     CancellationToken::new()
                 )
@@ -184,7 +180,7 @@ async fn run_guard_requires_one_owned_child_and_never_means_cancel_all() {
         .clone()
         .execute(
             Action::Cancel,
-            ToolCall::function("legacy-selected-cancel", "cancel_agents", args.clone()),
+            ToolCall::function("legacy-selected-cancel", "StopAgents", args.clone()),
             args,
             CancellationToken::new(),
         )

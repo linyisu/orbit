@@ -462,7 +462,7 @@ impl Workspace {
                                     div()
                                         .text_sm()
                                         .text_ellipsis()
-                                        .when(tool.name == "run_command", |text| {
+                                        .when(tool.name == "Exec", |text| {
                                             text.font_family(cx.theme().mono_font_family.clone())
                                         })
                                         .child(presentation.title().to_owned()),
@@ -1149,12 +1149,12 @@ fn empty_state(
 
 fn tool_icon(name: &str) -> IconName {
     match name {
-        "run_command" => IconName::SquareTerminal,
-        "read_file" | "write_file" | "edit_file" | "apply_patch" | "delete_file" | "read_image"
-        | "read_document" => IconName::File,
-        "search_text" | "search_files" | "web_search" | "web_fetch" => IconName::Search,
-        "list_files" | "list_directory" | "project_overview" => IconName::Folder,
-        "spawn_agent" | "send_agent_message" | "read_agent" | "wait_agents" | "cancel_agents" => {
+        "Exec" => IconName::SquareTerminal,
+        "ReadFile" | "WriteFile" | "EditFile" | "apply_patch" | "delete_file" | "ReadImage"
+        | "ReadDocument" => IconName::File,
+        "Grep" | "search_files" | "WebSearch" | "WebFetch" => IconName::Search,
+        "ListFiles" | "list_directory" | "ProjectOverview" => IconName::Folder,
+        "SpawnAgent" | "SendAgentMessage" | "ReadAgent" | "WaitAgents" | "StopAgents" => {
             IconName::User
         }
         _ => IconName::Wrench,

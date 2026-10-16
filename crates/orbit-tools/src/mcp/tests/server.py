@@ -26,9 +26,21 @@ for line in sys.stdin:
     request_id = message.get("id")
     if method == "initialize":
         if mode != "init_timeout":
-            send({"id": request_id, "result": {"capabilities": {"tools": {}}}})
+            send({"id": request_id, "result": {"capabilities": {
+                "tools": {"listChanged": mode == "list_changed"}
+            }}})
     elif method == "tools/list":
+        cursor = message.get("params", {}).get("cursor")
+        if mode in ("pages", "cursor_loop", "duplicates"):
+            name = "work" if cursor is None or mode == "duplicates" else "second"
+            result = {"tools": [{"name": name, "inputSchema": {"type": "object"}}]}
+            if cursor is None or mode == "cursor_loop":
+                result["nextCursor"] = "page-two"
+            send({"id": request_id, "result": result})
+            continue
         schema = {"type": "object"}
+        if mode == "list_changed" and calls > 0:
+            schema["required"] = ["changed"]
         if mode == "changed" and generation > 1:
             schema["required"] = ["new_field"]
         send({"id": request_id, "result": {"tools": [
@@ -37,8 +49,16 @@ for line in sys.stdin:
         if mode == "blocked_write":
             time.sleep(60)
     elif method == "tools/call":
+        assert message["params"]["name"] == "work"
         calls += 1
-        if mode == "rpc_error" and calls == 1:
+        if mode == "structured":
+            send({"id": request_id, "result": {
+                "content": [], "structuredContent": {"count": 3}
+            }})
+        elif mode == "list_changed":
+            send({"id": request_id, "result": {"content": []}})
+            send({"method": "notifications/tools/list_changed"})
+        elif mode == "rpc_error" and calls == 1:
             send({"id": request_id, "error": {"code": -32000, "message": "busy"}})
         elif mode == "tool_error" and calls == 1:
             send({"id": request_id, "result": {"isError": True, "content": []}})

@@ -49,6 +49,20 @@ pub(super) fn open(state: &mut UiState, id: String) {
 }
 
 impl Viewer {
+    pub async fn poll_output(
+        &mut self,
+        connection: &std::sync::Arc<orbit_client::transport::Connection>,
+        parent: &str,
+    ) -> bool {
+        if let Some(dialog) = &mut self.view.ui.info_dialog {
+            dialog
+                .poll_output(connection, parent, Some(self.id.clone()))
+                .await
+        } else {
+            false
+        }
+    }
+
     pub fn tick(&mut self) -> bool {
         self.view.tick()
     }
@@ -176,7 +190,7 @@ impl Viewer {
 }
 
 pub(super) fn is_task(name: &str) -> bool {
-    matches!(name, "spawn_agent" | "send_agent_message")
+    matches!(name, "SpawnAgent" | "SendAgentMessage")
 }
 
 fn status(row: &ToolRow, value: &Value) -> &'static str {

@@ -368,7 +368,7 @@ fn remote_subagent_view_links_open_a_modal_and_keep_parent_input_isolated() {
             changes: Vec::new(),
             purpose: None,
             id: "spawn".into(),
-            name: "spawn_agent".into(),
+            name: "SpawnAgent".into(),
             status: ToolStatus::Finished,
             arguments: serde_json::json!({
                 "task": "child task"
@@ -631,9 +631,9 @@ fn approval_keeps_composer_editable_and_enter_sends_steering() {
         KeyModifiers::CONTROL,
     )))
     .unwrap();
-    tab.handle(Event::Paste("use read_document".into()))
+    tab.handle(Event::Paste("use ReadDocument".into()))
         .unwrap();
-    assert_eq!(tab.state.input.text, "use read_document");
+    assert_eq!(tab.state.input.text, "use ReadDocument");
     let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 30)).unwrap();
     terminal
         .draw(|frame| crate::tui::render::draw(frame, &mut tab.state))
@@ -646,7 +646,7 @@ fn approval_keeps_composer_editable_and_enter_sends_steering() {
     .unwrap();
     assert!(matches!(
         requests.try_recv().unwrap().request,
-        Request::Steer { message, .. } if message == "use read_document"
+        Request::Steer { message, .. } if message == "use ReadDocument"
     ));
     assert!(requests.try_recv().is_err());
     assert_eq!(tab.approval_id, Some(7));

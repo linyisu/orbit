@@ -10,6 +10,47 @@ use orbit_tools::{
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
+#[tokio::test]
+async fn batch_edits_commit_once_and_failure_leaves_the_original_file() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("module.rs");
+    fs::write(&path, "alpha\nbeta\n").unwrap();
+    let (task, mut approvals) = start(
+        root.path(),
+        json!({
+            "path": "module.rs", "edits": [
+                { "old_text": "alpha", "new_text": "gamma" },
+                { "old_text": "gamma\nbeta", "new_text": "gamma\ndelta" }
+            ]
+        }),
+        CancellationToken::new(),
+    );
+    approvals
+        .recv()
+        .await
+        .unwrap()
+        .decision
+        .send(true)
+        .unwrap();
+    let output = task.await.unwrap().unwrap();
+    assert_eq!(output.changes.len(), 1);
+    assert_eq!(output.changes[0].before.as_deref(), Some("alpha\nbeta\n"));
+    assert_eq!(fs::read_to_string(&path).unwrap(), "gamma\ndelta\n");
+    let (task, mut approvals) = start(
+        root.path(),
+        json!({
+            "path": "module.rs", "edits": [
+                { "old_text": "gamma", "new_text": "changed" },
+                { "old_text": "missing", "new_text": "never" }
+            ]
+        }),
+        CancellationToken::new(),
+    );
+    assert!(task.await.unwrap().is_err());
+    assert!(approvals.try_recv().is_err());
+    assert_eq!(fs::read_to_string(&path).unwrap(), "gamma\ndelta\n");
+}
+
 fn start(
     root: &std::path::Path,
     args: Value,
@@ -21,7 +62,7 @@ fn start(
     let (tx, rx) = approval::channel();
     let tool = EditFile::new(Workspace::new(root).unwrap(), tx);
     let task = tokio::spawn(async move {
-        tool.execute(ToolCall::function("edit", "edit_file", args), token)
+        tool.execute(ToolCall::function("edit", "EditFile", args), token)
             .await
     });
 

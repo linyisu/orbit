@@ -552,7 +552,7 @@ impl Workspace {
                     crate::policy::PolicyDecision::NeedsApproval(_) => {
                         return Err(WorkspaceError::PermissionDenied(format!(
                             "write permission denied: '{}' is outside the workspace. Call \
-                                request_capability to request access.",
+                                RequestAccess to request access.",
                             path.display()
                         )));
                     }
@@ -623,7 +623,7 @@ impl Workspace {
                     crate::policy::PolicyDecision::NeedsApproval(_) => {
                         return Err(WorkspaceError::PermissionDenied(format!(
                             "directory read permission denied: '{}' is outside the workspace. Call \
-                                request_capability to request access.",
+                                RequestAccess to request access.",
                             path.display()
                         )));
                     }
@@ -754,7 +754,7 @@ impl Workspace {
                     crate::policy::PolicyDecision::NeedsApproval(_) => {
                         return Err(WorkspaceError::PermissionDenied(format!(
                             "read permission denied: '{}' is outside the workspace. Call \
-                                request_capability to request access.",
+                                RequestAccess to request access.",
                             path.display()
                         )));
                     }

@@ -20,6 +20,7 @@ pub mod setup;
 mod skill_import;
 mod subagents;
 mod tasks;
+mod tool_output;
 mod usage;
 
 pub use orbit_protocol::request_id;

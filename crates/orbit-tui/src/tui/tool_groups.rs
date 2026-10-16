@@ -50,12 +50,13 @@ pub(super) fn header<T: Borrow<TranscriptItem>>(
 pub(super) fn section(row: &ToolRow, width: u16) -> Vec<LinkedLine> {
     let record = row.request_record();
     let marker = match row.status {
-        ToolStatus::Running => "●",
-        ToolStatus::Background => "◌",
-        ToolStatus::Finished => "✓",
-        ToolStatus::Failed => "×",
+        ToolStatus::Running => "● ",
+        ToolStatus::Background => "◌ ",
+        ToolStatus::Finished => "",
+        ToolStatus::Failed => "× ",
     };
-    let text = format!("  {marker} {} · {}", row.name, record.summary());
+    let name = &row.name;
+    let text = format!("  {marker}{name} · {}", record.summary());
     vec![LinkedLine::plain(Line::styled(
         super::render::fit_label(
             &super::render::safe_output(&text),

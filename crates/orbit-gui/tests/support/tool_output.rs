@@ -5,7 +5,7 @@ pub(super) fn events(workspace: &str, ticks: usize) -> VecDeque<Value> {
     let call = json!({
         "id": "output-command",
         "function": {
-            "name": "run_command",
+            "name": "Exec",
             "arguments": serde_json::to_string(&json!({
                 "command": "cargo check --all-targets",
                 "cwd": workspace,
@@ -79,7 +79,7 @@ pub(super) fn long_events(workspace: &str) -> VecDeque<Value> {
     let call = json!({
         "id": "output-command",
         "function": {
-            "name": "run_command",
+            "name": "Exec",
             "arguments": serde_json::to_string(&json!({
                 "command": command,
                 "cwd": workspace,
@@ -174,4 +174,84 @@ pub(super) fn progress(events: &[Value]) -> Vec<Value> {
         "stdout": stdout,
         "elapsed_ms": count * 250
     })]
+}
+
+pub(super) fn complete_history(workspace: &str) -> Vec<Value> {
+    let mut events = vec![json!({"Started": {"prompt": "检查生成的命令与网页记录"}})];
+    for mut event in long_events(workspace) {
+        if event["Agent"]["Model"]["ReasoningDelta"] == "" {
+            continue;
+        }
+        if let Some(content) = event["Agent"]["ToolFinished"]["content"].as_str() {
+            let mut result: Value = serde_json::from_str(content).unwrap();
+            result["stdout"] = "preview stdout tail".into();
+            result["stderr"] = "preview stderr tail".into();
+            result["output_truncated"] = true.into();
+            result["output_id"] = "cmd-inspector".into();
+            event["Agent"]["ToolFinished"]["content"] = result.to_string().into();
+        }
+        events.push(event);
+    }
+    let call = json!({
+        "id": "web-inspector",
+        "function": {
+            "name": "WebFetch",
+            "arguments": json!({"url": "https://example.org/generated"}).to_string()
+        }
+    });
+    events.push(json!({"Agent": {"ToolStarted": {"call": call}}}));
+    events.push(json!({
+        "Agent": {
+            "ToolFinished": {
+                "call": call,
+                "content": json!({
+                    "content": "preview webpage",
+                    "snapshot_id": "web-inspector",
+                    "has_more": true
+                }).to_string(),
+                "changes": []
+            }
+        }
+    }));
+    events.push(json!({"Finished": {"status": "completed", "elapsed_ms": 2}}));
+    events
+}
+
+pub(super) fn retained_page(request: &Value) -> Value {
+    let source = &request["source"];
+    let content = if source["kind"] == "web" && source["snapshot_id"] == "web-inspector" {
+        (1..=80)
+            .map(|line| format!("DOCUMENT-{line:03}: generated document paragraph\n"))
+            .collect::<String>()
+    } else if source["kind"] == "command" && source["output_id"] == "cmd-inspector" {
+        let events = long_events("");
+        let result = events
+            .iter()
+            .find_map(|event| event["Agent"]["ToolFinished"]["content"].as_str())
+            .unwrap();
+        let result: Value = serde_json::from_str(result).unwrap();
+        result[source["stream"]
+            .as_str()
+            .unwrap_or("stdout")]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned()
+    } else {
+        return json!({"type": "error", "value": "missing fixture output"});
+    };
+    let start = request["offset"].as_u64().unwrap_or(0) as usize;
+    if start > content.len() || !content.is_char_boundary(start) {
+        return json!({"type": "error", "value": "invalid output offset"});
+    }
+    let mut end = (start + 700).min(content.len());
+    while !content.is_char_boundary(end) {
+        end -= 1;
+    }
+    json!({
+        "type": "tool_output",
+        "value": {
+            "content": content[start..end],
+            "next_offset": (end < content.len()).then_some(end)
+        }
+    })
 }

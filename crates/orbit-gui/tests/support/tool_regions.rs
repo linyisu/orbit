@@ -7,14 +7,14 @@ pub(super) fn events() -> VecDeque<Value> {
         "id": "regions-read",
         "purpose": "查看示例模块入口",
         "function": {
-            "name": "read_file", "arguments": json!({"path": "sample.rs"}).to_string()
+            "name": "ReadFile", "arguments": json!({"path": "sample.rs"}).to_string()
         }
     });
     let command = json!({
         "id": "regions-command",
         "purpose": "验证生成的目录清单",
         "function": {
-            "name": "run_command", "arguments": json!({"command": "printf catalog"}).to_string()
+            "name": "Exec", "arguments": json!({"command": "printf catalog"}).to_string()
         }
     });
     [

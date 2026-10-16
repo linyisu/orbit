@@ -445,9 +445,7 @@ pub(super) fn command_output(
 
     if truncated || (total > 0 && next_offset < total) {
         view.push_spans(vec![Span::styled(
-            format!(
-                "… 尚有后续输出 (next_offset = {next_offset}, 可使用 read_command_output 继续查询)"
-            ),
+            format!("… 尚有后续输出 (next_offset = {next_offset}, 可使用 CommandOutput 继续查询)"),
             Style::default().fg(theme.tool_running),
         )]);
     }
@@ -697,7 +695,7 @@ pub(super) fn document_with_links(
 
     if truncated && let Some(next) = next_start {
         view.push_spans(vec![Span::styled(
-            format!("… 尚有后续字符 (next_start_char = {next}, 可使用 read_document 继续查看)"),
+            format!("… 尚有后续字符 (next_start_char = {next}, 可使用 ReadDocument 继续查看)"),
             Style::default().fg(theme.tool_running),
         )]);
     }

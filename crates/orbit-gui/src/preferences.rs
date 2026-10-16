@@ -386,6 +386,7 @@ impl Preferences {
         );
         gpui_kit::component::Theme::update(cx, |theme| {
             theme.font_size = gpui_kit::px(size as f32);
+            theme.mono_font_size = theme.font_size;
             theme.font_family = ui;
             theme.mono_font_family = code;
         });

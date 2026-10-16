@@ -694,7 +694,7 @@ async fn failed_over_limit_summary_uses_retrievable_archive_projection() {
     assert!(
         serde_json::to_string(&result.history)
             .unwrap()
-            .contains("read_history archive_id=1")
+            .contains("ReadHistory archive_id=1")
     );
     assert!(backend.requests().len() >= 2);
 
@@ -719,7 +719,7 @@ impl orbit_agent::archive::ContextArchive for Archive {
                 .lock()
                 .unwrap()
                 .push(messages.to_vec());
-            Ok("read_history archive_id=1".into())
+            Ok("ReadHistory archive_id=1".into())
         })
     }
 }
@@ -729,7 +729,7 @@ struct ProgressArchive(std::sync::Mutex<Option<orbit_agent::memory::SummaryProgr
 
 impl orbit_agent::archive::ContextArchive for ProgressArchive {
     fn save<'a>(&'a self, _: &'a [ChatMessage]) -> orbit_agent::archive::ArchiveFuture<'a> {
-        Box::pin(async { Ok("read_history archive_id=1".into()) })
+        Box::pin(async { Ok("ReadHistory archive_id=1".into()) })
     }
 
     fn load_progress<'a>(&'a self, _: &'a str) -> orbit_agent::archive::ProgressLoadFuture<'a> {
@@ -988,7 +988,7 @@ async fn successful_summary_batches_resume_after_later_provider_failure() {
                 message,
                 ChatMessage::User { content, .. }
                     if content.contains("First batch accepted")
-                        && content.contains("read_history archive_id=1")
+                        && content.contains("ReadHistory archive_id=1")
             ))
     );
 
@@ -1104,7 +1104,7 @@ async fn tool_heavy_history_reclaims_over_seventy_percent_without_a_model_call()
     let shortened = serde_json::to_string(&compacted.history).unwrap();
 
     assert!(shortened.contains("failure-0"));
-    assert!(shortened.contains("read_history archive_id=1"));
+    assert!(shortened.contains("ReadHistory archive_id=1"));
 }
 
 #[tokio::test]

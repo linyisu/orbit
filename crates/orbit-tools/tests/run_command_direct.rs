@@ -19,7 +19,7 @@ async fn unavailable_output_retention_does_not_prevent_command_execution() {
         tool.execute(
             ToolCall::function(
                 "output",
-                "run_command",
+                "Exec",
                 json!({
                     "command": "printf 'result'; exit 7"
                 }),
@@ -60,7 +60,7 @@ async fn auto_native_network_enabled_script_executes_in_requested_workspace_dire
     );
     let task =
         tokio::spawn(async move {
-            tool.execute(ToolCall::function("script", "run_command", json!({
+            tool.execute(ToolCall::function("script", "Exec", json!({
             "command": "for value in first second; do printf '%s\\n' \"$value\"; done > \
                 result.txt; pwd",
             "cwd": "src",
@@ -96,7 +96,7 @@ async fn auto_literal_text_pipeline_creates_and_appends_workspace_files_without_
     let (sender, mut receiver) = approval::channel();
     let tool = RunCommand::new(Workspace::new(root.path()).unwrap(), sender);
     let task = tokio::spawn(async move {
-        tool.execute(ToolCall::function("text", "run_command", json!({
+        tool.execute(ToolCall::function("text", "Exec", json!({
             "command": "mkdir -p demo && echo 'literal $(touch unexpected) | >' > demo/text.txt && \
                 printf '%s\\n' 'second line' | tee -a demo/text.txt ../mirror.txt > \
                 demo/output.txt && cat demo/text.txt | tee demo/copy.txt",
@@ -158,7 +158,7 @@ async fn auto_local_mkdir_creates_nested_and_quoted_directories_in_the_requested
         tool.execute(
             ToolCall::function(
                 "mkdir",
-                "run_command",
+                "Exec",
                 json!({
                     "command": "mkdir -p 'demo folder/nested' ../another",
                     "cwd": "existing",
@@ -201,7 +201,7 @@ async fn run_command_executes_directly_in_workspace_and_persists_changes() {
         tool.execute(
             ToolCall::function(
                 "test",
-                "run_command",
+                "Exec",
                 json!({
                     "command": "echo 'direct execution' > output.txt",
                     "workspace_access": "read_write"
@@ -273,7 +273,7 @@ async fn run_command_reports_when_workspace_fingerprint_is_unavailable() {
         tool.execute(
             ToolCall::function(
                 "scan_limit",
-                "run_command",
+                "Exec",
                 json!({
                     "command": "true"
                 }),
@@ -325,7 +325,7 @@ async fn run_command_executes_in_specified_cwd() {
         tool.execute(
             ToolCall::function(
                 "test",
-                "run_command",
+                "Exec",
                 json!({
                     "command": "pwd && echo 'from_sub' > output.txt",
                     "cwd": "crates/my_crate",
@@ -376,7 +376,7 @@ async fn run_command_rejects_nonexistent_cwd() {
         .execute(
             ToolCall::function(
                 "test",
-                "run_command",
+                "Exec",
                 json!({
                     "command": "true",
                     "cwd": "nonexistent_dir"
@@ -405,7 +405,7 @@ async fn network_request_defaults_offline_and_cannot_exceed_policy() {
         tool.execute(
             ToolCall::function(
                 "network",
-                "run_command",
+                "Exec",
                 json!({
                     "command": "pwd"
                 }),
@@ -437,7 +437,7 @@ async fn network_request_defaults_offline_and_cannot_exceed_policy() {
         tool.execute(
             ToolCall::function(
                 "network",
-                "run_command",
+                "Exec",
                 json!({
                     "command": "pwd",
                     "network": "allow"
@@ -481,7 +481,7 @@ async fn run_command_uses_project_git_configuration_for_status_and_commit() {
 
     let call = ToolCall::function(
         "test",
-        "run_command",
+        "Exec",
         json!({
             "command": "git status --short",
             "workspace_access": "read"
@@ -506,7 +506,7 @@ async fn run_command_uses_project_git_configuration_for_status_and_commit() {
 
     let call_commit = ToolCall::function(
         "test",
-        "run_command",
+        "Exec",
         json!({
             "command": "git add initial.txt && git commit -m 'initial commit'",
             "workspace_access": "read_write"

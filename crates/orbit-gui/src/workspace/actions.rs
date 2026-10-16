@@ -617,7 +617,7 @@ impl Workspace {
         }
         let title = plan.title.clone();
         let markdown = plan.markdown.clone();
-        // submit_plan waits inside the active run for this decision. Busy is
+        // SubmitPlan waits inside the active run for this decision. Busy is
         // expected here; the service validates the generation and file state.
         let reviewable =
             self.planning.mode == plan::WorkMode::Plan && plan.status == plan::Status::Review;

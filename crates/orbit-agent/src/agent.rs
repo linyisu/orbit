@@ -68,7 +68,7 @@ where
 {
     pub fn new(backend: B, mut tools: ToolRegistry, config: AgentConfig) -> Self {
         if !backend.supports_vision() {
-            tools.remove("read_image");
+            tools.remove("ReadImage");
         }
 
         Self {
@@ -687,6 +687,7 @@ where
                         AgentEvent::ToolFinished {
                             call: completion.call.clone(),
                             content: output.content.clone(),
+                            outcome: Some(output.outcome),
                             changes: output.changes.clone(),
                             files: Some(output.files.clone()),
                         }

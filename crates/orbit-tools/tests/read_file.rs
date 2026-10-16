@@ -45,7 +45,7 @@ impl Drop for Fixture {
 }
 
 fn call(arguments: Value) -> ToolCall {
-    ToolCall::function("read-1", "read_file", arguments)
+    ToolCall::function("read-1", "ReadFile", arguments)
 }
 
 #[tokio::test]

@@ -1598,7 +1598,7 @@ fn settings_resources_round_trip_preserves_memory_category_and_workspace_scope()
             panic!("MCP expected")
         };
         assert!(servers[0].connected);
-        assert_eq!(servers[0].tools[0].name, "mcp__fixture__echo");
+        assert_eq!(servers[0].tools[0].name, "MCP_Fixture_Echo");
         assert_eq!(servers[0].tools[0].description, "Echo input");
         let Snapshot::Mcp(reloaded) = resources(
             &backend,

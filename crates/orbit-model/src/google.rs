@@ -570,7 +570,7 @@ mod tests {
                     },
                     "tools": [{
                         "functionDeclarations": [{
-                            "name": "read_file",
+                            "name": "ReadFile",
                             "parametersJsonSchema": {
                                 "type": "object",
                                 "properties": {
@@ -626,7 +626,7 @@ mod tests {
             }),
             ..ToolCall::function(
                 "orbit-id",
-                "read_file",
+                "ReadFile",
                 json!({
                     "path": "src/main.rs"
                 }),
@@ -647,7 +647,7 @@ mod tests {
         assert_eq!(call["functionCall"]["id"], "native-id");
         assert_eq!(
             body["request"]["contents"][2]["parts"][0]["functionResponse"]["name"],
-            "read_file"
+            "ReadFile"
         );
 
         let (other, _) = crate::openai::chat_completions::encode(
@@ -679,7 +679,7 @@ mod tests {
             }),
             ..ToolCall::function(
                 "orbit-one",
-                "read_file",
+                "ReadFile",
                 json!({
                     "path": "one"
                 }),
@@ -687,7 +687,7 @@ mod tests {
         };
         let unsigned = ToolCall::function(
             "orbit-two",
-            "read_file",
+            "ReadFile",
             json!({
                 "path": "two"
             }),
@@ -727,12 +727,12 @@ mod tests {
     fn a_missing_or_empty_provider_id_is_generated_and_sent_on_replay() {
         for call in [
             json!({
-                "name": "read_file",
+                "name": "ReadFile",
                 "args": {}
             }),
             json!({
                 "id": "",
-                "name": "read_file",
+                "name": "ReadFile",
                 "args": {}
             }),
         ] {
@@ -756,7 +756,7 @@ mod tests {
             assert!(!id.is_empty());
             let tool = ToolCall {
                 metadata: delta.metadata.clone(),
-                ..ToolCall::function(&id, "read_file", json!({}))
+                ..ToolCall::function(&id, "ReadFile", json!({}))
             };
             let (body, _) = encode(
                 "claude-sonnet-4-6",

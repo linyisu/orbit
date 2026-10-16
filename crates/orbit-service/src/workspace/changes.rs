@@ -105,7 +105,7 @@ mod tests {
             run_id: 7,
             run_status: "completed".into(),
             call_id: "call-1".into(),
-            tool: "edit_file".into(),
+            tool: "EditFile".into(),
             change: FileChange {
                 path: path.into(),
                 before: before.map(str::to_owned),

@@ -16,11 +16,20 @@ use crate::error::{RuntimeError, failed};
 pub const MAX_OUTPUT: usize = 32 * 1_024;
 /// Maximum raw log bytes retained for one stdout or stderr stream.
 pub const MAX_RETAINED_OUTPUT_PER_STREAM: u64 = 16 * 1_024 * 1_024;
-/// Combined retained-log byte budget shared by commands in one run.
+/// Combined retained-log byte budget for one output store (one session in the service).
 pub const MAX_RETAINED_OUTPUT_PER_RUN: u64 = 128 * 1_024 * 1_024;
 
 static OUTPUT_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 static OUTPUT_BUDGETS: OnceLock<Mutex<HashMap<PathBuf, Weak<OutputBudget>>>> = OnceLock::new();
+
+/// Final capture evidence, separate from the bounded model preview.
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct CaptureReceipt {
+    pub stdout_bytes: u64,
+    pub stderr_bytes: u64,
+    pub truncated: bool,
+    pub error: Option<String>,
+}
 
 #[derive(Default)]
 struct OutputBudget {
@@ -222,7 +231,7 @@ fn prune_output_directory(
     budget: &OutputBudget,
     active: &HashSet<String>,
 ) -> Result<(), RuntimeError> {
-    let mut entries = std::fs::read_dir(directory)
+    let entries = std::fs::read_dir(directory)
         .map_err(failed)?
         .filter_map(Result::ok)
         .filter_map(|entry| {
@@ -243,28 +252,45 @@ fn prune_output_directory(
         })
         .collect::<Vec<_>>();
 
-    entries.sort_by_key(|(_, _, modified)| *modified);
-
-    for (path, size, _) in entries {
-        if budget.used.load(Ordering::Acquire)
-            <= MAX_RETAINED_OUTPUT_PER_RUN.saturating_sub(2 * MAX_RETAINED_OUTPUT_PER_STREAM)
-        {
-            break;
-        }
-
+    let mut groups = HashMap::<String, Vec<_>>::new();
+    for (path, size, modified) in entries {
         let Some(stem) = path
             .file_stem()
             .and_then(|stem| stem.to_str())
         else {
             continue;
         };
-        if active.contains(stem) {
-            continue;
+        if !active.contains(stem) {
+            groups
+                .entry(stem.to_owned())
+                .or_default()
+                .push((path, size, modified));
         }
-        std::fs::remove_file(path).map_err(failed)?;
-        budget
-            .used
-            .fetch_sub(size, Ordering::AcqRel);
+    }
+    let mut groups = groups.into_values().collect::<Vec<_>>();
+    groups.sort_by_key(|entries| {
+        entries
+            .iter()
+            .map(|(_, _, modified)| *modified)
+            .max()
+    });
+
+    for entries in groups {
+        if budget.used.load(Ordering::Acquire)
+            <= MAX_RETAINED_OUTPUT_PER_RUN.saturating_sub(2 * MAX_RETAINED_OUTPUT_PER_STREAM)
+        {
+            break;
+        }
+
+        // Evict both streams and their capture receipt as one command.
+        for (path, size, _) in entries {
+            std::fs::remove_file(path).map_err(failed)?;
+            let _ = budget
+                .used
+                .try_update(Ordering::AcqRel, Ordering::Acquire, |used| {
+                    Some(used.saturating_sub(size))
+                });
+        }
     }
 
     Ok(())
@@ -354,6 +380,46 @@ mod tests {
         );
         assert!(first_stdout.written() <= 10 && second_stdout.written() <= 10);
         drop((first_stdout, second_stdout, first_stderr, second_stderr));
+    }
+
+    #[tokio::test]
+    async fn pruning_removes_complete_command_groups_including_the_capture_receipt() {
+        let directory = tempfile::tempdir().unwrap();
+        let budget = output_budget(directory.path()).unwrap();
+        for (suffix, size) in [
+            ("stdout", 40_000_000),
+            ("stderr", 40_000_000),
+            ("json", 100),
+        ] {
+            std::fs::File::create(
+                directory
+                    .path()
+                    .join(format!("cmd-stale.{suffix}")),
+            )
+            .unwrap()
+            .set_len(size)
+            .unwrap();
+        }
+        budget
+            .used
+            .store(MAX_RETAINED_OUTPUT_PER_RUN, Ordering::Release);
+        let log = OutputLog::create(directory.path())
+            .await
+            .unwrap();
+        for suffix in ["stdout", "stderr", "json"] {
+            assert!(
+                !directory
+                    .path()
+                    .join(format!("cmd-stale.{suffix}"))
+                    .exists()
+            );
+        }
+        assert!(
+            directory
+                .path()
+                .join(format!("{}.stdout", log.id()))
+                .exists()
+        );
     }
 
     #[tokio::test]

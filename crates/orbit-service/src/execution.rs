@@ -209,26 +209,25 @@ fn retry_archive_id(runs: &[Run], history: &[ChatMessage]) -> Option<i64> {
         return None;
     }
 
-    let reference = last_completed
+    let record = last_completed
         .events
         .iter()
         .find_map(|event| match event {
             AgentEvent::CompactionRecorded { record }
                 if record.strategy == CompactionStrategy::ArchiveProjection =>
             {
-                record.archive.as_deref()
+                Some(record)
             }
 
             _ => None,
         })?;
-    let id = reference
-        .strip_prefix("read_history archive_id=")?
+    let id = record.archive_id()?;
+    let reference = record
+        .archive
+        .as_deref()?
         .split(';')
-        .next()?
-        .parse::<i64>()
-        .ok()
-        .filter(|id| *id > 0)?;
-    let marker = format!("read_history archive_id={id};");
+        .next()?;
+    let marker = format!("{reference};");
 
     history
         .iter()
