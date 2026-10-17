@@ -140,7 +140,7 @@ impl<B: ModelBackend> Agent<B> {
                         (event, output.content)
                     }
                     Err(ToolError::Cancelled) => {
-                        let content = "tool execution cancelled".to_owned();
+                        let content = ToolError::Cancelled.model_content();
                         (
                             AgentEvent::ToolFinished {
                                 call: call.clone(),
@@ -159,7 +159,7 @@ impl<B: ModelBackend> Agent<B> {
                                 call: call.clone(),
                                 error: message.clone(),
                             },
-                            format!("tool error: {message}"),
+                            error.model_content(),
                         )
                     }
                 };

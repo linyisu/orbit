@@ -117,7 +117,10 @@ impl Questions {
             "当前客户端不支持交互问答，请通过对话向用户提问"
         );
         form.validate()
-            .map_err(anyhow::Error::msg)?;
+            .map_err(|message| ToolError::InvalidArguments {
+                tool: "AskUser".into(),
+                message,
+            })?;
         let record = Record {
             id: orbit_protocol::request_id(),
             call_id,
@@ -294,7 +297,7 @@ impl Tool for AskUser {
                 .questions
                 .ask(call.id, self.source.clone(), form, cancellation)
                 .await
-                .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
+                .map_err(ToolError::from_anyhow)?;
             Ok(ToolOutput::text(
                 serde_json::to_string(&result)
                     .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?,

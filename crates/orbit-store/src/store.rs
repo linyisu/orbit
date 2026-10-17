@@ -232,6 +232,21 @@ impl Store {
         Ok(self.load_from(id, 0, false).await?.0)
     }
 
+    /// Check for execution history without loading its contents; missing sessions return false.
+    pub async fn has_runs(&self, id: &str) -> Result<bool> {
+        self.read_access(|conn| async move {
+            Ok(runs::Entity::find()
+                .select_only()
+                .column(runs::Column::Id)
+                .filter(runs::Column::SessionId.eq(id))
+                .into_tuple::<i64>()
+                .one(&conn)
+                .await?
+                .is_some())
+        })
+        .await
+    }
+
     /// Load model context and compact execution evidence, leaving presentation
     /// payloads in the transcript ledger for paged reads.
     pub async fn load_runtime(&self, id: &str) -> Result<crate::types::RuntimeSnapshot> {

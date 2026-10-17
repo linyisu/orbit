@@ -34,6 +34,23 @@ async fn batch_edits_commit_once_and_failure_leaves_the_original_file() {
         .unwrap();
     let output = task.await.unwrap().unwrap();
     assert_eq!(output.changes.len(), 1);
+    let receipt: Value = serde_json::from_str(&output.content).unwrap();
+    assert!(
+        receipt["diff"]
+            .as_str()
+            .unwrap()
+            .contains("-alpha")
+    );
+    assert!(
+        receipt["diff"]
+            .as_str()
+            .unwrap()
+            .contains("+gamma")
+    );
+    assert_eq!(receipt["diff_truncated"], false);
+    assert_eq!(receipt["edits_applied"], 2);
+    assert_eq!(receipt["inserted_lines"], 2);
+    assert_eq!(receipt["deleted_lines"], 2);
     assert_eq!(output.changes[0].before.as_deref(), Some("alpha\nbeta\n"));
     assert_eq!(fs::read_to_string(&path).unwrap(), "gamma\ndelta\n");
     let (task, mut approvals) = start(
@@ -67,6 +84,37 @@ fn start(
     });
 
     (task, rx)
+}
+
+#[tokio::test]
+async fn large_committed_diff_is_bounded_without_truncating_the_file_receipt() {
+    let root = tempfile::tempdir().unwrap();
+    let before = "old line\n".repeat(10_000);
+    let after = "new line\n".repeat(10_000);
+    fs::write(root.path().join("large.txt"), &before).unwrap();
+    let (task, mut approvals) = start(
+        root.path(),
+        json!({
+            "path": "large.txt", "old_text": before, "new_text": after
+        }),
+        CancellationToken::new(),
+    );
+    approvals
+        .recv()
+        .await
+        .unwrap()
+        .decision
+        .send(true)
+        .unwrap();
+    let output = task.await.unwrap().unwrap();
+    let receipt: Value = serde_json::from_str(&output.content).unwrap();
+    assert_eq!(receipt["diff_truncated"], true);
+    assert!(receipt["diff"].as_str().unwrap().len() <= 16 * 1_024);
+    assert_eq!(output.changes[0].after, after);
+    assert_eq!(
+        fs::read_to_string(root.path().join("large.txt")).unwrap(),
+        after
+    );
 }
 
 #[tokio::test]
@@ -327,7 +375,12 @@ async fn denial_cancellation_and_concurrent_changes_never_overwrite_the_file() {
             }
         }
 
-        assert!(task.await.unwrap().is_err());
+        let error = task.await.unwrap().unwrap_err();
+        match action {
+            "deny" => assert!(matches!(error, ToolError::PermissionDenied(_))),
+            "cancel" => assert_eq!(error, ToolError::Cancelled),
+            _ => assert!(matches!(error, ToolError::Conflict(_))),
+        }
         assert_eq!(
             fs::read_to_string(root.path().join("file")).unwrap(),
             if action == "conflict" {

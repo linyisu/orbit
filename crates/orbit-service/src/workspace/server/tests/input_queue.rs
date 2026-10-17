@@ -22,10 +22,7 @@ async fn actual_dispatch_mutates_waiting_inputs_and_delivers_them_after_cancella
         .await
         .unwrap();
     // Leave the real model request waiting, so steering stays in the real inbox.
-    let (_socket, _) = tokio::time::timeout(Duration::from_secs(3), listener.accept())
-        .await
-        .unwrap()
-        .unwrap();
+    let (_socket, _) = streaming_request(&listener).await;
     let mut ids = Vec::new();
     for message in ["original", "remove me"] {
         let Response::InputQueued { message_id } = fixture
@@ -239,10 +236,7 @@ async fn image_input_is_uploaded_queued_and_authorized_for_withdrawal() {
         })
         .await
         .unwrap();
-    let (_socket, _) = tokio::time::timeout(Duration::from_secs(3), listener.accept())
-        .await
-        .unwrap()
-        .unwrap();
+    let (_socket, _) = streaming_request(&listener).await;
     let mut png = std::io::Cursor::new(Vec::new());
     image::DynamicImage::new_rgb8(2, 2)
         .write_to(&mut png, image::ImageFormat::Png)
@@ -341,10 +335,7 @@ async fn file_input_is_queued_without_vision_and_can_be_withdrawn() {
         })
         .await
         .unwrap();
-    let (_socket, _) = tokio::time::timeout(Duration::from_secs(3), listener.accept())
-        .await
-        .unwrap()
-        .unwrap();
+    let (_socket, _) = streaming_request(&listener).await;
     let bytes = b"generated queue material\n".to_vec();
     let Response::InputQueued { message_id } = fixture
         .request(Request::SubmitAttachments {

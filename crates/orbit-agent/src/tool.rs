@@ -118,8 +118,81 @@ pub enum ToolError {
     InvalidArguments { tool: String, message: String },
     #[error("tool execution failed: {0}")]
     ExecutionFailed(String),
+    #[error("permission denied: {0}")]
+    PermissionDenied(String),
+    #[error("authorization required: {0}")]
+    AuthorizationRequired(String),
+    #[error("policy denied: {0}")]
+    PolicyDenied(String),
+    #[error("input changed: {0}")]
+    Conflict(String),
+    #[error("dependency unavailable: {0}")]
+    DependencyUnavailable(String),
     #[error("tool execution was cancelled")]
     Cancelled,
+}
+
+impl ToolError {
+    /// Preserve typed failures through service orchestration; unknown errors stay unclassified.
+    pub fn from_anyhow(error: anyhow::Error) -> Self {
+        match error.downcast::<Self>() {
+            Ok(error) => error,
+            Err(error) => match error.downcast::<orbit_runtime::RuntimeError>() {
+                Ok(error) => error.into(),
+                Err(error) => Self::ExecutionFailed(format!("{error:#}")),
+            },
+        }
+    }
+
+    /// Stable model-facing failure envelope. Recovery never authorizes an automatic replay.
+    pub fn model_content(&self) -> String {
+        const MAX_ERROR_MESSAGE_BYTES: usize = 4_096;
+        let mut message = self.to_string();
+        let truncated = message.len() > MAX_ERROR_MESSAGE_BYTES;
+        if truncated {
+            let mut end = MAX_ERROR_MESSAGE_BYTES;
+            while !message.is_char_boundary(end) {
+                end -= 1;
+            }
+            message.truncate(end);
+        }
+        let (code, recovery) = match self {
+            Self::EmptyCallId | Self::EmptyToolName | Self::InvalidArguments { .. } => {
+                ("invalid_arguments", "correct_arguments")
+            }
+            Self::UnknownTool(_) => ("unknown_tool", "select_available_tool"),
+            Self::PermissionDenied(_) => ("permission_denied", "wait_for_new_user_request"),
+            Self::AuthorizationRequired(_) => {
+                ("authorization_required", "request_user_authorization")
+            }
+            Self::PolicyDenied(_) => ("policy_denied", "choose_permitted_operation"),
+            Self::Conflict(_) => ("conflict", "refresh_input"),
+            Self::DependencyUnavailable(_) => ("dependency_unavailable", "configure_dependency"),
+            Self::ExecutionFailed(_) => ("execution_failed", "inspect_failure"),
+            Self::Cancelled => ("cancelled", "stop"),
+        };
+        serde_json::json!({
+            "error": {
+                "code": code,
+                "message": message,
+                "message_truncated": truncated,
+                "recovery": recovery,
+                "retryable": false
+            }
+        })
+        .to_string()
+    }
+}
+
+impl From<orbit_runtime::filesystem::WorkspaceError> for ToolError {
+    fn from(error: orbit_runtime::filesystem::WorkspaceError) -> Self {
+        use orbit_runtime::filesystem::WorkspaceError;
+        match error {
+            WorkspaceError::PermissionDenied(message) => Self::AuthorizationRequired(message),
+            WorkspaceError::ProtectedPath => Self::PolicyDenied(error.to_string()),
+            _ => Self::ExecutionFailed(error.to_string()),
+        }
+    }
 }
 
 impl From<orbit_runtime::RuntimeError> for ToolError {
@@ -127,9 +200,10 @@ impl From<orbit_runtime::RuntimeError> for ToolError {
         match err {
             orbit_runtime::RuntimeError::Cancelled => ToolError::Cancelled,
             orbit_runtime::RuntimeError::ExecutionFailed(msg) => ToolError::ExecutionFailed(msg),
-            orbit_runtime::RuntimeError::Workspace(err) => {
-                ToolError::ExecutionFailed(err.to_string())
+            orbit_runtime::RuntimeError::DependencyUnavailable { program, message } => {
+                ToolError::DependencyUnavailable(format!("{program}: {message}"))
             }
+            orbit_runtime::RuntimeError::Workspace(err) => err.into(),
             orbit_runtime::RuntimeError::Io(err) => ToolError::ExecutionFailed(err.to_string()),
         }
     }
@@ -573,6 +647,30 @@ mod tests {
             .expect_err("unknown tools must fail");
 
         assert_eq!(error, ToolError::UnknownTool("missing".to_owned()));
+        let receipt: serde_json::Value = serde_json::from_str(&error.model_content()).unwrap();
+        assert_eq!(receipt["error"]["code"], "unknown_tool");
+        assert_eq!(receipt["error"]["retryable"], false);
+    }
+
+    #[test]
+    fn orchestration_context_preserves_typed_cancellation_and_policy_failures() {
+        let error = anyhow::Error::new(ToolError::Cancelled).context("plan review interrupted");
+        assert_eq!(ToolError::from_anyhow(error), ToolError::Cancelled);
+        let error = ToolError::from(orbit_runtime::filesystem::WorkspaceError::ProtectedPath);
+        let receipt: serde_json::Value = serde_json::from_str(&error.model_content()).unwrap();
+        assert_eq!(receipt["error"]["code"], "policy_denied");
+        assert_eq!(receipt["error"]["recovery"], "choose_permitted_operation");
+        let denied = ToolError::PermissionDenied("拒绝".repeat(2_000));
+        let receipt: serde_json::Value = serde_json::from_str(&denied.model_content()).unwrap();
+        assert_eq!(receipt["error"]["recovery"], "wait_for_new_user_request");
+        assert_eq!(receipt["error"]["message_truncated"], true);
+        assert!(
+            receipt["error"]["message"]
+                .as_str()
+                .unwrap()
+                .len()
+                <= 4_096
+        );
     }
 
     #[test]

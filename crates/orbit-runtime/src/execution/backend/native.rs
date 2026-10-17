@@ -4,7 +4,7 @@ use tokio::process::Command;
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    error::{RuntimeError, failed},
+    error::RuntimeError,
     execution::{
         ExecutionEnvironment, ExecutionPolicy, ExecutionRequest, ExecutionResult, OutputLog,
         environment::is_sensitive_key, process::ProcessGroup, supervisor::run_child_process,
@@ -91,7 +91,20 @@ impl ExecutionBackend for NativeBackend {
                 });
             }
 
-            let (child, guard) = ProcessGroup::spawn(&mut command).map_err(failed)?;
+            let (child, guard) = ProcessGroup::spawn(&mut command).map_err(|error| {
+                if error.kind() == std::io::ErrorKind::NotFound
+                    && std::path::Path::new(shell).is_absolute()
+                    && std::fs::metadata(shell)
+                        .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
+                {
+                    RuntimeError::DependencyUnavailable {
+                        program: shell.into(),
+                        message: error.to_string(),
+                    }
+                } else {
+                    RuntimeError::Io(error)
+                }
+            })?;
             let process_group = child.id();
             let verification = request
                 .fingerprint

@@ -85,6 +85,8 @@ pub fn is_reserved_system_path(path: &Path) -> bool {
 #[derive(Debug, Serialize)]
 pub struct CommandResult {
     pub exit_code: Option<i32>,
+    pub signal: Option<i32>,
+    pub core_dumped: bool,
     pub elapsed_ms: u64,
     pub stdout: String,
     pub stderr: String,

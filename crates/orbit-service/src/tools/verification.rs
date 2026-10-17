@@ -154,6 +154,8 @@ fn compare(
                     .collect::<String>(),
                 "command_truncated": record.command.chars().count() > 512,
                 "exit_code": record.exit_code,
+                "signal": record.signal,
+                "core_dumped": record.core_dumped,
                 "timed_out": record.timed_out,
                 "cancelled": record.cancelled,
                 "elapsed_ms": record.elapsed_ms,
@@ -228,18 +230,21 @@ fn compare(
             } else if last.is_some() {
                 "content_modified_after_orbit"
             } else {
-                "external_change"
+                "unattributed_change"
             };
 
             let changed_from_baseline =
                 baseline.map(|b| b.files.get(&path) != current.files.get(&path));
-            let executable_changed = baseline.map(|b| {
-                b.files.get(&path).map(|f| f.executable)
-                    != current
-                        .files
-                        .get(&path)
-                        .map(|f| f.executable)
+            let executable_changed = baseline.and_then(|b| {
+                Some(b.files.get(&path)?.executable != current.files.get(&path)?.executable)
             });
+            let change_kind =
+                baseline.map(|b| match (b.files.get(&path), current.files.get(&path)) {
+                    (None, Some(_)) => "created",
+                    (Some(_), None) => "deleted",
+                    (Some(before), Some(after)) if before == after => "unchanged",
+                    _ => "modified",
+                });
             let external_before_first_orbit_write = baseline
                 .and(first)
                 .map(|_| baseline_hash != first_before);
@@ -247,6 +252,7 @@ fn compare(
             json!({
                 "path": path,
                 "origin": origin,
+                "change_kind": change_kind,
                 "baseline_available": baseline.is_some(),
                 "changed_from_baseline": changed_from_baseline,
                 "executable_changed": executable_changed,
@@ -342,7 +348,8 @@ pub async fn changes_text(session: &crate::session::SessionState) -> String {
                 {
                     "content_matches_orbit_receipt" => "内容与 Orbit 检查点一致",
                     "content_modified_after_orbit" => "内容已偏离 Orbit 检查点",
-                    _ => "会话开始后发生的外部变更",
+                    "external_change" | "unattributed_change" => "变更来源未确认",
+                    _ => "变更来源未知",
                 };
 
                 let prior = if row["external_before_first_orbit_write"] == true {
@@ -381,6 +388,36 @@ mod tests {
     use orbit_runtime::verification::{FileFingerprint, VerificationEvidence};
 
     use super::*;
+
+    #[test]
+    fn file_presence_and_execute_bit_changes_are_distinct_from_attribution() {
+        let baseline = input("base");
+        let mut created = baseline.clone();
+        created.files.insert(
+            "new.rs".into(),
+            FileFingerprint {
+                sha256: content_hash(b"new"),
+                executable: false,
+            },
+        );
+        let result = compare(&created, Some(&baseline), &[], &[]);
+        assert_eq!(result["changes"][0]["change_kind"], "created");
+        assert_eq!(result["changes"][0]["origin"], "unattributed_change");
+        assert!(result["changes"][0]["executable_changed"].is_null());
+        let deleted = WorkspaceFingerprint::default();
+        let result = compare(&deleted, Some(&baseline), &[], &[]);
+        assert_eq!(result["changes"][0]["change_kind"], "deleted");
+        assert!(result["changes"][0]["executable_changed"].is_null());
+        let mut executable = baseline.clone();
+        executable
+            .files
+            .get_mut("a.rs")
+            .unwrap()
+            .executable = true;
+        let result = compare(&executable, Some(&baseline), &[], &[]);
+        assert_eq!(result["changes"][0]["change_kind"], "modified");
+        assert_eq!(result["changes"][0]["executable_changed"], true);
+    }
     fn input(content: &str) -> WorkspaceFingerprint {
         WorkspaceFingerprint {
             digest: content_hash(content.as_bytes()),
@@ -418,6 +455,8 @@ mod tests {
             run_status: "completed".into(),
             command: "echo no tests".into(),
             exit_code: Some(0),
+            signal: None,
+            core_dumped: false,
             timed_out: false,
             cancelled: false,
             elapsed_ms: 1,
@@ -444,6 +483,8 @@ mod tests {
             run_status: "completed".into(),
             command: "touch new_file".into(),
             exit_code: Some(0),
+            signal: None,
+            core_dumped: false,
             timed_out: false,
             cancelled: false,
             elapsed_ms: 5,

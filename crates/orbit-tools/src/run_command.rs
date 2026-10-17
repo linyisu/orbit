@@ -383,7 +383,7 @@ impl Tool for RunCommand {
             };
 
             if !approved {
-                return Err(ToolError::ExecutionFailed(
+                return Err(ToolError::PermissionDenied(
                     "user denied command; do not retry without a new user request".into(),
                 ));
             }

@@ -173,7 +173,7 @@ impl Tool for RequestCapability {
                     .to_string(),
                 )),
 
-                PolicyDecision::Denied(reason) => Err(ToolError::ExecutionFailed(format!(
+                PolicyDecision::Denied(reason) => Err(ToolError::PolicyDenied(format!(
                     "permission permanently denied: {reason}. This policy denial cannot be \
                         overridden by user approval; do not retry the same request. Use an \
                         eligible external path, the workspace, or Exec's isolated \
@@ -213,7 +213,7 @@ impl Tool for RequestCapability {
                     };
 
                     if !approved {
-                        return Err(ToolError::ExecutionFailed(format!(
+                        return Err(ToolError::PermissionDenied(format!(
                             "permission denied: user denied capability request for '{}'",
                             resolved.canonical().display()
                         )));

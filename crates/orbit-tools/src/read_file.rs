@@ -147,7 +147,7 @@ fn read(
 ) -> Result<String, ToolError> {
     let mut file = workspace
         .authorize_read(Path::new(&arguments.path))
-        .map_err(failed)?;
+        .map_err(ToolError::from)?;
     let snapshot = version(&file.metadata().map_err(failed)?);
     let (mut line, mut character, offset) = if let Some(cursor) = &arguments.cursor {
         if cursor.version != snapshot

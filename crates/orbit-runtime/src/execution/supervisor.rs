@@ -1,3 +1,4 @@
+use std::os::unix::process::ExitStatusExt;
 use std::{collections::VecDeque, time::Duration};
 
 use tokio::io::{AsyncRead, AsyncReadExt};
@@ -187,6 +188,8 @@ pub(crate) async fn run_child_process(
 
     Ok(CommandResult {
         exit_code: status.code(),
+        signal: status.signal(),
+        core_dumped: status.core_dumped(),
         elapsed_ms: started
             .elapsed()
             .as_millis()
@@ -269,6 +272,34 @@ mod tests {
 mod drain_tests {
     use super::*;
     use tokio::io::AsyncWriteExt;
+
+    #[tokio::test]
+    async fn signal_termination_retains_output_without_claiming_timeout_or_cancellation() {
+        let mut command = tokio::process::Command::new("/bin/sh");
+        command
+            .args(["-c", "printf before; kill -TERM $$"])
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        let (child, _group) = super::super::process::ProcessGroup::spawn(&mut command).unwrap();
+        let id = child.id();
+        let result = run_child_process(
+            child,
+            Duration::from_secs(5),
+            CancellationToken::new(),
+            None,
+            "native",
+            0,
+            0,
+            None,
+            id,
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.exit_code, None);
+        assert_eq!(result.signal, Some(libc::SIGTERM));
+        assert_eq!(result.stdout, "before");
+        assert!(!result.timed_out && !result.cancelled && !result.core_dumped);
+    }
 
     #[tokio::test]
     async fn completed_process_does_not_wait_for_a_detached_pipe_owner() {

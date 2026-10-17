@@ -574,7 +574,7 @@ impl Tool for PlanTool {
             .await;
             result
                 .and_then(|r| Ok(ToolOutput::text(serde_json::to_string(&r)?)))
-                .map_err(|e| ToolError::ExecutionFailed(e.to_string()))
+                .map_err(ToolError::from_anyhow)
         })
     }
 }

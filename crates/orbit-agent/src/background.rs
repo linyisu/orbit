@@ -638,9 +638,7 @@ impl Job {
                 .as_ref()
                 .map(|result| match result {
                     Ok(output) => compact_output(&output.content),
-                    Err(error) => serde_json::json!({
-                        "error": error.to_string()
-                    }),
+                    Err(error) => compact_output(&error.model_content()),
                 })
         } else {
             None
@@ -954,7 +952,7 @@ mod tests {
             .unwrap();
         assert_eq!(result[0].status, JobStatus::Failed);
         assert!(
-            result[0].result.as_ref().unwrap()["error"]
+            result[0].result.as_ref().unwrap()["error"]["message"]
                 .as_str()
                 .unwrap()
                 .contains("panicked")

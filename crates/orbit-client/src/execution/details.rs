@@ -257,6 +257,15 @@ pub fn status(tool: &ToolRun) -> String {
             "已取消".into()
         } else if result.timed_out {
             "已超时".into()
+        } else if let Some(signal) = result.signal {
+            format!(
+                "信号 {signal}{}",
+                if result.core_dumped {
+                    " · 核心转储"
+                } else {
+                    ""
+                }
+            )
         } else {
             result
                 .exit_code
@@ -503,6 +512,23 @@ mod tests {
     use super::*;
     use crate::protocol::model::ToolCall;
     use serde_json::json;
+
+    #[test]
+    fn command_signal_is_presented_without_inventing_a_success_or_exit_code() {
+        let call = ToolCall::function("signal", "Exec", json!({"command": "synthetic command"}));
+        let mut tool = ToolRun::new(&call);
+        tool.output = Some(
+            json!({
+                "exit_code": null, "signal": 15, "core_dumped": false,
+                "elapsed": {"secs": 0, "nanos": 7_000_000},
+                "stdout": "", "stderr": "", "timed_out": false, "cancelled": false,
+                "output_truncated": false, "stdout_total_bytes": 0, "stderr_total_bytes": 0
+            })
+            .to_string(),
+        );
+        assert_eq!(tool.command_result().unwrap().status(), ToolStatus::Failed);
+        assert_eq!(status(&tool), "信号 15 · 7 ms");
+    }
 
     #[test]
     fn search_modes_and_context_lines_survive_shared_projection() {

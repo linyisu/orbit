@@ -9,6 +9,8 @@ mod feedback;
 
 const MAX_EDIT_BYTES: usize = 1_024 * 1_024;
 const MAX_EDITS: usize = 32;
+const MAX_DIFF_BYTES: usize = 16 * 1_024;
+const DIFF_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(250);
 
 #[derive(Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -108,7 +110,9 @@ impl Tool for EditFile {
                 ));
             }
         }
-        self.writer
+        let edits_applied = edits.len();
+        let mut output = self
+            .writer
             .edit(
                 args.path,
                 move |before| {
@@ -131,7 +135,48 @@ impl Tool for EditFile {
                 },
                 cancellation,
             )
-            .await
+            .await?;
+        if let Some(change) = output.changes.first() {
+            let diff = similar::TextDiff::configure()
+                .timeout(DIFF_TIMEOUT)
+                .diff_lines(
+                    change
+                        .before
+                        .as_deref()
+                        .unwrap_or_default(),
+                    &change.after,
+                );
+            let mut text = diff
+                .unified_diff()
+                .context_radius(3)
+                .to_string();
+            let (inserted, deleted) =
+                diff.iter_all_changes()
+                    .fold((0usize, 0usize), |counts, change| match change.tag() {
+                        similar::ChangeTag::Insert => (counts.0 + 1, counts.1),
+                        similar::ChangeTag::Delete => (counts.0, counts.1 + 1),
+                        similar::ChangeTag::Equal => counts,
+                    });
+            let truncated = text.len() > MAX_DIFF_BYTES;
+            if truncated {
+                let mut end = MAX_DIFF_BYTES;
+                while !text.is_char_boundary(end) {
+                    end -= 1;
+                }
+                text.truncate(end);
+            }
+            if let Ok(serde_json::Value::Object(mut receipt)) =
+                serde_json::from_str(&output.content)
+            {
+                receipt.insert("diff".into(), text.into());
+                receipt.insert("diff_truncated".into(), truncated.into());
+                receipt.insert("edits_applied".into(), edits_applied.into());
+                receipt.insert("inserted_lines".into(), inserted.into());
+                receipt.insert("deleted_lines".into(), deleted.into());
+                output.content = serde_json::Value::Object(receipt).to_string();
+            }
+        }
+        Ok(output)
     }
 }
 

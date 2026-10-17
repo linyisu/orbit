@@ -1263,3 +1263,111 @@ async fn development_writes_use_parent_approvals_and_capability_ceiling() {
         );
     }
 }
+
+#[tokio::test]
+async fn failed_development_preparation_rolls_back_and_unstarted_children_cannot_continue() {
+    let directory = tempfile::tempdir().unwrap();
+    let model = GatedModel::new();
+    let (mut service, _parent) = fixture(directory.path(), model.clone(), Default::default()).await;
+    let (approvals, _receiver) = orbit_tools::approval::channel();
+    let inner = Arc::get_mut(&mut service).unwrap();
+    inner.approvals = Some(approvals);
+    inner
+        .allowed_tools
+        .insert("WriteFile".into());
+    let args = json!({"task": "prepare development workspace", "role": "develop"});
+    let error = service
+        .clone()
+        .execute(
+            Action::Spawn,
+            ToolCall::function("startup", "SpawnAgent", args.clone()),
+            args,
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("startup failed")
+    );
+    assert!(
+        service
+            .store
+            .subagents(&service.parent)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        model
+            .requests
+            .lock()
+            .unwrap()
+            .is_empty()
+    );
+    assert!(service.active.lock().await.is_empty());
+    let orphan = service
+        .store
+        .create_subagent(
+            &service.parent,
+            "orbit::orbit-model".into(),
+            "develop".into(),
+            "legacy unstarted child".into(),
+        )
+        .await
+        .unwrap();
+    let id = orphan.id().to_owned();
+    drop(orphan);
+    assert!(
+        service
+            .send(
+                ToolCall::function("continue", "SendAgentMessage", json!({})),
+                SendArgs {
+                    agent_id: id.clone(),
+                    message: "continue work".into()
+                },
+                CancellationToken::new()
+            )
+            .await
+            .is_err()
+    );
+    assert!(
+        service
+            .store
+            .load(&id)
+            .await
+            .unwrap()
+            .runs
+            .is_empty()
+    );
+    assert!(
+        service
+            .store
+            .pending_agent_messages(&id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let mut writer = service
+        .store
+        .acquire(&id)
+        .await
+        .unwrap();
+    writer
+        .begin("recorded startup".into(), "orbit::orbit-model".into())
+        .await
+        .unwrap();
+    drop(writer);
+    let _error = service
+        .rollback_startup(
+            directory.path(),
+            None,
+            &id,
+            anyhow::anyhow!("synthetic failure after run creation"),
+        )
+        .await;
+    let snapshot = service.store.load(&id).await.unwrap();
+    assert_eq!(snapshot.runs.len(), 1);
+    assert_eq!(snapshot.runs[0].status, "interrupted");
+}

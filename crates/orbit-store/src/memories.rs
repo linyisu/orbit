@@ -8,6 +8,37 @@ use crate::{
 use anyhow::{Context, Result, ensure};
 use sea_orm::*;
 impl Store {
+    /// Read a live ID-ordered page confined to one conversation.
+    pub async fn session_memory_page(
+        &self,
+        session_id: &str,
+        include_inactive: bool,
+        after_id: i64,
+        limit: usize,
+    ) -> Result<Vec<SessionMemory>> {
+        ensure!(
+            (1..=101).contains(&limit) && after_id >= 0,
+            "invalid memory page"
+        );
+        self.read_access(|conn| async move {
+            let mut query = memories::Entity::find()
+                .filter(memories::Column::SessionId.eq(session_id))
+                .filter(memories::Column::Id.gt(after_id));
+            if !include_inactive {
+                query = query.filter(memories::Column::Active.eq(true));
+            }
+            query
+                .order_by_asc(memories::Column::Id)
+                .limit(limit as u64)
+                .all(&conn)
+                .await?
+                .into_iter()
+                .map(memory)
+                .collect()
+        })
+        .await
+    }
+
     pub async fn session_memories(
         &self,
         session_id: &str,

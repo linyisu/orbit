@@ -12,6 +12,9 @@ pub enum RuntimeError {
     #[error("execution failed: {0}")]
     ExecutionFailed(String),
 
+    #[error("cannot start {program}: {message}")]
+    DependencyUnavailable { program: String, message: String },
+
     #[error(transparent)]
     Workspace(#[from] WorkspaceError),
 

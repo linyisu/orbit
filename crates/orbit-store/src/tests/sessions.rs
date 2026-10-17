@@ -1516,6 +1516,16 @@ async fn verification_evidence_and_start_baseline_are_durable_and_session_scoped
         isolation: "native".into(),
     };
 
+    let mut receipt = command_receipt("synthetic verification", 1);
+    if let AgentEvent::ToolFinished { content, .. } = &mut receipt {
+        *content = serde_json::json!({
+            "exit_code": null, "signal": 15, "core_dumped": false,
+            "timed_out": false, "cancelled": false,
+            "elapsed": { "secs": 1, "nanos": 250_000_000 }
+        })
+        .to_string();
+    }
+
     writer
         .finish(
             &crate::types::RunCompletion::Failed,
@@ -1524,7 +1534,7 @@ async fn verification_evidence_and_start_baseline_are_durable_and_session_scoped
                     call_id: "command-1".into(),
                     evidence: evidence.clone(),
                 },
-                command_receipt("cargo test", 1),
+                receipt,
             ],
         )
         .await
@@ -1535,7 +1545,10 @@ async fn verification_evidence_and_start_baseline_are_durable_and_session_scoped
         .unwrap();
 
     assert_eq!(records[0].evidence, Some(evidence));
-    assert_eq!(records[0].exit_code, Some(1));
+    assert_eq!(records[0].exit_code, None);
+    assert_eq!(records[0].signal, Some(15));
+    assert!(!records[0].core_dumped);
+    assert_eq!(records[0].elapsed_ms, 1_250);
     assert!(
         store
             .verification_records(other.id())

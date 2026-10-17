@@ -139,6 +139,12 @@ impl Store {
                     exit_code: result["exit_code"]
                         .as_i64()
                         .and_then(|code| i32::try_from(code).ok()),
+                    signal: result["signal"]
+                        .as_i64()
+                        .and_then(|signal| i32::try_from(signal).ok()),
+                    core_dumped: result["core_dumped"]
+                        .as_bool()
+                        .unwrap_or(false),
                     timed_out: result["timed_out"]
                         .as_bool()
                         .unwrap_or(false),
@@ -147,6 +153,16 @@ impl Store {
                         .unwrap_or(false),
                     elapsed_ms: result["elapsed_ms"]
                         .as_u64()
+                        .or_else(|| {
+                            serde_json::from_value::<std::time::Duration>(result["elapsed"].clone())
+                                .ok()
+                                .map(|elapsed| {
+                                    elapsed
+                                        .as_millis()
+                                        .min(u64::MAX as u128)
+                                        as u64
+                                })
+                        })
                         .unwrap_or(0),
                     evidence: evidence_by_call.remove(&(run_id, call.id)),
                 });

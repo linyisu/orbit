@@ -85,7 +85,7 @@ impl ToolPolicy for Gate {
             return Ok(Box::new(()));
         }
         if access.read_only && !capabilities.in_plan() {
-            return Err(ToolError::ExecutionFailed(format!(
+            return Err(ToolError::PolicyDenied(format!(
                 "Plan 为只读模式，禁止 {name}；请提交计划并等待用户明确选择开始执行"
             )));
         }

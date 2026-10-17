@@ -368,6 +368,10 @@ fn path_parts(path: &str) -> (&str, &str) {
 #[derive(Clone, Debug, serde::Deserialize)]
 pub struct CommandResult {
     pub exit_code: Option<i32>,
+    #[serde(default)]
+    pub signal: Option<i32>,
+    #[serde(default)]
+    pub core_dumped: bool,
     pub elapsed: std::time::Duration,
     pub stdout: String,
     pub stderr: String,

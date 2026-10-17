@@ -225,7 +225,10 @@ impl Tool for AgentTool {
                         "workspace_strategy": {
                             "type": "string",
                             "enum": ["worktree", "shared"],
-                            "default": "worktree"
+                            "default": "worktree",
+                            "description": "Only applies to role=develop. Explore/review use the \
+                                parent directory read-only. Develop requires Git for worktree; \
+                                use shared explicitly for non-Git development."
                         },
                         "model": {
                             "type": "string"
@@ -370,13 +373,7 @@ impl Tool for AgentTool {
                 .clone()
                 .execute(self.action, call, args, cancellation)
                 .await
-                .map_err(|e| {
-                    if e.downcast_ref::<ToolError>() == Some(&ToolError::Cancelled) {
-                        ToolError::Cancelled
-                    } else {
-                        ToolError::ExecutionFailed(e.to_string())
-                    }
-                })
+                .map_err(ToolError::from_anyhow)
         })
     }
 }
@@ -441,6 +438,54 @@ fn page_length() -> usize {
 }
 
 impl Service {
+    /// Roll back an owned startup without deleting execution history.
+    /// Call after releasing its writer.
+    async fn rollback_startup(
+        &self,
+        parent: &std::path::Path,
+        worktree: Option<&std::path::Path>,
+        id: &str,
+        error: anyhow::Error,
+    ) -> anyhow::Error {
+        let has_runs = match self.store.has_runs(id).await {
+            Ok(has_runs) => has_runs,
+            Err(cleanup) => {
+                return error.context(format!(
+                    "child {id} startup failed; cannot inspect cleanup boundary: {cleanup:#}"
+                ));
+            }
+        };
+        if has_runs {
+            // Reacquiring the released writer records an abandoned startup as interrupted.
+            if let Err(cleanup) = self.store.acquire(id).await {
+                return error.context(format!(
+                    "child {id} startup failed; execution history preserved; \
+                        recovery failed: {cleanup:#}"
+                ));
+            }
+            return error.context(format!(
+                "child {id} startup failed; execution history preserved"
+            ));
+        }
+        let mut cleanup_errors = Vec::new();
+        if let Some(directory) = worktree
+            && let Err(cleanup) = workspace::cleanup(parent, directory, id).await
+        {
+            cleanup_errors.push(format!("worktree: {cleanup:#}"));
+        }
+        if let Err(cleanup) = self.store.delete_session(id).await {
+            cleanup_errors.push(format!("session: {cleanup:#}"));
+        }
+        if cleanup_errors.is_empty() {
+            error.context(format!("child {id} startup failed"))
+        } else {
+            anyhow::anyhow!(
+                "child {id} startup failed: {error:#}; cleanup failed: {}",
+                cleanup_errors.join("; ")
+            )
+        }
+    }
+
     async fn recover(&self) -> Result<()> {
         for record in self
             .store
@@ -574,30 +619,61 @@ impl Service {
                     )
                     .await?;
 
-                if args.role == "develop" {
-                    let directory = workspace::prepare(
-                        std::path::Path::new(&parent.workspace),
-                        self.store.path(),
-                        writer.id(),
-                        args.workspace_strategy,
-                    )
-                    .await?;
-                    writer.move_to(&directory, None).await?;
-                }
+                let mut prepared_worktree = None;
+                let prepared: Result<SubagentSession> = async {
+                    if args.role == "develop" {
+                        let directory = workspace::prepare(
+                            std::path::Path::new(&parent.workspace),
+                            self.store.path(),
+                            writer.id(),
+                            args.workspace_strategy,
+                        )
+                        .await?;
+                        if matches!(args.workspace_strategy, workspace::Strategy::Worktree) {
+                            prepared_worktree = Some(
+                                self.store
+                                    .path()
+                                    .with_extension("worktrees")
+                                    .join(writer.id()),
+                            );
+                        }
+                        writer.move_to(&directory, None).await?;
+                    }
 
-                writer
-                    .set_model_profile(
-                        model.qualified_name(),
-                        model
-                            .config
-                            .reasoning_effort
-                            .map(|e| e.as_str().to_owned()),
-                    )
-                    .await?;
-                let agent = self
-                    .store
-                    .owned_subagent(&self.parent, writer.id())
-                    .await?;
+                    writer
+                        .set_model_profile(
+                            model.qualified_name(),
+                            model
+                                .config
+                                .reasoning_effort
+                                .map(|e| e.as_str().to_owned()),
+                        )
+                        .await?;
+                    let agent = self
+                        .store
+                        .owned_subagent(&self.parent, writer.id())
+                        .await?;
+                    if token.is_cancelled() {
+                        return Err(ToolError::Cancelled.into());
+                    }
+                    Ok(agent)
+                }
+                .await;
+                let agent = match prepared {
+                    Ok(agent) => agent,
+                    Err(error) => {
+                        let id = writer.id().to_owned();
+                        drop(writer);
+                        return Err(self
+                            .rollback_startup(
+                                std::path::Path::new(&parent.workspace),
+                                prepared_worktree.as_deref(),
+                                &id,
+                                error,
+                            )
+                            .await);
+                    }
+                };
                 let prompt = if args.context.is_empty() {
                     args.task
                 } else {
@@ -606,18 +682,30 @@ impl Service {
                         args.task, args.context
                     )
                 };
-                self.launch(
-                    call,
-                    token,
-                    writer,
-                    agent,
-                    model,
-                    config,
-                    Some(prompt),
-                    permit,
-                )
-                .await
-                .map(LaunchResult::into_output)
+                let id = writer.id().to_owned();
+                let launched = self
+                    .launch(
+                        call,
+                        token,
+                        writer,
+                        agent,
+                        model,
+                        config,
+                        Some(prompt),
+                        permit,
+                    )
+                    .await;
+                match launched {
+                    Ok(result) => Ok(result.into_output()),
+                    Err(error) => Err(self
+                        .rollback_startup(
+                            std::path::Path::new(&parent.workspace),
+                            prepared_worktree.as_deref(),
+                            &id,
+                            error,
+                        )
+                        .await),
+                }
             }
 
             Action::Send => {
@@ -889,6 +977,12 @@ impl Service {
             .store
             .owned_subagent(&self.parent, &args.agent_id)
             .await?;
+        ensure!(
+            self.store
+                .has_runs(&args.agent_id)
+                .await?,
+            "subagent never started; create a new SpawnAgent with a valid workspace strategy"
+        );
         ensure!(
             agent.role != "develop"
                 || self

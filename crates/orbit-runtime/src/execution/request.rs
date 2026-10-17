@@ -42,6 +42,10 @@ impl ExecutionRequest {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ExecutionResult {
     pub exit_code: Option<i32>,
+    #[serde(default)]
+    pub signal: Option<i32>,
+    #[serde(default)]
+    pub core_dumped: bool,
     pub elapsed: Duration,
     pub stdout: String,
     pub stderr: String,
@@ -66,6 +70,8 @@ impl From<super::process::CommandResult> for ExecutionResult {
     fn from(result: super::process::CommandResult) -> Self {
         Self {
             exit_code: result.exit_code,
+            signal: result.signal,
+            core_dumped: result.core_dumped,
             elapsed: Duration::from_millis(result.elapsed_ms),
             stdout: result.stdout,
             stderr: result.stderr,
@@ -86,11 +92,12 @@ impl From<super::process::CommandResult> for ExecutionResult {
 
 impl ExecutionResult {
     pub fn display_summary(&self) -> String {
-        let code_str = match self.exit_code {
-            Some(code) => format!("exit {code}"),
-            None if self.timed_out => "timed out".to_string(),
-            None if self.cancelled => "cancelled".to_string(),
-            None => "terminated".to_string(),
+        let code_str = match (self.exit_code, self.signal) {
+            _ if self.cancelled => "cancelled".to_string(),
+            _ if self.timed_out => "timed out".to_string(),
+            (Some(code), _) => format!("exit {code}"),
+            (None, Some(signal)) => format!("signal {signal}"),
+            (None, None) => "terminated".to_string(),
         };
 
         format!("{code_str} · {} ms", self.elapsed.as_millis())
@@ -109,6 +116,8 @@ mod tests {
     fn execution_result_summary() {
         let success = ExecutionResult {
             exit_code: Some(0),
+            signal: None,
+            core_dumped: false,
             elapsed: Duration::from_millis(7),
             stdout: "hello".into(),
             stderr: String::new(),

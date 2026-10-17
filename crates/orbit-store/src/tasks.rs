@@ -48,6 +48,38 @@ pub enum TaskActor<'a> {
 }
 
 impl Store {
+    /// Read a live ID-ordered page without loading or hydrating the whole task board.
+    pub async fn task_page(
+        &self,
+        project: &str,
+        include_closed: bool,
+        after_id: i64,
+        limit: usize,
+    ) -> Result<Vec<ProjectTask>> {
+        ensure!(
+            (1..=101).contains(&limit) && after_id >= 0,
+            "invalid task page"
+        );
+        self.read_access(|conn| async move {
+            let tx = conn.begin().await?;
+            let mut query = tasks::Entity::find()
+                .filter(tasks::Column::ProjectId.eq(project))
+                .filter(tasks::Column::Id.gt(after_id));
+            if !include_closed {
+                query = query.filter(tasks::Column::Status.is_not_in(["completed", "cancelled"]));
+            }
+            let rows = query
+                .order_by_asc(tasks::Column::Id)
+                .limit(limit as u64)
+                .all(&tx)
+                .await?;
+            let result = state::hydrate(&tx, rows).await?;
+            tx.commit().await?;
+            Ok(result)
+        })
+        .await
+    }
+
     pub async fn tasks(&self, project: &str, include_closed: bool) -> Result<Vec<ProjectTask>> {
         self.read_access(|conn| async move {
             let tx = conn.begin().await?;

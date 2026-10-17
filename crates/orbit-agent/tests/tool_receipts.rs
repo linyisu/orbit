@@ -72,14 +72,13 @@ async fn foreground_receipts_preserve_outcomes_without_parsing_result_text() {
                 outcome, content, ..
             } = event
             {
-                assert_eq!(
-                    content,
-                    if reported.is_some() {
-                        "opaque result"
-                    } else {
-                        "tool execution cancelled"
-                    }
-                );
+                if reported.is_some() {
+                    assert_eq!(content, "opaque result");
+                } else {
+                    let failure: serde_json::Value = serde_json::from_str(&content).unwrap();
+                    assert_eq!(failure["error"]["code"], "cancelled");
+                    assert_eq!(failure["error"]["recovery"], "stop");
+                }
                 receipt = outcome;
             }
         }

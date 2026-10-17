@@ -66,8 +66,8 @@ impl WriteFile {
         let prepared = tokio::task::spawn_blocking(move || {
             let prepared = Prepared::new(workspace, Arguments { path, content })?;
             if prepared.preview.before.as_deref() != Some(original.as_str()) {
-                return Err(failed(
-                    "文件已被其他程序修改。编辑内容已保留，请比较磁盘版本后再保存。",
+                return Err(ToolError::Conflict(
+                    "文件已被其他程序修改。编辑内容已保留，请比较磁盘版本后再保存。".into(),
                 ));
             }
             Ok::<_, ToolError>(prepared)
@@ -278,7 +278,9 @@ impl DeletePrepared {
         };
 
         if !approved {
-            return Err(failed("user denied undo; no file was changed"));
+            return Err(ToolError::PermissionDenied(
+                "user denied undo; no file was changed".into(),
+            ));
         }
 
         tokio::task::spawn_blocking(move || self.commit(cancellation))
@@ -419,7 +421,7 @@ impl Prepared {
     fn new(workspace: Workspace, args: Arguments) -> Result<Self, ToolError> {
         let (parent, _) = workspace
             .authorize_write_parent(Path::new(&args.path))
-            .map_err(failed)?;
+            .map_err(ToolError::from)?;
         let metadata = parent.metadata().map_err(failed)?;
         let (before, text) = snapshot(&workspace, &args.path)?;
 
@@ -461,8 +463,8 @@ impl Prepared {
         };
 
         if !approved {
-            return Err(failed(
-                "user denied write; do not retry without a new user request",
+            return Err(ToolError::PermissionDenied(
+                "user denied write; do not retry without a new user request".into(),
             ));
         }
 
@@ -487,12 +489,12 @@ impl Prepared {
         let (parent, name) = self
             .workspace
             .authorize_write_parent(path)
-            .map_err(failed)?;
+            .map_err(ToolError::from)?;
         let metadata = parent.metadata().map_err(failed)?;
 
         if (metadata.dev(), metadata.ino()) != self.parent {
-            return Err(failed(
-                "write conflict: parent directory changed; request a new preview",
+            return Err(ToolError::Conflict(
+                "write conflict: parent directory changed; request a new preview".into(),
             ));
         }
 
@@ -534,8 +536,8 @@ impl Prepared {
             || text != self.preview.before
             || (current.dev(), current.ino()) != self.parent
         {
-            return Err(failed(
-                "write conflict: file changed after preview; request a new preview",
+            return Err(ToolError::Conflict(
+                "write conflict: file changed after preview; request a new preview".into(),
             ));
         }
 
@@ -592,7 +594,7 @@ fn snapshot(
         Err(WorkspaceError::Io(error)) if error.kind() == io::ErrorKind::NotFound => {
             return Ok((None, None));
         }
-        Err(error) => return Err(failed(error)),
+        Err(error) => return Err(error.into()),
     };
 
     if file.metadata().map_err(failed)?.nlink() != 1 {
@@ -616,7 +618,9 @@ fn snapshot(
         return Err(failed("existing file contains binary data"));
     }
     if fingerprint(&file)? != before {
-        return Err(failed("file changed while preparing preview"));
+        return Err(ToolError::Conflict(
+            "file changed while preparing preview".into(),
+        ));
     }
 
     Ok((Some(before), Some(text)))

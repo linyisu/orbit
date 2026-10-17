@@ -80,10 +80,12 @@ pub(super) async fn prepare(
     )
     .await?;
     let workspace = destination.join(relative);
-    ensure!(
-        workspace.is_dir(),
-        "当前目录在 HEAD 中不存在，请在仓库根目录创建开发子代理"
-    );
+    if !workspace.is_dir() {
+        cleanup(parent, &destination, agent)
+            .await
+            .context("invalid child directory; worktree cleanup failed")?;
+        anyhow::bail!("当前目录在 HEAD 中不存在，请在仓库根目录创建开发子代理");
+    }
     Ok(workspace)
 }
 
@@ -108,6 +110,41 @@ async fn git(root: &Path, arguments: &[&str]) -> Result<String> {
         String::from_utf8_lossy(&output.stderr).trim()
     );
     Ok(String::from_utf8(output.stdout)?)
+}
+
+/// Remove only this child's not-yet-started worktree and its private branch.
+pub(super) async fn cleanup(parent: &Path, destination: &Path, agent: &str) -> Result<()> {
+    ensure!(
+        agent.len() == 32
+            && agent
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit()),
+        "invalid child identity"
+    );
+    ensure!(
+        destination
+            .file_name()
+            .and_then(|name| name.to_str())
+            == Some(agent),
+        "worktree does not belong to this child"
+    );
+    if !destination.exists() {
+        return Ok(());
+    }
+    git(
+        parent,
+        &[
+            "worktree",
+            "remove",
+            "--force",
+            destination
+                .to_str()
+                .context("worktree path is not UTF-8")?,
+        ],
+    )
+    .await?;
+    git(parent, &["branch", "-D", &format!("orbit/agent-{agent}")]).await?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -190,6 +227,20 @@ mod tests {
                 .await
                 .unwrap()
                 .contains(rejected)
+        );
+        cleanup(&repo, &child, "0123456789abcdef0123456789abcdef")
+            .await
+            .unwrap();
+        assert!(!child.exists());
+        assert!(
+            !git(&repo, &["branch", "--list"])
+                .await
+                .unwrap()
+                .contains("0123456789abcdef0123456789abcdef")
+        );
+        assert_eq!(
+            std::fs::read_to_string(repo.join("file.txt")).unwrap(),
+            "base"
         );
     }
 

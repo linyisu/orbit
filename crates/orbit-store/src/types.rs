@@ -199,6 +199,10 @@ pub struct VerificationRecord {
     pub run_status: String,
     pub command: String,
     pub exit_code: Option<i32>,
+    #[serde(default)]
+    pub signal: Option<i32>,
+    #[serde(default)]
+    pub core_dumped: bool,
     pub timed_out: bool,
     pub cancelled: bool,
     pub elapsed_ms: u64,

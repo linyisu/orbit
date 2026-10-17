@@ -180,7 +180,7 @@ async fn background_launch_still_requires_approval_and_denial_creates_no_job() {
     request.decision.send(false).unwrap();
     assert!(matches!(
         launch.await.unwrap(),
-        Err(ToolError::ExecutionFailed(_))
+        Err(ToolError::PermissionDenied(_))
     ));
     assert!(
         jobs.snapshots(&[], false)

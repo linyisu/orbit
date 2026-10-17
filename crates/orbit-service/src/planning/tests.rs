@@ -258,9 +258,33 @@ async fn plan_approval_is_once_and_creates_linked_project_tasks_atomically() {
 async fn plan_cancelled_review_survives_reopen_and_idle_approval_returns_one_prompt() {
     let (dir, plan, _writer) = fixture().await;
     draft(&plan, vec![]).await;
-    let (task, cancel, generation) = reviewing(&plan).await;
+    let mut tools = ToolRegistry::new();
+    plan.register(&mut tools);
+    let cancel = CancellationToken::new();
+    let token = cancel.clone();
+    let generation = plan.snapshot().await.generation;
+    let task = tokio::spawn(async move {
+        tools
+            .execute(
+                orbit_model::types::ToolCall::function(
+                    "review",
+                    "SubmitPlan",
+                    json!({"generation": generation}),
+                ),
+                token,
+            )
+            .await
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        while !plan.waiting() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    let generation = plan.snapshot().await.generation;
     cancel.cancel();
-    assert!(task.await.unwrap().is_err());
+    assert_eq!(task.await.unwrap().unwrap_err(), ToolError::Cancelled);
     let restored = Planning::new(
         plan.0.store.clone(),
         plan.0.session.clone(),
