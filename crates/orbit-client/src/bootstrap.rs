@@ -179,7 +179,8 @@ async fn prepare(
         .context("missing server upload pipe")?;
     let (mut file, size) = binary.reader().await?;
     let upload = async {
-        let mut buffer = [0; 64 * 1_024];
+        // An inline array also enlarges local connection futures that never upload.
+        let mut buffer = vec![0; 64 * 1_024].into_boxed_slice();
         let mut sent = 0;
         let mut last_percent = 0;
         loop {

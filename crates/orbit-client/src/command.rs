@@ -28,7 +28,7 @@ pub async fn output(mut child: Child, progress: Option<&Progress>) -> Result<std
     };
     let read_errors = async {
         let mut bytes = Vec::new();
-        let mut buffer = [0; 4_096];
+        let mut buffer = vec![0; 4_096].into_boxed_slice();
         loop {
             let count = stderr.read(&mut buffer).await?;
             if count == 0 {

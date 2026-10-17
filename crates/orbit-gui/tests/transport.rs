@@ -31,6 +31,8 @@ use orbit_client::protocol::{Request, Response};
 use std::time::Duration;
 use tokio::sync::mpsc;
 
+const TRANSPORT_TEST_STACK_BYTES: usize = 512 * 1_024;
+
 #[test]
 fn mcp_start_permission_defaults_off_and_is_forwarded_to_each_target() {
     use clap::Parser;
@@ -234,7 +236,13 @@ fn connection_progress_precedes_workspace_open_on_controlled_service() {
     options.database = Some(directory.path().join("unused.db"));
     options.auth_dir = Some(directory.path().join("auth"));
     options.model = Some("fixture::local".into());
-    let runtime = tokio::runtime::Runtime::new().unwrap();
+    // Exercise the complete backend on a smaller stack than Tokio's default.
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .thread_stack_size(TRANSPORT_TEST_STACK_BYTES)
+        .enable_all()
+        .build()
+        .unwrap();
     let (_backend, mut events) = Backend::start(options, &runtime);
     runtime.block_on(async {
         let first = events
@@ -1487,7 +1495,13 @@ fn settings_resources_round_trip_preserves_memory_category_and_workspace_scope()
     options.auth_dir = Some(directory.path().join("auth"));
     options.model = Some("fixture::local".into());
     options.resume = Some("demo".into());
-    let runtime = tokio::runtime::Runtime::new().unwrap();
+    // Global library requests prepare another connection inside the worker task.
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .thread_stack_size(TRANSPORT_TEST_STACK_BYTES)
+        .enable_all()
+        .build()
+        .unwrap();
     let (backend, mut events) = Backend::start(options, &runtime);
     runtime.block_on(async {
         until(&mut events, |event| {
