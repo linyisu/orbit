@@ -195,3 +195,34 @@ async fn unsupported_limits_are_rejected_before_process_creation() {
     );
     assert!(!root.path().join("marker").exists());
 }
+
+#[cfg(windows)]
+#[tokio::test]
+async fn native_cmd_preserves_operators_and_spaces_without_a_posix_shell() {
+    let root = tempfile::tempdir().unwrap();
+    let mut environment = ExecutionEnvironment::new(root.path(), root.path()).unwrap();
+    environment.set_var("SHELL", "cmd.exe");
+    let request = ExecutionRequest::new(
+        "echo native-output & echo native-error 1>&2 & echo saved>\"file with spaces.txt\"",
+        Duration::from_secs(5),
+    );
+    let result = execution_backend()
+        .execute(
+            &request,
+            &ExecutionPolicy::default(),
+            &environment,
+            None,
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    assert!(result.is_success());
+    assert_eq!(result.stdout.trim(), "native-output");
+    assert_eq!(result.stderr.trim(), "native-error");
+    assert_eq!(
+        std::fs::read_to_string(root.path().join("file with spaces.txt"))
+            .unwrap()
+            .trim(),
+        "saved"
+    );
+}

@@ -241,7 +241,7 @@ mod tests {
 
     #[tokio::test]
     async fn capture_preserves_complete_short_output_in_the_retained_log() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = crate::filesystem::private_test_directory().unwrap();
         let log = OutputLog::create(directory.path())
             .await
             .unwrap();

@@ -117,6 +117,10 @@ impl AssetDirectory {
                 size.saturating_add(bytes.len() as u64) <= MAX_ASSET_DIRECTORY_BYTES,
                 "附件已达到 512 MiB 容量上限；请删除不需要的会话并清理附件后重试，已有附件不会被自动淘汰"
             );
+            #[cfg(windows)]
+            let mut temporary =
+                crate::filesystem::private::temporary_file(&self.root, ".pending-")?;
+            #[cfg(unix)]
             let mut temporary = tempfile::Builder::new()
                 .prefix(".pending-")
                 .tempfile_in(&self.root)?;
@@ -318,8 +322,11 @@ mod tests {
         let large = assets
             .path()
             .join(format!("{}.png", "a".repeat(64)));
-        File::create(&large)
-            .unwrap()
+        #[cfg(unix)]
+        let large_file = File::create(&large).unwrap();
+        #[cfg(windows)]
+        let large_file = crate::filesystem::private::open_file(&large, true, true).unwrap();
+        large_file
             .set_len(MAX_ASSET_DIRECTORY_BYTES)
             .unwrap();
         drop(lock);

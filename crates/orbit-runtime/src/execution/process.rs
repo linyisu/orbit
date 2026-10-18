@@ -47,7 +47,8 @@ pub fn system_executable(name: &str) -> Option<PathBuf> {
     if Path::new(name).components().count() != 1 || name.contains(['/', '\\', ':']) {
         return None;
     }
-    let mut buffer = vec![0u16; 32_768];
+    const SYSTEM_PATH_CHARS: usize = 32_768;
+    let mut buffer = vec![0u16; SYSTEM_PATH_CHARS];
     // SAFETY: the writable buffer contains the supplied number of UTF-16 elements.
     let length = unsafe { GetSystemDirectoryW(buffer.as_mut_ptr(), buffer.len() as u32) };
     if length == 0 || length as usize >= buffer.len() {

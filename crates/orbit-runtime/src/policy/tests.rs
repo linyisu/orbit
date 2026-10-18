@@ -1,3 +1,4 @@
+#[cfg(target_os = "linux")]
 use std::path::Path;
 
 use super::*;
@@ -8,8 +9,19 @@ fn all_paths_are_grantable_and_yolo_is_live_and_environment_scoped() {
     let project = root.path().join("project");
     std::fs::create_dir(&project).unwrap();
     let engine = PolicyEngine::new(ResolvedPath::resolve(&project, None).unwrap());
-    for path in ["/", "/tmp", "/opt", "/proc", "/dev", "/sys"] {
-        let capability = FilesystemCapability::local_read(Path::new(path));
+    #[cfg(unix)]
+    let paths: Vec<_> = ["/", "/tmp", "/opt", "/proc", "/dev", "/sys"]
+        .into_iter()
+        .map(std::path::PathBuf::from)
+        .collect();
+    #[cfg(windows)]
+    let paths = vec![
+        root.path().to_path_buf(),
+        root.path().join("external"),
+        root.path().join("other"),
+    ];
+    for path in paths {
+        let capability = FilesystemCapability::local_read(&path);
         assert!(matches!(
             engine.check_filesystem(&capability),
             PolicyDecision::NeedsApproval(_)

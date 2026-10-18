@@ -218,7 +218,10 @@ impl CommandOutputs {
                     "command output was evicted before saving the capture receipt",
                 ));
             }
+            #[cfg(unix)]
             let mut file = tempfile::NamedTempFile::new_in(lease.path())?;
+            #[cfg(windows)]
+            let mut file = crate::filesystem::private::temporary_file(lease.path(), ".receipt-")?;
             file.write_all(&bytes)?;
             file.as_file().sync_all()?;
             file.persist_noclobber(lease.path().join(format!("{id}.json")))
@@ -292,11 +295,13 @@ fn create_directory(root: &Path) -> Result<RunDirectory, RuntimeError> {
         }
     }
     prune_orphans(root)?;
-    let mut builder = tempfile::Builder::new();
-    builder.prefix("run-");
     #[cfg(unix)]
-    builder.permissions(std::fs::Permissions::from_mode(0o700));
-    let directory = builder.tempdir_in(root)?;
+    let directory = tempfile::Builder::new()
+        .prefix("run-")
+        .permissions(std::fs::Permissions::from_mode(0o700))
+        .tempdir_in(root)?;
+    #[cfg(windows)]
+    let directory = crate::filesystem::private::temporary_directory(root, "run-")?;
     validate_private_directory(directory.path())?;
     let lock = private_lock(&directory.path().join("owner.lock"), true)?;
     lock.lock()?;

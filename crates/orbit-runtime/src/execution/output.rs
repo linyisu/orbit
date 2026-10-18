@@ -317,7 +317,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn directory_aliases_share_budget_and_live_log_ownership() {
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::filesystem::private_test_directory().unwrap();
         let actual = root.path().join("actual");
         std::fs::create_dir(&actual).unwrap();
         let alias = root.path().join("alias");
@@ -338,7 +338,7 @@ mod tests {
 
     #[tokio::test]
     async fn failed_log_writes_preserve_exit_status_and_drain_large_output() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = crate::filesystem::private_test_directory().unwrap();
         let mut log = OutputLog::create(directory.path())
             .await
             .unwrap();
@@ -398,7 +398,7 @@ mod tests {
 
     #[tokio::test]
     async fn concurrent_logs_share_the_task_byte_budget() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = crate::filesystem::private_test_directory().unwrap();
         let first = OutputLog::create(directory.path())
             .await
             .unwrap();
@@ -434,7 +434,7 @@ mod tests {
 
     #[tokio::test]
     async fn pruning_removes_complete_command_groups_including_the_capture_receipt() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = crate::filesystem::private_test_directory().unwrap();
         let budget = output_budget(directory.path()).unwrap();
         for (suffix, size) in [
             ("stdout", 40_000_000),
@@ -474,7 +474,7 @@ mod tests {
 
     #[tokio::test]
     async fn pruning_keeps_live_logs_pinned_until_both_streams_close() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = crate::filesystem::private_test_directory().unwrap();
         let live = OutputLog::create(directory.path())
             .await
             .unwrap();

@@ -165,6 +165,65 @@ pub fn create_directory(path: &Path) -> io::Result<()> {
     validate_directory(path)
 }
 
+/// Allocate a temporary file with explicit ownership before any private bytes are written.
+pub fn temporary_file(parent: &Path, prefix: &str) -> io::Result<tempfile::NamedTempFile> {
+    tempfile::Builder::new()
+        .prefix(prefix)
+        .make_in(parent, |path| open_file(path, true, true))
+}
+
+/// Allocate a temporary directory and secure its empty contents before returning it.
+pub fn temporary_directory(parent: &Path, prefix: &str) -> io::Result<tempfile::TempDir> {
+    use std::os::windows::fs::OpenOptionsExt;
+    use windows_sys::Win32::Security::{
+        Authorization::SetSecurityInfo, GetSecurityDescriptorDacl, GetSecurityDescriptorOwner,
+        PROTECTED_DACL_SECURITY_INFORMATION,
+    };
+    use windows_sys::Win32::Storage::FileSystem::{READ_CONTROL, WRITE_DAC, WRITE_OWNER};
+    let directory = tempfile::Builder::new()
+        .prefix(prefix)
+        .tempdir_in(parent)?;
+    let file = std::fs::OpenOptions::new()
+        .access_mode(READ_CONTROL | WRITE_DAC | WRITE_OWNER)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(directory.path())?;
+    let descriptor = security()?;
+    let mut owner = ptr::null_mut();
+    let mut acl = ptr::null_mut();
+    let mut present = 0;
+    let mut defaulted = 0;
+    // SAFETY: descriptor owns a valid security descriptor; output pointers remain live.
+    unsafe {
+        check(GetSecurityDescriptorOwner(
+            descriptor.0,
+            &mut owner,
+            &mut defaulted,
+        ))?;
+        check(GetSecurityDescriptorDacl(
+            descriptor.0,
+            &mut present,
+            &mut acl,
+            &mut defaulted,
+        ))?;
+        let error = SetSecurityInfo(
+            file.as_raw_handle(),
+            SE_FILE_OBJECT,
+            OWNER_SECURITY_INFORMATION
+                | DACL_SECURITY_INFORMATION
+                | PROTECTED_DACL_SECURITY_INFORMATION,
+            owner,
+            ptr::null_mut(),
+            acl,
+            ptr::null_mut(),
+        );
+        if error != 0 {
+            return Err(io::Error::from_raw_os_error(error as i32));
+        }
+    }
+    validate_directory(directory.path())?;
+    Ok(directory)
+}
+
 /// Create missing parents privately; existing ancestors retain their permissions.
 /// The requested directory itself must satisfy the private-storage contract.
 pub fn create_directory_all(path: &Path) -> io::Result<()> {
