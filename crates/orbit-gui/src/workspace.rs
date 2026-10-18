@@ -305,6 +305,7 @@ impl Workspace {
         let input_focus = input.read(cx).focus_handle(cx);
         let dictation =
             cx.new(|cx| crate::speech::Dictation::new(input.clone(), runtime.clone(), window, cx));
+        let dictation_changed = cx.observe(&dictation, |_, _, cx| cx.notify());
         let focused = cx.on_focus(&input_focus, window, |_, _, cx| cx.notify());
         let blurred = cx.on_blur(&input_focus, window, |_, _, cx| cx.notify());
         let bounds = cx.observe_window_bounds(window, |view, window, cx| {
@@ -343,6 +344,7 @@ impl Workspace {
             picker_pending: false,
             _subscriptions: vec![
                 subscription,
+                dictation_changed,
                 focused,
                 blurred,
                 bounds,

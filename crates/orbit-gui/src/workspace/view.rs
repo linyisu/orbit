@@ -413,8 +413,10 @@ impl Workspace {
     fn composer_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let controls_disabled =
             !self.connected || self.opening || self.busy || self.pending.is_some();
-        let show_stop =
-            self.busy && !draft_ready(&self.input.read(cx).value(), &self.paths, self.busy);
+        let dictating = self.dictation.read(cx).is_active(cx);
+        let show_stop = !dictating
+            && self.busy
+            && !draft_ready(&self.input.read(cx).value(), &self.paths, self.busy);
         let mode = self
             .info
             .as_ref()
@@ -431,154 +433,161 @@ impl Workspace {
         h_flex()
             .gap_1()
             .flex_wrap()
-            .child(
-                Button::new("attach")
-                    .ghost()
-                    .small()
-                    .icon(IconName::Plus)
-                    .accessibility_label("添加附件")
-                    .tooltip("添加附件")
-                    .disabled(
-                        self.pending.is_some()
-                            || self.opening
-                            || self.picker_pending
-                            || self.attachment_imports != 0,
-                    )
-                    .on_click(cx.listener(|view, _, _, cx| view.attach(cx))),
-            )
-            .child(
-                Button::new("work-mode")
-                    .ghost()
-                    .small()
-                    .compact()
-                    .icon(IconName::SquareTerminal)
-                    .label(
-                        if self.planning.mode == orbit_protocol::plan::WorkMode::Plan {
-                            "计划"
-                        } else {
-                            "执行"
-                        },
-                    )
-                    .disabled(controls_disabled)
-                    .dropdown_caret(true)
-                    .tooltip("工作模式：执行任务或先制定计划")
-                    .dropdown_menu_with_anchor(Anchor::BottomLeft, move |mut menu, _, _| {
-                        menu = menu.check_side(gpui_kit::component::Side::Right);
-                        for (is_plan, label) in [(false, "执行"), (true, "计划")] {
-                            let owner = work_owner.clone();
-                            menu = menu.item(
-                                PopupMenuItem::new(label)
-                                    .checked(planning == is_plan)
-                                    .on_click(move |_, _, cx| {
-                                        let _ = owner.update(cx, |view, cx| {
-                                            view.plan_action(
-                                                if is_plan {
-                                                    orbit_protocol::plan::Action::Enter
-                                                } else {
-                                                    orbit_protocol::plan::Action::Leave
-                                                },
-                                                cx,
-                                            )
-                                        });
-                                    }),
-                            );
-                        }
-                        menu
-                    }),
-            )
-            .child(
-                Button::new("mode")
-                    .ghost()
-                    .small()
-                    .compact()
-                    .dropdown_caret(true)
-                    .tooltip("工具操作的审批方式")
-                    .label(match mode {
-                        Mode::Ask => "每次询问",
-                        Mode::Auto => "自动审批",
-                        Mode::Yolo => "全部允许",
-                    })
-                    .disabled(!self.connected || self.opening || self.pending.is_some())
-                    .dropdown_menu_with_anchor(Anchor::BottomLeft, move |mut menu, _, _| {
-                        menu = menu.check_side(gpui_kit::component::Side::Right);
-                        for (choice, label) in [
-                            (Mode::Ask, "每次询问"),
-                            (Mode::Auto, "自动审批"),
-                            (Mode::Yolo, "全部允许"),
-                        ] {
-                            let owner = mode_owner.clone();
-                            let session = mode_session.clone();
-                            menu = menu.item(
-                                PopupMenuItem::new(label)
-                                    .checked(mode == choice)
-                                    .on_click(move |_, _, cx| {
-                                        let _ = owner.update(cx, |view, cx| {
-                                            view.command(
-                                                Command::Request(Request::SetMode {
-                                                    session: session.clone(),
-                                                    mode: choice,
-                                                }),
-                                                cx,
-                                            )
-                                        });
-                                    }),
-                            );
-                        }
-                        menu
-                    }),
-            )
-            .child(div().flex_1())
-            .when_some(
-                self.info
-                    .as_ref()
-                    .filter(|info| !info.reasoning_efforts.is_empty()),
-                |row, info| {
-                    let owner = cx.weak_entity();
-                    let session = info.id.clone();
-                    let model = info.model.clone();
-                    let efforts = info.reasoning_efforts.clone();
-                    row.child(
-                        Button::new("reasoning-effort")
-                            .ghost()
-                            .small()
-                            .dropdown_caret(true)
-                            .label(
-                                info.reasoning_effort
-                                    .clone()
-                                    .unwrap_or_else(|| "思考强度".into()),
-                            )
-                            .disabled(controls_disabled)
-                            .dropdown_menu_with_anchor(
-                                Anchor::BottomLeft,
-                                move |mut menu, _, _| {
-                                    for effort in &efforts {
-                                        let owner = owner.clone();
-                                        let session = session.clone();
-                                        let model = model.clone();
-                                        let effort = effort.clone();
-                                        menu =
-                                            menu.item(PopupMenuItem::new(effort.clone()).on_click(
-                                                move |_, _, cx| {
-                                                    let _ = owner.update(cx, |view, cx| {
-                                                        view.command(
-                                                            Command::Request(Request::SetModel {
-                                                                session: session.clone(),
-                                                                model: model.clone(),
-                                                                effort: Some(effort.clone()),
-                                                            }),
-                                                            cx,
-                                                        )
-                                                    });
-                                                },
-                                            ));
-                                    }
-                                    menu
-                                },
-                            ),
-                    )
-                },
-            )
-            .child(self.composer_model_button(controls_disabled, cx))
+            .when(!dictating, |row| {
+                row.child(
+                    Button::new("attach")
+                        .ghost()
+                        .small()
+                        .icon(IconName::Plus)
+                        .accessibility_label("添加附件")
+                        .tooltip("添加附件")
+                        .disabled(
+                            self.pending.is_some()
+                                || self.opening
+                                || self.picker_pending
+                                || self.attachment_imports != 0,
+                        )
+                        .on_click(cx.listener(|view, _, _, cx| view.attach(cx))),
+                )
+                .child(
+                    Button::new("work-mode")
+                        .ghost()
+                        .small()
+                        .compact()
+                        .icon(IconName::SquareTerminal)
+                        .label(
+                            if self.planning.mode == orbit_protocol::plan::WorkMode::Plan {
+                                "计划"
+                            } else {
+                                "执行"
+                            },
+                        )
+                        .disabled(controls_disabled)
+                        .dropdown_caret(true)
+                        .tooltip("工作模式：执行任务或先制定计划")
+                        .dropdown_menu_with_anchor(Anchor::BottomLeft, move |mut menu, _, _| {
+                            menu = menu.check_side(gpui_kit::component::Side::Right);
+                            for (is_plan, label) in [(false, "执行"), (true, "计划")] {
+                                let owner = work_owner.clone();
+                                menu = menu.item(
+                                    PopupMenuItem::new(label)
+                                        .checked(planning == is_plan)
+                                        .on_click(move |_, _, cx| {
+                                            let _ = owner.update(cx, |view, cx| {
+                                                view.plan_action(
+                                                    if is_plan {
+                                                        orbit_protocol::plan::Action::Enter
+                                                    } else {
+                                                        orbit_protocol::plan::Action::Leave
+                                                    },
+                                                    cx,
+                                                )
+                                            });
+                                        }),
+                                );
+                            }
+                            menu
+                        }),
+                )
+                .child(
+                    Button::new("mode")
+                        .ghost()
+                        .small()
+                        .compact()
+                        .dropdown_caret(true)
+                        .tooltip("工具操作的审批方式")
+                        .label(match mode {
+                            Mode::Ask => "每次询问",
+                            Mode::Auto => "自动审批",
+                            Mode::Yolo => "全部允许",
+                        })
+                        .disabled(!self.connected || self.opening || self.pending.is_some())
+                        .dropdown_menu_with_anchor(Anchor::BottomLeft, move |mut menu, _, _| {
+                            menu = menu.check_side(gpui_kit::component::Side::Right);
+                            for (choice, label) in [
+                                (Mode::Ask, "每次询问"),
+                                (Mode::Auto, "自动审批"),
+                                (Mode::Yolo, "全部允许"),
+                            ] {
+                                let owner = mode_owner.clone();
+                                let session = mode_session.clone();
+                                menu = menu.item(
+                                    PopupMenuItem::new(label)
+                                        .checked(mode == choice)
+                                        .on_click(move |_, _, cx| {
+                                            let _ = owner.update(cx, |view, cx| {
+                                                view.command(
+                                                    Command::Request(Request::SetMode {
+                                                        session: session.clone(),
+                                                        mode: choice,
+                                                    }),
+                                                    cx,
+                                                )
+                                            });
+                                        }),
+                                );
+                            }
+                            menu
+                        }),
+                )
+                .child(div().flex_1())
+                .when_some(
+                    self.info
+                        .as_ref()
+                        .filter(|info| !info.reasoning_efforts.is_empty()),
+                    |row, info| {
+                        let owner = cx.weak_entity();
+                        let session = info.id.clone();
+                        let model = info.model.clone();
+                        let efforts = info.reasoning_efforts.clone();
+                        row.child(
+                            Button::new("reasoning-effort")
+                                .ghost()
+                                .small()
+                                .dropdown_caret(true)
+                                .label(
+                                    info.reasoning_effort
+                                        .clone()
+                                        .unwrap_or_else(|| "思考强度".into()),
+                                )
+                                .disabled(controls_disabled)
+                                .dropdown_menu_with_anchor(
+                                    Anchor::BottomLeft,
+                                    move |mut menu, _, _| {
+                                        for effort in &efforts {
+                                            let owner = owner.clone();
+                                            let session = session.clone();
+                                            let model = model.clone();
+                                            let effort = effort.clone();
+                                            menu = menu.item(
+                                                PopupMenuItem::new(effort.clone()).on_click(
+                                                    move |_, _, cx| {
+                                                        let _ = owner.update(cx, |view, cx| {
+                                                            view.command(
+                                                                Command::Request(
+                                                                    Request::SetModel {
+                                                                        session: session.clone(),
+                                                                        model: model.clone(),
+                                                                        effort: Some(
+                                                                            effort.clone(),
+                                                                        ),
+                                                                    },
+                                                                ),
+                                                                cx,
+                                                            )
+                                                        });
+                                                    },
+                                                ),
+                                            );
+                                        }
+                                        menu
+                                    },
+                                ),
+                        )
+                    },
+                )
+                .child(self.composer_model_button(controls_disabled, cx))
+            })
             .child(self.dictation.clone())
             .child(
                 Button::new("composer-action")
@@ -604,10 +613,8 @@ impl Workspace {
                         )
                     })
                     .disabled(!show_stop && !self.can_send(cx))
-                    .on_click(cx.listener(|view, _, window, cx| {
-                        if view.busy
-                            && !draft_ready(&view.input.read(cx).value(), &view.paths, view.busy)
-                        {
+                    .on_click(cx.listener(move |view, _, window, cx| {
+                        if show_stop {
                             view.stop_task(cx);
                         } else {
                             view.send(&SendMessage, window, cx);

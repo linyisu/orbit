@@ -359,6 +359,10 @@ impl Dictation {
         }
     }
 
+    pub(crate) fn is_active(&self, cx: &App) -> bool {
+        self.state.read(cx).status().is_active()
+    }
+
     fn restore(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(preview) = self.preview.take() {
             self.input
@@ -384,34 +388,51 @@ impl Render for Dictation {
         let model = self.model.read(cx);
         let status = self.state.read(cx).status();
         h_flex()
+            .when(status.is_active(), |bar| bar.flex_1().min_w_0())
             .gap_1()
             .child(match &model.setup {
-                Setup::Ready(_) => h_flex()
-                    .gap_1()
-                    .when(status.is_capturing(), |bar| {
-                        bar.child(
-                            SpeechWaveform::new(&self.state)
-                                .w_12()
-                                .small(),
-                        )
-                    })
-                    .child(SpeechButton::new(&self.state).small())
+                Setup::Ready(_) if status.is_active() => h_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .gap_2()
+                    .child(
+                        Button::new("cancel-dictation")
+                            .small()
+                            .ghost()
+                            .rounded_full()
+                            .icon(gpui_kit::assets::IconName::X)
+                            .accessibility_label("取消语音输入并还原草稿")
+                            .tooltip("取消语音输入并还原草稿")
+                            .on_click(cx.listener(|view, _, window, cx| view.cancel(window, cx))),
+                    )
+                    .child(
+                        SpeechWaveform::new(&self.state)
+                            .w_0()
+                            .flex_1()
+                            .min_w_0()
+                            .small(),
+                    )
                     .when(status == SpeechStatus::Stopping, |bar| {
                         bar.child(div().text_sm().child("转写中…"))
                     })
-                    .when(status.is_active(), |bar| {
-                        bar.child(
-                            Button::new("cancel-dictation")
-                                .small()
-                                .ghost()
-                                .icon(gpui_kit::assets::IconName::X)
-                                .accessibility_label("取消语音输入")
-                                .tooltip("取消语音输入")
-                                .on_click(
-                                    cx.listener(|view, _, window, cx| view.cancel(window, cx)),
-                                ),
-                        )
-                    })
+                    .child(
+                        Button::new("finish-dictation")
+                            .small()
+                            .ghost()
+                            .rounded_full()
+                            .icon(gpui_kit::assets::IconName::Square)
+                            .loading(status == SpeechStatus::Stopping)
+                            .disabled(!status.is_capturing())
+                            .accessibility_label("完成录音并保留文字")
+                            .tooltip("完成录音并保留文字")
+                            .on_click(cx.listener(|view, _, _, cx| {
+                                view.state
+                                    .update(cx, |state, cx| state.stop(cx));
+                            })),
+                    )
+                    .into_any_element(),
+                Setup::Ready(_) => SpeechButton::new(&self.state)
+                    .small()
                     .into_any_element(),
                 Setup::Preparing { progress, .. } => {
                     let label = if progress.total_bytes == 0 {
