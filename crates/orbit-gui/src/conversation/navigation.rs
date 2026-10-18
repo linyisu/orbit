@@ -368,7 +368,7 @@ impl Render for TailControl {
             .messages
             .read(cx)
             .is_scrolled_up();
-        if !self.running && !scrolled_up {
+        if !scrolled_up {
             return div().into_any_element();
         }
         Button::new("latest-output")

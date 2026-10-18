@@ -181,3 +181,192 @@ fn file_pages_contain_only_the_received_text_and_completed_status_is_empty() {
     assert!(status(&record).is_empty());
     assert_eq!(super::streams(&record), &[Stream::Result]);
 }
+
+#[test]
+fn source_gutter_uses_verified_file_lines_without_changing_source_indentation() {
+    let mut record = tool(
+        "ReadFile",
+        serde_json::json!({"path": "generated.rs"}),
+        Some(
+            serde_json::json!({"start_line": 97, "content": "97: 42: literal\n98:     indented\n"}),
+        ),
+    );
+    let source = super::source_text(&record).unwrap();
+    assert_eq!(source.first_line(), 97);
+    assert_eq!(source.text(), "42: literal\n    indented\n");
+    for content in [
+        "97: first\n99: skipped",
+        "98: mismatched",
+        "unprefixed text",
+    ] {
+        record.output = Some(serde_json::json!({"start_line": 97, "content": content}).to_string());
+        assert!(super::source_text(&record).is_none());
+        assert_eq!(super::content(&record, Stream::Result), content);
+    }
+}
+
+#[test]
+fn state_and_command_views_keep_user_content_and_drop_transport_metadata() {
+    for (name, output, expected) in [
+        (
+            "ListTasks",
+            serde_json::json!({
+                "tasks": [{
+                    "id": 8,
+                    "title": "Review generated module",
+                    "details": "Check cancellation",
+                    "status": "in_progress",
+                    "project_id": "private-project"
+                }],
+                "source_kind": "project_task_state"
+            }),
+            "Review generated module",
+        ),
+        (
+            "ListMemories",
+            serde_json::json!({
+                "memories": [{
+                    "id": 3,
+                    "title": "Style",
+                    "content": "Use descriptive names",
+                    "category": "preference",
+                    "active": true,
+                    "session_id": "private-session"
+                }]
+            }),
+            "Use descriptive names",
+        ),
+        (
+            "StopCommands",
+            serde_json::json!({
+                "jobs": [{
+                    "command": "generated-worker",
+                    "status": "cancelling",
+                    "elapsed_ms": 9,
+                    "call_id": "private-call"
+                }]
+            }),
+            "正在停止",
+        ),
+        (
+            "WaitCommands",
+            serde_json::json!({
+                "jobs": [{
+                    "command": "generated-worker",
+                    "status": "failed",
+                    "elapsed_ms": 11,
+                    "result": {
+                        "error": { "message": "Generated worker failed", "code": "execution_failed" }
+                    }
+                }]
+            }),
+            "Generated worker failed",
+        ),
+        (
+            "CheckEvidence",
+            serde_json::json!({
+                "commands": [],
+                "changes": [],
+                "command_count": 0,
+                "snapshot_id": "private-hash",
+                "baseline_available": true
+            }),
+            "0 项文件变更",
+        ),
+    ] {
+        let view = content(
+            &tool(name, serde_json::json!({}), Some(output)),
+            Stream::Result,
+        );
+        assert!(view.contains(expected), "{view}");
+        assert!(
+            !view.contains("private-") && !view.contains("source_kind"),
+            "{view}"
+        );
+    }
+}
+
+#[test]
+fn failure_receipts_keep_diagnostics_without_exposing_transport_metadata() {
+    for (code, title) in [
+        ("invalid_arguments", "调用参数无效"),
+        ("authorization_required", "需要访问授权"),
+        ("dependency_unavailable", "所需依赖不可用"),
+        ("conflict", "输入已发生变化"),
+        ("cancelled", "工具调用已取消"),
+        ("future_code", "工具执行失败"),
+    ] {
+        let mut record = tool(
+            "ReadFile",
+            serde_json::json!({"path": "generated.rs"}),
+            Some(serde_json::json!({
+                "error": {
+                    "code": code,
+                    "message": "generated diagnostic\nsecond line",
+                    "retryable": false,
+                    "recovery": "opaque_machine_hint",
+                    "message_truncated": false
+                }
+            })),
+        );
+        record.status = ToolStatus::Failed;
+        let failure = super::failure(&record).unwrap();
+        assert_eq!(failure.title(), title);
+        assert_eq!(failure.message(), "generated diagnostic\nsecond line");
+        let displayed = content(&record, Stream::Result);
+        assert_eq!(displayed, "generated diagnostic\nsecond line");
+        assert!(!displayed.contains("opaque_machine_hint") && !displayed.contains("retryable"));
+        record.status = ToolStatus::Complete;
+        assert!(super::failure(&record).is_none());
+    }
+    let mut record = tool("ReadFile", serde_json::json!({}), None);
+    record.status = ToolStatus::Failed;
+    record.output = Some("dependency unavailable is only diagnostic text here".into());
+    assert_eq!(super::failure(&record).unwrap().title(), "工具执行失败");
+    assert!(content(&record, Stream::Result).contains(record.output.as_deref().unwrap()));
+}
+
+#[test]
+fn command_failure_presentation_preserves_streams_and_distinguishes_cancellation() {
+    let mut record = tool(
+        "Exec",
+        serde_json::json!({"command": "generated-check"}),
+        Some(serde_json::json!({
+            "exit_code": 7,
+            "elapsed": {"secs": 2, "nanos": 0},
+            "stdout": "partial output",
+            "stderr": "generated failure",
+            "timed_out": false,
+            "cancelled": false,
+            "output_truncated": false,
+            "stdout_total_bytes": 14,
+            "stderr_total_bytes": 17
+        })),
+    );
+    assert_eq!(super::failure(&record).unwrap().title(), "命令执行失败");
+    assert_eq!(content(&record, Stream::Stderr), "generated failure");
+    let mut value: serde_json::Value =
+        serde_json::from_str(record.output.as_deref().unwrap()).unwrap();
+    value["cancelled"] = true.into();
+    value["timed_out"] = true.into();
+    record.output = Some(value.to_string());
+    assert_eq!(super::failure(&record).unwrap().title(), "命令已取消");
+    assert_eq!(content(&record, Stream::Stdout), "partial output");
+    value["cancelled"] = false.into();
+    record.output = Some(value.to_string());
+    assert_eq!(super::failure(&record).unwrap().title(), "命令执行超时");
+    value["timed_out"] = false.into();
+    value["exit_code"] = 0.into();
+    record.output = Some(value.to_string());
+    assert!(
+        super::failure(&record).is_none(),
+        "stderr alone is not a failure"
+    );
+    value["exit_code"] = serde_json::Value::Null;
+    value["signal"] = 15.into();
+    value["core_dumped"] = true.into();
+    record.output = Some(value.to_string());
+    let failure = super::failure(&record).unwrap();
+    assert_eq!(failure.title(), "命令被信号终止");
+    assert!(failure.message().contains("15") && failure.message().contains("核心转储"));
+}

@@ -3,7 +3,6 @@ mod images;
 mod markdown;
 mod model;
 mod navigation;
-mod process;
 use crate::file_preview::FileRequest;
 use gpui_kit::component::{
     ActiveTheme, Icon, IconName, Sizable,
@@ -20,10 +19,8 @@ use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use model::{Kind, Transcript, Turn};
 pub(crate) use navigation::bind_keys;
-use orbit_client::conversation::layout::Segment;
 use orbit_client::protocol::Update;
-use process::ProcessDisclosure;
-use std::{cell::Cell, collections::BTreeMap, rc::Rc, sync::Arc};
+use std::{cell::Cell, rc::Rc, sync::Arc};
 
 pub(crate) struct Conversation {
     _subscriptions: Vec<Subscription>,
@@ -45,25 +42,16 @@ pub(crate) struct ToolRequest(pub orbit_client::execution::ToolRun);
 enum RowKey {
     Prompt(usize),
     Part(usize, usize),
-    Tools(usize, usize),
     Footer(usize),
 }
 
 struct TurnView {
     user: Option<Entity<MessageRow>>,
     parts: Vec<Entity<MessageRow>>,
-    groups: BTreeMap<usize, Entity<ToolGroup>>,
     reply: SharedString,
     completed: bool,
     viewport_bounds: Rc<Cell<Bounds<Pixels>>>,
     _subscriptions: Vec<Subscription>,
-}
-
-struct ToolGroup {
-    start: usize,
-    rows: Vec<Entity<MessageRow>>,
-    label: SharedString,
-    disclosure: ProcessDisclosure,
 }
 
 struct LayoutChanged {
@@ -98,7 +86,6 @@ struct MessageImage {
 }
 
 impl EventEmitter<Disclosure> for MessageRow {}
-impl EventEmitter<Disclosure> for ToolGroup {}
 impl EventEmitter<Disclosure> for TurnView {}
 impl EventEmitter<LayoutChanged> for TurnView {}
 impl EventEmitter<LayoutChanged> for MessageRow {}
@@ -186,7 +173,6 @@ impl Conversation {
             let row = cx.new(|_| TurnView {
                 user: None,
                 parts: Vec::new(),
-                groups: BTreeMap::new(),
                 reply: "".into(),
                 completed: false,
                 viewport_bounds: self.viewport_bounds.clone(),
@@ -261,16 +247,7 @@ impl Conversation {
     }
 
     fn remeasure_part(&mut self, turn: usize, part: usize, cx: &mut Context<Self>) {
-        let key = self.transcript.turns[turn]
-            .segments()
-            .into_iter()
-            .find_map(|segment| match segment {
-                Segment::Part(index) if index == part => Some(RowKey::Part(turn, part)),
-                Segment::Tools(range) if range.contains(&part) => {
-                    Some(RowKey::Tools(turn, range.start))
-                }
-                _ => None,
-            });
+        let key = Some(RowKey::Part(turn, part));
         if let Some(index) = key.and_then(|key| {
             self.order
                 .iter()
@@ -290,15 +267,7 @@ impl Conversation {
                 prompts.push(order.len());
             }
             order.push(RowKey::Prompt(turn));
-            order.extend(
-                source
-                    .segments()
-                    .into_iter()
-                    .map(|segment| match segment {
-                        Segment::Part(part) => RowKey::Part(turn, part),
-                        Segment::Tools(range) => RowKey::Tools(turn, range.start),
-                    }),
-            );
+            order.extend((0..source.parts.len()).map(|part| RowKey::Part(turn, part)));
             order.push(RowKey::Footer(turn));
         }
         let prefix = self
@@ -472,49 +441,6 @@ impl TurnView {
                 cx.notify();
             });
         }
-        for segment in turn.segments() {
-            let Segment::Tools(range) = segment else {
-                continue;
-            };
-            let start = range.start;
-            let group = self
-                .groups
-                .entry(start)
-                .or_insert_with(|| {
-                    let group = cx.new(|_| ToolGroup {
-                        start,
-                        rows: Vec::new(),
-                        label: "".into(),
-                        disclosure: ProcessDisclosure::default(),
-                    });
-                    self._subscriptions.push(cx.subscribe(
-                        &group,
-                        |_, _, event: &Disclosure, cx| {
-                            cx.emit(Disclosure { index: event.index });
-                        },
-                    ));
-                    group
-                });
-            group.update(cx, |group, cx| {
-                group.rows = self.parts[range.clone()].to_vec();
-                group.label = orbit_client::execution::batch_label(
-                    turn.parts[range.clone()]
-                        .iter()
-                        .filter_map(|part| {
-                            part.tool
-                                .as_ref()
-                                .map(|tool| tool.status)
-                        }),
-                )
-                .into();
-                group.disclosure.sync(
-                    !turn.parts[range]
-                        .iter()
-                        .any(|part| part.running),
-                );
-                cx.notify();
-            });
-        }
         cx.notify();
     }
 }
@@ -542,33 +468,6 @@ fn disclosure_button(id: &'static str, title: SharedString, expanded: bool) -> B
                 )
                 .child(div().min_w_0().truncate().child(title)),
         )
-}
-
-impl Render for ToolGroup {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        v_flex()
-            .w_full()
-            .min_w_0()
-            .items_start()
-            .gap_2()
-            .child(
-                disclosure_button("tool-group", self.label.clone(), self.disclosure.expanded())
-                    .on_click(cx.listener(|view, _, _, cx| {
-                        view.disclosure.toggle();
-                        cx.emit(Disclosure { index: view.start });
-                        cx.notify();
-                    })),
-            )
-            .when(self.disclosure.expanded(), |view| {
-                view.child(
-                    v_flex()
-                        .w_full()
-                        .min_w_0()
-                        .pl(rems(1.5))
-                        .children(self.rows.clone()),
-                )
-            })
-    }
 }
 
 impl Render for TurnView {
@@ -624,9 +523,6 @@ impl Render for Conversation {
                                 })
                                 .into_any_element(),
                             RowKey::Part(turn, part) => view.rows[turn].read(cx).parts[part]
-                                .clone()
-                                .into_any_element(),
-                            RowKey::Tools(turn, start) => view.rows[turn].read(cx).groups[&start]
                                 .clone()
                                 .into_any_element(),
                             RowKey::Footer(turn) => view.rows[turn]
@@ -832,8 +728,7 @@ impl MessageRow {
 }
 
 impl Render for MessageRow {
-    /// The title icon owns a column; expanded content starts at the title text, using the same
-    /// inset rather than Button's internal padding.
+    /// Expandable text aligns with its title; tool rows reserve no icon column.
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if let Some(tool) = &self.tool {
             let tool = tool.clone();
@@ -842,54 +737,63 @@ impl Render for MessageRow {
                 .small()
                 .w_full()
                 .justify_start()
+                .px_0()
                 .child(
                     h_flex()
                         .w_full()
                         .min_w_0()
                         .gap_2()
-                        .child(
-                            div()
-                                .w_4()
-                                .flex_shrink_0()
-                                .when(
-                                    matches!(
-                                        tool.status,
-                                        orbit_client::execution::ToolStatus::Running
-                                            | orbit_client::execution::ToolStatus::Background
-                                    ),
-                                    |slot| {
-                                        slot.child(
-                                            Icon::new(IconName::LoaderCircle)
-                                                .small()
-                                                .with_animation(
-                                                    "tool-running",
-                                                    Animation::new(std::time::Duration::from_secs(
-                                                        2,
-                                                    ))
-                                                    .repeat(),
-                                                    |icon, delta| {
-                                                        icon.transform(Transformation::rotate(
-                                                            percentage(delta),
-                                                        ))
-                                                    },
-                                                ),
+                        .when(
+                            tool.status != orbit_client::execution::ToolStatus::Complete,
+                            |row| {
+                                row.child(
+                                    div()
+                                        .flex_shrink_0()
+                                        .when(
+                                            matches!(
+                                                tool.status,
+                                                orbit_client::execution::ToolStatus::Running
+                                                    | orbit_client::execution::ToolStatus::Background
+                                            ),
+                                            |slot| {
+                                                slot.child(
+                                                    Icon::new(IconName::LoaderCircle)
+                                                        .small()
+                                                        .with_animation(
+                                                            "tool-running",
+                                                            Animation::new(
+                                                                std::time::Duration::from_secs(2),
+                                                            )
+                                                            .repeat(),
+                                                            |icon, delta| {
+                                                                icon.transform(
+                                                                    Transformation::rotate(
+                                                                        percentage(delta),
+                                                                    ),
+                                                                )
+                                                            },
+                                                        ),
+                                                )
+                                            },
                                         )
-                                    },
-                                )
-                                .when(
-                                    tool.status == orbit_client::execution::ToolStatus::Failed,
-                                    |slot| {
-                                        slot.child(
-                                            Icon::new(IconName::CircleAlert)
-                                                .small()
-                                                .text_color(cx.theme().danger),
+                                        .when(
+                                            tool.status
+                                                == orbit_client::execution::ToolStatus::Failed,
+                                            |slot| {
+                                                slot.child(
+                                                    Icon::new(IconName::CircleAlert)
+                                                        .small()
+                                                        .text_color(cx.theme().danger),
+                                                )
+                                            },
                                         )
-                                    },
+                                        .when(
+                                            tool.status
+                                                == orbit_client::execution::ToolStatus::Stopped,
+                                            |slot| slot.child(Icon::new(IconName::Square).small()),
+                                        ),
                                 )
-                                .when(
-                                    tool.status == orbit_client::execution::ToolStatus::Stopped,
-                                    |slot| slot.child(Icon::new(IconName::Square).small()),
-                                ),
+                            },
                         )
                         .child(
                             div()
@@ -897,14 +801,16 @@ impl Render for MessageRow {
                                 .text_ellipsis()
                                 .child(tool.name.clone()),
                         )
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .text_ellipsis()
-                                .text_color(cx.theme().muted_foreground)
-                                .child(tool.summary()),
-                        ),
+                        .when(tool.summary() != tool.name, |row| {
+                            row.child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .text_ellipsis()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(tool.summary()),
+                            )
+                        }),
                 )
                 .accessibility_label(format!("{} · {}", tool.status.label(), tool.summary()))
                 .on_click(cx.listener(move |_, _, _, cx| cx.emit(ToolRequest(tool.clone()))))

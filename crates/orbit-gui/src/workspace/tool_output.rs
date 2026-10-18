@@ -10,8 +10,8 @@ use gpui_kit::component::{
 };
 
 use orbit_client::execution::details::{
-    Request as ToolRequest, RequestLayout, Stream, content, default_stream, retained::Retained,
-    status,
+    Request as ToolRequest, RequestLayout, Stream, content, default_stream, failure,
+    retained::Retained, source_text, status,
 };
 
 pub(super) struct ToolOutput {
@@ -62,6 +62,7 @@ impl ToolOutput {
                     .language("plaintext")
                     .line_number(true)
                     .folding(false)
+                    .indent_guides(false)
                     .soft_wrap(true)
                     .scroll_beyond_last_line(Some(0))
                     .default_value(displayed.clone())
@@ -71,6 +72,7 @@ impl ToolOutput {
                     .language(request.language())
                     .line_number(true)
                     .folding(false)
+                    .indent_guides(false)
                     .soft_wrap(true)
                     .scroll_beyond_last_line(Some(0))
                     .default_value(request.content())
@@ -163,9 +165,22 @@ impl ToolOutput {
             })
             .detach();
         }
-        let next = self
-            .retained
-            .content(&self.tool, self.stream);
+        let source = (self.stream == Stream::Result)
+            .then(|| source_text(&self.tool))
+            .flatten();
+        let next = source.as_ref().map_or_else(
+            || {
+                self.retained
+                    .content(&self.tool, self.stream)
+            },
+            |source| source.text().to_owned(),
+        );
+        let first_line = source
+            .as_ref()
+            .map_or(1, |source| source.first_line());
+        self.editor.update(cx, |editor, cx| {
+            editor.set_line_number_start(first_line, cx);
+        });
         if next != self.displayed {
             if self.stream == Stream::Changes && self.diff_patch.as_deref() != Some(&next) {
                 let patch = next.clone();
@@ -351,6 +366,17 @@ impl ToolOutput {
 }
 
 pub(super) fn present(panel: Entity<ToolOutput>, window: &mut Window, cx: &mut App) {
+    if matches!(
+        orbit_client::execution::details::target(&panel.read(cx).tool),
+        Some(orbit_client::execution::details::Target::Image(_))
+    ) {
+        panel.update(cx, |panel, cx| {
+            panel.closed = false;
+            // The caller may still lease Workspace; resolve the image after that update ends.
+            cx.defer_in(window, |panel, window, cx| panel.inspect_target(window, cx));
+        });
+        return;
+    }
     panel.update(cx, |panel, cx| {
         panel.closed = false;
         panel.refresh(window, cx);
@@ -391,6 +417,7 @@ impl Render for ToolOutput {
         } else {
             self.status.clone()
         };
+        let call_failure = failure(&self.tool);
         let streams = self.pages;
         let target = orbit_client::execution::details::target(&self.tool)
             .filter(|_| !self.disconnected && has_owner)
@@ -407,6 +434,12 @@ impl Render for ToolOutput {
             .clamp(1, 6) as f32;
         let header_height = (window.rem_size() * (request_lines * 1.5 + 1.))
             .min(window.viewport_size().height * 0.20);
+        let background = cx
+            .theme()
+            .highlight_theme
+            .style
+            .editor_background
+            .unwrap_or_else(|| cx.theme().input_background());
         let copy_owner = cx.entity().downgrade();
         let copy = || {
             Clipboard::new(("copy-tool-output", self.stream as usize))
@@ -441,6 +474,7 @@ impl Render for ToolOutput {
                         .rounded_md()
                         .border_1()
                         .border_color(cx.theme().border)
+                        .bg(background)
                         .overflow_hidden()
                         .child(
                             h_flex()
@@ -485,6 +519,8 @@ impl Render for ToolOutput {
                                             .accessibility_label("复制调用内容"),
                                     ),
                                     self.request.heading().into(),
+                                    background,
+                                    window.rem_size() * 3.,
                                 )),
                         )
                         .when(!self.request.context().is_empty(), |view| {
@@ -543,6 +579,40 @@ impl Render for ToolOutput {
                         }),
                 )
             })
+            .when_some(call_failure, |view, failure| {
+                view.child(
+                    v_flex()
+                        .flex_shrink_0()
+                        .min_w_0()
+                        .gap_1()
+                        .px_3()
+                        .py_2()
+                        .rounded_md()
+                        .bg(cx.theme().muted.opacity(0.15))
+                        .child(
+                            h_flex()
+                                .gap_2()
+                                .child(
+                                    Icon::new(if self.tool.status == ToolStatus::Stopped {
+                                        IconName::Square
+                                    } else {
+                                        IconName::CircleAlert
+                                    })
+                                    .small(),
+                                )
+                                .child(failure.title()),
+                        )
+                        .when(!failure.guidance().is_empty(), |card| {
+                            card.child(
+                                div()
+                                    .text_sm()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .whitespace_normal()
+                                    .child(failure.guidance()),
+                            )
+                        }),
+                )
+            })
             .child(
                 v_flex()
                     .flex_1()
@@ -567,11 +637,17 @@ impl Render for ToolOutput {
                                     .min_w_0()
                                     .menu(false)
                                     .selected_index(selected)
-                                    .children(
-                                        streams
-                                            .iter()
-                                            .map(|stream| Tab::new().label(stream.label())),
-                                    )
+                                    .children(streams.iter().map(|stream| {
+                                        Tab::new().label(
+                                            if *stream == Stream::Result
+                                                && failure(&self.tool).is_some()
+                                            {
+                                                "错误详情"
+                                            } else {
+                                                stream.label()
+                                            },
+                                        )
+                                    }))
                                     .on_click(cx.listener(move |view, ix: &usize, window, cx| {
                                         view.select(streams[*ix], window, cx)
                                     })),
@@ -656,7 +732,7 @@ impl Render for ToolOutput {
                                                 div()
                                                     .absolute()
                                                     .top_2()
-                                                    .right_2()
+                                                    .right_4()
                                                     .child(copy()),
                                             ),
                                     )
@@ -670,6 +746,8 @@ impl Render for ToolOutput {
                                         &self.editor,
                                         Some(copy()),
                                         format!("工具输出 {}", self.stream.label()).into(),
+                                        background,
+                                        window.rem_size() * 3.,
                                     ))
                                 },
                             ),
@@ -683,18 +761,28 @@ fn editor_content(
     editor: &Entity<EditorState>,
     copy: Option<Clipboard>,
     label: SharedString,
+    background: Hsla,
+    padding_right: Pixels,
 ) -> impl IntoElement {
     div()
         .relative()
         .size_full()
         .min_w_0()
         .min_h_0()
+        .overflow_hidden()
+        .bg(background)
         .child(
             Editor::new(editor)
                 .readonly(true)
                 .bordered(false)
+                .w_full()
                 .h_full()
-                .pr_10()
+                .content_padding(Edges {
+                    top: padding_right / 6.,
+                    bottom: padding_right / 6.,
+                    left: padding_right / 8.,
+                    right: padding_right,
+                })
                 .aria_label(label),
         )
         .when_some(copy, |body, copy| {
@@ -702,7 +790,7 @@ fn editor_content(
                 div()
                     .absolute()
                     .top_2()
-                    .right_2()
+                    .right_4()
                     .child(copy),
             )
         })

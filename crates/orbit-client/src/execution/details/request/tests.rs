@@ -144,3 +144,13 @@ fn dynamic_tools_and_malformed_calls_keep_their_original_identity_and_data() {
     malformed.arguments = "unfinished {".into();
     assert_eq!(Request::new(&malformed, "").content(), "unfinished {");
 }
+
+#[test]
+fn state_queries_hide_empty_requests_and_show_rejected_arguments_without_a_code_panel() {
+    for name in ["ListTasks", "ListMemories", "ReadHistory", "CheckEvidence"] {
+        assert_eq!(request(name, json!({})).layout(), RequestLayout::Hidden);
+    }
+    let invalid = request("ListTasks", json!({"unexpected": "retained"}));
+    assert_eq!(invalid.layout(), RequestLayout::Summary);
+    assert!(invalid.content().contains("unexpected") && invalid.content().contains("retained"));
+}

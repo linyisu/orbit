@@ -2,12 +2,63 @@
 use super::{ToolRun, ToolStatus};
 use serde_json::Value;
 
+mod failure;
+mod operations;
+pub use failure::{Failure, failure};
 mod request;
 pub mod retained;
 pub use request::{Request, RequestLayout};
 
 #[cfg(test)]
 mod streams_tests;
+
+/// Source text and its original one-based gutter origin, separate from transport prefixes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SourceText {
+    text: String,
+    first_line: usize,
+}
+
+impl SourceText {
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+
+    pub fn first_line(&self) -> usize {
+        self.first_line
+    }
+}
+
+/// Removes only the sequential line prefixes defined by the ReadFile result contract.
+/// Malformed results remain available through the ordinary result presentation.
+pub fn source_text(tool: &ToolRun) -> Option<SourceText> {
+    if tool.name != "ReadFile" || tool.status != ToolStatus::Complete {
+        return None;
+    }
+    let value: Value = serde_json::from_str(tool.output.as_deref()?).ok()?;
+    let content = value["content"].as_str()?;
+    let first_prefix = content
+        .split_once(": ")?
+        .0
+        .parse::<usize>()
+        .ok()?;
+    let first_line = value["start_line"]
+        .as_u64()
+        .and_then(|line| usize::try_from(line).ok())
+        .unwrap_or(first_prefix);
+    if first_line == 0 {
+        return None;
+    }
+    let mut text = String::with_capacity(content.len());
+    for (offset, line) in content
+        .split_inclusive('\n')
+        .enumerate()
+    {
+        let prefix = format!("{}: ", first_line.checked_add(offset)?);
+        text.push_str(line.strip_prefix(&prefix)?);
+    }
+    Some(SourceText { text, first_line })
+}
 
 /// An explicit navigation target reported by a completed tool, never an executable action.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -159,6 +210,11 @@ pub fn content(tool: &ToolRun, stream: Stream) -> String {
             .stderr_preview
             .clone()
             .unwrap_or_default();
+    }
+    if stream == Stream::Result
+        && let Some(failure) = failure(tool)
+    {
+        return failure.message().to_owned();
     }
     let Some(output) = &tool.output else {
         return String::new();
@@ -357,6 +413,9 @@ fn structured(name: &str, output: &str) -> String {
     let Ok(value) = serde_json::from_str::<Value>(output) else {
         return output.to_owned();
     };
+    if let Some(text) = operations::present(name, &value) {
+        return text;
+    }
     match name {
         "WebSearch" => {
             if let Some(results) = value["results"].as_array() {

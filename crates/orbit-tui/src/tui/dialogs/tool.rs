@@ -119,14 +119,13 @@ impl InfoDialog {
         let streams = header.streams;
         self.title = record.name.clone();
         self.target = details::target(record);
-        self.content = header
-            .retained
-            .content(record, selected);
+        self.content = header.content(self.selected_page);
         self.pages = streams
             .iter()
-            .map(|stream| ReportPage {
+            .enumerate()
+            .map(|(index, stream)| ReportPage {
                 label: stream.label().into(),
-                content: Text::from(header.retained.content(record, *stream)),
+                content: Text::from(header.content(index)),
             })
             .collect();
     }
@@ -314,7 +313,17 @@ impl InfoDialog {
         let area = inner.inner(ratatui::layout::Margin::new(1, 0));
         let request_body = header.request.layout() == details::RequestLayout::Body;
         let hidden = header.request.layout() == details::RequestLayout::Hidden;
-        let [title, label, parameters, context, tabs, body, footer] = Layout::vertical([
+        let failure = details::failure(&header.record);
+        let [
+            title,
+            label,
+            parameters,
+            context,
+            failure_area,
+            tabs,
+            body,
+            footer,
+        ] = Layout::vertical([
             Constraint::Length(1),
             Constraint::Length(u16::from(!hidden)),
             Constraint::Length(if request_body {
@@ -323,6 +332,7 @@ impl InfoDialog {
                 0
             }),
             Constraint::Length(u16::from(!hidden && !header.request.context().is_empty())),
+            Constraint::Length(u16::from(failure.is_some())),
             Constraint::Length(1),
             Constraint::Min(1),
             Constraint::Length(1),
@@ -333,6 +343,17 @@ impl InfoDialog {
                 .style(super::super::components::accent()),
             title,
         );
+        if let Some(failure) = failure {
+            frame.render_widget(
+                Paragraph::new(super::super::render::fit_label(
+                    &format!("{}  {}", failure.title(), failure.guidance()),
+                    usize::from(failure_area.width),
+                    false,
+                ))
+                .style(super::super::components::accent()),
+                failure_area,
+            );
+        }
         let active = if header.active == Pane::Parameters {
             " ◂"
         } else {

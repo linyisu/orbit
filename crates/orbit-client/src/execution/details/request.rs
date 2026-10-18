@@ -136,7 +136,34 @@ impl Request {
                 "plaintext",
                 &[("reason", "原因"), ("access", "权限")],
             ),
-            _ => return request,
+            "ListTasks" | "UpdateTask" | "ListMemories" | "SearchMemory" | "SaveMemory"
+            | "ForgetMemory" | "ReadHistory" | "CheckEvidence" => {
+                request.layout = if args
+                    .as_object()
+                    .is_some_and(|fields| fields.is_empty())
+                {
+                    RequestLayout::Hidden
+                } else {
+                    RequestLayout::Summary
+                };
+                request.content = args
+                    .as_object()
+                    .unwrap()
+                    .iter()
+                    .map(|(key, value)| super::parameter(key, value))
+                    .collect::<Vec<_>>()
+                    .join(" · ");
+                return request;
+            }
+            _ => {
+                if args
+                    .as_object()
+                    .is_some_and(|fields| fields.is_empty())
+                {
+                    request.layout = RequestLayout::Hidden;
+                }
+                return request;
+            }
         };
         request.heading = heading;
         request.language = language;
@@ -153,13 +180,36 @@ impl Request {
                 | "WebFetch"
                 | "ProjectOverview"
                 | "CodeSymbols"
+                | "CommandOutput"
+                | "CommandStatus"
+                | "WaitCommands"
+                | "StopCommands"
+                | "ReadAgent"
+                | "WaitAgents"
+                | "StopAgents"
+                | "RequestAccess"
+                | "EnterPlan"
+                | "SubmitPlan"
+                | "CancelPlan"
         ) {
             RequestLayout::Summary
         } else {
             RequestLayout::Body
         };
         if let Some(value) = args.get(key) {
-            request.content = literal(value);
+            request.content = if matches!(key, "job_ids" | "agent_ids") {
+                value.as_array().map_or_else(
+                    || literal(value),
+                    |ids| {
+                        ids.iter()
+                            .map(literal)
+                            .collect::<Vec<_>>()
+                            .join("、")
+                    },
+                )
+            } else {
+                literal(value)
+            };
         } else if matches!(tool.name.as_str(), "ListFiles" | "ProjectOverview") {
             request.content = ".".into();
         } else if tool.name == "EnterPlan" {
@@ -168,6 +218,20 @@ impl Request {
             request.content = "提交计划供审阅".into();
         } else if tool.name == "CancelPlan" {
             request.content = "放弃自主计划草稿".into();
+        }
+        if matches!(key, "job_ids" | "agent_ids")
+            && args.get(key).is_none_or(|value| {
+                value
+                    .as_array()
+                    .is_some_and(Vec::is_empty)
+            })
+        {
+            request.content = if key == "job_ids" {
+                "全部后台命令"
+            } else {
+                "全部子任务"
+            }
+            .into();
         }
         let mut context: Vec<String> = fields
             .iter()
