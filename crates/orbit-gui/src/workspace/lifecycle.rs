@@ -71,6 +71,8 @@ impl Workspace {
                     Some(cx.new(|cx| files::Files::new(owner, session, workspace, window, cx)));
             }
         }
+        self.dictation
+            .update(cx, |dictation, cx| dictation.cancel(cx));
         self.page = MainPage::Files;
         if let Some(files) = &self.files {
             files.update(cx, |files, cx| {
@@ -109,6 +111,8 @@ impl Workspace {
             self.review =
                 Some(cx.new(|cx| review::Review::new(owner, session, workspace, window, cx)));
         }
+        self.dictation
+            .update(cx, |dictation, cx| dictation.cancel(cx));
         self.page = MainPage::Review;
         if let Some(review) = &self.review {
             review.update(cx, |review, cx| {
@@ -255,6 +259,8 @@ impl Workspace {
 
     pub(crate) fn focus_file_edits(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(files) = self.files.clone() {
+            self.dictation
+                .update(cx, |dictation, cx| dictation.cancel(cx));
             self.page = MainPage::Files;
             files.update(cx, |files, cx| files.focus(window, cx));
             cx.notify();
@@ -388,6 +394,8 @@ impl Workspace {
             self.watch_agents(cx);
         }
         if !visible && changed {
+            self.dictation
+                .update(cx, |dictation, cx| dictation.cancel(cx));
             if self.attention.suspend() {
                 window.close_all_dialogs(cx);
             }
@@ -664,6 +672,8 @@ impl Workspace {
                 Some(cx.new(|cx| tasks::Tasks::new(owner, session, workspace, window, cx)));
         }
         let changed = self.page != MainPage::Tasks;
+        self.dictation
+            .update(cx, |dictation, cx| dictation.cancel(cx));
         self.page = MainPage::Tasks;
         self.panel = None;
         self.inspector = None;

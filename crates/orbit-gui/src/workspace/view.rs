@@ -579,6 +579,7 @@ impl Workspace {
                 },
             )
             .child(self.composer_model_button(controls_disabled, cx))
+            .child(self.dictation.clone())
             .child(
                 Button::new("composer-action")
                     .small()

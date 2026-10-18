@@ -14,6 +14,7 @@
 | 问答与子 Agent | 问答弹窗、子 Agent 面板 | 问答卡片、Agent 面板 |
 | 工具过程与详情 | 按顺序分组的工具列表、Alt+O 详情、Alt+P 定位最新输出 | 按顺序分组的工具列表、详情弹窗、输入区上方运行状态 |
 | 输入历史与快捷键 | Ctrl+Up / Ctrl+Down、`/keys` | Up / Down、快捷键设置 |
+| 本地语音输入 | 暂无入口 | 输入区麦克风，本机转写后填入草稿 |
 
 技能和插件市场属于本机全局库，两端共用 `orbit-client::library`。显式应用的完整资源快照在目标会话中持久保存，其他会话不自动启用。
 
@@ -34,6 +35,7 @@ GUI 提供原生字体、图片灯箱和编辑器；TUI 的字体与图片协议
 | 会话轮询、后台请求分流与回执 | `orbit-client::pump` |
 | 思考与答复分段、工具摘要及详情数据 | `orbit-client::conversation`、`activity`、`execution` |
 | 窗口恢复、草稿与附件副本 | `orbit-client::windows` |
+| 本机语音模型缓存与离线转写 | `orbit-client::speech`（`local-speech` feature） |
 | 附件识别、上传、下载与队列资产恢复 | `orbit-client::attachments`、`pump` |
 | 模型发现、预算与连接编辑校验 | `orbit-config::config::connections` |
 | Agent 设置与 MCP 表单解析 | `orbit-config::config::advanced`、`connections::mcp` |

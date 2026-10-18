@@ -7,7 +7,7 @@
 先按 [根 README](../../README.md#快速开始) 准备工具链与配置。Ubuntu 的额外依赖：
 
 ```sh
-sudo apt install build-essential clang pkg-config libfontconfig-dev libwayland-dev \
+sudo apt install build-essential clang libclang-dev cmake pkg-config libfontconfig-dev libwayland-dev \
   libxkbcommon-x11-dev libx11-xcb-dev libssl-dev libzstd-dev libasound2-dev libvulkan-dev
 cargo run -p orbit-gui --locked -- --config config.toml
 ```
@@ -26,6 +26,7 @@ cargo run -p orbit-gui --locked -- --config config.toml
 - 远程连接的主机和目录使用可输入下拉；目录提供 `~/`、`../` 与子目录，支持键盘选择。
 - 新会话在输入框上方选择目录及本地、SSH、WSL；切换目标保留草稿，右上角只保留工作面板入口。
 - 输入区支持文件附件、图片、历史输入与暂存消息；粘贴文件自动生成附件卡片，达到 4096 字节或超过 32 行的文本转成文本附件。编辑暂存消息会撤回到输入框；响应时空草稿显示停止，有内容时显示发送。
+- 输入框右侧的麦克风提供本地语音输入：首次点击准备并下载约 141 MiB 的多语言模型，准备完成后再点击开始录音。录音时显示波形，点击停止后本机转写并插入当前光标位置，可编辑后发送。取消、发送现有草稿或切换会话及页面会停止录音并丢弃未提交结果；最长两分钟。模型保存在客户端主机缓存，音频不上传，也不随 SSH/WSL 连接传输。下载和转写不阻塞界面，失败可以重试。
 - 消息内图片在前、文件在后；发送前后的文件卡片均可点击查看只读文本并复制。输入框内附件与文字共用左边距。已发送附件通过所属会话服务读取，SSH/WSL 路径不由本机解释。
 - 用户消息保留原文并支持悬停复制，AI 回答支持本地、网络、内嵌图片；整轮回复完成后才显示全文和代码块复制按钮。缺失历史图片不阻止继续会话。未指定语言的代码块显示 `text` 标签。
 - 工作面板提供执行、计划、变更和 Agent；执行区内部滚轮不带动外层会话。审批和变更的统一差异只显示一列行号。
@@ -42,6 +43,9 @@ cargo run -p orbit-gui --locked -- --config config.toml
 ## 源码与外观
 
 [workspace/](src/workspace/) 管理会话视图与设置，[conversation/](src/conversation/) 渲染消息，[backend.rs](src/backend.rs) 将窗口事件接入共享客户端。认证、配置校验、会话轮询与附件传输由对应共享 crate 提供，前端只保留交互和视图状态。
+
+[speech.rs](src/speech.rs) 适配 GPUI Kit 的录音、波形和草稿插入；模型下载、校验和本地识别
+由 `orbit-client::speech` 处理。隔离音源与真实模型验收见 [语音验收](tests/support/speech.md)。
 
 GPUI Kit 使用固定的 fork 提交，补丁来源见 [依赖补丁](../../patches/README.md)。
 

@@ -24,6 +24,8 @@ pub mod prompt;
 pub mod protocol;
 pub mod pump;
 mod selection;
+#[cfg(feature = "local-speech")]
+pub mod speech;
 pub use selection::requested_model;
 pub mod transport;
 pub mod usage;

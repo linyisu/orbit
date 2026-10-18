@@ -13,6 +13,7 @@ mod image_preview;
 mod keymap;
 mod math;
 mod preferences;
+mod speech;
 mod theme;
 mod usage;
 mod workbench;

@@ -24,6 +24,18 @@ DeepSeek 用量只展示 CNY：底部显示总余额，详情保留总余额、�
 `library` 在本机调用无会话的服务接口；应用时传输有界包快照到指定会话，保留脚本、参考资料和图片等资源，但不执行安装内容。
 GUI 与 TUI 使用同一路由。全局保存成功不依赖远程会话在线；应用操作不自动重发。
 
+## 本机语音
+
+`local-speech` 功能通过 [speech.rs](src/speech.rs) 提供本机 CPU 转写。
+使用 [whisper-rs](https://codeberg.org/tazz4843/whisper-rs) 和
+[Whisper 多语言 base 模型](https://huggingface.co/ggerganov/whisper.cpp)：首次准备时
+下载约 141 MiB，校验固定的大小和 SHA-256 后原子保存到
+`$XDG_CACHE_HOME/orbit/speech`，缺省为 `~/.cache/orbit/speech`。
+损坏、截断或取消的下载不替换缓存；后续使用无需联网。
+音频只保存在有界内存中，按 16 kHz 单声道 PCM 输入，单次最多 120 秒；
+不写入会话、目标工作区或网络请求。取消会中止推理，失败和取消均不返回可提交的文字。
+GUI 的录音和草稿插入属于平台适配，模型准备与转写逻辑不进入界面。
+
 ## 入口
 
 - [conversation.rs](src/conversation.rs)、[activity.rs](src/activity.rs)、[execution.rs](src/execution.rs)：

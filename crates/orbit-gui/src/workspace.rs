@@ -173,6 +173,7 @@ pub(crate) struct Workspace {
     _subscriptions: Vec<Subscription>,
     focus: FocusHandle,
     input: Entity<TextareaState>,
+    dictation: Entity<crate::speech::Dictation>,
     history: composer::History,
     conversation: Entity<Conversation>,
     info: Option<SessionInfo>,
@@ -302,6 +303,8 @@ impl Workspace {
             }
         });
         let input_focus = input.read(cx).focus_handle(cx);
+        let dictation =
+            cx.new(|cx| crate::speech::Dictation::new(input.clone(), runtime.clone(), window, cx));
         let focused = cx.on_focus(&input_focus, window, |_, _, cx| cx.notify());
         let blurred = cx.on_blur(&input_focus, window, |_, _, cx| cx.notify());
         let bounds = cx.observe_window_bounds(window, |view, window, cx| {
@@ -349,6 +352,7 @@ impl Workspace {
             ],
             focus: cx.focus_handle(),
             input,
+            dictation,
             history: Default::default(),
             conversation,
             info: None,
@@ -1068,6 +1072,8 @@ impl Workspace {
         if !self.can_send(cx) {
             return;
         }
+        self.dictation
+            .update(cx, |dictation, cx| dictation.cancel(cx));
         let text = self.input.read(cx).value();
         let session = self.info.as_ref().unwrap().id.clone();
         let retry = self
