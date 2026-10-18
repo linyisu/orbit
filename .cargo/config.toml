@@ -1,2 +1,8 @@
 [alias]
 xtask = "run --package orbit-xtask --"
+
+[env]
+# Portable BLAS kernels and a bounded native pool for local speech.
+OPENBLAS_DYNAMIC_ARCH = "1"
+OPENBLAS_USE_LOCKING = "1"
+OPENBLAS_NUM_THREADS = "2"

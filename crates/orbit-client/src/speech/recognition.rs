@@ -1,123 +1,174 @@
-//! Live decoding and a separate serialized Qwen worker; audio capture never waits for correction.
-use std::{
-    sync::{
-        Arc, Mutex, TryLockError,
-        mpsc::{self, Receiver, Sender, TryRecvError},
-    },
-    time::Duration,
-};
+//! Incremental Qwen audio windows and KV reuse; capture and all native work stay separate.
+use std::{sync::mpsc, time::Duration};
 
 use anyhow::{Context, Result, ensure};
-use sherpa_onnx::{OfflineRecognizer, OnlineStream};
+use qwen_asr::{context::QwenCtx, transcribe::StreamState};
 
-use super::{CancellationToken, Recognition, Recognizer, SAMPLE_RATE_HZ, transcript::Transcript};
+use super::{
+    CancellationToken, Recognition, Recognizer, SAMPLE_RATE_HZ, model::inference_guard,
+    transcript::Transcript,
+};
 
 const INPUT_POLL: Duration = Duration::from_millis(100);
-const CORRECTION_LOCK_POLL: Duration = Duration::from_millis(25);
+const DECODE_CHUNK_SAMPLES: usize = SAMPLE_RATE_HZ * 2;
+const PRE_ROLL_SAMPLES: usize = SAMPLE_RATE_HZ / 5;
+const TRAILING_SILENCE_SAMPLES: usize = SAMPLE_RATE_HZ * 3 / 5;
+const SPEECH_RMS_FLOOR: f64 = 0.002;
 
-struct SentenceAudio {
-    index: usize,
-    samples: Vec<f32>,
+#[derive(Default)]
+enum Activity {
+    #[default]
+    Waiting,
+    Speaking {
+        quiet_samples: usize,
+    },
 }
 
-type Correction = Result<(usize, String)>;
+/// The buffer is a short pre-roll while waiting, and a bounded utterance while speaking.
+#[derive(Default)]
+struct Audio {
+    samples: Vec<f32>,
+    activity: Activity,
+}
 
-impl Recognition {
-    /// Stream live hypotheses while Qwen corrects completed sentences on another worker.
-    /// A correction failure returns an error without clearing the published preview.
-    pub fn run(self) -> Result<String> {
-        let cancel = self.cancel.child_token();
-        let engine = self.engine.clone();
-        let correction_cancel = cancel.clone();
-        // The unconsumed audio in these jobs is bounded by Capture's 120-second session cap.
-        // Replaying prefixes is deliberately avoided: each completed sentence is decoded once.
-        let (jobs, receiver) = mpsc::channel();
-        let (corrected, results) = mpsc::channel();
-        std::thread::scope(|scope| {
-            let correction = scope
-                .spawn(move || correct_sentences(&engine, receiver, corrected, &correction_cancel));
-            let result = self.decode(&jobs, &results);
-            cancel.cancel();
-            drop(jobs);
-            let joined = correction.join();
-            let text = result?;
-            ensure!(joined.is_ok(), "句尾校正线程意外停止，已保留实时预览");
-            Ok(text)
+impl Audio {
+    fn push(&mut self, samples: &[f32]) -> bool {
+        let speech = !samples.is_empty()
+            && samples
+                .iter()
+                .map(|sample| f64::from(*sample).powi(2))
+                .sum::<f64>()
+                > SPEECH_RMS_FLOOR.powi(2) * samples.len() as f64;
+        self.samples.extend_from_slice(samples);
+        match &mut self.activity {
+            Activity::Waiting if speech => {
+                self.activity = Activity::Speaking { quiet_samples: 0 };
+                false
+            }
+            Activity::Waiting => {
+                if self.samples.len() > PRE_ROLL_SAMPLES {
+                    self.samples
+                        .drain(..self.samples.len() - PRE_ROLL_SAMPLES);
+                }
+                false
+            }
+            Activity::Speaking { quiet_samples } => {
+                if speech {
+                    *quiet_samples = 0;
+                } else {
+                    *quiet_samples += samples.len();
+                }
+                *quiet_samples >= TRAILING_SILENCE_SAMPLES
+            }
+        }
+    }
+
+    fn is_speaking(&self) -> bool {
+        matches!(self.activity, Activity::Speaking { .. })
+    }
+
+    fn reset(&mut self) {
+        self.samples.clear();
+        self.activity = Activity::Waiting;
+    }
+}
+
+struct StreamingSession {
+    decoder: QwenCtx,
+    state: StreamState,
+    audio: Audio,
+    transcript: Transcript,
+}
+
+impl StreamingSession {
+    fn new(engine: &Recognizer, cancel: &CancellationToken) -> Result<Self> {
+        const ENCODER_WINDOW_FRAMES: usize = 200;
+        const ROLLBACK_TOKENS: i32 = 12;
+        const UNFIXED_CHUNKS: i32 = 2;
+        const MAX_NEW_TOKENS: i32 = 64;
+        let _guard = inference_guard(cancel)?;
+        let mut decoder = engine.model.new_session();
+        decoder.config.enc_n_window_infer = ENCODER_WINDOW_FRAMES;
+        decoder.stream_chunk_sec = DECODE_CHUNK_SAMPLES as f32 / SAMPLE_RATE_HZ as f32;
+        decoder.stream_rollback = ROLLBACK_TOKENS;
+        decoder.stream_unfixed_chunks = UNFIXED_CHUNKS;
+        decoder.stream_max_new_tokens = MAX_NEW_TOKENS;
+        decoder.past_text_conditioning = true;
+        decoder
+            .set_force_language("Chinese")
+            .map_err(|()| anyhow::anyhow!("无法配置 Qwen 中英文识别"))?;
+        Ok(Self {
+            decoder,
+            state: StreamState::new(),
+            audio: Audio::default(),
+            transcript: Transcript::default(),
         })
     }
 
-    fn decode(
-        &self,
-        jobs: &Sender<SentenceAudio>,
-        results: &Receiver<Correction>,
-    ) -> Result<String> {
-        let stream = self.engine.preview.create_stream();
-        let mut transcript = Transcript::default();
-        let mut audio = Vec::new();
-        loop {
-            ensure!(!self.cancel.is_cancelled(), "语音转写已取消");
-            match self.receiver.recv_timeout(INPUT_POLL) {
-                Ok(samples) => {
-                    stream.accept_waveform(SAMPLE_RATE_HZ as i32, &samples);
-                    audio.extend_from_slice(&samples);
-                }
-                Err(mpsc::RecvTimeoutError::Timeout) => {
-                    apply_corrections(results, &mut transcript)?;
-                    self.publish(&transcript)?;
-                    continue;
-                }
-                Err(mpsc::RecvTimeoutError::Disconnected) => break,
-            }
-            self.decode_preview(&stream, &mut transcript)?;
-            if self.engine.preview.is_endpoint(&stream) {
-                queue_sentence(jobs, &mut transcript, &mut audio)?;
-                self.engine.preview.reset(&stream);
-            }
-            apply_corrections(results, &mut transcript)?;
-            self.publish(&transcript)?;
-        }
-        ensure!(!self.cancel.is_cancelled(), "语音转写已取消");
-        stream.accept_waveform(SAMPLE_RATE_HZ as i32, &vec![0.; SAMPLE_RATE_HZ * 4 / 5]);
-        stream.input_finished();
-        self.decode_preview(&stream, &mut transcript)?;
-        queue_sentence(jobs, &mut transcript, &mut audio)?;
-        self.publish(&transcript)?;
-        while transcript.pending() {
-            ensure!(!self.cancel.is_cancelled(), "语音转写已取消");
-            match results.recv_timeout(INPUT_POLL) {
-                Ok(result) => {
-                    let (index, text) = result?;
-                    transcript.correct(index, text)?;
-                    self.publish(&transcript)?;
-                }
-                Err(mpsc::RecvTimeoutError::Timeout) => {}
-                Err(mpsc::RecvTimeoutError::Disconnected) => {
-                    anyhow::bail!("句尾校正未完成，已保留实时预览");
+    fn push(&mut self, samples: &[f32], cancel: &CancellationToken) -> Result<()> {
+        let end = self.audio.push(samples);
+        if self.audio.is_speaking() {
+            if end {
+                self.finish(cancel)?;
+            } else {
+                while self.audio.samples.len() - self.state.audio_cursor() >= DECODE_CHUNK_SAMPLES {
+                    let end = self.state.audio_cursor() + DECODE_CHUNK_SAMPLES;
+                    self.decode(end, false, cancel)?;
                 }
             }
         }
-        ensure!(!self.cancel.is_cancelled(), "语音转写已取消");
-        Ok(transcript.text())
-    }
-
-    fn decode_preview(&self, stream: &OnlineStream, transcript: &mut Transcript) -> Result<()> {
-        while self.engine.preview.is_ready(stream) {
-            ensure!(!self.cancel.is_cancelled(), "语音转写已取消");
-            self.engine.preview.decode(stream);
-        }
-        transcript.preview(
-            self.engine
-                .preview
-                .get_result(stream)
-                .context("无法读取实时语音结果")?
-                .text,
-        );
         Ok(())
     }
 
-    fn publish(&self, transcript: &Transcript) -> Result<()> {
+    fn decode(&mut self, end: usize, finalize: bool, cancel: &CancellationToken) -> Result<()> {
+        let _guard = inference_guard(cancel)?;
+        qwen_asr::transcribe::stream_push_audio(
+            &mut self.decoder,
+            &self.audio.samples[..end],
+            &mut self.state,
+            finalize,
+        )
+        .context("Qwen 增量识别未完成，已保留先前文字")?;
+        ensure!(!cancel.is_cancelled(), "语音转写已取消");
+        self.transcript
+            .preview(self.state.hypothesis());
+        Ok(())
+    }
+
+    fn finish(&mut self, cancel: &CancellationToken) -> Result<()> {
+        if self.audio.is_speaking() {
+            self.decode(self.audio.samples.len(), true, cancel)?;
+            self.transcript.commit();
+            self.state.reset();
+            self.audio.reset();
+        }
+        Ok(())
+    }
+}
+
+impl Recognition {
+    /// Produce the first hypothesis and subsequent revisions with the same Qwen stream.
+    /// Completed encoder windows and matching decoder prefixes are reused. Stopping flushes
+    /// the remaining window and rollback tail; cancellation prevents further publication.
+    pub fn run(self) -> Result<String> {
+        let mut session = StreamingSession::new(&self.engine, &self.cancel)?;
+        loop {
+            ensure!(!self.cancel.is_cancelled(), "语音转写已取消");
+            match self.receiver.recv_timeout(INPUT_POLL) {
+                Ok(samples) => session.push(&samples, &self.cancel)?,
+                Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+            self.publish(session.transcript.text())?;
+        }
+        session.finish(&self.cancel)?;
+        let text = session.transcript.text();
+        self.publish(text.clone())?;
+        Ok(text)
+    }
+
+    fn publish(&self, text: String) -> Result<()> {
         ensure!(!self.cancel.is_cancelled(), "语音转写已取消");
-        let text = transcript.text();
         self.updates
             .send_if_modified(|previous| {
                 if *previous == text {
@@ -131,124 +182,120 @@ impl Recognition {
     }
 }
 
-fn queue_sentence(
-    jobs: &Sender<SentenceAudio>,
-    transcript: &mut Transcript,
-    samples: &mut Vec<f32>,
-) -> Result<()> {
-    if let Some(index) = transcript.finish_sentence() {
-        jobs.send(SentenceAudio {
-            index,
-            samples: std::mem::take(samples),
-        })
-        .context("句尾校正服务已停止，已保留实时预览")?;
-    } else {
-        samples.clear();
-    }
-    Ok(())
-}
-
-fn apply_corrections(results: &Receiver<Correction>, transcript: &mut Transcript) -> Result<()> {
-    loop {
-        match results.try_recv() {
-            Ok(result) => {
-                let (index, text) = result?;
-                transcript.correct(index, text)?;
-            }
-            Err(TryRecvError::Empty) => return Ok(()),
-            Err(TryRecvError::Disconnected) => {
-                anyhow::bail!("句尾校正服务已停止，已保留实时预览");
-            }
-        }
-    }
-}
-
-fn correct_sentences(
-    engine: &Arc<Recognizer>,
-    jobs: Receiver<SentenceAudio>,
-    results: Sender<Correction>,
-    cancel: &CancellationToken,
-) {
-    while !cancel.is_cancelled() {
-        let job = match jobs.recv_timeout(INPUT_POLL) {
-            Ok(job) => job,
-            Err(mpsc::RecvTimeoutError::Timeout) => continue,
-            Err(mpsc::RecvTimeoutError::Disconnected) => return,
-        };
-        let result =
-            correct(&engine.correction, &job.samples, cancel).map(|text| (job.index, text));
-        if cancel.is_cancelled() {
-            return;
-        }
-        let failed = result.is_err();
-        if results.send(result).is_err() || failed {
-            return;
-        }
-    }
-}
-
-fn correct(
-    engine: &Mutex<OfflineRecognizer>,
-    samples: &[f32],
-    cancel: &CancellationToken,
-) -> Result<String> {
-    let engine = loop {
-        ensure!(!cancel.is_cancelled(), "句尾校正已取消");
-        match engine.try_lock() {
-            Ok(engine) => break engine,
-            Err(TryLockError::WouldBlock) => std::thread::sleep(CORRECTION_LOCK_POLL),
-            Err(TryLockError::Poisoned(_)) => anyhow::bail!("句尾校正服务异常，请重新启动语音输入"),
-        }
-    };
-    let stream = engine.create_stream();
-    stream.accept_waveform(SAMPLE_RATE_HZ as i32, samples);
-    engine.decode(&stream);
-    ensure!(!cancel.is_cancelled(), "句尾校正已取消");
-    let text = stream
-        .get_result()
-        .context("无法读取 Qwen 校正结果")?
-        .text;
-    ensure!(
-        !text.trim().is_empty(),
-        "Qwen 未返回校正文字，已保留实时预览"
-    );
-    Ok(text)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn correction_errors_and_disconnection_keep_completed_preview() {
-        let mut transcript = Transcript::default();
-        transcript.preview("独立生成的预览".into());
-        transcript.finish_sentence();
-        transcript.preview("继续输入".into());
-        let (sender, receiver) = mpsc::channel();
-        sender
-            .send(Err(anyhow::anyhow!("generated correction failure")))
-            .unwrap();
-        assert!(apply_corrections(&receiver, &mut transcript).is_err());
-        assert_eq!(transcript.text(), "独立生成的预览继续输入");
-        drop(sender);
-        assert!(apply_corrections(&receiver, &mut transcript).is_err());
-        assert_eq!(transcript.text(), "独立生成的预览继续输入");
+    fn silence_keeps_only_preroll_and_never_starts_inference() {
+        let mut audio = Audio::default();
+        for _ in 0..100 {
+            assert!(!audio.push(&[0.; 1_600]));
+        }
+        assert!(!audio.is_speaking());
+        assert_eq!(audio.samples.len(), PRE_ROLL_SAMPLES);
+        assert!(!audio.push(&[0.05; 1_600]));
+        assert!(audio.is_speaking());
+        for _ in 0..5 {
+            assert!(!audio.push(&[0.; 1_600]));
+        }
+        assert!(audio.push(&[0.; 1_600]));
+        audio.reset();
+        assert!(!audio.is_speaking());
+        assert!(audio.samples.is_empty());
     }
 
     #[test]
-    fn silence_is_not_submitted_to_the_generative_corrector() {
-        let (sender, receiver) = mpsc::channel();
-        let mut transcript = Transcript::default();
-        let mut audio = vec![0.; 16_000];
-        queue_sentence(&sender, &mut transcript, &mut audio).unwrap();
-        assert!(audio.is_empty());
-        assert!(receiver.try_recv().is_err());
-        transcript.preview("测试".into());
-        audio.extend_from_slice(&[0.1, 0.2]);
-        queue_sentence(&sender, &mut transcript, &mut audio).unwrap();
-        assert!(audio.is_empty());
-        assert_eq!(receiver.recv().unwrap().samples, [0.1, 0.2]);
-        assert_eq!(transcript.text(), "测试");
+    fn speech_resets_the_silence_boundary() {
+        let mut audio = Audio::default();
+        audio.push(&[0.05; 1_600]);
+        audio.push(&[0.; 8_000]);
+        assert!(!audio.push(&[0.05; 1_600]));
+        assert!(!audio.push(&[0.; 8_000]));
+        assert!(audio.push(&[0.; 1_600]));
+    }
+
+    #[test]
+    #[ignore = "requires verified Qwen weights and independent benchmark WAV manifest"]
+    fn benchmark_incremental_qwen_corpus() {
+        use std::{path::PathBuf, time::Instant};
+        let root = PathBuf::from(std::env::var_os("ORBIT_SPEECH_TEST_MODEL_DIRECTORY").unwrap());
+        let manifest: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(std::env::var_os("ORBIT_SPEECH_BENCHMARK_MANIFEST").unwrap()).unwrap(),
+        )
+        .unwrap();
+        let cancel = CancellationToken::new();
+        let (progress, _) = tokio::sync::watch::channel(super::super::Progress::Waiting);
+        let loading = Instant::now();
+        let engine = super::super::model::load(&root, &cancel, &progress).unwrap();
+        eprintln!("QWEN_LOAD_SECONDS={:.3}", loading.elapsed().as_secs_f64());
+        for item in manifest.as_array().unwrap() {
+            let samples = qwen_asr::audio::load_wav(item["path"].as_str().unwrap()).unwrap();
+            let mut session = StreamingSession::new(&engine, &cancel).unwrap();
+            if let Ok(rollback) = std::env::var("ORBIT_SPEECH_BENCHMARK_ROLLBACK") {
+                session.decoder.stream_rollback = rollback.parse().unwrap();
+            }
+            let started = Instant::now();
+            let mut first = None;
+            let mut compute = Duration::ZERO;
+            let mut previous = String::new();
+            let mut revisions = 0;
+            let mut slowest = Duration::ZERO;
+            let mut max_cached_windows = 0;
+            for (index, chunk) in samples.chunks(1_600).enumerate() {
+                let deadline = started + Duration::from_millis((index as u64 + 1) * 100);
+                std::thread::sleep(deadline.saturating_duration_since(Instant::now()));
+                let processing = Instant::now();
+                session.push(chunk, &cancel).unwrap();
+                max_cached_windows = max_cached_windows.max(session.state.enc_window_count());
+                assert!(
+                    max_cached_windows <= 7,
+                    "encoder context grew beyond fourteen seconds"
+                );
+                let duration = processing.elapsed();
+                compute += duration;
+                slowest = slowest.max(duration);
+                let text = session.transcript.text();
+                if !text.is_empty() {
+                    first.get_or_insert_with(|| started.elapsed().as_secs_f64());
+                }
+                if !previous.is_empty() && !text.starts_with(&previous) {
+                    revisions += 1;
+                }
+                previous = text;
+            }
+            let finishing = Instant::now();
+            session.finish(&cancel).unwrap();
+            let finish = finishing.elapsed();
+            compute += finish;
+            let work = session.state.work();
+            assert!(
+                work.encoder_samples <= samples.len(),
+                "encoder replayed an audio prefix"
+            );
+            assert!(
+                work.reused_prefill_rows > 0,
+                "decoder did not reuse KV rows"
+            );
+            eprintln!(
+                "QWEN_BENCHMARK={}",
+                serde_json::json!({
+                    "id": item["id"],
+                    "condition": item["condition"],
+                    "text": session.transcript.text(),
+                    "audio_seconds": samples.len() as f64 / SAMPLE_RATE_HZ as f64,
+                    "first_text_seconds": first,
+                    "compute_seconds": compute.as_secs_f64(),
+                    "finish_seconds": finish.as_secs_f64(),
+                    "slowest_push_seconds": slowest.as_secs_f64(),
+                    "revisions": revisions,
+                    "encoder_samples": work.encoder_samples,
+                    "encoder_windows": work.encoder_windows,
+                    "max_cached_windows": max_cached_windows,
+                    "reused_prefill_rows": work.reused_prefill_rows,
+                    "prefill_rows": work.prefill_rows,
+                })
+            );
+        }
     }
 }

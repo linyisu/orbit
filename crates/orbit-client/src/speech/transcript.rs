@@ -1,14 +1,7 @@
-//! Ordered voice spans; a late sentence correction cannot overwrite newer live text.
-use anyhow::{Result, ensure};
-
-enum Sentence {
-    Preview(String),
-    Corrected(String),
-}
-
+//! Committed utterances followed by one replaceable Qwen hypothesis.
 #[derive(Default)]
 pub(super) struct Transcript {
-    sentences: Vec<Sentence>,
+    completed: String,
     live: String,
 }
 
@@ -17,41 +10,13 @@ impl Transcript {
         self.live = text;
     }
 
-    pub fn finish_sentence(&mut self) -> Option<usize> {
-        if self.live.trim().is_empty() {
-            self.live.clear();
-            return None;
-        }
-        let index = self.sentences.len();
-        self.sentences
-            .push(Sentence::Preview(std::mem::take(&mut self.live)));
-        Some(index)
-    }
-
-    pub fn correct(&mut self, index: usize, text: String) -> Result<()> {
-        ensure!(
-            !text.trim().is_empty(),
-            "句尾校正未返回文字，已保留实时预览"
-        );
-        let Some(sentence @ Sentence::Preview(_)) = self.sentences.get_mut(index) else {
-            anyhow::bail!("句尾校正对应的语音片段已失效");
-        };
-        *sentence = Sentence::Corrected(text);
-        Ok(())
-    }
-
-    pub fn pending(&self) -> bool {
-        self.sentences
-            .iter()
-            .any(|sentence| matches!(sentence, Sentence::Preview(_)))
+    pub fn commit(&mut self) {
+        append(&mut self.completed, &self.live);
+        self.live.clear();
     }
 
     pub fn text(&self) -> String {
-        let mut text = String::new();
-        for sentence in &self.sentences {
-            let (Sentence::Preview(part) | Sentence::Corrected(part)) = sentence;
-            append(&mut text, part);
-        }
+        let mut text = self.completed.clone();
         append(&mut text, &self.live);
         text
     }
@@ -59,6 +24,9 @@ impl Transcript {
 
 fn append(text: &mut String, part: &str) {
     let part = part.trim();
+    if part.is_empty() {
+        return;
+    }
     if text.ends_with(|c: char| c.is_ascii_alphanumeric())
         && part.starts_with(|c: char| c.is_ascii_alphanumeric())
     {
@@ -69,51 +37,31 @@ fn append(text: &mut String, part: &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::Transcript;
 
     #[test]
-    fn delayed_corrections_preserve_newer_preview_and_other_sentences() {
+    fn revisions_replace_only_the_live_utterance_and_commit_once() {
         let mut transcript = Transcript::default();
-        transcript.preview("检查阿尔法".into());
-        let first = transcript.finish_sentence().unwrap();
+        transcript.preview("检查 Alpha。".into());
+        transcript.commit();
         transcript.preview("再检查贝塔".into());
-        let second = transcript.finish_sentence().unwrap();
-        transcript.preview("最后运行测试".into());
-        transcript
-            .correct(second, "再检查 Beta。".into())
-            .unwrap();
-        transcript
-            .correct(first, "检查 Alpha。".into())
-            .unwrap();
-        assert_eq!(transcript.text(), "检查 Alpha。再检查 Beta。最后运行测试");
-        assert!(!transcript.pending());
-        assert!(
-            transcript
-                .correct(first, "过期结果".into())
-                .is_err()
-        );
-        assert_eq!(transcript.text(), "检查 Alpha。再检查 Beta。最后运行测试");
+        transcript.preview("再检查 Beta。".into());
+        assert_eq!(transcript.text(), "检查 Alpha。再检查 Beta。");
+        transcript.commit();
+        transcript.commit();
+        assert_eq!(transcript.text(), "检查 Alpha。再检查 Beta。");
     }
 
     #[test]
-    fn empty_corrections_do_not_erase_preview_and_english_boundaries_survive() {
+    fn empty_revisions_preserve_committed_text_and_ascii_boundaries() {
         let mut transcript = Transcript::default();
         transcript.preview("build".into());
-        let first = transcript.finish_sentence().unwrap();
+        transcript.commit();
         transcript.preview("module".into());
-        assert!(
-            transcript
-                .correct(first, "  ".into())
-                .is_err()
-        );
-        assert!(transcript.pending());
         assert_eq!(transcript.text(), "build module");
-        transcript
-            .correct(first, "Build".into())
-            .unwrap();
-        assert_eq!(transcript.text(), "Build module");
-        transcript.preview(" ".into());
-        assert!(transcript.finish_sentence().is_none());
-        assert_eq!(transcript.text(), "Build");
+        transcript.preview(String::new());
+        assert_eq!(transcript.text(), "build");
+        transcript.commit();
+        assert_eq!(transcript.text(), "build");
     }
 }

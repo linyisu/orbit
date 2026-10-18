@@ -5,7 +5,7 @@ edition.workspace = true
 
 [features]
 test-support = []
-local-speech = ["dep:sherpa-onnx", "dep:reqwest"]
+local-speech = ["dep:qwen-asr", "dep:reqwest"]
 
 [dependencies]
 similar.workspace = true
@@ -30,8 +30,11 @@ tempfile.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 toml.workspace = true
-sherpa-onnx = { workspace = true, optional = true }
+qwen-asr = { workspace = true, optional = true }
 reqwest = { workspace = true, optional = true }
 
 [dev-dependencies]
 orbit-config = { workspace = true, features = ["test-support"] }
+
+[target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
+qwen-asr = { workspace = true, optional = true, features = ["blas"] }

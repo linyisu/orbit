@@ -407,6 +407,7 @@ impl Render for Dictation {
                     )
                     .child(
                         SpeechWaveform::new(&self.state)
+                            .live()
                             .w_0()
                             .flex_1()
                             .min_w_0()
@@ -463,7 +464,7 @@ impl Render for Dictation {
                 Setup::Idle | Setup::Failed(_) => {
                     let tooltip = match &model.setup {
                         Setup::Failed(error) => format!("{error}；点击重试"),
-                        _ => "启用本地语音输入，首次下载约 4 GB；支持后台续传，音频不会上传"
+                        _ => "启用本地语音输入，首次下载约 1.9 GB；支持后台续传，音频不会上传"
                             .to_owned(),
                     };
                     Button::new("prepare-speech")
@@ -500,8 +501,7 @@ fn preparation_label(progress: Progress) -> String {
         } => {
             format!("下载语音 {}%", received * 100 / total.max(1))
         }
-        Progress::LoadingPreview => "加载实时语音…".into(),
-        Progress::LoadingCorrection => "加载 Qwen…".into(),
+        Progress::LoadingModel => "加载 Qwen…".into(),
     }
 }
 
@@ -532,8 +532,7 @@ mod tests {
             }),
             "校验语音 100%"
         );
-        assert_eq!(preparation_label(Progress::LoadingCorrection), "加载 Qwen…");
-        assert_eq!(preparation_label(Progress::LoadingPreview), "加载实时语音…");
+        assert_eq!(preparation_label(Progress::LoadingModel), "加载 Qwen…");
         assert_eq!(preparation_label(Progress::Waiting), "准备语音…");
     }
 }

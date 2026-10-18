@@ -19,12 +19,13 @@ members = [
     "crates/orbit-tools",
     "crates/orbit-store",
 ]
-exclude = ["vendor/ratex-unicode-font", "vendor/gpui-pre-wgpu"]
+exclude = ["vendor/ratex-unicode-font", "vendor/gpui-pre-wgpu", "vendor/qwen-asr"]
 
 [patch.crates-io]
+qwen-asr = { path = "vendor/qwen-asr" }
 gpui-pre-wgpu = { path = "vendor/gpui-pre-wgpu" }
 ratex-unicode-font = { path = "vendor/ratex-unicode-font" }
-rquickjs = { git = "https://github.com/linyisu/gpui-kit", rev = "9c39eb67c57677a9f495132415af30934a2176da" }
+rquickjs = { git = "https://github.com/linyisu/gpui-kit", rev = "5f9de8a41cc2762866d076057ef2452fdbae1876" }
 
 [workspace.package]
 version = "0.1.0"
@@ -120,7 +121,7 @@ unicode-linebreak = "0.1.5"
 unicode-segmentation = "1.13.3"
 unicode-width = "0.2.2"
 url = "2.5"
-sherpa-onnx = "=1.13.8"
+qwen-asr = { version = "=0.11.0", default-features = false, features = ["vdsp"] }
 windows-sys = { version = "0.61.2", features = ["Win32_Storage_FileSystem", "Win32_Foundation"] }
 zip = { version = "8.6.0", default-features = false }
 
@@ -139,4 +140,8 @@ opt-level = 3
 opt-level = 3
 
 [profile.dev.package.regex-syntax]
+opt-level = 3
+
+# Native speech kernels must remain optimized in desktop development builds.
+[profile.dev.package.qwen-asr]
 opt-level = 3

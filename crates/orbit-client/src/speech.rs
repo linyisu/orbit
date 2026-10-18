@@ -1,4 +1,4 @@
-//! Client-host speech preparation, live previews and Qwen sentence correction.
+//! Client-host Qwen incremental speech recognition and background model preparation.
 //! Only verified model downloads use the network; audio stays on this client host.
 mod cache;
 mod model;
@@ -35,8 +35,7 @@ pub enum Progress {
         received_bytes: u64,
         total_bytes: u64,
     },
-    LoadingPreview,
-    LoadingCorrection,
+    LoadingModel,
 }
 
 /// The global client-host cache, independent of local and remote projects.
@@ -50,7 +49,7 @@ pub fn model_directory() -> Result<PathBuf> {
     Ok(root.join("orbit/speech"))
 }
 
-/// Download or resume verified assets and load both models off the caller's executor.
+/// Download or resume verified assets and load Qwen off the caller's executor.
 /// Cancellation preserves partial downloads and discards late loading results. A native
 /// load already in progress finishes on its worker and releases resources there.
 pub async fn prepare(
@@ -72,10 +71,9 @@ pub async fn prepare(
     }
 }
 
-/// Native CPU recognizers shared across windows; corrections serialize on their worker.
+/// Native Qwen weights shared across windows; each recording owns its incremental caches.
 pub struct Recognizer {
-    preview: sherpa_onnx::OnlineRecognizer,
-    correction: std::sync::Mutex<sherpa_onnx::OfflineRecognizer>,
+    model: Arc<qwen_asr::context::QwenModel>,
 }
 
 /// Bounded microphone input. Dropping it ends the input; cancellation discards all hypotheses.

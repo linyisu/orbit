@@ -1,0 +1,381 @@
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -37,7 +37,7 @@
+ 
+ [features]
+ android = []
+-blas = []
++blas = ["dep:openblas-src"]
+ default = [
+     "blas",
+     "vdsp",
+@@ -51,8 +51,6 @@
+ [lib]
+ name = "qwen_asr"
+ crate-type = [
+-    "cdylib",
+-    "staticlib",
+     "rlib",
+ ]
+ path = "src/lib.rs"
+@@ -111,3 +109,9 @@
+ 
+ [dependencies.libc]
+ version = "0.2"
++
++[target.'cfg(target_os = "linux")'.dependencies.openblas-src]
++version = "=0.10.16"
++optional = true
++default-features = false
++features = ["cblas", "static", "rustls"]
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -52,6 +52,9 @@
+ //!
+ //! The remaining modules (`encoder`, `decoder`, `kernels`, `safetensors`) are
+ //! implementation details and not intended for direct use.
++
++#[cfg(all(target_os = "linux", feature = "blas"))]
++extern crate openblas_src;
+ 
+ pub mod align;
+ pub mod audio;
+--- a/src/transcribe.rs
++++ b/src/transcribe.rs
+@@ -25,8 +25,8 @@
+ const STREAM_DEGEN_MIN_REPEATS: usize = 4;
+ const STREAM_STALE_CHUNKS: i32 = 4;
+ const STREAM_RESET_INTERVAL_CHUNKS: i32 = 45;
++const STREAM_INCREMENTAL_RESET_INTERVAL_CHUNKS: i32 = 6;
+ const STREAM_RESET_CARRY_TOKENS: usize = 24;
+-const STREAM_MAX_ENC_WINDOWS: usize = 4;
+ 
+ // Multilingual utterance-boundary VAD (opt-in `multilingual` mode only).
+ // A speech→silence transition longer than `ML_MIN_SILENCE_SEC` with the frame
+@@ -2615,12 +2615,22 @@
+     row_keys: Vec<PrefillRowKey>,
+ }
+ 
++/// Cumulative encoder and decoder work, retained across stream resets.
++#[derive(Clone, Copy, Debug, Default)]
++pub struct StreamWork {
++    pub encoder_samples: usize,
++    pub encoder_windows: usize,
++    pub reused_prefill_rows: usize,
++    pub prefill_rows: usize,
++}
++
+ /// Persistent state for incremental streaming transcription.
+ ///
+ /// Create once, then call [`stream_push_audio`] each time new audio
+ /// arrives.  The state keeps encoder caches, token history, and decoder
+ /// prefill row keys so that only *new* work is performed per call.
+ pub struct StreamState {
++    work: StreamWork,
+     // Encoder
+     enc_cache: Vec<EncWindow>,
+     enc_cached_seq_total: usize,
+@@ -2662,7 +2672,7 @@
+     ml_speech_since_boundary: bool,
+ 
+     // Tokenizer (loaded once)
+-    tokenizer: Option<QwenTokenizer>,
++    tokenizer: Option<std::sync::Arc<QwenTokenizer>>,
+     prompt_prepared: bool,
+ }
+ 
+@@ -2676,6 +2686,7 @@
+     /// Create a new empty streaming state.
+     pub fn new() -> Self {
+         StreamState {
++            work: StreamWork::default(),
+             enc_cache: Vec::new(),
+             enc_cached_seq_total: 0,
+             enc_cache_base_windows: 0,
+@@ -2724,6 +2735,29 @@
+         // Keep tokenizer and prompt_prepared
+     }
+ 
++    fn prefix_len(&self, text_start: usize, rollback: i32) -> usize {
++        self.raw_tokens
++            .len()
++            .saturating_sub(rollback.max(0) as usize)
++            .max(text_start + self.stable_text_tokens.len())
++            .min(self.raw_tokens.len())
++    }
++
++    fn finalize_tail(&mut self, text_start: usize, tokenizer: &QwenTokenizer) -> Vec<u8> {
++        let mut delta = Vec::new();
++        for &token in self.raw_tokens[text_start..]
++            .iter()
++            .skip(self.stable_text_tokens.len())
++        {
++            self.stable_text_tokens.push(token);
++            let bytes = tokenizer.decode_bytes(token);
++            self.result_bytes.extend_from_slice(bytes);
++            delta.extend_from_slice(bytes);
++        }
++        self.provisional_bytes.clear();
++        delta
++    }
++
+     /// Get the current stable transcription result.
+     pub fn text(&self) -> String {
+         String::from_utf8_lossy(&self.result_bytes).into_owned()
+@@ -2736,6 +2770,24 @@
+     /// and is empty once the stream has been finalized.
+     pub fn provisional_text(&self) -> String {
+         String::from_utf8_lossy(&self.provisional_bytes).into_owned()
++    }
++
++    /// Stable text and its replaceable tail, decoded across UTF-8 token boundaries.
++    pub fn hypothesis(&self) -> String {
++        let mut bytes = self.result_bytes.clone();
++        bytes.extend_from_slice(&self.provisional_bytes);
++        match std::str::from_utf8(&bytes) {
++            Ok(text) => text.to_owned(),
++            Err(error) if error.error_len().is_none() => {
++                String::from_utf8_lossy(&bytes[..error.valid_up_to()]).into_owned()
++            }
++            Err(_) => String::from_utf8_lossy(&bytes).into_owned(),
++        }
++    }
++
++    /// Cumulative work for this stream, including across utterance boundaries.
++    pub fn work(&self) -> StreamWork {
++        self.work
+     }
+ 
+     /// Get how many samples have been processed so far.
+@@ -2785,9 +2837,10 @@
+ 
+     // Lazy-init tokenizer
+     if state.tokenizer.is_none() {
+-        state.tokenizer = load_tokenizer(&ctx.model.model_dir);
+-    }
+-    let tokenizer = state.tokenizer.as_ref()?;
++        state.tokenizer = load_tokenizer(&ctx.model.model_dir).map(std::sync::Arc::new);
++    }
++    let tokenizer_handle = state.tokenizer.as_ref()?.clone();
++    let tokenizer = tokenizer_handle.as_ref();
+ 
+     if !state.prompt_prepared {
+         if !ctx.prepare_prompt_tokens(tokenizer) {
+@@ -2802,7 +2855,12 @@
+         return Some(String::new());
+     }
+     if available == 0 {
+-        return Some(String::new());
++        let delta = if finalize {
++            state.finalize_tail(stream_text_start(ctx, &state.raw_tokens), tokenizer)
++        } else {
++            Vec::new()
++        };
++        return Some(String::from_utf8_lossy(&delta).into_owned());
+     }
+ 
+     let enc_window_frames = cfg.enc_n_window_infer.clamp(100, 800);
+@@ -2836,6 +2894,8 @@
+                     .encoder
+                     .forward(&cfg, &mel, mel_frames, Some(&mut ctx.enc_bufs))?;
+             let row_keys = prefill_embed_keys(&win_enc, win_seq, dim);
++            state.work.encoder_samples += enc_window_samples;
++            state.work.encoder_windows += 1;
+             state.enc_cached_seq_total += win_seq;
+             state.enc_cache.push(EncWindow {
+                 seq_len: win_seq,
+@@ -2865,6 +2925,7 @@
+                         .encoder
+                         .forward(&cfg, &mel, mel_frames, Some(&mut ctx.enc_bufs))
+                 {
++                    state.work.encoder_samples += state.audio_cursor - full_end;
+                     partial_seq = seq;
+                     partial_keys = prefill_embed_keys(&enc, seq, dim);
+                     partial_enc = enc;
+@@ -2907,7 +2968,7 @@
+             && state.chunk_idx >= unfixed_chunks
+             && !state.raw_tokens.is_empty()
+         {
+-            (state.raw_tokens.len() as i32 - rollback).max(0) as usize
++            state.prefix_len(stream_text_start(ctx, &state.raw_tokens), rollback)
+         } else {
+             0
+         };
+@@ -3036,6 +3097,8 @@
+ 
+         ctx.kv_cache.len = reused_prefill;
+         let delta_prefill = prefill_len - reused_prefill;
++        state.work.reused_prefill_rows += reused_prefill;
++        state.work.prefill_rows += delta_prefill;
+         if delta_prefill > 0 {
+             decoder::decoder_prefill(
+                 &ctx.model.decoder,
+@@ -3141,8 +3204,10 @@
+         }
+ 
+         // ---- Update raw token history ----
+-        state.raw_tokens.truncate(n_prefix_tokens);
+-        state.raw_tokens.extend_from_slice(&chunk_tokens);
++        if !speech_ended {
++            state.raw_tokens.truncate(n_prefix_tokens);
++            state.raw_tokens.extend_from_slice(&chunk_tokens);
++        }
+ 
+         // ---- Utterance-boundary reset on true EOT (opt-in) ----
+         // If the model emitted an immediate EOT (silence → EOT, the classic
+@@ -3179,62 +3244,18 @@
+                         state.chunk_idx, state.stale_count, best_reps
+                     );
+                 }
+-                let carry = state
+-                    .stable_text_tokens
+-                    .len()
+-                    .min(STREAM_RESET_CARRY_TOKENS);
+-                let carry_start = state.stable_text_tokens.len() - carry;
+-                state.raw_tokens.clear();
+-                if carry > 0 {
+-                    state.raw_tokens.push(TOKEN_ASR_TEXT);
+-                    state
+-                        .raw_tokens
+-                        .extend_from_slice(&state.stable_text_tokens[carry_start..]);
+-                }
+-                state.prev_prefill_keys.clear();
+-                state.stale_count = 0;
+-                state.prev_tail_snapshot.clear();
+-                if state.enc_cache.len() >= STREAM_MAX_ENC_WINDOWS {
+-                    state.enc_cache_base_windows += state.enc_cache.len();
+-                    state.enc_cache.clear();
+-                    state.enc_cached_seq_total = 0;
+-                }
+-            }
+-
+-            // Periodic re-anchor: reset context every STREAM_RESET_INTERVAL_CHUNKS chunks
+-            if state.chunk_idx > 0 && state.chunk_idx % STREAM_RESET_INTERVAL_CHUNKS == 0 {
+-                if kernels::verbose() >= 2 {
+-                    eprintln!("[stream reanchor] at chunk {}", state.chunk_idx);
+-                }
+-                let carry = state
+-                    .stable_text_tokens
+-                    .len()
+-                    .min(STREAM_RESET_CARRY_TOKENS);
+-                let carry_start = state.stable_text_tokens.len() - carry;
+-                state.raw_tokens.clear();
+-                if carry > 0 {
+-                    state.raw_tokens.push(TOKEN_ASR_TEXT);
+-                    state
+-                        .raw_tokens
+-                        .extend_from_slice(&state.stable_text_tokens[carry_start..]);
+-                }
+-                state.prev_prefill_keys.clear();
+-                state.stale_count = 0;
+-                state.prev_tail_snapshot.clear();
+-                if state.enc_cache.len() >= STREAM_MAX_ENC_WINDOWS {
+-                    state.enc_cache_base_windows += state.enc_cache.len();
+-                    state.enc_cache.clear();
+-                    state.enc_cached_seq_total = 0;
+-                }
+-            }
+-        }
+-
++                reset_utterance_segment!(state);
++            }
++        }
++
++        let reanchor = !is_final && state.chunk_idx > 0
++            && state.chunk_idx % STREAM_INCREMENTAL_RESET_INTERVAL_CHUNKS == 0;
+         // ---- Parse text region and emit stable tokens (non-speech-ended case) ----
+         if !speech_ended {
+             let text_start = stream_text_start(ctx, &state.raw_tokens);
+             let n_text_tokens = state.raw_tokens.len().saturating_sub(text_start);
+ 
+-            let candidate_len = if is_final {
++            let candidate_len = if is_final || reanchor {
+                 n_text_tokens
+             } else if state.chunk_idx >= unfixed_chunks {
+                 (n_text_tokens as i32 - rollback).max(0) as usize
+@@ -3321,6 +3342,13 @@
+             }
+         }
+ 
++        if reanchor {
++            // Commit the current chunk before dropping its encoder context.
++            // Output-token carry only matches retained audio; a fresh audio segment
++            // must start with no output prefix or its first words can be skipped.
++            reset_utterance_segment!(state);
++        }
++
+         ctx.perf_total_ms += elapsed_ms(chunk_t0);
+         state.chunk_idx += 1;
+ 
+@@ -3340,7 +3368,8 @@
+     {
+         let text_start = stream_text_start(ctx, &state.raw_tokens);
+         let candidate_tokens = &state.raw_tokens[text_start..];
+-        for &tok in &candidate_tokens[state.stable_text_tokens.len()..] {
++        let committed = state.stable_text_tokens.len().min(candidate_tokens.len());
++        for &tok in &candidate_tokens[committed..] {
+             let piece_bytes = tokenizer.decode_bytes(tok);
+             state.provisional_bytes.extend_from_slice(piece_bytes);
+         }
+@@ -3348,3 +3377,61 @@
+ 
+     Some(String::from_utf8_lossy(&delta_bytes).into_owned())
+ }
++
++#[cfg(test)]
++mod orbit_stream_tests {
++    use super::StreamState;
++
++    #[test]
++    fn segment_reset_keeps_committed_text_but_does_not_carry_output_tokens() {
++        let mut state = StreamState::new();
++        state.raw_tokens = (0..100).collect();
++        state.stable_text_tokens = state.raw_tokens.clone();
++        state.result_bytes = b"committed".to_vec();
++        state.work.encoder_samples = 32_000;
++        reset_utterance_segment!(state);
++        assert!(state.raw_tokens.is_empty());
++        assert!(state.stable_text_tokens.is_empty());
++        assert_eq!(state.hypothesis(), "committed");
++        assert_eq!(state.work().encoder_samples, 32_000);
++    }
++
++    #[test]
++    fn rollback_never_reopens_committed_tokens() {
++        let mut state = StreamState::new();
++        state.raw_tokens = (0..30).collect();
++        state.stable_text_tokens = (0..25).collect();
++        assert_eq!(state.prefix_len(0, 12), 25);
++        state.stable_text_tokens = state.raw_tokens.clone();
++        assert_eq!(state.prefix_len(0, 12), 30);
++    }
++
++    #[test]
++    fn finalize_flushes_pending_tokens_once_without_new_audio() {
++        let path = std::env::temp_dir()
++            .join(format!("qwen-final-tail-{}.json", std::process::id()));
++        std::fs::write(&path, r#"{"a":0,"b":1}"#).unwrap();
++        let tokenizer = crate::tokenizer::QwenTokenizer::load(path.to_str().unwrap()).unwrap();
++        std::fs::remove_file(path).unwrap();
++        let mut state = StreamState::new();
++        state.raw_tokens = vec![0, 1];
++        state.stable_text_tokens = vec![0];
++        state.result_bytes = b"a".to_vec();
++        state.provisional_bytes = b"b".to_vec();
++        assert_eq!(state.finalize_tail(0, &tokenizer), b"b");
++        assert_eq!(state.hypothesis(), "ab");
++        assert!(state.finalize_tail(0, &tokenizer).is_empty());
++        assert_eq!(state.hypothesis(), "ab");
++    }
++
++    #[test]
++    fn hypotheses_join_token_bytes_before_decoding_utf8() {
++        let mut state = StreamState::new();
++        let word = "独立".as_bytes();
++        state.result_bytes = word[..1].to_vec();
++        state.provisional_bytes = word[1..].to_vec();
++        assert_eq!(state.hypothesis(), "独立");
++        state.provisional_bytes.clear();
++        assert_eq!(state.hypothesis(), "");
++    }
++}

@@ -2087,6 +2087,206 @@ index 31ed8673..555f0e6b 100644
      #[gpui::test]
      fn test_message_scroller_builder(cx: &mut gpui::TestAppContext) {
          let state = cx.new(|cx| MessageScrollerState::new(0, cx));
+diff --git a/crates/component/src/speech/level.rs b/crates/component/src/speech/level.rs
+index 72bd78f3..9c449825 100644
+--- a/crates/component/src/speech/level.rs
++++ b/crates/component/src/speech/level.rs
+@@ -46,11 +46,17 @@ const ATTACK: f32 = 0.85;
+ /// fall back smoothly.
+ const RELEASE: f32 = 0.3;
+ 
++const LIVE_QUIET_INTERVALS: usize = 4;
++const LIVE_INPUT_TIMEOUT: Duration = Duration::from_millis(320);
++
+ /// Turns a stream of PCM into smoothed input levels, one per
+ /// [`LEVEL_INTERVAL`] of audio, carrying partial intervals across pushes.
+ pub(super) struct LevelMeter {
+     /// Samples per level: [`LEVEL_INTERVAL`] at the stream's rate and channels.
+     window: usize,
++    quiet_intervals: usize,
++    live_frontier: u64,
++    last_input: Option<Instant>,
+     sum: f64,
+     count: usize,
+     smoothed: f32,
+@@ -69,6 +75,9 @@ impl LevelMeter {
+     pub(super) fn new() -> Self {
+         Self {
+             window: window_for(16_000, 1),
++            quiet_intervals: 0,
++            live_frontier: 0,
++            last_input: None,
+             sum: 0.,
+             count: 0,
+             smoothed: 0.,
+@@ -94,6 +103,16 @@ impl LevelMeter {
+ 
+     /// [`Self::push`] with the time the samples arrived.
+     pub(super) fn push_at(&mut self, samples: &[i16], now: Instant) -> bool {
++        if samples.is_empty() {
++            return false;
++        }
++        if self
++            .last_input
++            .is_some_and(|last| now.saturating_duration_since(last) >= LIVE_INPUT_TIMEOUT)
++        {
++            self.live_frontier = self.recorded;
++        }
++        self.last_input = Some(now);
+         let mut recorded = false;
+         for &sample in samples {
+             let sample = sample as f64 / i16::MAX as f64;
+@@ -109,6 +128,14 @@ impl LevelMeter {
+                 self.sum = 0.;
+                 self.count = 0;
+                 self.recorded += 1;
++                self.quiet_intervals = if raw == 0. {
++                    self.quiet_intervals.saturating_add(1)
++                } else {
++                    0
++                };
++                if self.quiet_intervals >= LIVE_QUIET_INTERVALS {
++                    self.live_frontier = self.recorded;
++                }
+                 self.align_playhead(now);
+                 recorded = true;
+             }
+@@ -149,6 +176,20 @@ impl LevelMeter {
+         Some(lead.clamp(0., PLAYHEAD_MAX_LEAD))
+     }
+ 
++    pub(super) fn live_levels_at(&self, now: Instant) -> impl ExactSizeIterator<Item = f32> + '_ {
++        let stale = self
++            .last_input
++            .is_none_or(|last| now.saturating_duration_since(last) >= LIVE_INPUT_TIMEOUT);
++        let first = self.recorded - self.levels.len() as u64;
++        self.levels.iter().enumerate().map(move |(index, &level)| {
++            if stale || first + (index as u64) < self.live_frontier {
++                0.
++            } else {
++                level
++            }
++        })
++    }
++
+     pub(super) fn levels(&self) -> impl ExactSizeIterator<Item = f32> + '_ {
+         self.levels.iter().copied()
+     }
+@@ -207,6 +248,39 @@ mod tests {
+             .collect()
+     }
+ 
++    #[test]
++    fn live_levels_clear_after_silence_and_only_new_speech_returns() {
++        let mut meter = LevelMeter::new();
++        let start = Instant::now();
++        let window = window_for(16_000, 1);
++        meter.push_at(&tone(8_000, window), start);
++        assert!(meter.live_levels_at(start).any(|level| level > 0.));
++        for index in 1..=4 {
++            meter.push_at(&vec![0; window], start + LEVEL_INTERVAL * index);
++        }
++        let quiet = start + LEVEL_INTERVAL * 4;
++        assert!(meter.live_levels_at(quiet).all(|level| level == 0.));
++        assert!(meter.levels().any(|level| level > 0.));
++        meter.push_at(&tone(8_000, window), quiet + LEVEL_INTERVAL);
++        let levels: Vec<_> = meter.live_levels_at(quiet + LEVEL_INTERVAL).collect();
++        assert!(levels[..levels.len() - 1].iter().all(|&level| level == 0.));
++        assert!(*levels.last().unwrap() > 0.);
++    }
++
++    #[test]
++    fn live_levels_expire_when_input_stalls() {
++        let mut meter = LevelMeter::new();
++        let start = Instant::now();
++        let samples = tone(8_000, window_for(16_000, 1));
++        meter.push_at(&samples, start);
++        let later = start + LIVE_INPUT_TIMEOUT;
++        assert!(meter.live_levels_at(later).all(|level| level == 0.));
++        meter.push_at(&samples, later);
++        let levels: Vec<_> = meter.live_levels_at(later).collect();
++        assert_eq!(levels[0], 0.);
++        assert!(levels[1] > 0.);
++    }
++
+     #[test]
+     fn one_level_per_interval_across_pushes() {
+         let mut meter = LevelMeter::new();
+diff --git a/crates/component/src/speech/state.rs b/crates/component/src/speech/state.rs
+index e46ebed3..dc519bc9 100644
+--- a/crates/component/src/speech/state.rs
++++ b/crates/component/src/speech/state.rs
+@@ -172,6 +172,13 @@ impl SpeechState {
+         self.meter.levels()
+     }
+ 
++    pub(super) fn live_levels_at(
++        &self,
++        now: instant::Instant,
++    ) -> impl ExactSizeIterator<Item = f32> + '_ {
++        self.meter.live_levels_at(now)
++    }
++
+     /// How far past the waveform's trailing edge the newest level sits at
+     /// `now`, in levels; see `LevelMeter::lead_at`.
+     pub(super) fn level_lead_at(&self, now: instant::Instant) -> Option<f32> {
+diff --git a/crates/component/src/speech/waveform.rs b/crates/component/src/speech/waveform.rs
+index 4958ab27..56aeeb35 100644
+--- a/crates/component/src/speech/waveform.rs
++++ b/crates/component/src/speech/waveform.rs
+@@ -30,6 +30,7 @@ const GAP_RATIO: f32 = 2.5;
+ pub struct SpeechWaveform {
+     state: Entity<SpeechState>,
+     size: Size,
++    live: bool,
+     style: StyleRefinement,
+ }
+ 
+@@ -39,10 +40,18 @@ impl SpeechWaveform {
+         Self {
+             state: state.clone(),
+             size: Size::default(),
++            live: false,
+             style: StyleRefinement::default(),
+         }
+     }
+ 
++    /// Settle to the baseline after 320 ms of silence or missing input.
++    /// Resumed speech shows fresh levels without restoring the old peaks.
++    pub fn live(mut self) -> Self {
++        self.live = true;
++        self
++    }
++
+     fn height(&self) -> Pixels {
+         match self.size {
+             Size::Size(height) => height,
+@@ -76,17 +85,22 @@ impl RenderOnce for SpeechWaveform {
+         let gap = (bar * GAP_RATIO).round();
+         let state = self.state.read(cx);
+         let capturing = state.status().is_capturing();
+-        let levels: Vec<f32> = state.levels().collect();
++        let now = Instant::now();
++        let levels: Vec<f32> = if self.live {
++            state.live_levels_at(now).collect()
++        } else {
++            state.levels().collect()
++        };
+         let animate = capturing && !cx.reduce_motion();
+         // The bars follow an even clock rather than the arrival of each level,
+         // which comes in uneven bursts: the newest bar slides in from just past
+         // the trailing edge, so the waveform scrolls without stepping or
+         // stalling. Without animation the newest bar sits at the edge.
+         let scroll = state
+-            .level_lead_at(Instant::now())
++            .level_lead_at(now)
+             .filter(|_| animate)
+             .map_or(0., |lead| -lead);
+-        if animate {
++        if animate || (capturing && self.live) {
+             window.request_animation_frame();
+         }
+         let color = if capturing {
 diff --git a/website/base/text-view.md b/website/base/text-view.md
 index 9718375b..5d747b8f 100644
 --- a/website/base/text-view.md
@@ -2112,6 +2312,16 @@ index 749aad5c..a6f1516f 100644
  | `scroll_to_end(cx)` | tail following enabled | Move to the latest row and resume following. |
  
  ### `MessageScroller`
+diff --git a/website/component/speech.md b/website/component/speech.md
+index 217f849d..d7ad23ab 100644
+--- a/website/component/speech.md
++++ b/website/component/speech.md
+@@ -407,3 +407,5 @@ application recognizer; without one, `SpeechButton` renders nothing. The
+ [SpeechError]: https://docs.rs/gpui-component/latest/gpui_component/speech/enum.SpeechError.html
+ [SystemRecognizer]: https://docs.rs/gpui-component/latest/gpui_component/speech/struct.SystemRecognizer.html
+ [Microphone]: https://docs.rs/gpui-component/latest/gpui_component/speech/struct.Microphone.html
++
++Use `SpeechWaveform::new(&speech).live()` for immediate microphone feedback: after 320 ms of silence or missing audio it settles to the baseline. Resumed speech starts fresh; the default waveform retains its rolling history.
 diff --git a/website/zh-CN/base/text-view.md b/website/zh-CN/base/text-view.md
 index c6394e3c..6cfa4f6a 100644
 --- a/website/zh-CN/base/text-view.md
@@ -2137,3 +2347,13 @@ index 5ff081ee..01e507cb 100644
  | `scroll_to_end(cx)` | 恢复尾部跟随并滚到最新内容。 |
  
  ### `MessageScroller`
+diff --git a/website/zh-CN/component/speech.md b/website/zh-CN/component/speech.md
+index 6b2658f0..e022e0e5 100644
+--- a/website/zh-CN/component/speech.md
++++ b/website/zh-CN/component/speech.md
+@@ -334,3 +334,5 @@ Linux 没有系统识别器，只有在应用提供识别器时才能使用语
+ [SpeechError]: https://docs.rs/gpui-component/latest/gpui_component/speech/enum.SpeechError.html
+ [SystemRecognizer]: https://docs.rs/gpui-component/latest/gpui_component/speech/struct.SystemRecognizer.html
+ [Microphone]: https://docs.rs/gpui-component/latest/gpui_component/speech/struct.Microphone.html
++
++使用 `SpeechWaveform::new(&speech).live()` 展示即时麦克风反馈：持续静音或音频中断 320 ms 后回到基线，恢复说话后只展示新的音量。默认波形继续保留滚动历史。

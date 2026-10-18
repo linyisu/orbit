@@ -50,10 +50,19 @@ async fn local_model_streams_and_corrects_before_input_finishes() {
         corrected.contains('。'),
         "no Qwen sentence correction while recording: {corrected}"
     );
+    for chunk in samples.chunks(AUDIO_CHUNK_SAMPLES) {
+        capture.push(chunk).unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
     drop(capture);
     let text = worker.await.unwrap().unwrap();
+    assert!(
+        text.starts_with(&corrected),
+        "a later utterance replaced committed text"
+    );
     eprintln!("Live: {before}; corrected: {text}");
     let expected: Vec<_> = "你好现在开始测试今天下午三点开会请把报告保存在项目目录"
+        .repeat(2)
         .chars()
         .collect();
     let actual: Vec<_> = text
@@ -73,6 +82,21 @@ async fn local_model_streams_and_corrects_before_input_finishes() {
         }
     }
     assert!(distance[expected.len()] * 10 <= expected.len(), "{text}");
+    let (updates, _) = watch::channel(String::new());
+    let (mut capture, recognition) = engine.start(CancellationToken::new(), updates);
+    capture
+        .push(&samples[..SAMPLE_RATE_HZ * 2])
+        .unwrap();
+    drop(capture);
+    let boundary = tokio::task::spawn_blocking(move || recognition.run())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        !boundary.is_empty(),
+        "exact chunk boundary discarded all provisional tokens"
+    );
+    assert!(!boundary.contains('�'));
     let (updates, _) = watch::channel(String::new());
     let (mut capture, recognition) = engine.start(CancellationToken::new(), updates);
     capture
@@ -114,7 +138,7 @@ fn capture_accounts_for_frames_accepted_before_a_queue_overrun() {
 }
 
 #[tokio::test]
-#[ignore = "requires verified local Qwen and preview models"]
+#[ignore = "requires verified local Qwen weights"]
 async fn cancellation_discards_native_loading_without_blocking_the_caller() {
     let directory = PathBuf::from(std::env::var_os("ORBIT_SPEECH_TEST_MODEL_DIRECTORY").unwrap());
     let (progress, mut updates) = watch::channel(Progress::Waiting);
@@ -122,7 +146,7 @@ async fn cancellation_discards_native_loading_without_blocking_the_caller() {
     let loading = tokio::spawn(prepare(directory.clone(), cancel.clone(), progress));
     tokio::time::timeout(std::time::Duration::from_secs(90), async {
         loop {
-            if *updates.borrow_and_update() == Progress::LoadingCorrection {
+            if *updates.borrow_and_update() == Progress::LoadingModel {
                 break;
             }
             updates.changed().await.unwrap();
@@ -149,4 +173,31 @@ async fn cancellation_discards_native_loading_without_blocking_the_caller() {
         .unwrap()
         .is_ok()
     );
+}
+
+#[test]
+fn cancellation_wakes_a_native_waiter_while_another_operation_still_owns_the_pool() {
+    let owner = CancellationToken::new();
+    let _guard = model::inference_guard(&owner).unwrap();
+    let cancel = CancellationToken::new();
+    let waiting = cancel.clone();
+    let (ready, started) = mpsc::channel();
+    let (result, completed) = mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        ready.send(()).unwrap();
+        result
+            .send(model::inference_guard(&waiting).is_err())
+            .unwrap();
+    });
+    started
+        .recv_timeout(std::time::Duration::from_secs(1))
+        .unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    cancel.cancel();
+    assert!(
+        completed
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .unwrap()
+    );
+    worker.join().unwrap();
 }

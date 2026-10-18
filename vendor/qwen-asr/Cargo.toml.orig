@@ -1,0 +1,40 @@
+[package]
+name = "qwen-asr"
+version = "0.11.0"
+edition.workspace = true
+license.workspace = true
+description = "CPU-only Qwen3-ASR speech recognition (pure Rust)"
+keywords = ["asr", "speech-recognition", "qwen", "inference"]
+categories = ["multimedia::audio"]
+repository = "https://github.com/huanglizhuo/QwenASR"
+documentation = "https://docs.rs/qwen-asr"
+readme = "README.md"
+
+[lib]
+crate-type = ["cdylib", "staticlib", "rlib"]
+name = "qwen_asr"
+
+[dependencies]
+libc = "0.2"
+
+[package.metadata.docs.rs]
+no-default-features = true
+
+[features]
+default = ["blas", "vdsp"]
+blas = []
+vdsp = []
+ios = []
+android = []
+macos-ffi = []
+# R13-Android stage 1: INT8 decoder-prefill GEMM. Opt-in, NOT default. The path
+# only compiles under all(feature="int8-prefill", not(feature="blas"),
+# target_arch="aarch64"), so desktop/apple/CLI builds never include it. Wired
+# into the Flutter Android dependency only.
+int8-prefill = []
+# R13-Android stage 2: INT8 encoder weight GEMMs (conv_out, q/k/v/o attn
+# projections, fc1/fc2 FFN, proj1/proj2). Opt-in, NOT default, and INDEPENDENT
+# of int8-prefill so each can be rolled back separately. Same triple gate
+# (feature + not blas + aarch64), so desktop/apple/CLI never compile a line of
+# it. Wired into the Flutter Android dependency only.
+int8-encoder = []

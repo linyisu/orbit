@@ -1,0 +1,3437 @@
+//! Offline, segmented, and streaming transcription orchestration.
+
+use crate::align;
+use crate::audio;
+use crate::config::*;
+use crate::context::QwenCtx;
+use crate::decoder::{self, tok_embed_bf16_to_f32, Decoder, DecoderBuffers, KvCache, RopeCache};
+#[cfg(target_arch = "aarch64")]
+use crate::decoder::{decoder_forward_verify, verify_accepted_len};
+use crate::encoder::{Encoder, EncoderBuffers};
+use crate::kernels;
+use crate::output::{SegmentResult, TranscriptionResult, WordTimestamp};
+use crate::subtitle::{format_vtt, group_words_to_cues, segment_to_cue, Cue};
+use crate::tokenizer::QwenTokenizer;
+
+use std::time::Instant;
+
+// Prompt token sequences
+const PREFIX_HEAD: &[i32] = &[151644, 8948, 198];
+const PREFIX_TAIL: &[i32] = &[151645, 198, 151644, 872, 198, 151669];
+const SUFFIX_BASE: &[i32] = &[151670, 151645, 198, 151644, 77091, 198];
+
+// Streaming robustness constants (matching C reference)
+const STREAM_DEGEN_MAX_PERIOD: usize = 6;
+const STREAM_DEGEN_MIN_REPEATS: usize = 4;
+const STREAM_STALE_CHUNKS: i32 = 4;
+const STREAM_RESET_INTERVAL_CHUNKS: i32 = 45;
+const STREAM_INCREMENTAL_RESET_INTERVAL_CHUNKS: i32 = 6;
+const STREAM_RESET_CARRY_TOKENS: usize = 24;
+
+// Multilingual utterance-boundary VAD (opt-in `multilingual` mode only).
+// A speech→silence transition longer than `ML_MIN_SILENCE_SEC` with the frame
+// RMS below `ML_SILENCE_RMS` marks an utterance boundary at which the language
+// carry is dropped so the next utterance re-detects its language.
+const ML_SILENCE_RMS: f32 = 0.02;
+const ML_MIN_SILENCE_SEC: f32 = 0.6;
+const ML_VAD_FRAME: usize = 1600; // 100 ms at 16 kHz
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct PrefillRowKey {
+    a: u64,
+    b: u64,
+}
+
+#[inline]
+fn mix64(mut x: u64) -> u64 {
+    x ^= x >> 30;
+    x = x.wrapping_mul(0xbf58476d1ce4e5b9);
+    x ^= x >> 27;
+    x = x.wrapping_mul(0x94d049bb133111eb);
+    x ^ (x >> 31)
+}
+
+#[inline]
+fn prefill_token_key(token: i32) -> PrefillRowKey {
+    let x = token as u32 as u64;
+    PrefillRowKey {
+        a: mix64(0x544f_4b45_4e00_0000 ^ x),
+        b: mix64(0x454d_4245_4400_0000 ^ x.rotate_left(17)),
+    }
+}
+
+fn prefill_embed_key(row: &[f32]) -> PrefillRowKey {
+    let mut a = 0xcbf29ce484222325u64;
+    let mut b = 0x9e3779b97f4a7c15u64 ^ row.len() as u64;
+    for &v in row {
+        let bits = v.to_bits() as u64;
+        a ^= bits;
+        a = a.wrapping_mul(0x100000001b3);
+        b ^= bits
+            .wrapping_add(0x9e3779b97f4a7c15)
+            .wrapping_add(b << 6)
+            .wrapping_add(b >> 2);
+    }
+    PrefillRowKey { a, b }
+}
+
+fn prefill_embed_keys(data: &[f32], seq_len: usize, dim: usize) -> Vec<PrefillRowKey> {
+    let mut keys = Vec::with_capacity(seq_len);
+    for i in 0..seq_len {
+        keys.push(prefill_embed_key(&data[i * dim..(i + 1) * dim]));
+    }
+    keys
+}
+
+fn has_prefilled_asr_text(ctx: &QwenCtx) -> bool {
+    ctx.force_prompt_tokens
+        .as_ref()
+        .is_some_and(|tokens| tokens.contains(&TOKEN_ASR_TEXT))
+}
+
+/// Index into `raw_tokens` where the ASR text region begins.
+///
+/// When the ASR text token was prefilled into the prompt, `raw_tokens`
+/// contains only generated text, so the region starts at 0.  Otherwise the
+/// region starts right after the first `TOKEN_ASR_TEXT` marker.  This mirrors
+/// the slicing used by the streaming commit blocks and must stay identical to
+/// them so the provisional tail lines up exactly with the committed text.
+fn stream_text_start(ctx: &QwenCtx, raw_tokens: &[i32]) -> usize {
+    if !has_prefilled_asr_text(ctx) {
+        raw_tokens
+            .iter()
+            .position(|&t| t == TOKEN_ASR_TEXT)
+            .map(|p| p + 1)
+            .unwrap_or(0)
+    } else {
+        0
+    }
+}
+
+/// Root-mean-square amplitude of a sample slice (audio normalized to -1.0..1.0).
+fn slice_rms(samples: &[f32]) -> f32 {
+    if samples.is_empty() {
+        return 0.0;
+    }
+    let sum: f64 = samples.iter().map(|&s| (s as f64) * (s as f64)).sum();
+    (sum / samples.len() as f64).sqrt() as f32
+}
+
+/// Utterance-boundary reset sub-step: drop the finished utterance's generated
+/// `language X` header so the NEXT utterance re-detects language from fresh
+/// audio. Used only when multilingual auto-detection is active.
+macro_rules! reset_language_header {
+    ($ctx:expr) => {{
+        $ctx.detected_language = None;
+    }};
+}
+
+/// Utterance-boundary reset sub-step: drop the finished utterance's committed
+/// text carry AND release the encoder-audio window so the next utterance decodes
+/// from a clean KV/encoder state — only post-boundary audio is re-encoded.
+/// Mirrors the degen-reset truncation (STREAM_RESET_CARRY_TOKENS) but with ZERO
+/// carry; the encoder release mirrors the reanchor path's cache clear. Keeping
+/// the old audio makes the model re-transcribe every chunk (heavy duplication);
+/// releasing it keeps the per-utterance transcript clean (see experiments.md
+/// R13-Android). Used by both multilingual mode and `vad_segment_reset`.
+macro_rules! reset_utterance_segment {
+    ($state:expr) => {{
+        $state.raw_tokens.clear();
+        $state.stable_text_tokens.clear();
+        $state.prev_prefill_keys.clear();
+        $state.prev_tail_snapshot.clear();
+        $state.stale_count = 0;
+        $state.enc_cache_base_windows += $state.enc_cache.len();
+        $state.enc_cache.clear();
+        $state.enc_cached_seq_total = 0;
+        $state.last_partial_cursor = 0;
+        $state.last_partial_enc.clear();
+        $state.last_partial_keys.clear();
+        $state.last_partial_seq = 0;
+    }};
+}
+
+/// Streaming utterance-boundary reset dispatcher: composes the two reset
+/// sub-steps based on which opt-in flag(s) are active, so `multilingual` and
+/// `vad_segment_reset` can independently (or jointly) trigger a reset without
+/// duplicating field-clearing logic.
+///
+/// - `multilingual` (with no forced language): re-detect language AND hard
+///   segment reset — identical to the previously shipped `multilingual`
+///   boundary reset (byte-for-byte the same fields, in the same order).
+/// - `vad_segment_reset`: hard segment reset only (no language re-detection).
+/// - both: language re-detection + segment reset.
+///
+/// Implemented as a macro (not a fn) so it expands to disjoint per-field access:
+/// inside `stream_push_audio` the tokenizer is held as a `&` borrow of `state`,
+/// which would conflict with a `&mut StreamState` helper call. The default
+/// decode path (both flags false) never reaches a call site.
+macro_rules! stream_boundary_reset {
+    ($ctx:expr, $state:expr) => {{
+        let ml_active = $ctx.multilingual && $ctx.force_language.is_none();
+        if ml_active {
+            reset_utterance_segment!($state);
+            reset_language_header!($ctx);
+        } else if $ctx.vad_segment_reset {
+            reset_utterance_segment!($state);
+        }
+        $state.ml_speech_since_boundary = false;
+    }};
+}
+
+fn prefill_lcp_len(prev: &[PrefillRowKey], current: &[PrefillRowKey], prefill_len: usize) -> usize {
+    let cmp_len = prefill_len.min(prev.len()).min(current.len());
+    let mut reused = 0usize;
+    while reused < cmp_len && prev[reused] == current[reused] {
+        reused += 1;
+    }
+    reused
+}
+
+fn get_time_ms() -> f64 {
+    // Use monotonic clock
+    static START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+    let start = START.get_or_init(Instant::now);
+    start.elapsed().as_secs_f64() * 1000.0
+}
+
+fn elapsed_ms(t0: f64) -> f64 {
+    get_time_ms() - t0
+}
+
+/// Returns `(best_reps, best_period)`: how many times a block of `best_period`
+/// tokens repeats at the tail of `tokens`. Used for streaming degeneracy detection.
+fn stream_tail_repeat_blocks(tokens: &[i32], max_period: usize) -> (usize, usize) {
+    let n = tokens.len();
+    if n < 2 {
+        return (1, 0);
+    }
+    let period_cap = (n / 2).min(if max_period > 0 { max_period } else { n / 2 });
+    let mut best_reps = 1usize;
+    let mut best_period = 0usize;
+    for p in 1..=period_cap {
+        let mut reps = 1usize;
+        while (reps + 1) * p <= n {
+            let a = &tokens[n - (reps + 1) * p..n - reps * p];
+            let b = &tokens[n - reps * p..n - (reps - 1) * p];
+            if a != b {
+                break;
+            }
+            reps += 1;
+        }
+        if reps > best_reps {
+            best_reps = reps;
+            best_period = p;
+        }
+    }
+    (best_reps, best_period)
+}
+
+fn load_tokenizer(model_dir: &str) -> Option<QwenTokenizer> {
+    let _pg = kernels::ProfileGuard::new(&kernels::PROF.tokenizer_load);
+    let vocab_path = format!("{}/vocab.json", model_dir);
+    QwenTokenizer::load(&vocab_path)
+}
+
+/// Immutable, thread-shareable model weights plus the prepared prompt token
+/// state needed to decode one segment. Every field is read-only during decode,
+/// so a single `SegWeights` can be shared by `&` across concurrent segment
+/// workers (see [`transcribe_audio`]'s parallel path).
+struct SegWeights<'a> {
+    cfg: &'a QwenConfig,
+    encoder: &'a Encoder,
+    decoder: &'a Decoder,
+    prompt_tokens: Option<&'a [i32]>,
+    force_prompt_tokens: Option<&'a [i32]>,
+    has_prefilled_asr_text: bool,
+}
+
+/// Per-segment mutable session buffers. Each concurrent worker owns its own set
+/// so no cross-thread synchronization is needed inside a decode.
+struct SegSession {
+    kv_cache: KvCache,
+    rope_cache: RopeCache,
+    dec_bufs: DecoderBuffers,
+    enc_bufs: EncoderBuffers,
+}
+
+impl SegSession {
+    fn new(cfg: &QwenConfig) -> Self {
+        SegSession {
+            kv_cache: KvCache::new(cfg.dec_layers, 2048, cfg.dec_kv_heads, cfg.dec_head_dim),
+            rope_cache: RopeCache::new(),
+            dec_bufs: DecoderBuffers::new(cfg),
+            enc_bufs: EncoderBuffers::new(),
+        }
+    }
+}
+
+/// Output of decoding one segment, with the ctx-side side effects deferred so
+/// the core is a pure function of `(weights, session, samples)`.
+struct SegCore {
+    /// Whitespace-trimmed transcript text for this segment.
+    text: String,
+    /// Raw header bytes (pre-`<asr_text>` tokens) for language detection.
+    header_bytes: Vec<u8>,
+    n_text_tokens: i32,
+    /// Mel + encoder time (ms).
+    encode_ms: f64,
+    /// Prefill + autoregressive decode time (ms).
+    decode_ms: f64,
+    /// Wall time of the whole segment decode (ms).
+    total_ms: f64,
+}
+
+/// Result of the segment "front half": mel → encoder → embedding assembly →
+/// decoder prefill. The session's KV cache holds the prefilled context; the
+/// autoregressive decode starts by feeding `next_embed` (the last prefill
+/// position's embedding) through one decoder forward.
+struct SegPrefilled {
+    /// Embedding of the last prefill position (input to the first forward).
+    next_embed: Vec<f32>,
+    /// Mel + encoder time (ms).
+    encode_ms: f64,
+    /// Decoder prefill time (ms), excluding the first forward.
+    prefill_ms: f64,
+    /// Wall anchor for the whole segment (start of the mel step).
+    seg_t0: f64,
+}
+
+/// Segment front half against shared `weights` using worker-owned session
+/// buffers: mel spectrogram, encoder, prompt/encoder embedding assembly and
+/// decoder prefill. Touches no [`QwenCtx`] state, so it is safe to run on many
+/// threads concurrently as long as each call has its own session buffers.
+fn prefill_segment_core(
+    weights: &SegWeights,
+    kv_cache: &mut KvCache,
+    rope_cache: &mut RopeCache,
+    dec_bufs: &mut DecoderBuffers,
+    enc_bufs: &mut EncoderBuffers,
+    samples: &[f32],
+    past_tokens: Option<&[i32]>,
+) -> Option<SegPrefilled> {
+    let cfg = weights.cfg;
+    let dim = cfg.dec_hidden;
+    let seg_t0 = get_time_ms();
+
+    // Mel spectrogram
+    let t0 = get_time_ms();
+    let (mel, mel_frames) = {
+        let _pg = kernels::ProfileGuard::new(&kernels::PROF.mel_compute);
+        audio::mel_spectrogram(samples)?
+    };
+    let mel_ms = elapsed_ms(t0);
+
+    if kernels::verbose() >= 2 {
+        eprintln!("  Mel: {} frames ({:.0} ms)", mel_frames, mel_ms);
+    }
+
+    // Encoder
+    let t0 = get_time_ms();
+    let (enc_output, enc_seq_len) =
+        weights
+            .encoder
+            .forward(cfg, &mel, mel_frames, Some(enc_bufs))?;
+    let enc_ms = elapsed_ms(t0);
+
+    if kernels::verbose() >= 2 {
+        eprintln!("  Encoder: {} tokens ({:.0} ms)", enc_seq_len, enc_ms);
+    }
+
+    // Build input embeddings
+    let n_prompt_tokens = weights.prompt_tokens.map_or(0, |t| t.len());
+    let n_force_prompt_tokens = weights.force_prompt_tokens.map_or(0, |t| t.len());
+    let n_past = past_tokens.map_or(0, |t| t.len());
+    let n_past_prompt_tokens = if n_past > 0 { n_past + 1 } else { 0 }; // +1 for <asr_text>
+
+    let prefix_len = PREFIX_HEAD.len() + n_prompt_tokens + PREFIX_TAIL.len();
+    let suffix_len = SUFFIX_BASE.len() + n_force_prompt_tokens;
+    let total_seq = prefix_len + enc_seq_len + suffix_len + n_past_prompt_tokens;
+
+    let mut input_embeds = vec![0.0f32; total_seq * dim];
+    let tok_emb = weights.decoder.tok_embeddings_bf16;
+
+    // Embed prefix head
+    let mut off = 0;
+    for &tok in PREFIX_HEAD {
+        unsafe {
+            tok_embed_bf16_to_f32(
+                &mut input_embeds[off * dim..(off + 1) * dim],
+                tok_emb,
+                tok,
+                dim,
+            )
+        };
+        off += 1;
+    }
+
+    // Optional prompt
+    if let Some(ptoks) = weights.prompt_tokens {
+        for &tok in ptoks {
+            unsafe {
+                tok_embed_bf16_to_f32(
+                    &mut input_embeds[off * dim..(off + 1) * dim],
+                    tok_emb,
+                    tok,
+                    dim,
+                )
+            };
+            off += 1;
+        }
+    }
+
+    // Prefix tail
+    for &tok in PREFIX_TAIL {
+        unsafe {
+            tok_embed_bf16_to_f32(
+                &mut input_embeds[off * dim..(off + 1) * dim],
+                tok_emb,
+                tok,
+                dim,
+            )
+        };
+        off += 1;
+    }
+
+    // Encoder output
+    for i in 0..enc_seq_len {
+        input_embeds[(prefix_len + i) * dim..(prefix_len + i + 1) * dim]
+            .copy_from_slice(&enc_output[i * dim..(i + 1) * dim]);
+    }
+
+    // Suffix base
+    let suffix_off = prefix_len + enc_seq_len;
+    for (i, &tok) in SUFFIX_BASE.iter().enumerate() {
+        unsafe {
+            tok_embed_bf16_to_f32(
+                &mut input_embeds[(suffix_off + i) * dim..(suffix_off + i + 1) * dim],
+                tok_emb,
+                tok,
+                dim,
+            )
+        };
+    }
+
+    // Force language tokens
+    if let Some(ftoks) = weights.force_prompt_tokens {
+        for (i, &tok) in ftoks.iter().enumerate() {
+            unsafe {
+                tok_embed_bf16_to_f32(
+                    &mut input_embeds[(suffix_off + SUFFIX_BASE.len() + i) * dim
+                        ..(suffix_off + SUFFIX_BASE.len() + i + 1) * dim],
+                    tok_emb,
+                    tok,
+                    dim,
+                )
+            };
+        }
+    }
+
+    // Past text conditioning tokens
+    let past_off = suffix_off + suffix_len;
+    if let Some(ptoks) = past_tokens {
+        for (i, &tok) in ptoks.iter().enumerate() {
+            unsafe {
+                tok_embed_bf16_to_f32(
+                    &mut input_embeds[(past_off + i) * dim..(past_off + i + 1) * dim],
+                    tok_emb,
+                    tok,
+                    dim,
+                )
+            };
+        }
+        unsafe {
+            tok_embed_bf16_to_f32(
+                &mut input_embeds
+                    [(past_off + ptoks.len()) * dim..(past_off + ptoks.len() + 1) * dim],
+                tok_emb,
+                TOKEN_ASR_TEXT,
+                dim,
+            )
+        };
+    }
+
+    // Decoder prefill
+    let t0 = get_time_ms();
+    kv_cache.len = 0;
+    let prefill_len = total_seq - 1;
+    decoder::decoder_prefill(
+        weights.decoder,
+        cfg,
+        kv_cache,
+        rope_cache,
+        dec_bufs,
+        &input_embeds,
+        prefill_len,
+    );
+    let prefill_ms = elapsed_ms(t0);
+
+    if kernels::verbose() >= 2 {
+        eprintln!("  Prefill: {} tokens ({:.0} ms)", total_seq, prefill_ms);
+    }
+
+    Some(SegPrefilled {
+        next_embed: input_embeds[prefill_len * dim..(prefill_len + 1) * dim].to_vec(),
+        encode_ms: mel_ms + enc_ms,
+        prefill_ms,
+        seg_t0,
+    })
+}
+
+/// Acceptance telemetry for the R14-B1 offline prompt-lookup verifier in
+/// [`decode_segment_core`], surfaced at `kernels::verbose() >= 2`. These
+/// counts validate the B1 economics: per-draft acceptance `p` and
+/// tokens/verify-step determine how much of the ~575 MB/token decode weight
+/// stream the verifier amortizes.
+#[cfg(target_arch = "aarch64")]
+#[derive(Default)]
+struct OfflineVerifyStats {
+    /// Multi-token verify steps executed (`decoder_forward_verify` calls).
+    verify_steps: usize,
+    /// Draft tokens accepted across all verify steps.
+    accepted_drafts: usize,
+    /// Single-token steps taken because the draft proposal was empty.
+    single_steps: usize,
+    /// `propose()` calls that returned no drafts.
+    empty_proposals: usize,
+}
+
+/// Decode a single segment against shared `weights` using a worker-owned
+/// session's buffers. `on_piece` receives the raw bytes of each decoded *text*
+/// token as it is produced (the serial path streams these through `token_cb`;
+/// the parallel path captures them for ordered replay). This function touches
+/// no [`QwenCtx`] state, so it is safe to run on many threads concurrently as
+/// long as each call has its own session buffers.
+///
+/// `verify_pool` (aarch64 only): `Some` enables the R14-B1 prompt-lookup
+/// speculative decode path (serial/single-session callers pass the ctx-owned
+/// pool when `QWEN_ASR_VERIFY=1` opts in — default OFF, measured acceptance
+/// on ASR text is low); `None` keeps the plain autoregressive loop (the L3
+/// parallel workers pass `None` — they run single-threaded by design and v1
+/// does not speculate there).
+#[allow(clippy::too_many_arguments)]
+fn decode_segment_core(
+    weights: &SegWeights,
+    kv_cache: &mut KvCache,
+    rope_cache: &mut RopeCache,
+    dec_bufs: &mut DecoderBuffers,
+    enc_bufs: &mut EncoderBuffers,
+    #[cfg(target_arch = "aarch64")] verify_pool: Option<&mut decoder::VerifyBufferPool>,
+    tokenizer: &QwenTokenizer,
+    samples: &[f32],
+    past_tokens: Option<&[i32]>,
+    on_piece: &mut dyn FnMut(&[u8]),
+) -> Option<SegCore> {
+    let cfg = weights.cfg;
+    let dim = cfg.dec_hidden;
+    let mut n_text_tokens = 0i32;
+    let n_past = past_tokens.map_or(0, |t| t.len());
+    let tok_emb = weights.decoder.tok_embeddings_bf16;
+
+    let pre = prefill_segment_core(
+        weights,
+        kv_cache,
+        rope_cache,
+        dec_bufs,
+        enc_bufs,
+        samples,
+        past_tokens,
+    )?;
+
+    // Autoregressive decode (the first token comes from the last prefill
+    // position's embedding; its forward is counted as decode time here, while
+    // the reported per-segment decode_ms below still covers prefill + decode
+    // exactly as before).
+    let t0 = get_time_ms();
+    let mut token = decoder::decoder_forward(
+        weights.decoder,
+        cfg,
+        kv_cache,
+        rope_cache,
+        dec_bufs,
+        &pre.next_embed,
+    );
+    let max_tokens = 2048;
+    let mut n_generated = 0;
+    let mut past_asr_text = weights.has_prefilled_asr_text || n_past > 0;
+
+    let mut text_bytes: Vec<u8> = Vec::new();
+    let mut header_bytes: Vec<u8> = Vec::new();
+    let mut tmp_embed = vec![0.0f32; dim];
+
+    // R14-B1 (aarch64, verify_pool = Some): prompt-lookup speculative decode.
+    // Each iteration proposes up to MAX_BATCH-1 drafts from the segment's own
+    // committed-token history (n-gram self-match, ~zero cost) and verifies
+    // them in ONE multi-token forward that streams the decoder weights once.
+    // Every accepted draft is a nearly-free token (~5 ms of DRAM-bound weight
+    // traffic saved). Only verifier-accepted tokens are committed, so the
+    // output is byte-identical to the plain greedy loop below; on the first
+    // mismatch the next iteration simply re-proposes (no realignment latch).
+    #[cfg(target_arch = "aarch64")]
+    let mut verify_pool = verify_pool;
+    #[cfg(target_arch = "aarch64")]
+    let mut lookup = crate::draft::PromptLookup::new();
+    #[cfg(target_arch = "aarch64")]
+    let mut stats = OfflineVerifyStats::default();
+    #[cfg(target_arch = "aarch64")]
+    let (mut verify_embeds, mut verify_out) = if verify_pool.is_some() {
+        (
+            vec![0.0f32; kernels::MAX_BATCH * dim],
+            vec![0i32; kernels::MAX_BATCH],
+        )
+    } else {
+        (Vec::new(), Vec::new())
+    };
+
+    while n_generated < max_tokens {
+        #[cfg(target_arch = "aarch64")]
+        if let Some(pool) = verify_pool.as_deref_mut() {
+            // Mirror the sequential loop's top-of-iteration EOS handling for
+            // the pending token so a pending EOS is never fed to the model.
+            if token == TOKEN_ENDOFTEXT || token == TOKEN_IM_END {
+                n_generated += 1;
+                break;
+            }
+
+            // Owned copy (≤ 7 tokens): the commit loop below mutates `lookup`,
+            // which `propose`'s returned slice borrows.
+            let drafts = lookup.propose(token, kernels::MAX_BATCH - 1).to_vec();
+            if drafts.is_empty() {
+                stats.single_steps += 1;
+                stats.empty_proposals += 1;
+                // Fall through to the plain single-token step below.
+            } else {
+                // Verify window [t0, d1..d_k]: one weight stream for kk lanes.
+                let kk = 1 + drafts.len();
+                unsafe {
+                    tok_embed_bf16_to_f32(&mut verify_embeds[..dim], tok_emb, token, dim);
+                }
+                for (i, &d) in drafts.iter().enumerate() {
+                    unsafe {
+                        tok_embed_bf16_to_f32(
+                            &mut verify_embeds[(i + 1) * dim..(i + 2) * dim],
+                            tok_emb,
+                            d,
+                            dim,
+                        );
+                    }
+                }
+                let base = kv_cache.len;
+                let bufs = pool.ensure(kk, cfg);
+                decoder::decoder_forward_verify(
+                    weights.decoder,
+                    cfg,
+                    kv_cache,
+                    rope_cache,
+                    bufs,
+                    &verify_embeds[..kk * dim],
+                    kk,
+                    &mut verify_out[..kk],
+                );
+                // kv_cache.len == base + kk here.
+                let a = decoder::verify_accepted_len(&drafts, &verify_out[..kk]);
+                stats.verify_steps += 1;
+                stats.accepted_drafts += a;
+
+                // Commit the run [t0, d1..d_a] through the exact sequential
+                // per-token semantics (budget, EOS, state machine, on_piece),
+                // then roll kv_cache.len back to the tokens actually fed —
+                // stale rows beyond it are overwritten on the next step.
+                let run_first = token;
+                let mut pushed = 0usize;
+                let mut stop = false;
+                for idx in 0..(a + 1) {
+                    let c = if idx == 0 { run_first } else { drafts[idx - 1] };
+                    if n_generated >= max_tokens {
+                        stop = true;
+                        break;
+                    }
+                    n_generated += 1;
+                    if c == TOKEN_ENDOFTEXT || c == TOKEN_IM_END {
+                        stop = true;
+                        break;
+                    }
+                    if c == TOKEN_ASR_TEXT {
+                        past_asr_text = true;
+                    } else if past_asr_text {
+                        let piece_bytes = tokenizer.decode_bytes(c);
+                        text_bytes.extend_from_slice(piece_bytes);
+                        n_text_tokens += 1;
+                        on_piece(piece_bytes);
+                    } else if c < 151643 {
+                        let piece_bytes = tokenizer.decode_bytes(c);
+                        header_bytes.extend_from_slice(piece_bytes);
+                    }
+                    lookup.push(c);
+                    pushed += 1;
+                }
+                kv_cache.len = base + pushed;
+                if stop {
+                    break;
+                }
+                // The free token is the pending token for the next step; it is
+                // NOT committed yet (the next iteration's run handles it).
+                token = verify_out[a];
+                continue;
+            }
+        }
+
+        n_generated += 1;
+
+        if token == TOKEN_ENDOFTEXT || token == TOKEN_IM_END {
+            break;
+        }
+
+        if token == TOKEN_ASR_TEXT {
+            past_asr_text = true;
+        } else if past_asr_text {
+            let piece_bytes = tokenizer.decode_bytes(token);
+            text_bytes.extend_from_slice(piece_bytes);
+            n_text_tokens += 1;
+            on_piece(piece_bytes);
+        } else if token < 151643 {
+            let piece_bytes = tokenizer.decode_bytes(token);
+            header_bytes.extend_from_slice(piece_bytes);
+        }
+
+        #[cfg(target_arch = "aarch64")]
+        if verify_pool.is_some() {
+            lookup.push(token);
+        }
+
+        unsafe { tok_embed_bf16_to_f32(&mut tmp_embed, tok_emb, token, dim) };
+        token = decoder::decoder_forward(
+            weights.decoder,
+            cfg,
+            kv_cache,
+            rope_cache,
+            dec_bufs,
+            &tmp_embed,
+        );
+    }
+
+    let decode_ms = elapsed_ms(t0);
+    if kernels::verbose() >= 2 {
+        eprintln!(
+            "  Decode: {} tokens ({:.0} ms, {:.1} ms/token)",
+            n_generated,
+            decode_ms,
+            if n_generated > 0 {
+                decode_ms / n_generated as f64
+            } else {
+                0.0
+            }
+        );
+        #[cfg(target_arch = "aarch64")]
+        if stats.verify_steps > 0 || stats.single_steps > 0 {
+            // Tokens per verify step = accepted drafts + the one free token
+            // each step commits; this is the B1 amortization multiplier.
+            eprintln!(
+                "  Verify: {} steps ({} accepted drafts, {:.2} tok/step), {} single steps ({} empty proposals)",
+                stats.verify_steps,
+                stats.accepted_drafts,
+                if stats.verify_steps > 0 {
+                    (stats.accepted_drafts + stats.verify_steps) as f64
+                        / stats.verify_steps as f64
+                } else {
+                    0.0
+                },
+                stats.single_steps,
+                stats.empty_proposals,
+            );
+        }
+    }
+
+    let text = String::from_utf8_lossy(&text_bytes);
+    let trimmed = text.trim().to_string();
+
+    Some(SegCore {
+        text: trimmed,
+        header_bytes,
+        n_text_tokens,
+        encode_ms: pre.encode_ms,
+        decode_ms: pre.prefill_ms + decode_ms,
+        total_ms: elapsed_ms(pre.seg_t0),
+    })
+}
+
+/// Fold a decoded [`SegCore`] back into `ctx`: language detection from the
+/// header and perf-counter accumulation. Shared by the serial and parallel
+/// segment paths so both update `ctx` identically.
+fn apply_seg_core(ctx: &mut QwenCtx, core: &SegCore) {
+    if ctx.force_language.is_none() {
+        if let Some(language) = parse_language_header(&String::from_utf8_lossy(&core.header_bytes))
+        {
+            ctx.detected_language = Some(language);
+        }
+    }
+    ctx.perf_text_tokens += core.n_text_tokens;
+    ctx.perf_encode_ms += core.encode_ms;
+    ctx.perf_decode_ms += core.decode_ms;
+}
+
+/// Transcribe a single segment against `ctx`, streaming text tokens through
+/// `ctx.token_cb` as they are produced. Returns (text, n_text_tokens).
+fn transcribe_segment(
+    ctx: &mut QwenCtx,
+    samples: &[f32],
+    tokenizer: &QwenTokenizer,
+    past_tokens: Option<&[i32]>,
+) -> Option<(String, i32)> {
+    if !ctx.prepare_prompt_tokens(tokenizer) {
+        return None;
+    }
+
+    let cfg = ctx.config.clone();
+    let weights = SegWeights {
+        cfg: &cfg,
+        encoder: &ctx.model.encoder,
+        decoder: &ctx.model.decoder,
+        prompt_tokens: ctx.prompt_tokens.as_deref(),
+        force_prompt_tokens: ctx.force_prompt_tokens.as_deref(),
+        has_prefilled_asr_text: has_prefilled_asr_text(ctx),
+    };
+
+    // Disjoint field borrows: `token_cb` (shared) is a different field from the
+    // four mutable session buffers, so the closure and the `&mut` args coexist.
+    let token_cb = ctx.token_cb.as_ref();
+    let mut on_piece = |bytes: &[u8]| {
+        if let Some(cb) = token_cb {
+            // For the callback, provide lossy UTF-8 for display purposes
+            cb(&String::from_utf8_lossy(bytes));
+        }
+    };
+
+    let core = decode_segment_core(
+        &weights,
+        &mut ctx.kv_cache,
+        &mut ctx.rope_cache,
+        &mut ctx.dec_bufs,
+        &mut ctx.enc_bufs,
+        // R14-B1: the serial single-session path speculates with the
+        // ctx-owned verify pool. Opt-in only (default OFF — measured
+        // acceptance on ASR text is low, ~3% fewer decode forwards on
+        // long-2min); `QWEN_ASR_VERIFY=1` enables.
+        #[cfg(target_arch = "aarch64")]
+        if offline_verify_enabled() {
+            Some(&mut ctx.verify_pool)
+        } else {
+            None
+        },
+        tokenizer,
+        samples,
+        past_tokens,
+        &mut on_piece,
+    )?;
+
+    apply_seg_core(ctx, &core);
+    ctx.perf_total_ms += core.total_ms;
+    Some((core.text, core.n_text_tokens))
+}
+
+fn parse_language_header(header: &str) -> Option<String> {
+    let trimmed = header.trim();
+    if let Some(language) = normalize_language(trimmed) {
+        return Some(language);
+    }
+    let (prefix, rest) = trimmed.split_once(char::is_whitespace)?;
+    if !prefix.eq_ignore_ascii_case("language") {
+        return None;
+    }
+    normalize_language(rest)
+}
+
+// ========================================================================
+// Segment-based splitting
+// ========================================================================
+
+fn find_split_point(samples: &[f32], target_sample: usize, search_sec: f32) -> usize {
+    let search_half = (search_sec * SAMPLE_RATE as f32) as usize;
+    let lo = target_sample.saturating_sub(search_half);
+    let hi = (target_sample + search_half).min(samples.len());
+
+    let win_samples = 1600; // 100ms at 16kHz
+    let mut best_energy = 1e30f32;
+    let mut best_center = target_sample;
+
+    let mut pos = lo;
+    while pos + win_samples <= hi {
+        let end = (pos + win_samples).min(samples.len());
+        let mut energy = 0.0f32;
+        for &s in samples.iter().take(end).skip(pos) {
+            energy += s * s;
+        }
+        energy /= (end - pos) as f32;
+        if energy < best_energy {
+            best_energy = energy;
+            best_center = pos + (end - pos) / 2;
+        }
+        pos += win_samples / 2;
+    }
+
+    best_center
+}
+
+fn should_insert_boundary_space(prev_ch: u8, next_ch: u8) -> bool {
+    if prev_ch == 0 || next_ch == 0 {
+        return false;
+    }
+    if (prev_ch as char).is_whitespace() {
+        return false;
+    }
+    if (next_ch as char).is_whitespace() {
+        return false;
+    }
+    if (next_ch as char).is_ascii_punctuation() {
+        return false;
+    }
+    true
+}
+
+// ========================================================================
+// Public API
+// ========================================================================
+
+/// A single transcribed segment with wall-clock timestamps.
+pub struct TranscriptSegment {
+    pub start_ms: u64,
+    pub end_ms: u64,
+    pub text: String,
+}
+
+/// Build low-energy split points for segmented transcription. Always contains
+/// a leading `0`; further splits are added only when the audio exceeds one
+/// segment (`target_samples + margin_samples`).
+fn build_split_points(
+    samples: &[f32],
+    target_samples: usize,
+    margin_samples: usize,
+    search_sec: f32,
+) -> Vec<usize> {
+    let mut splits = vec![0usize];
+    let mut pos = 0;
+    while pos + target_samples + margin_samples < samples.len() {
+        let split = find_split_point(samples, pos + target_samples, search_sec);
+        splits.push(split);
+        pos = split;
+    }
+    splits
+}
+
+/// Shared segmentation driver for timestamp-preserving transcription: split
+/// `samples` at low-energy boundaries (`ctx.segment_sec`, 30 s fallback),
+/// transcribe each split, and invoke `on_text` with
+/// `(ctx, seg_start, seg_end, text)` for every non-empty segment transcript.
+///
+/// Uses the same scheduling decision as [`transcribe_audio`]
+/// ([`choose_seg_schedule`]): independent segments run on the parallel
+/// workers / lockstep scheduler and their outputs are replayed to `on_text`
+/// in segment order, so the callback sequence is identical to the serial
+/// loop — including the aligner interaction in [`transcribe_full`], which
+/// consumes each segment inside the callback (on the caller thread, during
+/// replay) and therefore does not require serial streaming.
+fn transcribe_splits(
+    ctx: &mut QwenCtx,
+    samples: &[f32],
+    tokenizer: &QwenTokenizer,
+    on_text: &mut dyn FnMut(&mut QwenCtx, usize, usize, String),
+) {
+    let segment_sec = if ctx.segment_sec > 0.0 {
+        ctx.segment_sec
+    } else {
+        30.0
+    };
+    let search_sec = ctx.search_sec.min(segment_sec / 2.0);
+    let target_samples = (segment_sec * SAMPLE_RATE as f32) as usize;
+    let margin_samples = (search_sec * SAMPLE_RATE as f32) as usize;
+
+    let splits = build_split_points(samples, target_samples, margin_samples, search_sec);
+    let n_splits = splits.len();
+
+    match choose_seg_schedule(ctx, n_splits) {
+        #[cfg(target_arch = "aarch64")]
+        SegSchedule::Lockstep(b) => {
+            let slots = collect_splits_lockstep(ctx, samples, &splits, tokenizer, b);
+            replay_splits_ordered(ctx, samples.len(), &splits, slots, on_text);
+            return;
+        }
+        SegSchedule::ParallelWorkers(k) => {
+            let slots = collect_splits_parallel(ctx, samples, &splits, tokenizer, k);
+            replay_splits_ordered(ctx, samples.len(), &splits, slots, on_text);
+            return;
+        }
+        SegSchedule::Serial => {}
+    }
+
+    let min_samples = SAMPLE_RATE as usize / 2;
+    for s in 0..n_splits {
+        let seg_start = splits[s];
+        let seg_end = if s + 1 < n_splits {
+            splits[s + 1]
+        } else {
+            samples.len()
+        };
+        let seg_len = seg_end - seg_start;
+
+        // Set perf_audio_ms to this segment's duration so any per-segment
+        // token budgets are relative to the segment, not the full file.
+        ctx.perf_audio_ms = 1000.0 * seg_len as f64 / SAMPLE_RATE as f64;
+
+        let seg_buf: Vec<f32>;
+        let seg_ptr = if seg_len < min_samples {
+            seg_buf = {
+                let mut buf = vec![0.0f32; min_samples];
+                buf[..seg_len].copy_from_slice(&samples[seg_start..seg_end]);
+                buf
+            };
+            &seg_buf[..]
+        } else {
+            &samples[seg_start..seg_end]
+        };
+
+        let (text, _) = match transcribe_segment(ctx, seg_ptr, tokenizer, None) {
+            Some(r) => r,
+            None => continue,
+        };
+
+        if text.is_empty() {
+            continue;
+        }
+
+        on_text(ctx, seg_start, seg_end, text);
+    }
+}
+
+/// Callback invoked after each transcribed segment with the segment result and
+/// its subtitle cues.
+pub type OnSegmentFn<'a> = &'a mut dyn FnMut(&SegmentResult, &[Cue]);
+
+pub fn transcribe_full(
+    ctx: &mut QwenCtx,
+    mut aligner: Option<&mut QwenCtx>,
+    samples: &[f32],
+    mut on_segment: Option<OnSegmentFn<'_>>,
+) -> Option<TranscriptionResult> {
+    ctx.reset_perf();
+
+    let tokenizer = load_tokenizer(&ctx.model.model_dir)?;
+    if !ctx.prepare_prompt_tokens(&tokenizer) {
+        return None;
+    }
+
+    let audio_end_ms = samples_to_ms(samples.len());
+    let mut segments = Vec::new();
+    let mut all_cues: Vec<Cue> = Vec::new();
+    let mut text = String::new();
+
+    transcribe_splits(
+        ctx,
+        samples,
+        &tokenizer,
+        &mut |ctx, seg_start, seg_end, seg_text| {
+            let start_ms = samples_to_ms(seg_start);
+            let end_ms = samples_to_ms(seg_end);
+
+            if !text.is_empty() {
+                let prev = *text.as_bytes().last().unwrap_or(&0);
+                let next = *seg_text.as_bytes().first().unwrap_or(&0);
+                if should_insert_boundary_space(prev, next) {
+                    text.push(' ');
+                }
+            }
+            text.push_str(&seg_text);
+
+            let language = ctx
+                .force_language
+                .as_deref()
+                .or(ctx.detected_language.as_deref())
+                .unwrap_or("English")
+                .to_string();
+
+            let mut words = Vec::new();
+            let mut cue_words = Vec::new();
+            if let Some(aligner_ctx) = aligner.as_deref_mut() {
+                if let Some(aligned) = align::forced_align(
+                    aligner_ctx,
+                    &samples[seg_start..seg_end],
+                    &seg_text,
+                    &language,
+                ) {
+                    for word in aligned {
+                        let word_start = start_ms + word.start_ms.max(0.0).round() as u64;
+                        let word_end = start_ms + word.end_ms.max(0.0).round() as u64;
+                        cue_words.push(align::AlignResult {
+                            text: word.text.clone(),
+                            start_ms: word_start as f32,
+                            end_ms: word_end as f32,
+                        });
+                        words.push(WordTimestamp {
+                            word: word.text,
+                            start_ms: word_start,
+                            end_ms: word_end,
+                        });
+                    }
+                }
+            }
+
+            // Compute this segment's cues exactly once; the on_segment callback
+            // (incremental SRT/VTT writing) and the final `vtt` field both see
+            // the same cue list, keeping streamed and one-shot output identical.
+            let seg_cues = if cue_words.is_empty() {
+                vec![segment_to_cue(&TranscriptSegment {
+                    start_ms,
+                    end_ms,
+                    text: seg_text.clone(),
+                })]
+            } else {
+                group_words_to_cues(&cue_words, audio_end_ms)
+            };
+
+            let segment = SegmentResult {
+                start_ms,
+                end_ms,
+                text: seg_text,
+                words,
+            };
+
+            if let Some(callback) = on_segment.as_deref_mut() {
+                callback(&segment, &seg_cues);
+            }
+            all_cues.extend(seg_cues);
+            segments.push(segment);
+        },
+    );
+
+    let language = ctx
+        .force_language
+        .as_deref()
+        .or(ctx.detected_language.as_deref())
+        .and_then(language_to_iso639)
+        .unwrap_or("")
+        .to_string();
+
+    Some(TranscriptionResult {
+        language,
+        duration_ms: samples_to_ms(samples.len()),
+        text,
+        segments,
+        vtt: format_vtt(&all_cues),
+    })
+}
+
+fn samples_to_ms(samples: usize) -> u64 {
+    (samples as u64 * 1000) / SAMPLE_RATE as u64
+}
+
+/// Segment-execution strategy shared by every segmented entry point
+/// (`transcribe_audio` and the timestamped `transcribe_splits` callers).
+enum SegSchedule {
+    /// One segment at a time on the caller's own session: past-text
+    /// conditioning, a single segment, or only one worker available.
+    Serial,
+    /// L3 independent single-threaded workers (round-robin assignment).
+    ParallelWorkers(usize),
+    /// aarch64 lockstep batched decode (R12-E3) with background prefill.
+    #[cfg(target_arch = "aarch64")]
+    Lockstep(usize),
+}
+
+/// Shared scheduling decision for all segmented entry points: parallel
+/// scheduling requires independent segments (`!past_text_conditioning`) and
+/// more than one segment; on aarch64 the lockstep batched scheduler is
+/// preferred when its batch size is >= 2 (env: `QWEN_ASR_SEG_LOCKSTEP`,
+/// `QWEN_ASR_SEG_BATCH`), then the L3 worker pool when its worker count is
+/// >= 2 (env: `QWEN_ASR_SEG_WORKERS`), else serial.
+fn choose_seg_schedule(ctx: &QwenCtx, n_splits: usize) -> SegSchedule {
+    if ctx.past_text_conditioning || n_splits <= 1 {
+        return SegSchedule::Serial;
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        let b = lockstep_batch_size(n_splits);
+        if b >= 2 {
+            return SegSchedule::Lockstep(b);
+        }
+    }
+    let k = segment_worker_count(n_splits);
+    if k >= 2 {
+        SegSchedule::ParallelWorkers(k)
+    } else {
+        SegSchedule::Serial
+    }
+}
+
+/// Transcribe audio samples (f32, 16 kHz, mono, range [-1, 1]).
+///
+/// When `ctx.segment_sec > 0` and the audio exceeds that duration, it is
+/// automatically split at low-energy boundaries.
+/// Returns `None` if the tokenizer or encoder fails to initialize.
+pub fn transcribe_audio(ctx: &mut QwenCtx, samples: &[f32]) -> Option<String> {
+    ctx.reset_perf();
+    ctx.perf_audio_ms = 1000.0 * samples.len() as f64 / SAMPLE_RATE as f64;
+
+    let audio_samples = if ctx.skip_silence {
+        let compacted = if ctx.segment_sec > 0.0 {
+            audio::compact_silence_fast(samples)
+        } else {
+            audio::compact_silence(samples)
+        };
+        if kernels::verbose() >= 1 {
+            let used_pct = 100.0 * compacted.len() as f32 / samples.len().max(1) as f32;
+            eprintln!(
+                "Silence skip: used {:.1}%, skipped {:.1}% ({} -> {} samples)",
+                used_pct,
+                100.0 - used_pct,
+                samples.len(),
+                compacted.len()
+            );
+        }
+        compacted
+    } else {
+        samples.to_vec()
+    };
+
+    if kernels::verbose() >= 2 {
+        eprintln!(
+            "Audio: {} samples ({:.1} seconds)",
+            audio_samples.len(),
+            audio_samples.len() as f32 / SAMPLE_RATE as f32
+        );
+    }
+
+    let tokenizer = load_tokenizer(&ctx.model.model_dir)?;
+    if !ctx.prepare_prompt_tokens(&tokenizer) {
+        return None;
+    }
+
+    let target_samples = (ctx.segment_sec * SAMPLE_RATE as f32) as usize;
+    let search = ctx.search_sec.min(ctx.segment_sec / 2.0);
+    let margin_samples = (search * SAMPLE_RATE as f32) as usize;
+
+    // No splitting if segment_sec is 0 or audio fits in one segment
+    if ctx.segment_sec <= 0.0 || audio_samples.len() <= target_samples + margin_samples {
+        let (text, _) = transcribe_segment(ctx, &audio_samples, &tokenizer, None)?;
+        return Some(text);
+    }
+
+    // Build split points
+    let splits = build_split_points(&audio_samples, target_samples, margin_samples, search);
+    let n_splits = splits.len();
+
+    if kernels::verbose() >= 2 {
+        eprintln!("Splitting into {} segments", n_splits);
+    }
+
+    let mut result = String::new();
+    let min_samples = SAMPLE_RATE as usize / 2;
+    let use_past_text = ctx.past_text_conditioning;
+
+    // Parallel fast path: when segments are independent (no past-text
+    // conditioning) and there is more than one, decode them concurrently.
+    // On aarch64 the default is the lockstep batched scheduler (R12-E3):
+    // waves of segments advance one token together so the decode weight
+    // stream is amortized across the wave. Otherwise (or when lockstep is
+    // disabled) fall back to the L3 independent-worker path. Each segment's
+    // decode is bit-identical to the serial path in both schemes, so the
+    // assembled transcript is byte-identical. Past-text conditioning creates
+    // a serial dependency (segment N's prompt = segment N-1's text) and stays
+    // serial. The decision itself is shared with the timestamped entry points
+    // via `choose_seg_schedule`.
+    match choose_seg_schedule(ctx, n_splits) {
+        #[cfg(target_arch = "aarch64")]
+        SegSchedule::Lockstep(b) => {
+            let slots = collect_splits_lockstep(ctx, &audio_samples, &splits, &tokenizer, b);
+            return Some(assemble_segment_outputs(ctx, slots));
+        }
+        SegSchedule::ParallelWorkers(k) => {
+            let slots = collect_splits_parallel(ctx, &audio_samples, &splits, &tokenizer, k);
+            return Some(assemble_segment_outputs(ctx, slots));
+        }
+        SegSchedule::Serial => {}
+    }
+
+    for s in 0..n_splits {
+        let core_start = splits[s];
+        let core_end = if s + 1 < n_splits {
+            splits[s + 1]
+        } else {
+            audio_samples.len()
+        };
+        let seg_start = core_start;
+        let seg_end = core_end;
+        let seg_samples = seg_end - seg_start;
+
+        if kernels::verbose() >= 2 {
+            eprintln!(
+                "Segment {}/{}: {:.1}-{:.1}s ({} samples)",
+                s + 1,
+                n_splits,
+                seg_start as f32 / SAMPLE_RATE as f32,
+                seg_end as f32 / SAMPLE_RATE as f32,
+                seg_samples
+            );
+        }
+
+        let seg_buf: Vec<f32>;
+        let seg_ptr = if seg_samples < min_samples {
+            seg_buf = {
+                let mut buf = vec![0.0f32; min_samples];
+                buf[..seg_samples].copy_from_slice(&audio_samples[seg_start..seg_end]);
+                buf
+            };
+            &seg_buf[..]
+        } else {
+            &audio_samples[seg_start..seg_end]
+        };
+
+        let past_tokens: Option<Vec<i32>> = if use_past_text && !result.is_empty() {
+            tokenizer.encode(&result)
+        } else {
+            None
+        };
+
+        let (seg_text, _seg_text_tokens) =
+            match transcribe_segment(ctx, seg_ptr, &tokenizer, past_tokens.as_deref()) {
+                Some(r) => r,
+                None => continue,
+            };
+
+        if seg_text.is_empty() {
+            continue;
+        }
+
+        let need_space = if !result.is_empty() {
+            let prev = *result.as_bytes().last().unwrap_or(&0);
+            let next = *seg_text.as_bytes().first().unwrap_or(&0);
+            should_insert_boundary_space(prev, next)
+        } else {
+            false
+        };
+
+        if need_space {
+            result.push(' ');
+            if let Some(ref cb) = ctx.token_cb {
+                cb(" ");
+            }
+        }
+
+        if let Some(ref cb) = ctx.token_cb {
+            if ctx.past_text_conditioning {
+                cb(&seg_text);
+            }
+        }
+
+        result.push_str(&seg_text);
+    }
+
+    Some(result)
+}
+
+/// Number of concurrent single-threaded segment workers to use. Defaults to the
+/// configured hot-kernel thread count plus up to two spare CPUs, capped at the
+/// number of segments; a `1` count means "stay serial". The
+/// `QWEN_ASR_SEG_WORKERS` environment variable overrides the default (internal
+/// tuning knob used for the K-sweep; not part of any public API).
+fn segment_worker_count(n_splits: usize) -> usize {
+    let base = std::env::var("QWEN_ASR_SEG_WORKERS")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or_else(|| {
+            let hot_threads = kernels::get_num_threads();
+            let spare_cpus = kernels::get_num_cpus().saturating_sub(hot_threads);
+            hot_threads + spare_cpus.min(2)
+        });
+    base.clamp(1, n_splits.max(1))
+}
+
+/// Per-segment owned sample buffers (mirrors the serial short-segment
+/// zero-padding). Owned so each worker can borrow its input across a scope.
+fn build_seg_inputs(audio_samples: &[f32], splits: &[usize]) -> Vec<Vec<f32>> {
+    let n_splits = splits.len();
+    let min_samples = SAMPLE_RATE as usize / 2;
+    let mut seg_inputs: Vec<Vec<f32>> = Vec::with_capacity(n_splits);
+    for s in 0..n_splits {
+        let seg_start = splits[s];
+        let seg_end = if s + 1 < n_splits {
+            splits[s + 1]
+        } else {
+            audio_samples.len()
+        };
+        let seg_samples = seg_end - seg_start;
+        let buf = if seg_samples < min_samples {
+            let mut b = vec![0.0f32; min_samples];
+            b[..seg_samples].copy_from_slice(&audio_samples[seg_start..seg_end]);
+            b
+        } else {
+            audio_samples[seg_start..seg_end].to_vec()
+        };
+        seg_inputs.push(buf);
+    }
+    seg_inputs
+}
+
+/// One decoded segment held for ordered replay: the core result plus the text
+/// pieces in the order the decode produced them (what the serial path streams
+/// live through `token_cb`).
+struct SegOut {
+    core: SegCore,
+    streamed: String,
+}
+
+/// Ordered assembly of per-segment outputs — byte-for-byte equivalent to the
+/// serial segment loop. The streamed pieces are replayed through `token_cb` in
+/// segment order (reproducing the serial stdout byte stream exactly), then the
+/// segment texts are joined with the serial path's boundary-space rule.
+fn assemble_segment_outputs(ctx: &mut QwenCtx, slots: Vec<Option<SegOut>>) -> String {
+    let mut result = String::new();
+    for slot in slots.into_iter() {
+        let out = match slot {
+            Some(o) => o,
+            None => continue,
+        };
+        if !out.streamed.is_empty() {
+            if let Some(ref cb) = ctx.token_cb {
+                cb(&out.streamed);
+            }
+        }
+        apply_seg_core(ctx, &out.core);
+
+        let seg_text = out.core.text;
+        if seg_text.is_empty() {
+            continue;
+        }
+        let need_space = if !result.is_empty() {
+            let prev = *result.as_bytes().last().unwrap_or(&0);
+            let next = *seg_text.as_bytes().first().unwrap_or(&0);
+            should_insert_boundary_space(prev, next)
+        } else {
+            false
+        };
+        if need_space {
+            result.push(' ');
+            if let Some(ref cb) = ctx.token_cb {
+                cb(" ");
+            }
+        }
+        if let Some(ref cb) = ctx.token_cb {
+            if ctx.past_text_conditioning {
+                cb(&seg_text);
+            }
+        }
+        result.push_str(&seg_text);
+    }
+    result
+}
+
+/// Ordered replay of collected segment outputs into the timestamped
+/// per-segment callback used by `transcribe_splits`: byte-for-byte equivalent
+/// to the serial `transcribe_splits` loop. Streamed pieces go through
+/// `token_cb` in segment order (reproducing the serial stdout byte stream),
+/// each segment's [`SegCore`] is folded into `ctx` (language detection + perf
+/// counters) BEFORE its callback fires — so the `ctx.detected_language` the
+/// callback observes matches the serial path — and segments that failed
+/// (`None` slot) or produced empty text are skipped exactly like the serial
+/// loop's `continue`s. Per-segment perf reporting (`perf_audio_ms`) is
+/// assigned for every segment, as in the serial loop; the region wall time
+/// was already accounted by the collect functions.
+fn replay_splits_ordered(
+    ctx: &mut QwenCtx,
+    n_samples: usize,
+    splits: &[usize],
+    slots: Vec<Option<SegOut>>,
+    on_text: &mut dyn FnMut(&mut QwenCtx, usize, usize, String),
+) {
+    let n_splits = splits.len();
+    for (s, slot) in slots.into_iter().enumerate() {
+        let seg_start = splits[s];
+        let seg_end = if s + 1 < n_splits {
+            splits[s + 1]
+        } else {
+            n_samples
+        };
+
+        // Set perf_audio_ms to this segment's duration, same as the serial
+        // loop does before decoding each segment.
+        ctx.perf_audio_ms = 1000.0 * (seg_end - seg_start) as f64 / SAMPLE_RATE as f64;
+
+        let out = match slot {
+            Some(o) => o,
+            None => continue,
+        };
+        if !out.streamed.is_empty() {
+            if let Some(ref cb) = ctx.token_cb {
+                cb(&out.streamed);
+            }
+        }
+        apply_seg_core(ctx, &out.core);
+
+        if out.core.text.is_empty() {
+            continue;
+        }
+        on_text(ctx, seg_start, seg_end, out.core.text);
+    }
+}
+
+/// Decode independent segments concurrently. Each of `k` workers runs its
+/// kernels single-threaded (`set_thread_override(1)`) and owns its session
+/// buffers, so `k` segments occupy `k` cores with no shared thread-pool
+/// barriers — the in-process analogue of L2's independent processes, but
+/// sharing one immutable weight set. Segments are assigned round-robin for load
+/// balance; results are returned as segment-indexed slots so the caller can
+/// reassemble them in segment order (see [`assemble_segment_outputs`] and
+/// [`replay_splits_ordered`]), making the outcome identical to the serial path.
+fn collect_splits_parallel(
+    ctx: &mut QwenCtx,
+    audio_samples: &[f32],
+    splits: &[usize],
+    tokenizer: &QwenTokenizer,
+    k: usize,
+) -> Vec<Option<SegOut>> {
+    let n_splits = splits.len();
+    let seg_inputs = build_seg_inputs(audio_samples, splits);
+
+    if kernels::verbose() >= 2 {
+        eprintln!(
+            "Parallel segments: {} segments across {} single-threaded workers",
+            n_splits, k
+        );
+    }
+
+    let cfg = ctx.config.clone();
+    let weights = SegWeights {
+        cfg: &cfg,
+        encoder: &ctx.model.encoder,
+        decoder: &ctx.model.decoder,
+        prompt_tokens: ctx.prompt_tokens.as_deref(),
+        force_prompt_tokens: ctx.force_prompt_tokens.as_deref(),
+        has_prefilled_asr_text: has_prefilled_asr_text(ctx),
+    };
+
+    let weights_ref = &weights;
+    let seg_inputs_ref = &seg_inputs;
+
+    let region_t0 = get_time_ms();
+    let collected: Vec<(usize, SegOut)> = std::thread::scope(|scope| {
+        let mut handles = Vec::with_capacity(k);
+        for w in 0..k {
+            let indices: Vec<usize> = (w..n_splits).step_by(k).collect();
+            let handle = scope.spawn(move || {
+                // Force every kernel this worker invokes onto the inline
+                // single-thread path so the K workers don't oversubscribe or
+                // barrier-share the one global pool.
+                kernels::set_thread_override(1);
+                let mut session = SegSession::new(weights_ref.cfg);
+                let mut out: Vec<(usize, SegOut)> = Vec::with_capacity(indices.len());
+                for idx in indices {
+                    let mut streamed = String::new();
+                    let mut on_piece = |bytes: &[u8]| {
+                        streamed.push_str(&String::from_utf8_lossy(bytes));
+                    };
+                    let core = decode_segment_core(
+                        weights_ref,
+                        &mut session.kv_cache,
+                        &mut session.rope_cache,
+                        &mut session.dec_bufs,
+                        &mut session.enc_bufs,
+                        // Parallel workers run single-threaded by design;
+                        // v1 does not speculate there.
+                        #[cfg(target_arch = "aarch64")]
+                        None,
+                        tokenizer,
+                        &seg_inputs_ref[idx],
+                        None,
+                        &mut on_piece,
+                    );
+                    if let Some(core) = core {
+                        out.push((idx, SegOut { core, streamed }));
+                    }
+                }
+                kernels::set_thread_override(0);
+                out
+            });
+            handles.push(handle);
+        }
+        let mut all: Vec<(usize, SegOut)> = Vec::with_capacity(n_splits);
+        for handle in handles {
+            match handle.join() {
+                Ok(mut v) => all.append(&mut v),
+                Err(e) => std::panic::resume_unwind(e),
+            }
+        }
+        all
+    });
+    let region_ms = elapsed_ms(region_t0);
+
+    // Reassemble into segment-indexed slots (None = segment returned nothing).
+    let mut slots: Vec<Option<SegOut>> = (0..n_splits).map(|_| None).collect();
+    for (idx, out) in collected {
+        slots[idx] = Some(out);
+    }
+
+    // Report the parallel region's wall time as the inference time: the honest
+    // latency of decoding all segments (per-segment `encode_ms`/`decode_ms`
+    // remain component sums and now overlap in wall time).
+    ctx.perf_total_ms += region_ms;
+    slots
+}
+
+/// Lockstep batch size (live-session cap) for the multi-segment decode path
+/// (R12-E3); see the R12-E3 B sweep for the default. Internal tuning knobs,
+/// not part of any public API: `QWEN_ASR_SEG_BATCH` overrides the batch size,
+/// `QWEN_ASR_SEG_LOOKAHEAD` the prefill lookahead, and
+/// `QWEN_ASR_SEG_LOCKSTEP=0` disables lockstep entirely (falls back to the L3
+/// independent-worker path) for debug A/B comparisons.
+#[cfg(target_arch = "aarch64")]
+fn lockstep_batch_size(n_splits: usize) -> usize {
+    let enabled = std::env::var("QWEN_ASR_SEG_LOCKSTEP")
+        .map(|v| v != "0")
+        .unwrap_or(true);
+    if !enabled {
+        return 1;
+    }
+    let b = std::env::var("QWEN_ASR_SEG_BATCH")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(kernels::MAX_BATCH);
+    b.min(kernels::MAX_BATCH).min(n_splits)
+}
+
+/// Number of extra sessions kept in flight in background prefill workers ahead
+/// of decode demand (R12-E3). Each costs one session's buffers (~0.5 GB) and
+/// one single-threaded worker while active.
+#[cfg(target_arch = "aarch64")]
+fn lockstep_lookahead() -> usize {
+    std::env::var("QWEN_ASR_SEG_LOOKAHEAD")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(6)
+}
+
+/// Per-segment token state machine for the lockstep decode loop. Mirrors the
+/// autoregressive loop in [`decode_segment_core`] exactly, advanced one
+/// produced token at a time.
+#[cfg(target_arch = "aarch64")]
+struct LockstepSeg {
+    seg_idx: usize,
+    /// Input embedding for the next decoder forward.
+    next_embed: Vec<f32>,
+    n_generated: usize,
+    past_asr_text: bool,
+    text_bytes: Vec<u8>,
+    header_bytes: Vec<u8>,
+    n_text_tokens: i32,
+    streamed: String,
+    encode_ms: f64,
+    prefill_ms: f64,
+    seg_t0: f64,
+    done: bool,
+}
+
+/// Decode independent segments with the lockstep batched scheduler (R12-E3).
+///
+/// Segments are prefilled by background single-threaded workers (bit-identical
+/// to the L3 independent-worker path by construction — the per-segment
+/// mel/encode/prefill pipeline is NOT thread-count-invariant, so it must run
+/// exactly as it does there), and up to `b_max` prefilled sessions advance ONE
+/// token together through [`decoder::decoder_forward_batched`]: each decode
+/// weight row is streamed from DRAM once and applied to all live sessions,
+/// cutting the ~575 MB/token decode weight traffic (the R11-D DRAM wall) by
+/// the live batch factor. The batched step is bit-identical to the
+/// single-session step per session (INT8 exactness, R12-E2) regardless of the
+/// batch composition, so the assembled transcript is byte-identical to both
+/// the L3 parallel path and the serial loop even though prefill completion
+/// order is nondeterministic.
+///
+/// Refill policy: dynamic — `b_max + lookahead` sessions circulate between
+/// background prefill workers and the live decode set through a channel. When
+/// a segment finishes decoding, its session is immediately recycled into a
+/// prefill worker for the next unstarted segment, so prefill overlaps decode
+/// instead of stalling it at wave boundaries, and the live set stays near
+/// `b_max` for maximal weight-stream amortization.
+///
+/// Results are returned as segment-indexed slots so the caller can reassemble
+/// them in segment order (see [`assemble_segment_outputs`] and
+/// [`replay_splits_ordered`]).
+#[cfg(target_arch = "aarch64")]
+fn collect_splits_lockstep(
+    ctx: &mut QwenCtx,
+    audio_samples: &[f32],
+    splits: &[usize],
+    tokenizer: &QwenTokenizer,
+    b_max: usize,
+) -> Vec<Option<SegOut>> {
+    let n_splits = splits.len();
+    let seg_inputs = build_seg_inputs(audio_samples, splits);
+    let lookahead = lockstep_lookahead();
+    let total_sessions = (b_max + lookahead).min(n_splits);
+
+    if kernels::verbose() >= 2 {
+        eprintln!(
+            "Lockstep segments: {} segments, batch {}, {} sessions",
+            n_splits, b_max, total_sessions
+        );
+    }
+
+    let cfg = ctx.config.clone();
+    let weights = SegWeights {
+        cfg: &cfg,
+        encoder: &ctx.model.encoder,
+        decoder: &ctx.model.decoder,
+        prompt_tokens: ctx.prompt_tokens.as_deref(),
+        force_prompt_tokens: ctx.force_prompt_tokens.as_deref(),
+        has_prefilled_asr_text: has_prefilled_asr_text(ctx),
+    };
+    let dim = cfg.dec_hidden;
+    let tok_emb = weights.decoder.tok_embeddings_bf16;
+    let max_tokens = 2048;
+
+    /// A prefilled session that is decoding (or queued to decode).
+    struct LiveSeg {
+        session: SegSession,
+        st: LockstepSeg,
+    }
+
+    let mut slots: Vec<Option<SegOut>> = (0..n_splits).map(|_| None).collect();
+    let weights_ref = &weights;
+    let seg_inputs_ref = &seg_inputs;
+
+    let region_t0 = get_time_ms();
+    let mut decode_ms_total = 0.0f64;
+
+    let (tx, rx) = std::sync::mpsc::channel::<(usize, SegSession, Option<SegPrefilled>)>();
+    std::thread::scope(|scope| {
+        // Hand `session` to a background worker that prefills `seg_idx` with
+        // single-threaded kernels (identical environment to the L3 workers)
+        // and sends it back through the channel.
+        let spawn_prefill = |session: SegSession, seg_idx: usize| {
+            let tx = tx.clone();
+            let input = &seg_inputs_ref[seg_idx];
+            scope.spawn(move || {
+                kernels::set_thread_override(1);
+                let mut s = session;
+                let pre = prefill_segment_core(
+                    weights_ref,
+                    &mut s.kv_cache,
+                    &mut s.rope_cache,
+                    &mut s.dec_bufs,
+                    &mut s.enc_bufs,
+                    input,
+                    None,
+                );
+                let _ = tx.send((seg_idx, s, pre));
+            });
+        };
+
+        let mut next_seg = 0usize;
+        let mut outstanding = 0usize;
+        while next_seg < total_sessions {
+            spawn_prefill(SegSession::new(&cfg), next_seg);
+            next_seg += 1;
+            outstanding += 1;
+        }
+
+        let mut live: Vec<LiveSeg> = Vec::with_capacity(b_max);
+        let mut ready: std::collections::VecDeque<LiveSeg> = std::collections::VecDeque::new();
+        let mut tokens = [0i32; kernels::MAX_BATCH];
+
+        while outstanding > 0 || !live.is_empty() || !ready.is_empty() {
+            // Collect finished prefills; block only when there is nothing to
+            // decode yet.
+            loop {
+                let msg = if live.is_empty() && ready.is_empty() && outstanding > 0 {
+                    rx.recv().ok()
+                } else {
+                    rx.try_recv().ok()
+                };
+                let Some((seg_idx, session, pre)) = msg else {
+                    break;
+                };
+                outstanding -= 1;
+                match pre {
+                    Some(pre) => ready.push_back(LiveSeg {
+                        session,
+                        st: LockstepSeg {
+                            seg_idx,
+                            next_embed: pre.next_embed,
+                            n_generated: 0,
+                            past_asr_text: weights.has_prefilled_asr_text,
+                            text_bytes: Vec::new(),
+                            header_bytes: Vec::new(),
+                            n_text_tokens: 0,
+                            streamed: String::new(),
+                            encode_ms: pre.encode_ms,
+                            prefill_ms: pre.prefill_ms,
+                            seg_t0: pre.seg_t0,
+                            done: false,
+                        },
+                    }),
+                    // Prefill failure = segment yields nothing (mirrors the
+                    // serial path's `continue`); recycle the session.
+                    None => {
+                        if next_seg < n_splits {
+                            spawn_prefill(session, next_seg);
+                            next_seg += 1;
+                            outstanding += 1;
+                        }
+                    }
+                }
+            }
+            while live.len() < b_max {
+                match ready.pop_front() {
+                    Some(l) => live.push(l),
+                    None => break,
+                }
+            }
+            if live.is_empty() {
+                continue;
+            }
+
+            // One lockstep step: advance every live session by one token.
+            let step_t0 = get_time_ms();
+            {
+                let mut batch: Vec<decoder::BatchedSession> = live
+                    .iter_mut()
+                    .map(|l| decoder::BatchedSession {
+                        kv_cache: &mut l.session.kv_cache,
+                        rope: &mut l.session.rope_cache,
+                        bufs: &mut l.session.dec_bufs,
+                        input_embed: &l.st.next_embed,
+                    })
+                    .collect();
+                let b = batch.len();
+                decoder::decoder_forward_batched(
+                    weights.decoder,
+                    &cfg,
+                    &mut batch,
+                    &mut tokens[..b],
+                );
+            }
+            decode_ms_total += elapsed_ms(step_t0);
+
+            // Advance each live state machine (mirrors one iteration of the
+            // serial autoregressive loop). `tokens[j]` pairs with `live[j]`
+            // (the batch above was built in live order), so process every
+            // state BEFORE removing finished ones.
+            for (j, l) in live.iter_mut().enumerate() {
+                let st = &mut l.st;
+                let token = tokens[j];
+                if st.n_generated >= max_tokens {
+                    st.done = true;
+                } else {
+                    st.n_generated += 1;
+                    if token == TOKEN_ENDOFTEXT || token == TOKEN_IM_END {
+                        st.done = true;
+                    } else {
+                        if token == TOKEN_ASR_TEXT {
+                            st.past_asr_text = true;
+                        } else if st.past_asr_text {
+                            let piece_bytes = tokenizer.decode_bytes(token);
+                            st.text_bytes.extend_from_slice(piece_bytes);
+                            st.n_text_tokens += 1;
+                            st.streamed.push_str(&String::from_utf8_lossy(piece_bytes));
+                        } else if token < 151643 {
+                            let piece_bytes = tokenizer.decode_bytes(token);
+                            st.header_bytes.extend_from_slice(piece_bytes);
+                        }
+                        unsafe { tok_embed_bf16_to_f32(&mut st.next_embed, tok_emb, token, dim) };
+                    }
+                }
+            }
+            // Sweep out finished sessions and recycle them into prefill
+            // workers for the remaining segments.
+            let mut i = 0usize;
+            while i < live.len() {
+                if live[i].st.done {
+                    let l = live.swap_remove(i);
+                    let st = l.st;
+                    let text = String::from_utf8_lossy(&st.text_bytes);
+                    slots[st.seg_idx] = Some(SegOut {
+                        core: SegCore {
+                            text: text.trim().to_string(),
+                            header_bytes: st.header_bytes,
+                            n_text_tokens: st.n_text_tokens,
+                            encode_ms: st.encode_ms,
+                            // The lockstep decode wall is shared across live
+                            // sessions, so it is accounted once below;
+                            // per-segment decode_ms carries the segment's own
+                            // prefill time.
+                            decode_ms: st.prefill_ms,
+                            total_ms: elapsed_ms(st.seg_t0),
+                        },
+                        streamed: st.streamed,
+                    });
+                    if next_seg < n_splits {
+                        spawn_prefill(l.session, next_seg);
+                        next_seg += 1;
+                        outstanding += 1;
+                    }
+                } else {
+                    i += 1;
+                }
+            }
+        }
+    });
+    let region_ms = elapsed_ms(region_t0);
+
+    // Shared lockstep decode wall time (all steps), accounted once.
+    ctx.perf_decode_ms += decode_ms_total;
+
+    // Report the whole region's wall time as the inference time (same
+    // convention as the parallel path).
+    ctx.perf_total_ms += region_ms;
+    slots
+}
+
+/// Convenience wrapper: load a WAV file and transcribe it.
+///
+/// Equivalent to [`audio::load_wav`] followed by
+/// [`transcribe_audio`].
+pub fn transcribe(ctx: &mut QwenCtx, wav_path: &str) -> Option<String> {
+    let samples = audio::load_wav(wav_path)?;
+    transcribe_audio(ctx, &samples)
+}
+
+/// Transcribe from stdin.
+pub fn transcribe_stdin(ctx: &mut QwenCtx) -> Option<String> {
+    let samples = audio::read_pcm_stdin()?;
+    transcribe_audio(ctx, &samples)
+}
+
+/// Per-chunk telemetry from [`stream_decode_tail`], surfaced at
+/// `kernels::verbose() >= 2` for the R13-B overlap-draft verifier. All counts
+/// are in the current chunk's coordinate space.
+#[derive(Default)]
+struct DecodeTailStats {
+    /// Tokens committed this chunk (`== chunk_tokens.len()`).
+    committed: usize,
+    /// Draft tokens supplied this chunk (previous chunk's saved tail length).
+    draft_len: usize,
+    /// Longest common prefix between the draft stream and this chunk's
+    /// regenerated tail, aligned by position — the acceptance *ceiling*.
+    draft_lcp: usize,
+    /// Multi-token verify steps executed (`decoder_forward_verify` calls).
+    verify_steps: usize,
+    /// Draft tokens actually accepted across all verify steps.
+    accepted_drafts: usize,
+    /// Tokens committed via the verifier path (t0 + accepted drafts, per step).
+    verified_commits: usize,
+}
+
+/// Whether the streaming overlap-draft verifier is enabled for this run.
+/// `QWEN_ASR_VERIFY=0` forces the pure single-token decode path (kill switch).
+fn stream_verify_enabled() -> bool {
+    std::env::var("QWEN_ASR_VERIFY")
+        .map(|v| v != "0")
+        .unwrap_or(true)
+}
+
+/// Whether the R14-B1 offline prompt-lookup verifier is enabled. Default OFF:
+/// measured acceptance on real ASR output is low (audio.wav: 46/46 empty
+/// proposals, no repetition in a short segment; long-2min: 29 verify steps ≈
+/// 8% of decode steps, 11 accepted drafts, 1.38 tok/step ≈ 3% fewer decode
+/// forwards — speech transcripts have little exploitable token-level n-gram
+/// repetition), so the mechanism is kept byte-identical and tested but opt-in
+/// via `QWEN_ASR_VERIFY=1`. Note the env var is shared with the streaming
+/// verifier above, whose default is the opposite (`=0` disables it), so the
+/// two cannot be toggled independently. The streaming overlap-draft path is
+/// unaffected (its draft source is the previous chunk's tail, which DOES
+/// predict).
+#[cfg(target_arch = "aarch64")]
+fn offline_verify_enabled() -> bool {
+    std::env::var("QWEN_ASR_VERIFY")
+        .map(|v| v == "1")
+        .unwrap_or(false)
+}
+
+/// Partial-tail re-encode throttle multiplier: the streaming push path only
+/// re-encodes the partial tail once `multiplier * chunk_samples` of new audio
+/// has accumulated (else it reuses the cached encoder output for LCP matching).
+/// Higher = fewer re-encodes = lower RTF cost, at some partial-latency expense.
+/// `QWEN_ASR_ENC_THROTTLE=N` (default 2); cached after first read. A value of 0
+/// is clamped to 1 (re-encode every chunk).
+fn enc_throttle_multiplier() -> usize {
+    static M: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *M.get_or_init(|| {
+        std::env::var("QWEN_ASR_ENC_THROTTLE")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .map(|n| n.max(1))
+            .unwrap_or(2)
+    })
+}
+
+/// Shared autoregressive decode-tail loop for both streaming paths
+/// (`transcribe_stream` and `stream_push_audio`).
+///
+/// On entry the decoder KV cache is positioned right after the prefill and
+/// `first_token` is the pending token produced by the prefill's final
+/// `decoder_forward` (not yet fed). The loop greedily generates the chunk tail,
+/// returning the committed token stream (`chunk_tokens`), exactly as the former
+/// inline loop did.
+///
+/// R13-B overlap-draft speculation (aarch64, `verify_enabled`, non-empty
+/// `prev_tail`): `prev_tail` is the previous chunk's regenerated tail, aligned
+/// so that `prev_tail[j]` predicts this chunk's token at committed index `j`.
+/// The pending token `t0` (committed index `chunk_tokens.len()`) is always fed
+/// as-is; the drafts `prev_tail[cursor+1 ..]` predict the following positions.
+/// Each verify step feeds `[t0, d1..d_k]` through [`decoder_forward_verify`],
+/// commits the accepted run plus the free next token, and rolls `kv_cache.len`
+/// back to the committed length. On the first draft mismatch all remaining
+/// drafts are dropped (no realignment in v1) and the chunk finishes on the
+/// single-token path. Every committed token equals the sequential greedy
+/// argmax by construction, so the returned stream is byte-identical to the
+/// pure single-token loop; EOS and `max_new_tokens` truncation are applied
+/// per-token exactly as sequential decode would.
+#[allow(clippy::too_many_arguments)]
+fn stream_decode_tail(
+    ctx: &mut QwenCtx,
+    cfg: &QwenConfig,
+    tok_emb: *const u16,
+    dim: usize,
+    tmp_embed: &mut [f32],
+    first_token: i32,
+    max_new_tokens: i32,
+    prev_tail: &[i32],
+    verify_enabled: bool,
+    stats: &mut DecodeTailStats,
+) -> Vec<i32> {
+    let mut chunk_tokens: Vec<i32> = Vec::new();
+    let mut n_generated: i32 = 0;
+    let mut token = first_token;
+
+    #[cfg(target_arch = "aarch64")]
+    {
+        if verify_enabled && !prev_tail.is_empty() {
+            const K_MAX: usize = kernels::MAX_BATCH;
+            let mut embeds = vec![0f32; K_MAX * dim];
+            let mut out = [0i32; K_MAX];
+            let mut drafts_live = true;
+
+            'outer: while n_generated < max_new_tokens {
+                // Draft cursor == number of tokens already committed; the pending
+                // token occupies committed index `cursor` (predicted by
+                // prev_tail[cursor]); drafts predict the following positions.
+                let cursor = chunk_tokens.len();
+                let ndraft = if drafts_live {
+                    prev_tail.len().saturating_sub(cursor + 1).min(K_MAX - 1)
+                } else {
+                    0
+                };
+
+                if ndraft == 0 {
+                    // No aligned drafts left: plain single-token step (identical
+                    // math and control flow to the pure path below).
+                    n_generated += 1;
+                    if token == TOKEN_ENDOFTEXT || token == TOKEN_IM_END {
+                        break;
+                    }
+                    chunk_tokens.push(token);
+                    unsafe {
+                        tok_embed_bf16_to_f32(tmp_embed, tok_emb, token, dim);
+                    }
+                    token = decoder::decoder_forward(
+                        &ctx.model.decoder,
+                        cfg,
+                        &mut ctx.kv_cache,
+                        &mut ctx.rope_cache,
+                        &mut ctx.dec_bufs,
+                        tmp_embed,
+                    );
+                    continue;
+                }
+
+                // Build the verify window [t0, d1..d_ndraft].
+                let kk = 1 + ndraft;
+                unsafe {
+                    tok_embed_bf16_to_f32(&mut embeds[..dim], tok_emb, token, dim);
+                }
+                for i in 0..ndraft {
+                    let d = prev_tail[cursor + 1 + i];
+                    unsafe {
+                        tok_embed_bf16_to_f32(
+                            &mut embeds[(i + 1) * dim..(i + 2) * dim],
+                            tok_emb,
+                            d,
+                            dim,
+                        );
+                    }
+                }
+
+                let base = ctx.kv_cache.len;
+                let bufs = ctx.verify_pool.ensure(kk, cfg);
+                decoder_forward_verify(
+                    &ctx.model.decoder,
+                    cfg,
+                    &mut ctx.kv_cache,
+                    &mut ctx.rope_cache,
+                    bufs,
+                    &embeds[..kk * dim],
+                    kk,
+                    &mut out[..kk],
+                );
+                // kv_cache.len == base + kk here.
+
+                let drafts = &prev_tail[cursor + 1..cursor + 1 + ndraft];
+                let a = verify_accepted_len(drafts, &out[..kk]);
+                stats.verify_steps += 1;
+                stats.accepted_drafts += a;
+
+                // The committed run is [t0, d1..d_a]; the free next token out[a]
+                // becomes the next pending token. Feed the run through the exact
+                // sequential stop logic (budget then EOS), rolling kv_cache.len
+                // back to reflect only the tokens actually committed/fed.
+                let run_first = token;
+                let mut pushed = 0usize;
+                let mut stop = false;
+                for idx in 0..(a + 1) {
+                    let c = if idx == 0 { run_first } else { drafts[idx - 1] };
+                    if n_generated >= max_new_tokens {
+                        stop = true;
+                        break;
+                    }
+                    n_generated += 1;
+                    if c == TOKEN_ENDOFTEXT || c == TOKEN_IM_END {
+                        stop = true;
+                        break;
+                    }
+                    chunk_tokens.push(c);
+                    pushed += 1;
+                }
+                ctx.kv_cache.len = base + pushed;
+                stats.verified_commits += pushed;
+                if stop {
+                    break 'outer;
+                }
+
+                // Whole run committed; free token is the next pending token.
+                token = out[a];
+                // First mismatch drops all remaining drafts (no realignment).
+                if a < ndraft {
+                    drafts_live = false;
+                }
+            }
+
+            let mut lcp = 0usize;
+            while lcp < prev_tail.len()
+                && lcp < chunk_tokens.len()
+                && prev_tail[lcp] == chunk_tokens[lcp]
+            {
+                lcp += 1;
+            }
+            stats.committed = chunk_tokens.len();
+            stats.draft_len = prev_tail.len();
+            stats.draft_lcp = lcp;
+            return chunk_tokens;
+        }
+    }
+
+    // Pure single-token path: byte-identical to the original inline decode loop
+    // (x86_64, verifier disabled, or no drafts available).
+    let _ = verify_enabled;
+    while n_generated < max_new_tokens {
+        n_generated += 1;
+        if token == TOKEN_ENDOFTEXT || token == TOKEN_IM_END {
+            break;
+        }
+        chunk_tokens.push(token);
+        unsafe {
+            tok_embed_bf16_to_f32(tmp_embed, tok_emb, token, dim);
+        }
+        token = decoder::decoder_forward(
+            &ctx.model.decoder,
+            cfg,
+            &mut ctx.kv_cache,
+            &mut ctx.rope_cache,
+            &mut ctx.dec_bufs,
+            tmp_embed,
+        );
+    }
+
+    let mut lcp = 0usize;
+    while lcp < prev_tail.len() && lcp < chunk_tokens.len() && prev_tail[lcp] == chunk_tokens[lcp] {
+        lcp += 1;
+    }
+    stats.committed = chunk_tokens.len();
+    stats.draft_len = prev_tail.len();
+    stats.draft_lcp = lcp;
+    chunk_tokens
+}
+
+/// Streaming transcription: processes audio in chunks, emitting tokens via
+/// `ctx.token_cb` as they become stable.
+///
+/// Trades throughput for lower latency compared to offline mode. If no
+/// `token_cb` is set, falls back to a single offline decode of the full audio.
+pub fn transcribe_stream(ctx: &mut QwenCtx, samples: &[f32]) -> Option<String> {
+    let cfg = ctx.config.clone();
+    let dim = cfg.dec_hidden;
+    let verify_enabled = stream_verify_enabled();
+    let chunk_samples = (ctx.stream_chunk_sec * SAMPLE_RATE as f32) as usize;
+    let rollback = ctx.stream_rollback;
+    let unfixed_chunks = ctx.stream_unfixed_chunks;
+    let max_new_tokens = if ctx.stream_max_new_tokens > 0 {
+        ctx.stream_max_new_tokens
+    } else {
+        32
+    };
+
+    ctx.reset_perf();
+    ctx.perf_audio_ms = 1000.0 * samples.len() as f64 / SAMPLE_RATE as f64;
+
+    // If no token callback, fall back to offline decode
+    if ctx.token_cb.is_none() {
+        if kernels::verbose() >= 2 {
+            eprintln!("Streaming: no token callback, using direct final refinement");
+        }
+        let audio_samples = if ctx.skip_silence {
+            audio::compact_silence(samples)
+        } else {
+            samples.to_vec()
+        };
+        let tokenizer = load_tokenizer(&ctx.model.model_dir)?;
+        ctx.prepare_prompt_tokens(&tokenizer);
+        let (text, _) = transcribe_segment(ctx, &audio_samples, &tokenizer, None)?;
+        return Some(text);
+    }
+
+    let audio_samples = if ctx.skip_silence {
+        audio::compact_silence_fast(samples)
+    } else {
+        samples.to_vec()
+    };
+
+    let tokenizer = load_tokenizer(&ctx.model.model_dir)?;
+    if !ctx.prepare_prompt_tokens(&tokenizer) {
+        return None;
+    }
+
+    let enc_window_frames = cfg.enc_n_window_infer.clamp(100, 800);
+    let enc_window_samples = enc_window_frames * HOP_LENGTH;
+
+    let tok_emb = ctx.model.decoder.tok_embeddings_bf16;
+
+    let mut raw_tokens: Vec<i32> = Vec::new();
+    let mut stable_text_tokens: Vec<i32> = Vec::new();
+    let mut result_bytes: Vec<u8> = Vec::new();
+    let mut tmp_embed = vec![0.0f32; dim];
+
+    let mut chunk_idx = 0i32;
+    let mut audio_cursor = 0usize;
+
+    // Encoder window cache
+    struct EncWindow {
+        seq_len: usize,
+        enc_output: Vec<f32>,
+        row_keys: Vec<PrefillRowKey>,
+    }
+    let mut enc_cache: Vec<EncWindow> = Vec::new();
+    let mut enc_cached_seq_total = 0usize;
+
+    // Previous prefill row keys for LCP reuse
+    let mut prev_prefill_keys: Vec<PrefillRowKey> = Vec::new();
+
+    // Streaming robustness state
+    let mut stale_count = 0i32;
+    let mut prev_tail_snapshot: Vec<i32> = Vec::new();
+    let mut enc_cache_base_windows = 0usize;
+
+    while audio_cursor < audio_samples.len() {
+        let chunk_t0 = get_time_ms();
+        audio_cursor = (audio_cursor + chunk_samples).min(audio_samples.len());
+        let is_final = audio_cursor >= audio_samples.len();
+
+        // Encoder
+        let t0 = get_time_ms();
+        let full_end = (audio_cursor / enc_window_samples) * enc_window_samples;
+
+        // Cache completed windows (base offset accounts for windows cleared on re-anchor)
+        while (enc_cache_base_windows + enc_cache.len()) * enc_window_samples < full_end {
+            let ws = (enc_cache_base_windows + enc_cache.len()) * enc_window_samples;
+            let (mel, mel_frames) =
+                audio::mel_spectrogram(&audio_samples[ws..ws + enc_window_samples])?;
+            let (win_enc, win_seq) =
+                ctx.model
+                    .encoder
+                    .forward(&cfg, &mel, mel_frames, Some(&mut ctx.enc_bufs))?;
+            let row_keys = prefill_embed_keys(&win_enc, win_seq, dim);
+            enc_cached_seq_total += win_seq;
+            enc_cache.push(EncWindow {
+                seq_len: win_seq,
+                enc_output: win_enc,
+                row_keys,
+            });
+        }
+
+        // Encode partial tail
+        let mut partial_seq = 0;
+        let mut partial_enc: Vec<f32> = Vec::new();
+        let mut partial_keys: Vec<PrefillRowKey> = Vec::new();
+        if is_final && full_end < audio_cursor {
+            let _partial_samples = audio_cursor - full_end;
+            if let Some((mel, mel_frames)) =
+                audio::mel_spectrogram(&audio_samples[full_end..audio_cursor])
+            {
+                if let Some((enc, seq)) =
+                    ctx.model
+                        .encoder
+                        .forward(&cfg, &mel, mel_frames, Some(&mut ctx.enc_bufs))
+                {
+                    partial_seq = seq;
+                    partial_keys = prefill_embed_keys(&enc, seq, dim);
+                    partial_enc = enc;
+                }
+            }
+        }
+
+        let enc_seq_len = enc_cached_seq_total + partial_seq;
+        if enc_seq_len == 0 {
+            chunk_idx += 1;
+            continue;
+        }
+
+        let enc_ms = elapsed_ms(t0);
+        ctx.perf_encode_ms += enc_ms;
+
+        if !is_final && chunk_idx < unfixed_chunks {
+            prev_prefill_keys.clear();
+            ctx.perf_total_ms += elapsed_ms(chunk_t0);
+            chunk_idx += 1;
+            continue;
+        }
+
+        // Prefix rollback
+        let n_prefix_tokens = if ctx.past_text_conditioning
+            && chunk_idx >= unfixed_chunks
+            && !raw_tokens.is_empty()
+        {
+            (raw_tokens.len() as i32 - rollback).max(0) as usize
+        } else {
+            0
+        };
+
+        // Build input embeddings
+        let n_prompt_tokens = ctx.prompt_tokens.as_ref().map_or(0, |t| t.len());
+        let n_force_prompt_tokens = ctx.force_prompt_tokens.as_ref().map_or(0, |t| t.len());
+        let prefix_len = PREFIX_HEAD.len() + n_prompt_tokens + PREFIX_TAIL.len();
+        let suffix_len = SUFFIX_BASE.len() + n_force_prompt_tokens;
+        let total_seq = prefix_len + enc_seq_len + suffix_len + n_prefix_tokens;
+
+        let mut input_embeds = vec![0.0f32; total_seq * dim];
+        let mut prefill_keys = vec![PrefillRowKey { a: 0, b: 0 }; total_seq];
+        let mut off = 0;
+
+        for &tok in PREFIX_HEAD {
+            unsafe {
+                tok_embed_bf16_to_f32(
+                    &mut input_embeds[off * dim..(off + 1) * dim],
+                    tok_emb,
+                    tok,
+                    dim,
+                )
+            };
+            prefill_keys[off] = prefill_token_key(tok);
+            off += 1;
+        }
+        if let Some(ref ptoks) = ctx.prompt_tokens {
+            for &tok in ptoks {
+                unsafe {
+                    tok_embed_bf16_to_f32(
+                        &mut input_embeds[off * dim..(off + 1) * dim],
+                        tok_emb,
+                        tok,
+                        dim,
+                    )
+                };
+                prefill_keys[off] = prefill_token_key(tok);
+                off += 1;
+            }
+        }
+        for &tok in PREFIX_TAIL {
+            unsafe {
+                tok_embed_bf16_to_f32(
+                    &mut input_embeds[off * dim..(off + 1) * dim],
+                    tok_emb,
+                    tok,
+                    dim,
+                )
+            };
+            prefill_keys[off] = prefill_token_key(tok);
+            off += 1;
+        }
+
+        let mut enc_key_off = 0;
+        for w in &enc_cache {
+            prefill_keys[prefix_len + enc_key_off..prefix_len + enc_key_off + w.seq_len]
+                .copy_from_slice(&w.row_keys);
+            enc_key_off += w.seq_len;
+        }
+        if partial_seq > 0 {
+            prefill_keys[prefix_len + enc_key_off..prefix_len + enc_key_off + partial_seq]
+                .copy_from_slice(&partial_keys);
+        }
+
+        let mut enc_embed_off = 0;
+        for w in &enc_cache {
+            let n = w.seq_len * dim;
+            input_embeds
+                [(prefix_len + enc_embed_off) * dim..(prefix_len + enc_embed_off) * dim + n]
+                .copy_from_slice(&w.enc_output);
+            enc_embed_off += w.seq_len;
+        }
+        if partial_seq > 0 {
+            let n = partial_seq * dim;
+            input_embeds
+                [(prefix_len + enc_embed_off) * dim..(prefix_len + enc_embed_off) * dim + n]
+                .copy_from_slice(&partial_enc);
+        }
+
+        let suffix_off = prefix_len + enc_seq_len;
+        for (i, &tok) in SUFFIX_BASE.iter().enumerate() {
+            unsafe {
+                tok_embed_bf16_to_f32(
+                    &mut input_embeds[(suffix_off + i) * dim..(suffix_off + i + 1) * dim],
+                    tok_emb,
+                    tok,
+                    dim,
+                )
+            };
+            prefill_keys[suffix_off + i] = prefill_token_key(tok);
+        }
+        if let Some(ref ftoks) = ctx.force_prompt_tokens {
+            for (i, &tok) in ftoks.iter().enumerate() {
+                unsafe {
+                    tok_embed_bf16_to_f32(
+                        &mut input_embeds[(suffix_off + SUFFIX_BASE.len() + i) * dim
+                            ..(suffix_off + SUFFIX_BASE.len() + i + 1) * dim],
+                        tok_emb,
+                        tok,
+                        dim,
+                    )
+                };
+                prefill_keys[suffix_off + SUFFIX_BASE.len() + i] = prefill_token_key(tok);
+            }
+        }
+
+        let text_off = suffix_off + suffix_len;
+        for i in 0..n_prefix_tokens {
+            unsafe {
+                tok_embed_bf16_to_f32(
+                    &mut input_embeds[(text_off + i) * dim..(text_off + i + 1) * dim],
+                    tok_emb,
+                    raw_tokens[i],
+                    dim,
+                )
+            };
+            prefill_keys[text_off + i] = prefill_token_key(raw_tokens[i]);
+        }
+
+        // Decoder prefill with LCP reuse
+        let t0 = get_time_ms();
+        let prefill_len = total_seq - 1;
+
+        let reused_prefill = prefill_lcp_len(&prev_prefill_keys, &prefill_keys, prefill_len);
+
+        ctx.kv_cache.len = reused_prefill;
+        let delta_prefill = prefill_len - reused_prefill;
+        if delta_prefill > 0 {
+            decoder::decoder_prefill(
+                &ctx.model.decoder,
+                &cfg,
+                &mut ctx.kv_cache,
+                &mut ctx.rope_cache,
+                &mut ctx.dec_bufs,
+                &input_embeds[reused_prefill * dim..],
+                delta_prefill,
+            );
+        }
+
+        // Save for next chunk
+        prev_prefill_keys.clear();
+        prev_prefill_keys.extend_from_slice(&prefill_keys[..prefill_len]);
+
+        let prefill_ms = elapsed_ms(t0);
+        ctx.perf_decode_ms += prefill_ms;
+
+        let last_embed = &input_embeds[prefill_len * dim..(prefill_len + 1) * dim];
+        let token = decoder::decoder_forward(
+            &ctx.model.decoder,
+            &cfg,
+            &mut ctx.kv_cache,
+            &mut ctx.rope_cache,
+            &mut ctx.dec_bufs,
+            last_embed,
+        );
+
+        // Autoregressive decode (R13-B: overlap-draft speculation). The tail of
+        // `raw_tokens` about to be regenerated (positions `n_prefix_tokens..`,
+        // the previous chunk's output at the same absolute positions) is the
+        // draft stream; capture it BEFORE the truncate below.
+        let prev_tail: Vec<i32> = raw_tokens[n_prefix_tokens..].to_vec();
+        let t0 = get_time_ms();
+        let mut tail_stats = DecodeTailStats::default();
+        let chunk_tokens = stream_decode_tail(
+            ctx,
+            &cfg,
+            tok_emb,
+            dim,
+            &mut tmp_embed,
+            token,
+            max_new_tokens,
+            &prev_tail,
+            verify_enabled,
+            &mut tail_stats,
+        );
+
+        let decode_ms = elapsed_ms(t0);
+        ctx.perf_decode_ms += decode_ms;
+
+        if kernels::verbose() >= 2 {
+            eprintln!(
+                "  [stream chunk {} verify] committed={} draft_len={} lcp={} verify_steps={} accepted_drafts={} verified_commits={}",
+                chunk_idx,
+                tail_stats.committed,
+                tail_stats.draft_len,
+                tail_stats.draft_lcp,
+                tail_stats.verify_steps,
+                tail_stats.accepted_drafts,
+                tail_stats.verified_commits,
+            );
+        }
+
+        // Update raw token history
+        raw_tokens.truncate(n_prefix_tokens);
+        raw_tokens.extend_from_slice(&chunk_tokens);
+
+        // Streaming degeneracy detection
+        if raw_tokens == prev_tail_snapshot {
+            stale_count += 1;
+        } else {
+            stale_count = 0;
+            prev_tail_snapshot = raw_tokens.clone();
+        }
+        let (best_reps, _) = stream_tail_repeat_blocks(&raw_tokens, STREAM_DEGEN_MAX_PERIOD);
+        let is_degen = stale_count >= STREAM_STALE_CHUNKS || best_reps >= STREAM_DEGEN_MIN_REPEATS;
+
+        if is_degen {
+            if kernels::verbose() >= 2 {
+                eprintln!(
+                    "[stream degen] reset at chunk {} (stale={}, reps={})",
+                    chunk_idx, stale_count, best_reps
+                );
+            }
+            let carry = stable_text_tokens.len().min(STREAM_RESET_CARRY_TOKENS);
+            let carry_start = stable_text_tokens.len() - carry;
+            raw_tokens.clear();
+            if carry > 0 {
+                raw_tokens.push(TOKEN_ASR_TEXT);
+                raw_tokens.extend_from_slice(&stable_text_tokens[carry_start..]);
+            }
+            prev_prefill_keys.clear();
+            stale_count = 0;
+            prev_tail_snapshot.clear();
+        }
+
+        // Periodic re-anchor: reset context every STREAM_RESET_INTERVAL_CHUNKS chunks
+        if chunk_idx > 0 && chunk_idx % STREAM_RESET_INTERVAL_CHUNKS == 0 {
+            if kernels::verbose() >= 2 {
+                eprintln!("[stream reanchor] at chunk {}", chunk_idx);
+            }
+            let carry = stable_text_tokens.len().min(STREAM_RESET_CARRY_TOKENS);
+            let carry_start = stable_text_tokens.len() - carry;
+            raw_tokens.clear();
+            if carry > 0 {
+                raw_tokens.push(TOKEN_ASR_TEXT);
+                raw_tokens.extend_from_slice(&stable_text_tokens[carry_start..]);
+            }
+            prev_prefill_keys.clear();
+            stale_count = 0;
+            prev_tail_snapshot.clear();
+            enc_cache_base_windows += enc_cache.len();
+            enc_cache.clear();
+            enc_cached_seq_total = 0;
+        }
+
+        // Parse text region
+        let text_start = if !has_prefilled_asr_text(ctx) {
+            raw_tokens
+                .iter()
+                .position(|&t| t == TOKEN_ASR_TEXT)
+                .map(|p| p + 1)
+                .unwrap_or(0)
+        } else {
+            0
+        };
+        let n_text_tokens = raw_tokens.len().saturating_sub(text_start);
+
+        // Fixed frontier
+        let candidate_len = if is_final {
+            n_text_tokens
+        } else if chunk_idx >= unfixed_chunks {
+            (n_text_tokens as i32 - rollback).max(0) as usize
+        } else {
+            0
+        };
+
+        // Monotonic commit
+        let candidate_tokens = &raw_tokens[text_start..];
+        let _lcp = stable_text_tokens
+            .iter()
+            .zip(candidate_tokens.iter())
+            .take_while(|(a, b)| a == b)
+            .count();
+
+        let emit_from = stable_text_tokens.len();
+        let emit_to = candidate_len.max(emit_from);
+
+        for i in emit_from..emit_to {
+            if i < candidate_tokens.len() {
+                if i >= stable_text_tokens.len() {
+                    stable_text_tokens.push(candidate_tokens[i]);
+                }
+                let piece_bytes = tokenizer.decode_bytes(candidate_tokens[i]);
+                if let Some(ref cb) = ctx.token_cb {
+                    cb(&String::from_utf8_lossy(piece_bytes));
+                }
+                ctx.perf_text_tokens += 1;
+                result_bytes.extend_from_slice(piece_bytes);
+            }
+        }
+
+        ctx.perf_total_ms += elapsed_ms(chunk_t0);
+        chunk_idx += 1;
+    }
+
+    Some(String::from_utf8_lossy(&result_bytes).trim().to_string())
+} // ========================================================================
+  // Incremental Streaming API
+  // ========================================================================
+
+/// Encoder window cached output.
+struct EncWindow {
+    seq_len: usize,
+    enc_output: Vec<f32>,
+    row_keys: Vec<PrefillRowKey>,
+}
+
+/// Cumulative encoder and decoder work, retained across stream resets.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct StreamWork {
+    pub encoder_samples: usize,
+    pub encoder_windows: usize,
+    pub reused_prefill_rows: usize,
+    pub prefill_rows: usize,
+}
+
+/// Persistent state for incremental streaming transcription.
+///
+/// Create once, then call [`stream_push_audio`] each time new audio
+/// arrives.  The state keeps encoder caches, token history, and decoder
+/// prefill row keys so that only *new* work is performed per call.
+pub struct StreamState {
+    work: StreamWork,
+    // Encoder
+    enc_cache: Vec<EncWindow>,
+    enc_cached_seq_total: usize,
+    enc_cache_base_windows: usize,
+
+    // Decoder token history
+    raw_tokens: Vec<i32>,
+    stable_text_tokens: Vec<i32>,
+    result_bytes: Vec<u8>,
+    /// Decoded bytes of the provisional (unfixed) tail: tokens in `raw_tokens`
+    /// beyond what `stable_text_tokens` covers.  Replaced in full on every
+    /// push, cleared on reset/degen-reset; empty after finalize (all stable).
+    provisional_bytes: Vec<u8>,
+
+    // Prefill LCP reuse
+    prev_prefill_keys: Vec<PrefillRowKey>,
+
+    // Streaming robustness
+    prev_tail_snapshot: Vec<i32>,
+    stale_count: i32,
+
+    // Lazy partial encoding: skip re-encoding every other chunk
+    last_partial_cursor: usize,
+    last_partial_enc: Vec<f32>,
+    last_partial_keys: Vec<PrefillRowKey>,
+    last_partial_seq: usize,
+
+    // Audio cursor
+    audio_cursor: usize,
+    chunk_idx: i32,
+
+    // Multilingual utterance-boundary VAD state (opt-in `multilingual` mode).
+    // `ml_scan_cursor` is the per-100 ms scan position over the audio buffer;
+    // `ml_silence_run` is the current trailing-silence length in samples;
+    // `ml_speech_since_boundary` gates a reset to fire only after committed
+    // speech and only once per silence gap. Unused in the default path.
+    ml_scan_cursor: usize,
+    ml_silence_run: usize,
+    ml_speech_since_boundary: bool,
+
+    // Tokenizer (loaded once)
+    tokenizer: Option<std::sync::Arc<QwenTokenizer>>,
+    prompt_prepared: bool,
+}
+
+impl Default for StreamState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl StreamState {
+    /// Create a new empty streaming state.
+    pub fn new() -> Self {
+        StreamState {
+            work: StreamWork::default(),
+            enc_cache: Vec::new(),
+            enc_cached_seq_total: 0,
+            enc_cache_base_windows: 0,
+            raw_tokens: Vec::new(),
+            stable_text_tokens: Vec::new(),
+            result_bytes: Vec::new(),
+            provisional_bytes: Vec::new(),
+            prev_prefill_keys: Vec::new(),
+            prev_tail_snapshot: Vec::new(),
+            stale_count: 0,
+            last_partial_cursor: 0,
+            last_partial_enc: Vec::new(),
+            last_partial_keys: Vec::new(),
+            last_partial_seq: 0,
+            audio_cursor: 0,
+            chunk_idx: 0,
+            ml_scan_cursor: 0,
+            ml_silence_run: 0,
+            ml_speech_since_boundary: false,
+            tokenizer: None,
+            prompt_prepared: false,
+        }
+    }
+
+    /// Reset state for a new streaming window (e.g., after 30s limit).
+    pub fn reset(&mut self) {
+        self.enc_cache.clear();
+        self.enc_cached_seq_total = 0;
+        self.enc_cache_base_windows = 0;
+        self.raw_tokens.clear();
+        self.stable_text_tokens.clear();
+        self.result_bytes.clear();
+        self.provisional_bytes.clear();
+        self.prev_prefill_keys.clear();
+        self.prev_tail_snapshot.clear();
+        self.stale_count = 0;
+        self.last_partial_cursor = 0;
+        self.last_partial_enc.clear();
+        self.last_partial_keys.clear();
+        self.last_partial_seq = 0;
+        self.audio_cursor = 0;
+        self.chunk_idx = 0;
+        self.ml_scan_cursor = 0;
+        self.ml_silence_run = 0;
+        self.ml_speech_since_boundary = false;
+        // Keep tokenizer and prompt_prepared
+    }
+
+    fn prefix_len(&self, text_start: usize, rollback: i32) -> usize {
+        self.raw_tokens
+            .len()
+            .saturating_sub(rollback.max(0) as usize)
+            .max(text_start + self.stable_text_tokens.len())
+            .min(self.raw_tokens.len())
+    }
+
+    fn finalize_tail(&mut self, text_start: usize, tokenizer: &QwenTokenizer) -> Vec<u8> {
+        let mut delta = Vec::new();
+        for &token in self.raw_tokens[text_start..]
+            .iter()
+            .skip(self.stable_text_tokens.len())
+        {
+            self.stable_text_tokens.push(token);
+            let bytes = tokenizer.decode_bytes(token);
+            self.result_bytes.extend_from_slice(bytes);
+            delta.extend_from_slice(bytes);
+        }
+        self.provisional_bytes.clear();
+        delta
+    }
+
+    /// Get the current stable transcription result.
+    pub fn text(&self) -> String {
+        String::from_utf8_lossy(&self.result_bytes).into_owned()
+    }
+
+    /// Get the current provisional (unfixed) tail text.
+    ///
+    /// This is the newest hypothesis text held back from the stable commit by
+    /// the rollback / `unfixed_chunks` window.  It is recomputed on every push
+    /// and is empty once the stream has been finalized.
+    pub fn provisional_text(&self) -> String {
+        String::from_utf8_lossy(&self.provisional_bytes).into_owned()
+    }
+
+    /// Stable text and its replaceable tail, decoded across UTF-8 token boundaries.
+    pub fn hypothesis(&self) -> String {
+        let mut bytes = self.result_bytes.clone();
+        bytes.extend_from_slice(&self.provisional_bytes);
+        match std::str::from_utf8(&bytes) {
+            Ok(text) => text.to_owned(),
+            Err(error) if error.error_len().is_none() => {
+                String::from_utf8_lossy(&bytes[..error.valid_up_to()]).into_owned()
+            }
+            Err(_) => String::from_utf8_lossy(&bytes).into_owned(),
+        }
+    }
+
+    /// Cumulative work for this stream, including across utterance boundaries.
+    pub fn work(&self) -> StreamWork {
+        self.work
+    }
+
+    /// Get how many samples have been processed so far.
+    pub fn audio_cursor(&self) -> usize {
+        self.audio_cursor
+    }
+
+    /// Number of encoder windows currently cached. Drops to a small value at an
+    /// utterance-segment reset (VAD boundary in `vad_segment_reset`/multilingual
+    /// mode, or a degen/reanchor reset). Exposed for streaming introspection and
+    /// tests that verify a boundary reset actually released the encoder cache.
+    pub fn enc_window_count(&self) -> usize {
+        self.enc_cache.len()
+    }
+
+    /// Number of committed stable tokens for the current segment. Reset to 0 at
+    /// an utterance-segment boundary. Exposed for tests/introspection.
+    pub fn stable_token_count(&self) -> usize {
+        self.stable_text_tokens.len()
+    }
+}
+
+/// Process all available new audio incrementally.
+///
+/// `samples` is the **full** audio buffer accumulated so far (16 kHz mono f32).
+/// Processes all full chunks from `state.audio_cursor` to end of `samples`.
+/// When `finalize` is true, also processes any remaining partial chunk and
+/// emits all rollback-buffered tokens.
+/// Returns the newly emitted text delta (if any).
+pub fn stream_push_audio(
+    ctx: &mut QwenCtx,
+    samples: &[f32],
+    state: &mut StreamState,
+    finalize: bool,
+) -> Option<String> {
+    let cfg = ctx.config.clone();
+    let dim = cfg.dec_hidden;
+    let verify_enabled = stream_verify_enabled();
+    let chunk_samples = (ctx.stream_chunk_sec * SAMPLE_RATE as f32) as usize;
+    let rollback = ctx.stream_rollback;
+    let unfixed_chunks = ctx.stream_unfixed_chunks;
+    let max_new_tokens = if ctx.stream_max_new_tokens > 0 {
+        ctx.stream_max_new_tokens
+    } else {
+        32
+    };
+
+    // Lazy-init tokenizer
+    if state.tokenizer.is_none() {
+        state.tokenizer = load_tokenizer(&ctx.model.model_dir).map(std::sync::Arc::new);
+    }
+    let tokenizer_handle = state.tokenizer.as_ref()?.clone();
+    let tokenizer = tokenizer_handle.as_ref();
+
+    if !state.prompt_prepared {
+        if !ctx.prepare_prompt_tokens(tokenizer) {
+            return None;
+        }
+        state.prompt_prepared = true;
+    }
+
+    // Check if we have enough audio for at least one chunk (or finalizing)
+    let available = samples.len().saturating_sub(state.audio_cursor);
+    if available < chunk_samples && !finalize {
+        return Some(String::new());
+    }
+    if available == 0 {
+        let delta = if finalize {
+            state.finalize_tail(stream_text_start(ctx, &state.raw_tokens), tokenizer)
+        } else {
+            Vec::new()
+        };
+        return Some(String::from_utf8_lossy(&delta).into_owned());
+    }
+
+    let enc_window_frames = cfg.enc_n_window_infer.clamp(100, 800);
+    let enc_window_samples = enc_window_frames * HOP_LENGTH;
+    let tok_emb = ctx.model.decoder.tok_embeddings_bf16;
+    let mut tmp_embed = vec![0.0f32; dim];
+    let mut delta_bytes: Vec<u8> = Vec::new();
+
+    // ---- Process full chunks, plus remainder if finalizing ----
+    while state.audio_cursor < samples.len() {
+        let remaining = samples.len() - state.audio_cursor;
+        if remaining < chunk_samples && !finalize {
+            break; // Wait for more audio
+        }
+
+        let chunk_t0 = get_time_ms();
+        state.audio_cursor = (state.audio_cursor + chunk_samples).min(samples.len());
+        let is_final = finalize && state.audio_cursor >= samples.len();
+
+        // ---- Encoder: only encode new windows ----
+        let t0 = get_time_ms();
+        let full_end = (state.audio_cursor / enc_window_samples) * enc_window_samples;
+
+        // Cache newly completed windows (base offset accounts for windows cleared on re-anchor)
+        while (state.enc_cache_base_windows + state.enc_cache.len()) * enc_window_samples < full_end
+        {
+            let ws = (state.enc_cache_base_windows + state.enc_cache.len()) * enc_window_samples;
+            let (mel, mel_frames) = audio::mel_spectrogram(&samples[ws..ws + enc_window_samples])?;
+            let (win_enc, win_seq) =
+                ctx.model
+                    .encoder
+                    .forward(&cfg, &mel, mel_frames, Some(&mut ctx.enc_bufs))?;
+            let row_keys = prefill_embed_keys(&win_enc, win_seq, dim);
+            state.work.encoder_samples += enc_window_samples;
+            state.work.encoder_windows += 1;
+            state.enc_cached_seq_total += win_seq;
+            state.enc_cache.push(EncWindow {
+                seq_len: win_seq,
+                enc_output: win_enc,
+                row_keys,
+            });
+        }
+
+        // Encode partial tail — with lazy re-encoding for LCP optimization.
+        // Only re-encode when enough new audio has accumulated (every 2 chunks),
+        // on the first chunk, or when finalizing. On skip chunks, the reused
+        // encoder output gives near-perfect LCP matching, cutting prefill cost.
+        let enc_update_threshold = chunk_samples * enc_throttle_multiplier();
+        let partial_age = state.audio_cursor.saturating_sub(state.last_partial_cursor);
+        let need_encode =
+            state.last_partial_cursor == 0 || partial_age >= enc_update_threshold || is_final;
+
+        let partial_seq;
+        let partial_enc;
+        let partial_keys;
+        if need_encode && full_end < state.audio_cursor {
+            if let Some((mel, mel_frames)) =
+                audio::mel_spectrogram(&samples[full_end..state.audio_cursor])
+            {
+                if let Some((enc, seq)) =
+                    ctx.model
+                        .encoder
+                        .forward(&cfg, &mel, mel_frames, Some(&mut ctx.enc_bufs))
+                {
+                    state.work.encoder_samples += state.audio_cursor - full_end;
+                    partial_seq = seq;
+                    partial_keys = prefill_embed_keys(&enc, seq, dim);
+                    partial_enc = enc;
+                    state.last_partial_cursor = state.audio_cursor;
+                    state.last_partial_enc = partial_enc.clone();
+                    state.last_partial_keys = partial_keys.clone();
+                    state.last_partial_seq = partial_seq;
+                } else {
+                    partial_seq = state.last_partial_seq;
+                    partial_enc = state.last_partial_enc.clone();
+                    partial_keys = state.last_partial_keys.clone();
+                }
+            } else {
+                partial_seq = state.last_partial_seq;
+                partial_enc = state.last_partial_enc.clone();
+                partial_keys = state.last_partial_keys.clone();
+            }
+        } else if full_end < state.audio_cursor {
+            // Reuse previous partial encoding (skip chunk)
+            partial_seq = state.last_partial_seq;
+            partial_enc = state.last_partial_enc.clone();
+            partial_keys = state.last_partial_keys.clone();
+        } else {
+            partial_seq = 0;
+            partial_enc = Vec::new();
+            partial_keys = Vec::new();
+        }
+
+        let enc_seq_len = state.enc_cached_seq_total + partial_seq;
+        if enc_seq_len == 0 {
+            state.chunk_idx += 1;
+            return Some(String::new());
+        }
+
+        let enc_ms = elapsed_ms(t0);
+        ctx.perf_encode_ms += enc_ms;
+
+        // ---- Prefix rollback ----
+        let n_prefix_tokens = if ctx.past_text_conditioning
+            && state.chunk_idx >= unfixed_chunks
+            && !state.raw_tokens.is_empty()
+        {
+            state.prefix_len(stream_text_start(ctx, &state.raw_tokens), rollback)
+        } else {
+            0
+        };
+
+        // ---- Build input embeddings ----
+        let n_prompt_tokens = ctx.prompt_tokens.as_ref().map_or(0, |t| t.len());
+        let n_force_prompt_tokens = ctx.force_prompt_tokens.as_ref().map_or(0, |t| t.len());
+        let prefix_len = PREFIX_HEAD.len() + n_prompt_tokens + PREFIX_TAIL.len();
+        let suffix_len = SUFFIX_BASE.len() + n_force_prompt_tokens;
+        let total_seq = prefix_len + enc_seq_len + suffix_len + n_prefix_tokens;
+
+        let mut input_embeds = vec![0.0f32; total_seq * dim];
+        let mut prefill_keys = vec![PrefillRowKey { a: 0, b: 0 }; total_seq];
+        let mut off = 0;
+
+        for &tok in PREFIX_HEAD {
+            unsafe {
+                tok_embed_bf16_to_f32(
+                    &mut input_embeds[off * dim..(off + 1) * dim],
+                    tok_emb,
+                    tok,
+                    dim,
+                );
+            }
+            prefill_keys[off] = prefill_token_key(tok);
+            off += 1;
+        }
+        if let Some(ref ptoks) = ctx.prompt_tokens {
+            for &tok in ptoks {
+                unsafe {
+                    tok_embed_bf16_to_f32(
+                        &mut input_embeds[off * dim..(off + 1) * dim],
+                        tok_emb,
+                        tok,
+                        dim,
+                    );
+                }
+                prefill_keys[off] = prefill_token_key(tok);
+                off += 1;
+            }
+        }
+        for &tok in PREFIX_TAIL {
+            unsafe {
+                tok_embed_bf16_to_f32(
+                    &mut input_embeds[off * dim..(off + 1) * dim],
+                    tok_emb,
+                    tok,
+                    dim,
+                );
+            }
+            prefill_keys[off] = prefill_token_key(tok);
+            off += 1;
+        }
+
+        let mut enc_key_off = 0;
+        for w in &state.enc_cache {
+            prefill_keys[prefix_len + enc_key_off..prefix_len + enc_key_off + w.seq_len]
+                .copy_from_slice(&w.row_keys);
+            enc_key_off += w.seq_len;
+        }
+        if partial_seq > 0 {
+            prefill_keys[prefix_len + enc_key_off..prefix_len + enc_key_off + partial_seq]
+                .copy_from_slice(&partial_keys);
+        }
+
+        let mut enc_embed_off = 0;
+        for w in &state.enc_cache {
+            let n = w.seq_len * dim;
+            input_embeds
+                [(prefix_len + enc_embed_off) * dim..(prefix_len + enc_embed_off) * dim + n]
+                .copy_from_slice(&w.enc_output);
+            enc_embed_off += w.seq_len;
+        }
+        if partial_seq > 0 {
+            let n = partial_seq * dim;
+            input_embeds
+                [(prefix_len + enc_embed_off) * dim..(prefix_len + enc_embed_off) * dim + n]
+                .copy_from_slice(&partial_enc);
+        }
+
+        let suffix_off = prefix_len + enc_seq_len;
+        for (i, &tok) in SUFFIX_BASE.iter().enumerate() {
+            unsafe {
+                tok_embed_bf16_to_f32(
+                    &mut input_embeds[(suffix_off + i) * dim..(suffix_off + i + 1) * dim],
+                    tok_emb,
+                    tok,
+                    dim,
+                );
+            }
+            prefill_keys[suffix_off + i] = prefill_token_key(tok);
+        }
+        if let Some(ref ftoks) = ctx.force_prompt_tokens {
+            for (i, &tok) in ftoks.iter().enumerate() {
+                unsafe {
+                    tok_embed_bf16_to_f32(
+                        &mut input_embeds[(suffix_off + SUFFIX_BASE.len() + i) * dim
+                            ..(suffix_off + SUFFIX_BASE.len() + i + 1) * dim],
+                        tok_emb,
+                        tok,
+                        dim,
+                    );
+                }
+                prefill_keys[suffix_off + SUFFIX_BASE.len() + i] = prefill_token_key(tok);
+            }
+        }
+
+        let text_off = suffix_off + suffix_len;
+        for i in 0..n_prefix_tokens {
+            unsafe {
+                tok_embed_bf16_to_f32(
+                    &mut input_embeds[(text_off + i) * dim..(text_off + i + 1) * dim],
+                    tok_emb,
+                    state.raw_tokens[i],
+                    dim,
+                );
+            }
+            prefill_keys[text_off + i] = prefill_token_key(state.raw_tokens[i]);
+        }
+
+        // ---- Decoder prefill with LCP reuse ----
+        let t0 = get_time_ms();
+        let prefill_len = total_seq - 1;
+
+        let reused_prefill = prefill_lcp_len(&state.prev_prefill_keys, &prefill_keys, prefill_len);
+
+        ctx.kv_cache.len = reused_prefill;
+        let delta_prefill = prefill_len - reused_prefill;
+        state.work.reused_prefill_rows += reused_prefill;
+        state.work.prefill_rows += delta_prefill;
+        if delta_prefill > 0 {
+            decoder::decoder_prefill(
+                &ctx.model.decoder,
+                &cfg,
+                &mut ctx.kv_cache,
+                &mut ctx.rope_cache,
+                &mut ctx.dec_bufs,
+                &input_embeds[reused_prefill * dim..],
+                delta_prefill,
+            );
+        }
+
+        let last_embed = &input_embeds[prefill_len * dim..(prefill_len + 1) * dim];
+        let token = decoder::decoder_forward(
+            &ctx.model.decoder,
+            &cfg,
+            &mut ctx.kv_cache,
+            &mut ctx.rope_cache,
+            &mut ctx.dec_bufs,
+            last_embed,
+        );
+
+        // Save for next chunk
+        state.prev_prefill_keys.clear();
+        state
+            .prev_prefill_keys
+            .extend_from_slice(&prefill_keys[..prefill_len]);
+
+        let prefill_ms = elapsed_ms(t0);
+        ctx.perf_decode_ms += prefill_ms;
+
+        if kernels::verbose() >= 2 {
+            eprintln!(
+                "  [stream chunk {}] encoder: {:.0}ms, prefill: {}/{} reused ({:.0}ms, delta={})",
+                state.chunk_idx, enc_ms, reused_prefill, prefill_len, prefill_ms, delta_prefill
+            );
+        }
+
+        // ---- Autoregressive decode (R13-B: overlap-draft speculation) ----
+        // The tail of `raw_tokens` about to be regenerated (positions
+        // `n_prefix_tokens..`, the previous chunk's output at the same absolute
+        // positions) is the draft stream; capture it BEFORE the truncate below.
+        let prev_tail: Vec<i32> = state.raw_tokens[n_prefix_tokens..].to_vec();
+        let t0 = get_time_ms();
+        let mut tail_stats = DecodeTailStats::default();
+        let chunk_tokens = stream_decode_tail(
+            ctx,
+            &cfg,
+            tok_emb,
+            dim,
+            &mut tmp_embed,
+            token,
+            max_new_tokens,
+            &prev_tail,
+            verify_enabled,
+            &mut tail_stats,
+        );
+
+        let decode_ms = elapsed_ms(t0);
+        ctx.perf_decode_ms += decode_ms;
+
+        if kernels::verbose() >= 2 {
+            eprintln!(
+                "  [stream chunk {} verify] committed={} draft_len={} lcp={} verify_steps={} accepted_drafts={} verified_commits={}",
+                state.chunk_idx,
+                tail_stats.committed,
+                tail_stats.draft_len,
+                tail_stats.draft_lcp,
+                tail_stats.verify_steps,
+                tail_stats.accepted_drafts,
+                tail_stats.verified_commits,
+            );
+        }
+
+        // ---- Detect speech end (decoder produced EOT on silence) ----
+        // When chunk_tokens is empty, the decoder saw silence/end-of-speech.
+        // Commit ALL remaining rollback-buffered tokens BEFORE truncation,
+        // since truncate will remove them.
+        let speech_ended = chunk_tokens.is_empty()
+            && !state.raw_tokens.is_empty()
+            && state.chunk_idx >= unfixed_chunks;
+
+        if speech_ended {
+            // Emit remaining rollback tokens from current raw_tokens (before truncation)
+            let text_start = stream_text_start(ctx, &state.raw_tokens);
+            let candidate_tokens = &state.raw_tokens[text_start..];
+            let n_text = candidate_tokens.len();
+            let emit_from = state.stable_text_tokens.len();
+            for i in emit_from..n_text {
+                if i < candidate_tokens.len() {
+                    if i >= state.stable_text_tokens.len() {
+                        state.stable_text_tokens.push(candidate_tokens[i]);
+                    }
+                    let piece_bytes = tokenizer.decode_bytes(candidate_tokens[i]);
+                    if let Some(ref cb) = ctx.token_cb {
+                        cb(&String::from_utf8_lossy(piece_bytes));
+                    }
+                    ctx.perf_text_tokens += 1;
+                    state.result_bytes.extend_from_slice(piece_bytes);
+                    delta_bytes.extend_from_slice(piece_bytes);
+                }
+            }
+        }
+
+        // ---- Update raw token history ----
+        if !speech_ended {
+            state.raw_tokens.truncate(n_prefix_tokens);
+            state.raw_tokens.extend_from_slice(&chunk_tokens);
+        }
+
+        // ---- Utterance-boundary reset on true EOT (opt-in) ----
+        // If the model emitted an immediate EOT (silence → EOT, the classic
+        // speech-end signal), and an opt-in boundary mode is on, treat it as an
+        // utterance boundary. In multilingual mode the carry is dropped so the
+        // next utterance re-detects language; in vad_segment_reset mode the
+        // segment is reset so the next utterance decodes from a clean state.
+        // (The common case — a silence gap that does NOT surface as EOT under
+        // the accumulating encoder window — is handled by the frame-level VAD
+        // boundary at the end of the loop.)
+        if speech_ended
+            && ((ctx.multilingual && ctx.force_language.is_none()) || ctx.vad_segment_reset)
+        {
+            stream_boundary_reset!(ctx, state);
+        }
+
+        // ---- Streaming degeneracy detection ----
+        if !speech_ended {
+            if state.raw_tokens == state.prev_tail_snapshot {
+                state.stale_count += 1;
+            } else {
+                state.stale_count = 0;
+                state.prev_tail_snapshot = state.raw_tokens.clone();
+            }
+            let (best_reps, _) =
+                stream_tail_repeat_blocks(&state.raw_tokens, STREAM_DEGEN_MAX_PERIOD);
+            let is_degen =
+                state.stale_count >= STREAM_STALE_CHUNKS || best_reps >= STREAM_DEGEN_MIN_REPEATS;
+
+            if is_degen {
+                if kernels::verbose() >= 2 {
+                    eprintln!(
+                        "[stream degen] reset at chunk {} (stale={}, reps={})",
+                        state.chunk_idx, state.stale_count, best_reps
+                    );
+                }
+                reset_utterance_segment!(state);
+            }
+        }
+
+        let reanchor = !is_final && state.chunk_idx > 0
+            && state.chunk_idx % STREAM_INCREMENTAL_RESET_INTERVAL_CHUNKS == 0;
+        // ---- Parse text region and emit stable tokens (non-speech-ended case) ----
+        if !speech_ended {
+            let text_start = stream_text_start(ctx, &state.raw_tokens);
+            let n_text_tokens = state.raw_tokens.len().saturating_sub(text_start);
+
+            let candidate_len = if is_final || reanchor {
+                n_text_tokens
+            } else if state.chunk_idx >= unfixed_chunks {
+                (n_text_tokens as i32 - rollback).max(0) as usize
+            } else {
+                0
+            };
+
+            let candidate_tokens = &state.raw_tokens[text_start..];
+            let emit_from = state.stable_text_tokens.len();
+            let emit_to = candidate_len.max(emit_from);
+
+            for i in emit_from..emit_to {
+                if i < candidate_tokens.len() {
+                    if i >= state.stable_text_tokens.len() {
+                        state.stable_text_tokens.push(candidate_tokens[i]);
+                    }
+                    let piece_bytes = tokenizer.decode_bytes(candidate_tokens[i]);
+                    if let Some(ref cb) = ctx.token_cb {
+                        cb(&String::from_utf8_lossy(piece_bytes));
+                    }
+                    ctx.perf_text_tokens += 1;
+                    state.result_bytes.extend_from_slice(piece_bytes);
+                    delta_bytes.extend_from_slice(piece_bytes);
+                }
+            }
+        }
+
+        // ---- Utterance-boundary reset via frame-level VAD (opt-in) ----
+        // The accumulating encoder window means an inter-utterance silence gap
+        // rarely surfaces as an immediate EOT, so `speech_ended` alone cannot
+        // segment a conversation. When an opt-in boundary mode is on we instead
+        // scan the audio directly for a speech→silence transition: when a
+        // sufficiently long silence run follows committed speech, flush the
+        // finished utterance's rollback-held tail and reset the boundary. The
+        // reset action is dispatched by which flag is active — language
+        // re-detection (multilingual) and/or a hard segment reset
+        // (vad_segment_reset). Gated on `multilingual || vad_segment_reset`, so
+        // the default decode path (both false) is byte-identical.
+        if !speech_ended
+            && ((ctx.multilingual && ctx.force_language.is_none()) || ctx.vad_segment_reset)
+        {
+            let min_sil = (ML_MIN_SILENCE_SEC * SAMPLE_RATE as f32) as usize;
+            // Frame-level VAD scan over newly-arrived audio (inline: `state` is
+            // borrowed immutably by `tokenizer`, so only disjoint-field access
+            // is allowed here — no whole-`state` helper call).
+            let mut boundary = false;
+            while state.ml_scan_cursor + ML_VAD_FRAME <= state.audio_cursor
+                && state.ml_scan_cursor + ML_VAD_FRAME <= samples.len()
+            {
+                let s = state.ml_scan_cursor;
+                let e = s + ML_VAD_FRAME;
+                if slice_rms(&samples[s..e]) >= ML_SILENCE_RMS {
+                    state.ml_speech_since_boundary = true;
+                    state.ml_silence_run = 0;
+                } else {
+                    state.ml_silence_run += ML_VAD_FRAME;
+                    if !boundary
+                        && state.ml_silence_run >= min_sil
+                        && state.ml_speech_since_boundary
+                        && !state.stable_text_tokens.is_empty()
+                    {
+                        boundary = true;
+                        state.ml_speech_since_boundary = false;
+                    }
+                }
+                state.ml_scan_cursor = e;
+            }
+            if boundary {
+                // Flush any rollback-held tail of the finished utterance before
+                // the reset drops it (mirrors the speech-end commit block).
+                let text_start = stream_text_start(ctx, &state.raw_tokens);
+                let candidate = &state.raw_tokens[text_start..];
+                for &tok in &candidate[state.stable_text_tokens.len()..] {
+                    state.stable_text_tokens.push(tok);
+                    let piece_bytes = tokenizer.decode_bytes(tok);
+                    if let Some(ref cb) = ctx.token_cb {
+                        cb(&String::from_utf8_lossy(piece_bytes));
+                    }
+                    ctx.perf_text_tokens += 1;
+                    state.result_bytes.extend_from_slice(piece_bytes);
+                    delta_bytes.extend_from_slice(piece_bytes);
+                }
+                stream_boundary_reset!(ctx, state);
+            }
+        }
+
+        if reanchor {
+            // Commit the current chunk before dropping its encoder context.
+            // Output-token carry only matches retained audio; a fresh audio segment
+            // must start with no output prefix or its first words can be skipped.
+            reset_utterance_segment!(state);
+        }
+
+        ctx.perf_total_ms += elapsed_ms(chunk_t0);
+        state.chunk_idx += 1;
+
+        // Stop processing after speech ends — no point encoding more silence
+        if speech_ended {
+            break;
+        }
+    } // end while loop
+
+    // ---- Compute the provisional (unfixed) tail ----
+    // The tokens in `raw_tokens` beyond what `stable_text_tokens` covers are the
+    // newest hypothesis text that the rollback / unfixed-chunks window holds back
+    // from the stable commit.  Decode them (replacing any prior provisional text)
+    // so callers can render them as low-confidence "grey" text.  After finalize
+    // everything has been committed, so this range is empty.
+    state.provisional_bytes.clear();
+    {
+        let text_start = stream_text_start(ctx, &state.raw_tokens);
+        let candidate_tokens = &state.raw_tokens[text_start..];
+        let committed = state.stable_text_tokens.len().min(candidate_tokens.len());
+        for &tok in &candidate_tokens[committed..] {
+            let piece_bytes = tokenizer.decode_bytes(tok);
+            state.provisional_bytes.extend_from_slice(piece_bytes);
+        }
+    }
+
+    Some(String::from_utf8_lossy(&delta_bytes).into_owned())
+}
+
+#[cfg(test)]
+mod orbit_stream_tests {
+    use super::StreamState;
+
+    #[test]
+    fn segment_reset_keeps_committed_text_but_does_not_carry_output_tokens() {
+        let mut state = StreamState::new();
+        state.raw_tokens = (0..100).collect();
+        state.stable_text_tokens = state.raw_tokens.clone();
+        state.result_bytes = b"committed".to_vec();
+        state.work.encoder_samples = 32_000;
+        reset_utterance_segment!(state);
+        assert!(state.raw_tokens.is_empty());
+        assert!(state.stable_text_tokens.is_empty());
+        assert_eq!(state.hypothesis(), "committed");
+        assert_eq!(state.work().encoder_samples, 32_000);
+    }
+
+    #[test]
+    fn rollback_never_reopens_committed_tokens() {
+        let mut state = StreamState::new();
+        state.raw_tokens = (0..30).collect();
+        state.stable_text_tokens = (0..25).collect();
+        assert_eq!(state.prefix_len(0, 12), 25);
+        state.stable_text_tokens = state.raw_tokens.clone();
+        assert_eq!(state.prefix_len(0, 12), 30);
+    }
+
+    #[test]
+    fn finalize_flushes_pending_tokens_once_without_new_audio() {
+        let path = std::env::temp_dir()
+            .join(format!("qwen-final-tail-{}.json", std::process::id()));
+        std::fs::write(&path, r#"{"a":0,"b":1}"#).unwrap();
+        let tokenizer = crate::tokenizer::QwenTokenizer::load(path.to_str().unwrap()).unwrap();
+        std::fs::remove_file(path).unwrap();
+        let mut state = StreamState::new();
+        state.raw_tokens = vec![0, 1];
+        state.stable_text_tokens = vec![0];
+        state.result_bytes = b"a".to_vec();
+        state.provisional_bytes = b"b".to_vec();
+        assert_eq!(state.finalize_tail(0, &tokenizer), b"b");
+        assert_eq!(state.hypothesis(), "ab");
+        assert!(state.finalize_tail(0, &tokenizer).is_empty());
+        assert_eq!(state.hypothesis(), "ab");
+    }
+
+    #[test]
+    fn hypotheses_join_token_bytes_before_decoding_utf8() {
+        let mut state = StreamState::new();
+        let word = "独立".as_bytes();
+        state.result_bytes = word[..1].to_vec();
+        state.provisional_bytes = word[1..].to_vec();
+        assert_eq!(state.hypothesis(), "独立");
+        state.provisional_bytes.clear();
+        assert_eq!(state.hypothesis(), "");
+    }
+}

@@ -27,25 +27,33 @@ GUI 与 TUI 使用同一路由。全局保存成功不依赖远程会话在线�
 ## 本机语音
 
 `local-speech` 功能通过 [speech.rs](src/speech.rs) 提供本机 CPU 转写。
-[speech/model.rs](src/speech/model.rs) 固定模型来源、版本、大小与 SHA-256：
-[Paraformer 中文、英文流式模型](https://huggingface.co/csukuangfj/sherpa-onnx-streaming-paraformer-bilingual-zh-en)
-逐块提供实时预览，[Qwen3-ASR 0.6B](https://huggingface.co/Qwen/Qwen3-ASR-0.6B)
-在句尾根据对应音频校正文字和标点。
-Qwen 使用非量化 FP32 ONNX 权重，避免 INT8 在中英混说上的实测退化。首次合计下载约 4 GB，
-已有 Paraformer 缓存直接复用；Qwen 缓存子目录为 `qwen3-asr-0.6b-fp32`。
-两者通过 [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) 在后台运行，不要求 Python 或云端识别服务。
+[speech/model.rs](src/speech/model.rs) 固定官方 [Qwen3-ASR 0.6B](https://huggingface.co/Qwen/Qwen3-ASR-0.6B)
+权重来源、版本、大小与 SHA-256。Qwen 直接生成初稿、修订暂定尾部并在句尾收尾，
+不再加载 Paraformer，也不调用整句离线识别反复重跑历史录音。
+首次下载原始 BF16 权重与词表约 1.88 GB，缓存子目录为 `qwen3-asr-0.6b`。
+旧版 ONNX 缓存不再使用，也不自动删除。
+
+推理由带补丁的 [qwen-asr](../../vendor/qwen-asr/ORBIT_PATCH.md) 在后台运行，不要求 Python。
+Linux 静态链接 OpenBLAS，macOS 使用 Accelerate；Linux 源码构建需要 C 编译器、make，
+首次构建下载 OpenBLAS 源码。x86_64 要求 AVX2 与 FMA，运行前检测，不能仅凭编译成功认定兼容。
+编码和预填充使用浮点运算，后端单 token 解码使用内部 INT8 矩阵向量内核；
+准确率必须以增量路径的实测为准。Linux 上内核池限制为两个工作线程，OpenBLAS 单线程。
+所有本机模型操作在后台串行进入不可重入的原生内核池，等待期间可取消。
 
 缓存位于 `$XDG_CACHE_HOME/orbit/speech`，缺省根目录为 `~/.cache`，独立于项目与 SSH/WSL 目标。
-准备阶段区分缓存校验、累计下载进度和两个模型的加载；取消下载保留固定版本的 `.part` 文件，
+准备阶段区分缓存校验、累计下载进度和模型加载；取消下载保留固定版本的 `.part` 文件，
 重试使用 HTTP Range 继续，服务端忽略 Range 时安全重新下载。完整文件通过大小和 SHA-256
 校验后原子替换缓存；损坏下载不替换既有文件。跨进程准备使用可取消的缓存锁，已验证缓存离线可用。
 取消加载立即结束调用方等待；无法中断的原生加载在后台结束并丢弃结果，重试不会与旧加载竞争。
 
 音频按 16 kHz 单声道 PCM 输入，采集队列最多保留 3.2 秒待处理音频，单次最多 120 秒。
-实时解码与串行句尾校正在不同工作线程运行，每句音频只校正一次，不反复识别越来越长的录音前缀。
-停止录音会补齐预览并等待校正，较早句子的结果不能覆盖后续语音。取消丢弃后续结果，
-失败保留已经发布的预览但不返回完整转写成功。音频不写入会话、工作区或网络请求。
-GUI 只负责录音、进度展示和草稿插入，模型准备与转写逻辑不进入界面。
+每两秒解码一次，已完成的两秒音频窗口只编码一次，匹配的解码前缀复用 KV 缓存。
+最多约 14 秒重锚，避免长录音解码延迟不断增长；保留末尾 12 个 token 可修订。
+UTF-8 跨 token 拼接后再展示，暂定尾部整体替换，稳定前缀不会重复追加。
+静音等待仅保留 200 ms 预录，连续 600 ms 静音后补齐当前句并释放该句缓存。
+停止时补齐未满窗口及回滚尾部，即使恰好位于窗口边界也不丢尾字。
+取消不再发布结果；已开始的单次原生计算在后台结束。失败保留已发布预览，不返回完整转写成功。
+音频不写入会话、工作区或网络请求。GUI 只负责录音、音量反馈、进度展示和草稿插入。
 
 ## 入口
 

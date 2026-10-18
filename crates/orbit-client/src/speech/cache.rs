@@ -310,8 +310,7 @@ fn report(sender: &watch::Sender<Progress>, next: Progress) {
                 total_bytes: total,
             } => (1, received * 100 / total.max(1)),
             Progress::Waiting => (2, 0),
-            Progress::LoadingPreview => (3, 0),
-            Progress::LoadingCorrection => (4, 0),
+            Progress::LoadingModel => (3, 0),
         }
     }
     sender.send_if_modified(|previous| {
