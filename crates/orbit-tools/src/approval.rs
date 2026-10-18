@@ -76,14 +76,11 @@ impl CommandPreview {
         let mut bytes = Vec::new();
         for config in [repo.config_path(), repo.worktree_config_path()] {
             if config.exists() {
-                use std::os::unix::fs::MetadataExt;
-                let metadata = std::fs::symlink_metadata(&config).ok()?;
-                if metadata.file_type().is_symlink() || metadata.nlink() != 1 {
+                let file = orbit_runtime::filesystem::open_regular_file(&config).ok()?;
+                if orbit_runtime::filesystem::hard_link_count(&file).ok()? != 1 {
                     return None;
                 }
-                std::fs::File::open(config)
-                    .ok()?
-                    .take(1_024 * 1_024 + 1)
+                file.take(1_024 * 1_024 + 1)
                     .read_to_end(&mut bytes)
                     .ok()?;
                 if bytes.len() > 1_024 * 1_024 {

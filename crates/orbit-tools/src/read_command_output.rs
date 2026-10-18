@@ -1,7 +1,10 @@
-use std::{io::Read, os::unix::fs::OpenOptionsExt, path::PathBuf};
+use std::{io::Read, path::PathBuf};
 
 use orbit_agent::tool::{Tool, ToolError, ToolOutput};
-use orbit_runtime::execution::{MAX_RETAINED_OUTPUT_PER_STREAM, output::CommandOutputs};
+use orbit_runtime::execution::{
+    MAX_RETAINED_OUTPUT_PER_STREAM,
+    output::{CommandOutputs, open_retained_file},
+};
 use serde::Deserialize;
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
@@ -151,11 +154,7 @@ fn read(
         ));
     }
 
-    let mut file = std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-        .open(path)
-        .map_err(failed)?;
+    let mut file = open_retained_file(&path).map_err(failed)?;
     let metadata = file.metadata().map_err(failed)?;
     if !metadata.is_file() {
         return Err(failed("command output file is invalid"));
@@ -242,11 +241,7 @@ fn capture_receipt(
     path: &std::path::Path,
 ) -> Option<orbit_runtime::execution::output::CaptureReceipt> {
     const MAX_RECEIPT_BYTES: u64 = 16 * 1_024;
-    let file = std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-        .open(path)
-        .ok()?;
+    let file = open_retained_file(path).ok()?;
     if !file.metadata().ok()?.is_file() {
         return None;
     }

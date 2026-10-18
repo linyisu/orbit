@@ -1,11 +1,10 @@
-use std::os::unix::fs::MetadataExt;
 use std::{
     io::{BufRead, BufReader, Read, Seek, SeekFrom},
     path::Path,
 };
 
 use orbit_agent::tool::{Tool, ToolError, ToolOutput};
-use orbit_runtime::filesystem::Workspace;
+use orbit_runtime::filesystem::{FileVersion, Workspace};
 use serde::Deserialize;
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
@@ -42,19 +41,6 @@ struct Cursor {
     #[schemars(range(min = 1))]
     line: usize,
     character: usize,
-}
-
-fn version(metadata: &std::fs::Metadata) -> String {
-    format!(
-        "{}:{}:{}:{}:{}:{}:{}",
-        metadata.dev(),
-        metadata.ino(),
-        metadata.len(),
-        metadata.mtime(),
-        metadata.mtime_nsec(),
-        metadata.ctime(),
-        metadata.ctime_nsec()
-    )
 }
 
 fn first_line() -> usize {
@@ -148,9 +134,9 @@ fn read(
     let mut file = workspace
         .authorize_read(Path::new(&arguments.path))
         .map_err(ToolError::from)?;
-    let snapshot = version(&file.metadata().map_err(failed)?);
+    let snapshot = FileVersion::read(&file).map_err(failed)?;
     let (mut line, mut character, offset) = if let Some(cursor) = &arguments.cursor {
-        if cursor.version != snapshot
+        if cursor.version != snapshot.token()
             || cursor.line == 0
             || cursor.offset > file.metadata().map_err(failed)?.len()
         {
@@ -262,18 +248,11 @@ fn read(
     if eof && prefix_written && !content.ends_with('\n') && content.len() < MAX_TEXT_OUTPUT_BYTES {
         content.push('\n');
     }
-    if snapshot
-        != version(
-            &reader
-                .get_ref()
-                .metadata()
-                .map_err(failed)?,
-        )
-    {
+    if snapshot != FileVersion::read(reader.get_ref()).map_err(failed)? {
         return Err(failed("file changed during read; retry"));
     }
     let next = (!eof).then_some(Cursor {
-        version: snapshot,
+        version: snapshot.token().to_owned(),
         offset: position,
         line,
         character,

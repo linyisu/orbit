@@ -228,6 +228,23 @@ fn create_output_file(path: &Path) -> Result<std::fs::File, RuntimeError> {
     crate::filesystem::private::open_file(path, true, true).map_err(Into::into)
 }
 
+/// Open a retained log or receipt without following a final link or blocking on a FIFO.
+/// The caller must hold the owning session's output lease and validate its output identifier.
+/// Windows additionally verifies private ownership, DACL and absence of hard links.
+pub fn open_retained_file(path: &Path) -> std::io::Result<std::fs::File> {
+    #[cfg(windows)]
+    let file = crate::filesystem::private::open_file(path, false, false)?;
+    #[cfg(unix)]
+    let file = crate::filesystem::open_regular_file(path)?;
+    if !file.metadata()?.is_file() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "command output file is invalid",
+        ));
+    }
+    Ok(file)
+}
+
 #[cfg(unix)]
 fn create_output_file(path: &Path) -> Result<std::fs::File, RuntimeError> {
     use std::os::unix::fs::OpenOptionsExt;
@@ -313,6 +330,30 @@ fn prune_output_directory(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn retained_reads_reject_directories_and_link_aliases() {
+        let root = crate::filesystem::temporary_directory("orbit-output-read-").unwrap();
+        let source = root.path().join("source");
+        let mut file = create_output_file(&source).unwrap();
+        std::io::Write::write_all(&mut file, b"captured").unwrap();
+        drop(file);
+        assert_eq!(
+            open_retained_file(&source)
+                .unwrap()
+                .metadata()
+                .unwrap()
+                .len(),
+            8
+        );
+        assert!(open_retained_file(root.path()).is_err());
+        let alias = root.path().join("alias");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&source, &alias).unwrap();
+        #[cfg(windows)]
+        std::os::windows::fs::symlink_file(&source, &alias).unwrap();
+        assert!(open_retained_file(&alias).is_err());
+    }
 
     #[cfg(unix)]
     #[tokio::test]

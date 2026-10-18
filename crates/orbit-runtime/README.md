@@ -5,9 +5,14 @@
 ## 入口
 
 - [execution/](src/execution/)：目标 shell 环境、进程组、后台任务、超时、取消与有界输出。
-- [filesystem/](src/filesystem/)：文件描述符访问和原子写入。
+- [filesystem/](src/filesystem/)：文件描述符访问、跨平台文件版本和私有临时目录。
 - [policy.rs](src/policy.rs)、[capability.rs](src/capability.rs)：文件访问策略与外部授权。
 - [git/](src/git/)、[verification.rs](src/verification.rs)：Git 分类与执行证据。
+
+Git 检查的有界输出、绝对期限和取消由 [git/process.rs](src/git/process.rs) 监督，
+使用与普通命令相同的原生进程所有权；工具层保留 Git 参数、审批和结果解释。
+文件分页游标通过已打开句柄取得版本，Unix 保留已有编码，Windows 使用完整文件标识和
+原生修改时间；这类版本检查不替代文件内容摘要或原子提交锁。
 
 工作区指纹默认累计扫描 512 MiB、10000 项，文件内容按 64 KiB 块计算摘要，
 不把整个文件装入内存；`max_scan_mib` 和 `max_scan_entries` 可配置。

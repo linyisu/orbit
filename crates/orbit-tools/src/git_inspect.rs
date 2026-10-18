@@ -2,10 +2,9 @@
 
 use std::{
     collections::BTreeSet,
-    io::{self, Read},
-    os::unix::process::CommandExt,
+    io,
     path::{Path, PathBuf},
-    process::{Child, Command, Stdio},
+    process::{Command, Stdio},
     time::{Duration, Instant},
 };
 
@@ -26,7 +25,6 @@ const MAX_PATCH_BYTES: usize = 4 * 1_024 * 1_024;
 const MAX_ENTRIES: usize = 500;
 const MAX_OFFSET: usize = 20_000;
 const GIT_TIMEOUT: Duration = Duration::from_secs(10);
-const GIT_POLL_INTERVAL: Duration = Duration::from_millis(10);
 
 #[derive(Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -891,20 +889,6 @@ struct GitLimits {
     deadline: Instant,
 }
 
-struct GitChild(Child);
-
-impl Drop for GitChild {
-    /// Each child has its own process group. Kill descendants that may still hold stdout open, then
-    /// reap the direct child on every exit path.
-    fn drop(&mut self) {
-        unsafe {
-            libc::kill(-(self.0.id() as i32), libc::SIGKILL);
-        }
-        let _ = self.0.kill();
-        let _ = self.0.wait();
-    }
-}
-
 fn run_git(
     root: &Path,
     args: Vec<String>,
@@ -928,12 +912,22 @@ fn run_git_index(
         return Err(ToolError::Cancelled);
     }
 
+    #[cfg(windows)]
+    const NULL_DEVICE: &str = "NUL";
+    #[cfg(unix)]
+    const NULL_DEVICE: &str = "/dev/null";
     let mut command = Command::new("git");
     command
         .env_clear()
         .env(
             "PATH",
-            std::env::var_os("PATH").unwrap_or_else(|| "/usr/bin:/bin".into()),
+            std::env::var_os("PATH").unwrap_or_else(|| {
+                if cfg!(windows) {
+                    "".into()
+                } else {
+                    "/usr/bin:/bin".into()
+                }
+            }),
         )
         .env("LC_ALL", "C")
         .arg("--no-optional-locks")
@@ -942,7 +936,7 @@ fn run_git_index(
         .arg("-c")
         .arg("core.fsmonitor=false")
         .arg("-c")
-        .arg("core.hooksPath=/dev/null")
+        .arg(format!("core.hooksPath={NULL_DEVICE}"))
         .arg("-c")
         .arg("diff.external=");
     for driver in drivers {
@@ -957,7 +951,7 @@ fn run_git_index(
         .arg(root)
         .args(args)
         .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_GLOBAL", NULL_DEVICE)
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GIT_NO_LAZY_FETCH", "1")
         .env("GIT_NO_REPLACE_OBJECTS", "1")
@@ -968,73 +962,45 @@ fn run_git_index(
         .env_remove("GIT_ALTERNATE_OBJECT_DIRECTORIES")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .process_group(0);
+        .stderr(Stdio::null());
+    #[cfg(windows)]
+    for name in ["SystemRoot", "WINDIR", "TEMP", "TMP"] {
+        if let Some(value) = std::env::var_os(name) {
+            command.env(name, value);
+        }
+    }
     if let Some(index) = index {
         command.env("GIT_INDEX_FILE", index);
     }
     if let Some(objects) = objects {
         command.env("GIT_OBJECT_DIRECTORY", objects);
     }
-    let mut child = GitChild(command.spawn().map_err(failed)?);
-    let mut stdout = child
-        .0
-        .stdout
-        .take()
-        .expect("stdout is piped");
-    let flags = rustix::fs::fcntl_getfl(&stdout).map_err(failed)?;
-    rustix::fs::fcntl_setfl(&stdout, flags | rustix::fs::OFlags::NONBLOCK).map_err(failed)?;
-    let mut output = Vec::new();
-    let mut buffer = [0; 8_192];
-    let mut eof = false;
-    loop {
-        if cancellation.is_cancelled() {
-            return Err(ToolError::Cancelled);
-        }
-        if Instant::now() >= limits.deadline {
-            return Err(failed("Git inspection timed out after 10 seconds"));
-        }
-        if !eof {
-            match stdout.read(&mut buffer) {
-                Ok(0) => eof = true,
-                Ok(count) => {
-                    let remaining = limits
-                        .bytes
-                        .saturating_add(1)
-                        .saturating_sub(output.len());
-                    output.extend_from_slice(&buffer[..count.min(remaining)]);
-                    if output.len() > limits.bytes {
-                        if limits.truncate {
-                            output.truncate(limits.bytes);
-                            return Ok(output);
-                        }
-                        return Err(failed(format!(
-                            "Git output exceeds the {} byte inspection limit",
-                            limits.bytes,
-                        )));
-                    }
-                    continue;
-                }
-                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
-                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
-                Err(error) => return Err(failed(error)),
-            }
-        }
-        if eof && let Some(status) = child.0.try_wait().map_err(failed)? {
+    use orbit_runtime::git::process::{InspectionError, InspectionOutput, OutputLimit, inspect};
+    let output = inspect(
+        command,
+        cancellation.clone(),
+        limits.deadline,
+        if limits.truncate {
+            OutputLimit::Truncate(limits.bytes)
+        } else {
+            OutputLimit::Complete(limits.bytes)
+        },
+    )
+    .map_err(|error| match error {
+        InspectionError::Cancelled => ToolError::Cancelled,
+        InspectionError::TimedOut => failed("Git inspection timed out after 10 seconds"),
+        error => failed(error),
+    })?;
+    match output {
+        InspectionOutput::Truncated(output) => Ok(output),
+        InspectionOutput::Complete { stdout, status } => {
             if !status.success() && !(limits.allows_difference_status && status.code() == Some(1)) {
                 return Err(failed(
                     "Git inspection failed; the workspace may not be a Git repository",
                 ));
             }
-            return Ok(output);
+            Ok(stdout)
         }
-        std::thread::sleep(
-            GIT_POLL_INTERVAL.min(
-                limits
-                    .deadline
-                    .saturating_duration_since(Instant::now()),
-            ),
-        );
     }
 }
 

@@ -7,6 +7,9 @@ on:
     paths:
       - 'crates/orbit-runtime/**'
       - 'crates/orbit-service/**'
+      - 'crates/orbit-client/**'
+      - 'crates/orbit-build/**'
+      - 'crates/orbit-xtask/**'
       - 'crates/orbit-tools/**'
       - '.github/scripts/test-native-process.py'
       - '.github/scripts/test-native-windows-io.py'
@@ -17,6 +20,9 @@ on:
     paths:
       - 'crates/orbit-runtime/**'
       - 'crates/orbit-service/**'
+      - 'crates/orbit-client/**'
+      - 'crates/orbit-build/**'
+      - 'crates/orbit-xtask/**'
       - 'crates/orbit-tools/**'
       - '.github/scripts/test-native-process.py'
       - '.github/scripts/test-native-windows-io.py'
@@ -73,6 +79,8 @@ jobs:
         run: cargo test -p orbit-service --locked workspace::server::lifecycle::tests
       - name: Test atomic writes and permission preservation
         run: cargo test -p orbit-tools --locked --test write_file
+      - name: Test native Git inspection and index transactions
+        run: cargo test -p orbit-tools --locked --test git_inspect --test git_index
 
   windows-backend:
     name: Windows native backend

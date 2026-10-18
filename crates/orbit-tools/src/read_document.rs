@@ -2,7 +2,7 @@ use std::{io::Read, path::Path};
 
 use orbit_agent::tool::{Tool, ToolError, ToolFuture};
 use orbit_model::types::{ToolCall, ToolDefinition};
-use orbit_runtime::filesystem::Workspace;
+use orbit_runtime::filesystem::{FileVersion, Workspace};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
@@ -283,21 +283,11 @@ impl Tool for ReadDocument {
                 tokio::task::spawn_blocking(move || read_source(workspace, &path, token))
                     .await
                     .map_err(failed)??;
-            use std::os::unix::fs::MetadataExt;
             let worker_version = match &self.worker {
-                Some(path) => {
-                    let metadata = std::fs::metadata(path).map_err(failed)?;
-                    format!(
-                        "{}:{}:{}:{}:{}:{}:{}",
-                        metadata.dev(),
-                        metadata.ino(),
-                        metadata.len(),
-                        metadata.mtime(),
-                        metadata.mtime_nsec(),
-                        metadata.ctime(),
-                        metadata.ctime_nsec()
-                    )
-                }
+                Some(path) => FileVersion::for_path(path)
+                    .map_err(failed)?
+                    .token()
+                    .to_owned(),
 
                 None => env!("CARGO_PKG_VERSION").to_owned(),
             };
@@ -428,12 +418,11 @@ fn read_source(
     path: &str,
     cancellation: CancellationToken,
 ) -> Result<(Vec<u8>, String), ToolError> {
-    use std::os::unix::fs::MetadataExt;
     let mut file = workspace
         .authorize_read(Path::new(path))
         .map_err(failed)?;
-    let before = file.metadata().map_err(failed)?;
-    if before.len() > MAX_FILE_BYTES {
+    let before = FileVersion::read(&file).map_err(failed)?;
+    if file.metadata().map_err(failed)?.len() > MAX_FILE_BYTES {
         return Err(failed("document exceeds 256 MiB"));
     }
     let mut bytes = Vec::new();
@@ -452,20 +441,7 @@ fn read_source(
         bytes.extend_from_slice(&buffer[..count]);
     }
 
-    let after = file.metadata().map_err(failed)?;
-    if (
-        before.len(),
-        before.mtime(),
-        before.mtime_nsec(),
-        before.ctime(),
-        before.ctime_nsec(),
-    ) != (
-        after.len(),
-        after.mtime(),
-        after.mtime_nsec(),
-        after.ctime(),
-        after.ctime_nsec(),
-    ) {
+    if before != FileVersion::read(&file).map_err(failed)? {
         return Err(failed(
             "document changed during read; retry after writing finishes",
         ));

@@ -23,13 +23,9 @@ impl ImageAssets {
 
     /// Composer images are uploads in transit, not durable session attachments.
     pub fn temporary() -> Result<Self> {
-        use std::os::unix::fs::PermissionsExt;
-        let temporary = std::sync::Arc::new(
-            tempfile::Builder::new()
-                .prefix("orbit-composer-")
-                .permissions(std::fs::Permissions::from_mode(0o700))
-                .tempdir_in("/tmp")?,
-        );
+        let temporary = std::sync::Arc::new(orbit_runtime::filesystem::temporary_directory(
+            "orbit-composer-",
+        )?);
         Ok(Self {
             directory: AssetDirectory::for_database(&temporary.path().join("images")),
             temporary: Some(temporary),

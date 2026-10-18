@@ -6,10 +6,12 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::VecDeque,
     io::{Read, Write},
-    os::unix::fs::{DirBuilderExt, OpenOptionsExt},
     path::{Path, PathBuf},
     sync::Mutex,
 };
+
+#[cfg(unix)]
+use std::os::unix::fs::DirBuilderExt;
 
 const MAX_SNAPSHOT_BYTES: usize = 32 * 1_024 * 1_024;
 const MAX_SNAPSHOTS: usize = 64;
@@ -139,11 +141,19 @@ pub(super) fn read(directory: &Path, id: &str) -> Result<String, ToolError> {
     if !metadata.is_dir() || metadata.file_type().is_symlink() {
         return Err(failed("invalid snapshot directory"));
     }
-    let file = std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-        .open(directory.join(format!("{id}.json")))
+    #[cfg(unix)]
+    let file = orbit_runtime::filesystem::open_regular_file(&directory.join(format!("{id}.json")))
         .map_err(failed)?;
+    #[cfg(windows)]
+    let file = {
+        orbit_runtime::filesystem::private::validate_directory(directory).map_err(failed)?;
+        orbit_runtime::filesystem::private::open_file(
+            &directory.join(format!("{id}.json")),
+            false,
+            false,
+        )
+        .map_err(failed)?
+    };
     if !file
         .metadata()
         .map_err(failed)?
@@ -162,11 +172,14 @@ pub(super) fn read(directory: &Path, id: &str) -> Result<String, ToolError> {
 }
 
 fn save(directory: &Path, id: &str, content: &str) -> Result<(), ToolError> {
+    #[cfg(unix)]
     std::fs::DirBuilder::new()
         .recursive(true)
         .mode(0o700)
         .create(directory)
         .map_err(failed)?;
+    #[cfg(windows)]
+    orbit_runtime::filesystem::private::create_directory_all(directory).map_err(failed)?;
     let metadata = std::fs::symlink_metadata(directory).map_err(failed)?;
     if !metadata.is_dir() || metadata.file_type().is_symlink() {
         return Err(failed("invalid snapshot directory"));
@@ -203,7 +216,11 @@ fn save(directory: &Path, id: &str, content: &str) -> Result<(), ToolError> {
         bytes -= size;
         count -= 1;
     }
+    #[cfg(unix)]
     let mut file = tempfile::NamedTempFile::new_in(directory).map_err(failed)?;
+    #[cfg(windows)]
+    let mut file = orbit_runtime::filesystem::private::temporary_file(directory, ".snapshot-")
+        .map_err(failed)?;
     file.write_all(content.as_bytes())
         .map_err(failed)?;
     file.as_file()
@@ -238,7 +255,14 @@ mod tests {
         assert!(read(&owner, "../outside").is_err());
         std::fs::remove_file(owner.join(format!("{id}.json"))).unwrap();
         std::fs::write(directory.path().join("external"), &original).unwrap();
+        #[cfg(unix)]
         std::os::unix::fs::symlink(
+            directory.path().join("external"),
+            owner.join(format!("{id}.json")),
+        )
+        .unwrap();
+        #[cfg(windows)]
+        std::os::windows::fs::symlink_file(
             directory.path().join("external"),
             owner.join(format!("{id}.json")),
         )
