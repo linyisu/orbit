@@ -15,17 +15,15 @@ use windows_sys::{
     Wdk::{
         Foundation::OBJECT_ATTRIBUTES,
         Storage::FileSystem::{
-            FILE_CREATE, FILE_DISPOSITION_INFORMATION, FILE_NON_DIRECTORY_FILE, FILE_OPEN,
-            FILE_OPEN_REPARSE_POINT, FILE_RENAME_INFORMATION, FILE_RENAME_POSIX_SEMANTICS,
-            FILE_RENAME_REPLACE_IF_EXISTS, FILE_SYNCHRONOUS_IO_NONALERT,
-            FileDispositionInformation, FileRenameInformationEx, NtCreateFile,
-            NtSetInformationFile,
+            FILE_CREATE, FILE_DIRECTORY_FILE, FILE_DISPOSITION_INFORMATION,
+            FILE_NON_DIRECTORY_FILE, FILE_OPEN, FILE_OPEN_REPARSE_POINT, FILE_RENAME_INFORMATION,
+            FILE_RENAME_POSIX_SEMANTICS, FILE_RENAME_REPLACE_IF_EXISTS,
+            FILE_SYNCHRONOUS_IO_NONALERT, FileDispositionInformation, FileRenameInformationEx,
+            NtCreateFile, NtSetInformationFile,
         },
     },
     Win32::{
-        Foundation::{
-            INVALID_HANDLE_VALUE, OBJ_CASE_INSENSITIVE, RtlNtStatusToDosError, UNICODE_STRING,
-        },
+        Foundation::{OBJ_CASE_INSENSITIVE, RtlNtStatusToDosError, UNICODE_STRING},
         Security::{
             Authorization::{
                 ConvertSecurityDescriptorToStringSecurityDescriptorW, GetSecurityInfo,
@@ -38,9 +36,9 @@ use windows_sys::{
         Storage::FileSystem::{
             DELETE, FILE_ATTRIBUTE_ARCHIVE, FILE_ATTRIBUTE_HIDDEN, FILE_ATTRIBUTE_NORMAL,
             FILE_ATTRIBUTE_NOT_CONTENT_INDEXED, FILE_ATTRIBUTE_READONLY, FILE_ATTRIBUTE_SYSTEM,
-            FILE_BASIC_INFO, FILE_FLAG_BACKUP_SEMANTICS, FILE_GENERIC_READ, FILE_GENERIC_WRITE,
-            FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, FileBasicInfo, ReOpenFile,
-            SYNCHRONIZE, SetFileInformationByHandle, WRITE_DAC,
+            FILE_BASIC_INFO, FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_SHARE_DELETE,
+            FILE_SHARE_READ, FILE_SHARE_WRITE, FileBasicInfo, SYNCHRONIZE,
+            SetFileInformationByHandle, WRITE_DAC,
         },
         System::IO::IO_STATUS_BLOCK,
     },
@@ -335,18 +333,32 @@ pub(super) fn publish(
 }
 
 pub(super) fn sync_directory(parent: &File) -> io::Result<()> {
-    // SAFETY: reopening the same live object avoids looking its path up again after the commit.
-    let handle = unsafe {
-        ReOpenFile(
-            parent.as_raw_handle(),
-            FILE_GENERIC_READ | FILE_GENERIC_WRITE,
-            FILE_SHARE_READ | FILE_SHARE_WRITE,
-            FILE_FLAG_BACKUP_SEMANTICS,
-        )
+    let name = UNICODE_STRING::default();
+    let attributes = OBJECT_ATTRIBUTES {
+        Length: size_of::<OBJECT_ATTRIBUTES>() as u32,
+        RootDirectory: parent.as_raw_handle(),
+        ObjectName: &name,
+        ..Default::default()
     };
-    if handle == INVALID_HANDLE_VALUE {
-        return Err(io::Error::last_os_error());
-    }
-    // SAFETY: ReOpenFile transferred ownership of a new directory handle.
+    let mut handle = ptr::null_mut();
+    let mut io_status = IO_STATUS_BLOCK::default();
+    // SAFETY: an empty relative name reopens the retained directory object itself. The explicit
+    // directory option avoids ReOpenFile's file-only behavior; no mutable path is looked up.
+    status(unsafe {
+        NtCreateFile(
+            &mut handle,
+            FILE_GENERIC_READ | FILE_GENERIC_WRITE,
+            &attributes,
+            &mut io_status,
+            ptr::null(),
+            0,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            FILE_OPEN,
+            FILE_DIRECTORY_FILE | FILE_SYNCHRONOUS_IO_NONALERT,
+            ptr::null(),
+            0,
+        )
+    })?;
+    // SAFETY: successful NtCreateFile transfers a newly owned directory handle.
     unsafe { File::from_raw_handle(handle) }.sync_all()
 }
