@@ -128,18 +128,65 @@ fn verify_owner(stream: &UnixStream) -> Result<i32> {
         credentials.uid() == unsafe { libc::geteuid() },
         "workspace daemon belongs to another user"
     );
-    credentials
-        .pid()
-        .context("workspace daemon PID is unavailable")
+    #[cfg(not(target_os = "macos"))]
+    {
+        credentials
+            .pid()
+            .context("workspace daemon PID is unavailable")
+    }
+    #[cfg(target_os = "macos")]
+    {
+        use std::os::fd::AsRawFd;
+        let mut pid: libc::pid_t = 0;
+        let mut length = std::mem::size_of_val(&pid) as libc::socklen_t;
+        // SAFETY: the connected socket is live and the output buffer and length match pid_t.
+        let result = unsafe {
+            libc::getsockopt(
+                stream.as_raw_fd(),
+                libc::SOL_LOCAL,
+                libc::LOCAL_PEERPID,
+                std::ptr::from_mut(&mut pid).cast(),
+                &mut length,
+            )
+        };
+        if result != 0 {
+            return Err(std::io::Error::last_os_error())
+                .context("cannot identify workspace daemon");
+        }
+        ensure!(
+            length as usize == std::mem::size_of_val(&pid) && pid > 0,
+            "workspace daemon PID is unavailable"
+        );
+        Ok(pid)
+    }
 }
 
 async fn same_executable(stream: &UnixStream) -> Result<bool> {
     let pid = verify_owner(stream)?;
     tokio::task::spawn_blocking(move || {
-        compare_executables(
-            Path::new("/proc/self/exe"),
-            &PathBuf::from(format!("/proc/{pid}/exe")),
-        )
+        #[cfg(not(target_os = "macos"))]
+        {
+            compare_executables(
+                Path::new("/proc/self/exe"),
+                &PathBuf::from(format!("/proc/{pid}/exe")),
+            )
+        }
+        #[cfg(target_os = "macos")]
+        {
+            use std::{ffi::CStr, os::unix::ffi::OsStrExt};
+            let mut path = vec![0u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
+            // SAFETY: the writable buffer has the documented maximum path size.
+            let length =
+                unsafe { libc::proc_pidpath(pid, path.as_mut_ptr().cast(), path.len() as u32) };
+            if length <= 0 {
+                return Err(std::io::Error::last_os_error())
+                    .context("cannot inspect workspace daemon");
+            }
+            let path = CStr::from_bytes_until_nul(&path)
+                .context("workspace daemon path is not terminated")?;
+            let peer = Path::new(std::ffi::OsStr::from_bytes(path.to_bytes()));
+            compare_executables(&std::env::current_exe()?, peer)
+        }
     })
     .await?
 }

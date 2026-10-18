@@ -6,6 +6,7 @@ on:
     branches: [main, 'codex/native-runtime-*']
     paths:
       - 'crates/orbit-runtime/**'
+      - 'crates/orbit-service/**'
       - '.github/scripts/test-native-process.py'
       - '.github/workflows/native-runtime.yml'
       - 'Cargo.toml'
@@ -13,6 +14,7 @@ on:
   pull_request:
     paths:
       - 'crates/orbit-runtime/**'
+      - 'crates/orbit-service/**'
       - '.github/scripts/test-native-process.py'
       - '.github/workflows/native-runtime.yml'
       - 'Cargo.toml'
@@ -52,3 +54,16 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Test complete Unix runtime
         run: cargo test -p orbit-runtime --locked
+
+  macos-service:
+    name: macOS service lifecycle
+    runs-on: macos-15
+    timeout-minutes: 30
+    env:
+      CARGO_PROFILE_TEST_DEBUG: '0'
+      CARGO_INCREMENTAL: '0'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Test native service identity and handover
+        run: cargo test -p orbit-service --locked workspace::server::lifecycle::tests
