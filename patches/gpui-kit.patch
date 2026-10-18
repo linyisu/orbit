@@ -1,8 +1,148 @@
+diff --git a/crates/base/src/input/base/element.rs b/crates/base/src/input/base/element.rs
+index 9915b4fd..3eea993a 100644
+--- a/crates/base/src/input/base/element.rs
++++ b/crates/base/src/input/base/element.rs
+@@ -1116,7 +1116,10 @@ impl<M: InputModeKind> TextElement<M> {
+         let total_lines = text.lines_len();
+         // Reserve three digits for small documents, then follow the actual
+         // line count up to seven digits.
+-        let line_number_len = line_number_len(total_lines);
++        let last_number = state
++            .line_number_start
++            .saturating_add(total_lines.saturating_sub(1));
++        let line_number_len = line_number_len(last_number);
+ 
+         let mut line_number_width = if state.mode.line_number() {
+             let empty_line_number = window.text_system().shape_line(
+@@ -2980,7 +2983,7 @@ impl<M: InputModeKind> Element for TextElement<M> {
+             {
+                 let line_no: SharedString = format!(
+                     "{:>width$}",
+-                    displayed_line_number(buffer_line + 1),
++                    displayed_line_number(state.line_number_start.saturating_add(buffer_line)),
+                     width = line_number_len
+                 )
+                 .into();
+@@ -3875,6 +3878,30 @@ mod tests {
+         });
+     }
+ 
++    #[gpui::test]
++    fn source_line_origin_expands_the_gutter_without_changing_buffer_coordinates(
++        cx: &mut TestAppContext,
++    ) {
++        let (editor, window) = decoration_editor(cx, "first\nsecond", false);
++        let mut cx = VisualTestContext::from_window(window.into(), cx);
++        cx.update(|window, cx| {
++            window.draw(cx).clear(cx);
++            let cursor = editor.read(cx).cursor_position();
++            let ordinary_width = editor
++                .read(cx)
++                .last_layout
++                .as_ref()
++                .unwrap()
++                .line_number_width;
++            editor.update(cx, |state, cx| state.set_line_number_start(9_999, cx));
++            window.draw(cx).clear(cx);
++            let state = editor.read(cx);
++            assert!(state.last_layout.as_ref().unwrap().line_number_width > ordinary_width);
++            assert_eq!(state.text.to_string(), "first\nsecond");
++            assert_eq!(state.cursor_position(), cursor);
++        });
++    }
++
+     #[gpui::test]
+     fn selection_paths_follow_the_input_and_its_menu_focus(cx: &mut TestAppContext) {
+         let (editor, window) = decoration_editor(cx, "alpha beta", false);
+diff --git a/crates/base/src/input/base/state.rs b/crates/base/src/input/base/state.rs
+index d0b7dc9e..9cb2df08 100644
+--- a/crates/base/src/input/base/state.rs
++++ b/crates/base/src/input/base/state.rs
+@@ -503,6 +503,7 @@ pub struct InputBaseState<M: InputModeKind> {
+     /// The unwrapped width of the longest line and what it was measured for.
+     pub(super) longest_line_width: Cell<Option<(LongestLineKey, Pixels)>>,
+     pub(super) editor_paddings: Edges<Pixels>,
++    pub(super) line_number_start: usize,
+     /// The style this state paints with: what was projected onto it, with
+     /// every colour left unset resolved from the palette that is current. It
+     /// is rebuilt at the top of every render, which is what keeps it current
+@@ -915,6 +916,7 @@ impl<M: InputModeKind> InputBaseState<M> {
+             editor_scrollbar_snapshot: Cell::new(None),
+             longest_line_width: Cell::new(None),
+             editor_paddings: Edges::default(),
++            line_number_start: 1,
+             deferred_scroll_offset: None,
+             placeholder: SharedString::default(),
+             mask_pattern: MaskPattern::default(),
+@@ -3747,6 +3749,7 @@ impl<M: InputModeKind> InputBaseState<M> {
+     pub(crate) fn show_cursor(&self, window: &Window, cx: &App) -> bool {
+         (self.focus_handle.is_focused(window) || M::is_context_menu_open(self, cx))
+             && !self.disabled
++            && !(M::CODE_EDITOR && self.readonly)
+             && self.blink_cursor.read(cx).visible()
+             && window.is_window_active()
+     }
+@@ -9409,6 +9412,32 @@ mod tests {
+         }
+     }
+ 
++    #[gpui::test]
++    fn readonly_editor_hides_caret_without_disabling_selection_and_copy(cx: &mut TestAppContext) {
++        let view = InputView::<EditorMode>::new(cx);
++        let mut cx = VisualTestContext::from_window(view.window_handle.into(), cx);
++        setup_cursors(&mut cx, &view.input, "generated| log");
++        cx.update(|window, _| window.activate_window());
++        cx.run_until_parked();
++        cx.update(|window, cx| {
++            view.input.update(cx, |state, cx| {
++                state.focus(window, cx);
++                assert!(state.show_cursor(window, cx));
++                state.set_readonly(true, cx);
++                state.set_selected_range(0..9, cx);
++                state.copy(&Copy, window, cx);
++                assert!(!state.show_cursor(window, cx));
++                assert!(!state.disabled);
++                assert_eq!(state.selected_range(), 0..9);
++                assert_eq!(state.value(), "generated log\n");
++                assert_eq!(
++                    cx.read_from_clipboard().unwrap().text().unwrap(),
++                    "generated"
++                );
++            });
++        });
++    }
++
+     #[gpui::test]
+     fn test_mouse_down_shows_cursor_like_a_cursor_move(cx: &mut TestAppContext) {
+         cx.update(crate::init);
+@@ -12064,6 +12093,22 @@ impl InputBaseState<crate::input::EditorMode> {
+         self
+     }
+ 
++    /// Starts gutter numbering at this one-based source line, without changing the text.
++    /// Zero is treated as one. The default is one.
++    pub fn line_number_start(mut self, start: usize) -> Self {
++        self.line_number_start = start.max(1);
++        self
++    }
++
++    /// Changes the one-based source line shown for the first buffer line.
++    pub fn set_line_number_start(&mut self, start: usize, cx: &mut Context<Self>) {
++        let start = start.max(1);
++        if self.line_number_start != start {
++            self.line_number_start = start;
++            cx.notify();
++        }
++    }
++
+     /// Set line number.
+     pub fn set_line_number(&mut self, line_number: bool, _: &mut Window, cx: &mut Context<Self>) {
+         if let LayoutMode::CodeEditor { line_number: l, .. } = &mut self.mode {
 diff --git a/crates/base/src/lib.rs b/crates/base/src/lib.rs
-index 3f409e9d..36d928f9 100644
+index 9533a890..536f3fae 100644
 --- a/crates/base/src/lib.rs
 +++ b/crates/base/src/lib.rs
-@@ -59,6 +59,7 @@ mod reduce_motion;
+@@ -61,6 +61,7 @@ mod reduce_motion;
  mod resizable;
  mod root;
  mod scroll_bounce;
@@ -10,7 +150,7 @@ index 3f409e9d..36d928f9 100644
  mod scrollable_mask;
  mod scrollbar;
  mod select;
-@@ -163,6 +164,7 @@ pub use resizable::{
+@@ -165,6 +166,7 @@ pub use resizable::{
  };
  pub use root::{Root, RootPlugin};
  pub use scroll_bounce::{ScrollBounce, ScrollBounceMotion};
@@ -19,7 +159,7 @@ index 3f409e9d..36d928f9 100644
  pub use scrollbar::{
      Scrollbar, ScrollbarAxis, ScrollbarEntrance, ScrollbarHandle, ScrollbarMode, ScrollbarMotion,
 diff --git a/crates/base/src/root.rs b/crates/base/src/root.rs
-index 16ea0565..bfc09d9b 100644
+index ec2f5b45..7ca0bfc9 100644
 --- a/crates/base/src/root.rs
 +++ b/crates/base/src/root.rs
 @@ -2,15 +2,20 @@
@@ -43,10 +183,10 @@ index 16ea0565..bfc09d9b 100644
 +struct RootFontFallbacks(Option<FontFallbacks>);
 +impl Global for RootFontFallbacks {}
 +
- pub(crate) fn init(cx: &mut App) {
-     cx.bind_keys([
-         KeyBinding::new("tab", Tab, Some(CONTEXT)),
-@@ -96,6 +101,14 @@ pub struct Root {
+ /// Scan at most one cycle of the rendered tab order, preserving containment
+ /// regardless of how many controls exist behind a modal. GPUI exposes traversal
+ /// but not candidate enumeration. This scan is synchronous: only the final
+@@ -119,6 +124,14 @@ pub struct Root {
  }
  
  impl Root {
@@ -61,7 +201,7 @@ index 16ea0565..bfc09d9b 100644
      /// Register a presentation plugin once per application. Re-registering its
      /// type replaces the factory for future windows rather than mounting it twice.
      pub fn register_plugin<V: RootPlugin>(
-@@ -301,6 +314,9 @@ impl Render for Root {
+@@ -262,6 +275,9 @@ impl Render for Root {
          for plugin in &self.plugins {
              (plugin.style)(&mut content, window, cx);
          }
@@ -464,8 +604,21 @@ index f969647d..4555d2c3 100644
 +        }
 +    }
  }
+diff --git a/crates/base/src/text/editor_host.rs b/crates/base/src/text/editor_host.rs
+index 3ffc4b16..ef6ad3a9 100644
+--- a/crates/base/src/text/editor_host.rs
++++ b/crates/base/src/text/editor_host.rs
+@@ -94,7 +94,7 @@ impl RenderContext {
+     where
+         F: Fn(&SharedUri) -> ImageSource + Send + Sync + 'static,
+     {
+-        self.node.image_source = Some(Arc::new(resolver));
++        self.node.image_source = Some(Arc::new(move |uri| Some(resolver(uri))));
+         self
+     }
+ 
 diff --git a/crates/base/src/text/inline.rs b/crates/base/src/text/inline.rs
-index b184f0b7..6bc5cbf9 100644
+index e7d8221e..56e6ee00 100644
 --- a/crates/base/src/text/inline.rs
 +++ b/crates/base/src/text/inline.rs
 @@ -217,6 +217,7 @@ pub(super) struct Inline {
@@ -476,7 +629,7 @@ index b184f0b7..6bc5cbf9 100644
      selection_source: Option<(Arc<Mutex<InlineState>>, Range<usize>)>,
      /// Range highlight backgrounds, painted behind the text.
      range_backgrounds: Vec<(Range<usize>, Hsla)>,
-@@ -380,6 +381,7 @@ impl Inline {
+@@ -418,6 +419,7 @@ impl Inline {
              text_style: None,
              paint_origin: None,
              selection_bounds: None,
@@ -484,7 +637,7 @@ index b184f0b7..6bc5cbf9 100644
              selection_source: None,
              range_backgrounds: Vec::new(),
              reveal: None,
-@@ -407,6 +409,11 @@ impl Inline {
+@@ -453,6 +455,11 @@ impl Inline {
          self
      }
  
@@ -496,7 +649,7 @@ index b184f0b7..6bc5cbf9 100644
      pub(super) fn selection_source(
          mut self,
          state: Arc<Mutex<InlineState>>,
-@@ -1004,7 +1011,32 @@ impl Element for Inline {
+@@ -1058,7 +1065,32 @@ impl Element for Inline {
                  .text_view_state()
                  .map(|state| state.read(cx).text_view_style.selection())
                  .unwrap_or_else(|| crate::Theme::global(cx).tokens.colors.selection);
@@ -531,7 +684,7 @@ index b184f0b7..6bc5cbf9 100644
                  && let Some(text_view_state) = GlobalState::global(cx).text_view_state()
              {
 diff --git a/crates/base/src/text/inline_flow.rs b/crates/base/src/text/inline_flow.rs
-index 7e06a421..a52b18be 100644
+index e9145a3d..43c88663 100644
 --- a/crates/base/src/text/inline_flow.rs
 +++ b/crates/base/src/text/inline_flow.rs
 @@ -10,8 +10,9 @@ use gpui::{
@@ -546,12 +699,13 @@ index 7e06a421..a52b18be 100644
  };
  
  use crate::text::text_view::{LinkClickHandlerFn, handle_link_click};
-@@ -169,11 +170,34 @@ struct InlineFlowTypography {
+@@ -176,12 +177,35 @@ struct InlineFlowTypography {
  
  #[derive(Default)]
  struct InlineFlowLayout {
 +    lines: Vec<(Range<usize>, Pixels)>,
      fragments: Vec<PositionedFragment>,
+     empty_lines: Vec<(usize, Bounds<Pixels>)>,
      size: Size<Pixels>,
      wrap_width: Option<Pixels>,
  }
@@ -581,8 +735,8 @@ index 7e06a421..a52b18be 100644
  enum PositionedFragment {
      Object {
          item_ix: usize,
-@@ -464,7 +488,10 @@ impl Element for InlineFlow {
-             .map(|(ix, _)| ix);
+@@ -554,7 +578,10 @@ impl Element for InlineFlow {
+         };
  
          let mut text_fragment_count = 0;
 -        for (fragment_ix, fragment) in layout.fragments.iter().enumerate() {
@@ -593,7 +747,7 @@ index 7e06a421..a52b18be 100644
              match fragment {
                  PositionedFragment::Object {
                      item_ix,
-@@ -490,10 +517,7 @@ impl Element for InlineFlow {
+@@ -582,10 +609,7 @@ impl Element for InlineFlow {
                          accessibility_label.clone(),
                          (**object).clone(),
                          selected.clone(),
@@ -605,7 +759,7 @@ index 7e06a421..a52b18be 100644
                          Bounds::new(
                              point(bounds.left(), bounds.top() + selection_bounds.top()),
                              size(bounds.size.width, selection_bounds.size.height),
-@@ -502,7 +526,7 @@ impl Element for InlineFlow {
+@@ -594,7 +618,7 @@ impl Element for InlineFlow {
                      .link(link.clone(), self.link_click_handler.clone())
                      .into_any_element();
                      element.prepaint_as_root(
@@ -614,7 +768,7 @@ index 7e06a421..a52b18be 100644
                          size(
                              AvailableSpace::Definite(object_size.width),
                              AvailableSpace::Definite(object_size.height),
-@@ -548,7 +572,7 @@ impl Element for InlineFlow {
+@@ -644,7 +668,7 @@ impl Element for InlineFlow {
                      };
                      let background = code_background.map(|(background, color)| {
                          (
@@ -623,33 +777,38 @@ index 7e06a421..a52b18be 100644
                              color,
                          )
                      });
-@@ -559,6 +583,8 @@ impl Element for InlineFlow {
+@@ -655,6 +679,8 @@ impl Element for InlineFlow {
                      fragment_style.font_size = font_size.into();
                      fragment_style.line_height = fragment_size.height.into();
                      fragment_style.white_space = WhiteSpace::Nowrap;
 +                    // Alignment belongs to the whole line, never each fragment.
 +                    fragment_style.text_align = TextAlign::Left;
-                     let mut element = Inline::new(
+                     let element = Inline::new(
                          state,
                          links.clone(),
-@@ -579,11 +605,15 @@ impl Element for InlineFlow {
+@@ -674,7 +700,11 @@ impl Element for InlineFlow {
+                             .filter(|_| reveal_fragment == Some(fragment_ix))
                              .map(|reveal| reveal.clamp(source_range.start, source_range.end)),
                      )
-                     .text_style(fragment_style.clone())
+-                    .text_style(fragment_style.clone());
++                    .text_style(fragment_style.clone())
 +                    .selection_paint_bounds(Bounds::new(
 +                        flow_origin + selection_bounds.origin,
 +                        selection_bounds.size,
-+                    ))
-                     .selection_bounds(Bounds::new(
-                         point(bounds.left(), bounds.top() + selection_bounds.top()),
-                         size(bounds.size.width, selection_bounds.size.height),
-                     ))
--                    .paint_origin(bounds.origin + origin + point(padding, Pixels::ZERO))
-+                    .paint_origin(flow_origin + origin + point(padding, Pixels::ZERO))
-                     .into_any_element();
++                    ));
+                     let element = element.editor_piece(
+                         editor
+                             .as_ref()
+@@ -685,7 +715,7 @@ impl Element for InlineFlow {
+                             point(bounds.left(), bounds.top() + selection_bounds.top()),
+                             size(bounds.size.width, selection_bounds.size.height),
+                         ))
+-                        .paint_origin(bounds.origin + origin + point(padding, Pixels::ZERO))
++                        .paint_origin(flow_origin + origin + point(padding, Pixels::ZERO))
+                         .into_any_element();
                      // The `Inline` is its own layout root, with no box around
                      // it: its text measures with the window's text style, so
-@@ -593,7 +623,7 @@ impl Element for InlineFlow {
+@@ -695,7 +725,7 @@ impl Element for InlineFlow {
                              Some(fragment_style.subtract(&Default::default())),
                              |window| {
                                  element.prepaint_as_root(
@@ -658,7 +817,7 @@ index 7e06a421..a52b18be 100644
                                      size(
                                          AvailableSpace::Definite(
                                              fragment_size.width - padding * 2.,
-@@ -632,7 +662,7 @@ impl Element for InlineFlow {
+@@ -740,7 +770,7 @@ impl Element for InlineFlow {
                          self.link_click_handler.clone(),
                      );
                      element.prepaint_as_root(
@@ -667,23 +826,23 @@ index 7e06a421..a52b18be 100644
                          size(
                              AvailableSpace::Definite(fragment_size.width),
                              AvailableSpace::Definite(fragment_size.height),
-@@ -886,6 +916,7 @@ fn layout_measured_flow(
+@@ -1006,6 +1036,7 @@ fn layout_measured_flow(
      let line_ranges = line_ranges(items, image_sizes, &objects, text_style, wrap_width, window);
      let font_size = text_style.font_size.to_pixels(rem_size);
      let mut fragments = Vec::new();
 +    let mut lines = Vec::new();
+     let mut empty_lines = Vec::new();
      let mut max_width = Pixels::ZERO;
      let mut y = Pixels::ZERO;
- 
-@@ -1031,6 +1062,7 @@ fn layout_measured_flow(
+@@ -1152,6 +1183,7 @@ fn layout_measured_flow(
              item_start = item_end;
          }
  
 +        let first_fragment = fragments.len();
-         let mut x = Pixels::ZERO;
-         for mut fragment in line_fragments {
-             // Give a text run's glyph box equal leading on both sides, as
-@@ -1094,11 +1126,13 @@ fn layout_measured_flow(
+         if line_range.is_empty() {
+             empty_lines.push((
+                 line_range.start,
+@@ -1224,11 +1256,13 @@ fn layout_measured_flow(
              fragments.push(positioned);
          }
  
@@ -695,9 +854,9 @@ index 7e06a421..a52b18be 100644
      InlineFlowLayout {
 +        lines,
          fragments,
+         empty_lines,
          size: size(max_width, y),
-         wrap_width,
-@@ -1144,6 +1178,104 @@ fn code_background(
+@@ -1275,6 +1309,104 @@ fn code_background(
      })
  }
  
@@ -802,15 +961,15 @@ index 7e06a421..a52b18be 100644
  fn line_ranges(
      items: &[MeasureItem],
      image_sizes: &[Option<Size<Pixels>>],
-@@ -1178,6 +1310,7 @@ fn line_ranges(
+@@ -1309,6 +1441,7 @@ fn line_ranges(
          .text_system()
          .line_wrapper(text_style.font(), font_size);
      let mut ranges = Vec::new();
 +    let breaks = std::cell::OnceCell::new();
  
      for hard_line in hard_lines {
-         let mut item_start = 0;
-@@ -1224,6 +1357,20 @@ fn line_ranges(
+         if hard_line.is_empty() {
+@@ -1359,6 +1492,20 @@ fn line_ranges(
              item_start = item_end;
          }
  
@@ -831,7 +990,7 @@ index 7e06a421..a52b18be 100644
          // The wrapper sums per-character widths, which can be narrower than the
          // shaped run (CoreText sets an isolated full-width `，` at half width).
          // Check each line against the shaped spans and re-wrap it tighter when
-@@ -1259,6 +1406,14 @@ fn line_ranges(
+@@ -1394,6 +1541,14 @@ fn line_ranges(
              if end < hard_line.end && spans_width(&spans, start..hard_line.end) <= wrap_width {
                  end = hard_line.end;
              }
@@ -846,7 +1005,7 @@ index 7e06a421..a52b18be 100644
              ranges.push(start..end);
              start = end;
          }
-@@ -1743,6 +1898,53 @@ mod tests {
+@@ -1878,6 +2033,53 @@ mod tests {
          }
      }
  
@@ -900,7 +1059,7 @@ index 7e06a421..a52b18be 100644
      #[test]
      fn atomic_objects_wrap_and_share_a_baseline_at_multiple_font_sizes() {
          use super::super::inline::test_draw::in_prepaint;
-@@ -2145,4 +2347,54 @@ mod tests {
+@@ -2280,4 +2482,54 @@ mod tests {
              });
          }
      }
@@ -956,10 +1115,10 @@ index 7e06a421..a52b18be 100644
 +    }
  }
 diff --git a/crates/base/src/text/node.rs b/crates/base/src/text/node.rs
-index 11147620..83471bed 100644
+index 417c6f36..d966842f 100644
 --- a/crates/base/src/text/node.rs
 +++ b/crates/base/src/text/node.rs
-@@ -2197,35 +2197,63 @@ impl CodeBlock {
+@@ -2322,35 +2322,63 @@ impl CodeBlock {
      ) -> AnyElement {
          let style = &node_cx.style;
          let leaf_key = self.span.map(|span| TextLeafKey::block(span.start));
@@ -1043,7 +1202,7 @@ index 11147620..83471bed 100644
              .bg(style.code_background())
              .border_1()
              .border_color(style.border())
-@@ -2234,6 +2262,7 @@ impl CodeBlock {
+@@ -2359,6 +2387,7 @@ impl CodeBlock {
              .line_height(relative(1.6))
              .relative()
              .refine_style(&style.code_block())
@@ -1051,7 +1210,7 @@ index 11147620..83471bed 100644
              .child(
                  Inline::new(
                      self.state.clone(),
-@@ -2254,20 +2283,10 @@ impl CodeBlock {
+@@ -2379,20 +2408,10 @@ impl CodeBlock {
                  .range_backgrounds(node_cx.range_backgrounds(leaf_key).to_vec())
                  .reveal(node_cx.reveal_at(leaf_key, 0, self.code().len())),
              );
@@ -1073,7 +1232,7 @@ index 11147620..83471bed 100644
              let scroll_handle = window
                  .use_keyed_state(
                      block_element_id("codeblock-scroll", self.span, options.ix),
-@@ -2299,11 +2318,7 @@ impl CodeBlock {
+@@ -2424,11 +2443,7 @@ impl CodeBlock {
                  .children(lang_label)
                  .into_any_element()
          } else {
@@ -1086,7 +1245,7 @@ index 11147620..83471bed 100644
          };
  
          gapped(
-@@ -2344,10 +2359,10 @@ pub(crate) struct NodeContext {
+@@ -2469,10 +2484,10 @@ pub(crate) struct NodeContext {
  
  impl NodeContext {
      fn image_source(&self, image: &ImageNode) -> ImageSource {
@@ -1101,7 +1260,7 @@ index 11147620..83471bed 100644
      }
  
      pub(super) fn add_ref(&mut self, identifier: SharedString, link: LinkMark) {
-@@ -2466,12 +2481,7 @@ impl Paragraph {
+@@ -2591,13 +2606,7 @@ impl Paragraph {
          let backgrounds = node_cx.range_backgrounds(fade_key);
  
          if self.should_render_inline_flow() {
@@ -1110,12 +1269,13 @@ index 11147620..83471bed 100644
 -                self.inline_flow_items(fade_key, fades, backgrounds, node_cx, cx),
 -                node_cx.link_click_handler.clone(),
 -            )
+-            .editor_key(self.leaf_key())
 -            .into_any_element();
 +            return self.render_flow(fade_key, node_cx, cx);
          }
  
          let has_image = children.iter().any(|child| child.image.is_some());
-@@ -2650,6 +2660,27 @@ impl Paragraph {
+@@ -2778,6 +2787,28 @@ impl Paragraph {
              .into_any_element()
      }
  
@@ -1137,13 +1297,14 @@ index 11147620..83471bed 100644
 +            ),
 +            node_cx.link_click_handler.clone(),
 +        )
++        .editor_key(self.leaf_key())
 +        .into_any_element()
 +    }
 +
-     fn should_render_inline_flow(&self) -> bool {
-         let has_image = self.children.iter().any(|child| child.image.is_some());
-         let has_text = self.children.iter().any(|child| !child.text.is_empty());
-@@ -2940,17 +2971,25 @@ struct TableColumn {
+     /// The key an external editor gave this leaf, if any.
+     fn leaf_key(&self) -> Option<u64> {
+         self.state.lock().ok().and_then(|state| state.editor_key)
+@@ -3079,17 +3110,25 @@ struct TableColumn {
  }
  
  /// Horizontal padding of a table cell: `px_3` unless `style.table_cell`
@@ -1175,7 +1336,7 @@ index 11147620..83471bed 100644
  const CELL_MIN_PX: f32 = 48.0;
  const CELL_BORDER_PX: f32 = 1.0; // border_r_1 drawn by every column but the last
  
-@@ -3566,7 +3605,7 @@ impl BlockNode {
+@@ -3705,7 +3744,7 @@ impl BlockNode {
          let rem_size = window.rem_size();
          let wrap_min_px = f32::from(rems(4.).to_pixels(rem_size));
          // Widths were measured with the default cell padding.
@@ -1184,7 +1345,7 @@ index 11147620..83471bed 100644
          // Lengths are rounded to device pixels for layout. Round the content
          // widths up, or a column can lose the fraction of a pixel that keeps
          // its text on one line.
-@@ -3656,6 +3695,15 @@ impl BlockNode {
+@@ -3795,6 +3834,15 @@ impl BlockNode {
          div()
              .pb(block_gap(options, style))
              .w_full()
@@ -1200,7 +1361,7 @@ index 11147620..83471bed 100644
              .child(body)
              // Custom actions row (e.g. copy / download) rendered below the
              // table. The hook's element spans full width; alignment is up to
-@@ -3757,7 +3805,7 @@ impl BlockNode {
+@@ -3896,7 +3944,7 @@ impl BlockNode {
                          .span
                          .map(|span| TextLeafKey::table_cell(span.start, cell_ordinal));
                      cell_ordinal += 1;
@@ -1260,10 +1421,10 @@ index 81d8a9aa..7fc11403 100644
              stream_fade,
              range_highlights: self.range_highlights.clone(),
 diff --git a/crates/base/src/text/text_view.rs b/crates/base/src/text/text_view.rs
-index f5a461e3..fdc946f6 100644
+index 9261afbb..7f01f86f 100644
 --- a/crates/base/src/text/text_view.rs
 +++ b/crates/base/src/text/text_view.rs
-@@ -94,7 +94,7 @@ impl TextViewDefaults {
+@@ -104,7 +104,7 @@ impl TextViewDefaults {
  pub(crate) type TableActionsFn =
      dyn Fn(&TableData, &mut Window, &mut App) -> AnyElement + Send + Sync;
  
@@ -1272,7 +1433,7 @@ index f5a461e3..fdc946f6 100644
  
  pub(crate) type LinkClickHandlerFn =
      dyn Fn(&SharedString, &ClickEvent, &mut Window, &mut App) + Send + Sync;
-@@ -266,7 +266,7 @@ impl TextView {
+@@ -276,7 +276,7 @@ impl TextView {
      where
          F: Fn(&gpui::SharedUri) -> gpui::ImageSource + Send + Sync + 'static,
      {
@@ -1281,7 +1442,7 @@ index f5a461e3..fdc946f6 100644
          self
      }
  
-@@ -2761,23 +2761,28 @@ mod tests {
+@@ -2781,23 +2781,28 @@ mod tests {
              text_view: Entity<TextViewState>,
              width: Pixels,
              style: TextViewStyle,
@@ -1314,7 +1475,7 @@ index f5a461e3..fdc946f6 100644
              let mut app = TestApp::with_text_system(Arc::new(WideMonoTextSystem));
              app.update(crate::init);
              let cell = style.table_cell().clone().bg(gpui::rgb(CELL_BACKGROUND));
-@@ -2785,6 +2790,7 @@ mod tests {
+@@ -2805,6 +2810,7 @@ mod tests {
              let mut window = app.open_window(|_, cx| TableRoot {
                  text_view: cx.new(|cx| TextViewState::markdown(&source, cx)),
                  width: px(width),
@@ -1322,7 +1483,7 @@ index f5a461e3..fdc946f6 100644
                  style,
              });
              window.draw();
-@@ -2817,24 +2823,41 @@ mod tests {
+@@ -2837,24 +2843,41 @@ mod tests {
          };
  
          for (layout, style) in [("wrap", TextViewStyle::default()), ("scroll", scroll())] {
@@ -1518,7 +1679,7 @@ index 00000000..958a3a16
 +    assert_ne!(layout(true), layout(false));
 +}
 diff --git a/crates/component/src/diff/mod.rs b/crates/component/src/diff/mod.rs
-index 09ae6699..78302cbd 100644
+index 036d11b8..c29a394f 100644
 --- a/crates/component/src/diff/mod.rs
 +++ b/crates/component/src/diff/mod.rs
 @@ -204,6 +204,7 @@ pub struct Diff {
@@ -1584,16 +1745,16 @@ index 09ae6699..78302cbd 100644
          syntax_highlight: props.syntax_highlight,
          header_visible: props.header_visible,
          hover_highlight: props.hover_highlight,
-@@ -692,7 +706,7 @@ fn render_diff(
+@@ -697,7 +711,7 @@ fn render_diff(
                                  px(0.)
                              } else {
                                  let painted = state.geometry().borrow().painted_width();
 -                                code_width(painted, gutter_width, rem, mode)
 +                                code_width(painted, gutter_width, rem, mode, single_line_number)
                              };
-                             if state.record_paint(bounds.size, painted) {
+                             if state.record_paint(bounds.size, painted) || rehinted {
                                  cx.notify();
-@@ -746,6 +760,7 @@ struct CodePresentation {
+@@ -751,6 +765,7 @@ struct CodePresentation {
      rem: Pixels,
      expansion_lines: usize,
      line_number: bool,
@@ -1601,7 +1762,7 @@ index 09ae6699..78302cbd 100644
      syntax_highlight: bool,
      header_visible: bool,
      hover_highlight: DiffHoverHighlight,
-@@ -783,23 +798,55 @@ impl CodePresentation {
+@@ -788,23 +803,55 @@ impl CodePresentation {
      }
  }
  
@@ -1659,7 +1820,7 @@ index 09ae6699..78302cbd 100644
      window: &mut Window,
      cx: &App,
  ) -> Pixels {
-@@ -849,7 +896,13 @@ fn measure_code_width(
+@@ -854,7 +901,13 @@ fn measure_code_width(
                  .width
          })
          .fold(px(0.), Pixels::max);
@@ -1674,7 +1835,7 @@ index 09ae6699..78302cbd 100644
  }
  
  fn render_row(
-@@ -1630,6 +1683,7 @@ fn code_line(
+@@ -1635,6 +1688,7 @@ fn code_line(
                  code.geometry.clone(),
              )
          }));
@@ -1682,7 +1843,7 @@ index 09ae6699..78302cbd 100644
      let gutters_width = if code.line_number {
          code.gutter_width * gutters.iter().flatten().count() as f32
      } else {
-@@ -1857,3 +1911,6 @@ mod review_tests;
+@@ -1864,3 +1918,6 @@ mod scroll_tests;
  mod selection_tests;
  #[cfg(test)]
  mod tests;
@@ -1690,7 +1851,7 @@ index 09ae6699..78302cbd 100644
 +#[cfg(test)]
 +mod gutter_tests;
 diff --git a/crates/component/src/diff/state.rs b/crates/component/src/diff/state.rs
-index 7a8ddf51..594120fb 100644
+index ba0f1f7d..09ad817c 100644
 --- a/crates/component/src/diff/state.rs
 +++ b/crates/component/src/diff/state.rs
 @@ -100,6 +100,7 @@ pub(crate) struct LayoutKey {
@@ -1717,11 +1878,172 @@ index 7a8ddf51..594120fb 100644
              soft_wrap,
          }
      }
+diff --git a/crates/component/src/input/editor.rs b/crates/component/src/input/editor.rs
+index f69d6dee..eddfe592 100644
+--- a/crates/component/src/input/editor.rs
++++ b/crates/component/src/input/editor.rs
+@@ -1,8 +1,8 @@
+ use std::rc::Rc;
+ 
+ use gpui::{
+-    App, DefiniteLength, Entity, IntoElement, RenderOnce, SharedString, StyleRefinement, Styled,
+-    Window, prelude::FluentBuilder as _, relative,
++    App, DefiniteLength, Entity, IntoElement, Pixels, RenderOnce, SharedString, StyleRefinement,
++    Styled, Window, prelude::FluentBuilder as _, relative,
+ };
+ 
+ use super::{EditorState, Input};
+@@ -20,6 +20,7 @@ pub struct Editor {
+     style: StyleRefinement,
+     size: Size,
+     height: Option<DefiniteLength>,
++    content_padding: Option<gpui::Edges<Pixels>>,
+     appearance: bool,
+     bordered: bool,
+     disabled: bool,
+@@ -43,6 +44,7 @@ impl Editor {
+             style: StyleRefinement::default(),
+             size: Size::default(),
+             height: None,
++            content_padding: None,
+             appearance: true,
+             bordered: true,
+             disabled: false,
+@@ -60,6 +62,13 @@ impl Editor {
+         self
+     }
+ 
++    /// Reserves space inside the text viewport while keeping the scrollbar at the frame edge.
++    /// When unset, the component size supplies the ordinary content inset.
++    pub fn content_padding(mut self, padding: gpui::Edges<Pixels>) -> Self {
++        self.content_padding = Some(padding);
++        self
++    }
++
+     pub fn appearance(mut self, appearance: bool) -> Self {
+         self.appearance = appearance;
+         self
+@@ -156,6 +165,9 @@ impl RenderOnce for Editor {
+             .text_size(cx.theme().mono_font_size)
+             .line_height(relative(EDITOR_LINE_HEIGHT))
+             .with_size(self.size)
++            .when_some(self.content_padding, |this, padding| {
++                this.content_padding(padding)
++            })
+             .appearance(self.appearance)
+             .bordered(self.bordered)
+             .focus_bordered(false)
+diff --git a/crates/component/src/input/input.rs b/crates/component/src/input/input.rs
+index 3d014b1d..ea4740a6 100644
+--- a/crates/component/src/input/input.rs
++++ b/crates/component/src/input/input.rs
+@@ -3,9 +3,9 @@ use std::rc::Rc;
+ use gpui::prelude::FluentBuilder as _;
+ use gpui::{
+     AccessibleAction, AnyElement, App, DefiniteLength, Edges, ElementId, Entity, Hsla,
+-    InteractiveElement as _, IntoElement, MouseButton, ParentElement as _, Rems, RenderOnce, Role,
+-    SharedString, StatefulInteractiveElement as _, StyleRefinement, Styled, TextAlign, TouchPhase,
+-    Window, div, px, relative,
++    InteractiveElement as _, IntoElement, MouseButton, ParentElement as _, Pixels, Rems,
++    RenderOnce, Role, SharedString, StatefulInteractiveElement as _, StyleRefinement, Styled,
++    TextAlign, TouchPhase, Window, div, px, relative,
+ };
+ 
+ use crate::button::{Button, ButtonRounded, ButtonVariants as _};
+@@ -119,6 +119,7 @@ pub struct Input {
+     prefix: Option<AnyElement>,
+     suffix: Option<AnyElement>,
+     height: Option<DefiniteLength>,
++    content_padding: Option<gpui::Edges<Pixels>>,
+     appearance: bool,
+     cleanable: bool,
+     mask_toggle: bool,
+@@ -222,6 +223,11 @@ impl Input {
+         Self::with_state(state.into())
+     }
+ 
++    pub(crate) fn content_padding(mut self, padding: gpui::Edges<Pixels>) -> Self {
++        self.content_padding = Some(padding);
++        self
++    }
++
+     fn with_state(state: TextInputState) -> Self {
+         Self {
+             id: None,
+@@ -231,6 +237,7 @@ impl Input {
+             prefix: None,
+             suffix: None,
+             height: None,
++            content_padding: None,
+             appearance: true,
+             cleanable: false,
+             mask_toggle: false,
+@@ -595,7 +602,7 @@ impl RenderOnce for Input {
+         );
+         state.set_editor_paddings(
+             if state.presentation(cx).is_multi_line() {
+-                Edges {
++                self.content_padding.unwrap_or_else(|| Edges {
+                     top: self.size.input_py(),
+                     right: self.size.input_px(),
+                     bottom: self.size.input_py(),
+@@ -604,7 +611,7 @@ impl RenderOnce for Input {
+                     } else {
+                         self.size.input_px()
+                     },
+-                }
++                })
+             } else {
+                 Edges::default()
+             },
+diff --git a/crates/component/src/input/textarea.rs b/crates/component/src/input/textarea.rs
+index c81ea809..ddd859f9 100644
+--- a/crates/component/src/input/textarea.rs
++++ b/crates/component/src/input/textarea.rs
+@@ -19,6 +19,7 @@ pub struct Textarea {
+     style: StyleRefinement,
+     size: Size,
+     height: Option<DefiniteLength>,
++    content_padding: Option<gpui::Edges<gpui::Pixels>>,
+     appearance: bool,
+     bordered: bool,
+     disabled: bool,
+@@ -73,6 +74,7 @@ impl Textarea {
+             style: StyleRefinement::default(),
+             size: Size::default(),
+             height: None,
++            content_padding: None,
+             appearance: true,
+             bordered: true,
+             disabled: false,
+@@ -94,6 +96,12 @@ impl Textarea {
+         self
+     }
+ 
++    /// Overrides the inner text inset without moving the frame or its scrollbar.
++    pub fn content_padding(mut self, padding: gpui::Edges<gpui::Pixels>) -> Self {
++        self.content_padding = Some(padding);
++        self
++    }
++
+     pub fn appearance(mut self, appearance: bool) -> Self {
+         self.appearance = appearance;
+         self
+@@ -196,6 +204,9 @@ impl Textarea {
+             .when_some(self.token_hover_listener, |this, listener| {
+                 this.on_token_hover(move |event, window, cx| listener(event, window, cx))
+             })
++            .when_some(self.content_padding, |this, padding| {
++                this.content_padding(padding)
++            })
+             .appearance(self.appearance)
+             .bordered(self.bordered)
+             .disabled(self.disabled)
 diff --git a/crates/component/src/message_scroller.rs b/crates/component/src/message_scroller.rs
-index b7307773..6516c667 100644
+index 31ed8673..555f0e6b 100644
 --- a/crates/component/src/message_scroller.rs
 +++ b/crates/component/src/message_scroller.rs
-@@ -149,6 +149,15 @@ impl MessageScrollerState {
+@@ -157,6 +157,15 @@ impl MessageScrollerState {
          true
      }
  
@@ -1737,8 +2059,8 @@ index b7307773..6516c667 100644
      /// Resume tail following and scroll to the latest row.
      pub fn scroll_to_end(&mut self, cx: &mut Context<Self>) {
          self.list_state.set_follow_mode(FollowMode::Tail);
-@@ -483,6 +492,27 @@ mod tests {
-         });
+@@ -553,6 +562,27 @@ mod tests {
+         );
      }
  
 +    #[gpui::test]
@@ -1766,7 +2088,7 @@ index b7307773..6516c667 100644
      fn test_message_scroller_builder(cx: &mut gpui::TestAppContext) {
          let state = cx.new(|cx| MessageScrollerState::new(0, cx));
 diff --git a/website/base/text-view.md b/website/base/text-view.md
-index e761b4b6..f1b510e8 100644
+index 9718375b..5d747b8f 100644
 --- a/website/base/text-view.md
 +++ b/website/base/text-view.md
 @@ -109,7 +109,7 @@ and Component turns it on.
@@ -1791,7 +2113,7 @@ index 749aad5c..a6f1516f 100644
  
  ### `MessageScroller`
 diff --git a/website/zh-CN/base/text-view.md b/website/zh-CN/base/text-view.md
-index 4fda2653..5e2ac6b7 100644
+index c6394e3c..6cfa4f6a 100644
 --- a/website/zh-CN/base/text-view.md
 +++ b/website/zh-CN/base/text-view.md
 @@ -90,7 +90,7 @@ TextViewDefaults::new()

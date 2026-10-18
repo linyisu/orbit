@@ -44,7 +44,7 @@ impl Appearance {
         gpui_shell::policy::set_default(
             gpui_shell::policy::Policy::new().with_host_module(module)?,
         );
-        let runtime = gpui_component_shell::new_isolated_runtime()?;
+        let runtime = gpui_shell::components::new_isolated_runtime()?;
         let view = runtime.try_load(path, window, cx)?;
         let watcher = if cfg!(debug_assertions) {
             Some(runtime.watch(&view, window, cx)?)

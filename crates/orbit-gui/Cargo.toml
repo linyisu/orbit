@@ -42,14 +42,13 @@ pulldown-cmark.workspace = true
 tempfile.workspace = true
 tokio.workspace = true
 url.workspace = true
-gpui-kit = { git = "https://github.com/linyisu/gpui-component", rev = "889c130bedf1acc254f894564e65355b941a84eb", features = [
+gpui-kit = { git = "https://github.com/linyisu/gpui-kit", rev = "9c39eb67c57677a9f495132415af30934a2176da", features = [
     "tree-sitter-bash", "tree-sitter-c", "tree-sitter-cpp", "tree-sitter-css",
     "tree-sitter-go", "tree-sitter-html", "tree-sitter-javascript", "tree-sitter-lua",
     "tree-sitter-python", "tree-sitter-rust", "tree-sitter-toml",
     "tree-sitter-tsx", "tree-sitter-typescript", "tree-sitter-yaml",
 ] }
-gpui-shell = { git = "https://github.com/linyisu/gpui-component", rev = "889c130bedf1acc254f894564e65355b941a84eb" }
-gpui-component-shell = { git = "https://github.com/linyisu/gpui-component", rev = "889c130bedf1acc254f894564e65355b941a84eb" }
+gpui-shell = { git = "https://github.com/linyisu/gpui-kit", rev = "9c39eb67c57677a9f495132415af30934a2176da", default-features = false, features = ["quickjs", "components"] }
 
 [build-dependencies]
 orbit-build.workspace = true

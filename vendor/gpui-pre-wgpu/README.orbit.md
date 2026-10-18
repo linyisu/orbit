@@ -1,7 +1,7 @@
 # Orbit text fallback patch
 
-Source: crates.io `gpui-pre-wgpu` 0.3.8, based on
-[Zed `279fe070`](https://github.com/zed-industries/zed/tree/279fe070bb389b79652e52065b2f001edcc0b11b/crates/gpui_wgpu).
+Source: crates.io `gpui-pre-wgpu` 0.3.9, based on
+[Zed `93d74566`](https://github.com/zed-industries/zed/tree/93d745668805029476e6d7fbb19652116fed51de/crates/gpui_wgpu).
 License: [Apache-2.0](LICENSE-APACHE).
 
 `load_family` keeps fonts without ASCII `m`, preserving emoji and symbol
