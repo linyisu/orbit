@@ -1,11 +1,3 @@
-//! Unix socket transport; filesystem permissions protect the local endpoint.
-use std::io;
+//! Service aliases for the shared native local transport.
 
-pub(super) use tokio::net::{UnixListener as Listener, UnixStream as Stream};
-
-pub(super) async fn accept(listener: &mut Listener) -> io::Result<Stream> {
-    listener
-        .accept()
-        .await
-        .map(|(stream, _)| stream)
-}
+pub(super) use orbit_runtime::ipc::{Listener, Stream, accept};

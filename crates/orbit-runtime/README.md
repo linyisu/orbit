@@ -8,6 +8,8 @@
 - [filesystem/](src/filesystem/)：文件描述符访问、跨平台文件版本和私有临时目录。
 - [policy.rs](src/policy.rs)、[capability.rs](src/capability.rs)：文件访问策略与外部授权。
 - [git/](src/git/)、[verification.rs](src/verification.rs)：Git 分类与执行证据。
+- [ipc/](src/ipc/)：服务与 SSH 提示共用的本机字节流；Windows 使用排他的命名管道、
+  当前用户 DACL 与对端身份校验，拒绝远程连接，客户端不授予服务器模拟身份权限。
 
 Git 检查的有界输出、绝对期限和取消由 [git/process.rs](src/git/process.rs) 监督，
 使用与普通命令相同的原生进程所有权；工具层保留 Git 参数、审批和结果解释。

@@ -31,7 +31,7 @@ struct TuiArgs {
 
 fn main() -> Result<()> {
     orbit_client::register_server_bundle(include_bytes!(env!("ORBIT_EMBEDDED_SERVER")))?;
-    if std::env::args().nth(1).as_deref() == Some("--internal-ssh-askpass") {
+    if orbit_client::interaction::is_askpass() {
         orbit_client::interaction::askpass()?;
         return Ok(());
     }

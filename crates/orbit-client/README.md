@@ -6,6 +6,9 @@
 
 SSH 复用系统 OpenSSH 配置与认证；WSL 需要调用环境提供 `wsl.exe`。客户端将同架构静态服务部署到目标缓存，校验后复用，目标需提供工具执行依赖。
 
+Windows SSH 使用本机 OpenSSH，密码提示经私有命名管道传回客户端，不依赖 shell 脚本或
+WSL。Windows 不使用 OpenSSH 不支持的 ControlMaster；Unix 保留已有的连接复用与期限。
+
 `--config` 与 `--auth-dir` 属于本机，`--database` 属于目标端。配置及引用的凭据通过连接传入目标的私有临时目录，远端 OAuth 刷新尚不回写本机。
 
 断开客户端不会取消服务中的任务。重连按会话 ID 和事件游标恢复，未确认的副作用请求不自动重放。

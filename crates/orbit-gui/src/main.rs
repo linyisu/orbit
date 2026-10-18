@@ -25,7 +25,7 @@ use gpui_kit::*;
 use std::sync::Arc;
 
 fn main() -> anyhow::Result<()> {
-    if std::env::args().any(|arg| arg == "--internal-ssh-askpass") {
+    if orbit_client::interaction::is_askpass() {
         return orbit_client::interaction::askpass();
     }
     orbit_client::register_server_bundle(include_bytes!(env!("ORBIT_EMBEDDED_SERVER")))?;

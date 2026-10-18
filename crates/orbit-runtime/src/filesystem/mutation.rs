@@ -189,7 +189,7 @@ mod tests {
         sync_directory(&parent).unwrap();
         let replacement = File::open(directory.path().join("target")).unwrap();
         assert_eq!(
-            native::permissions(&original).unwrap(),
+            before.permissions,
             native::permissions(&replacement).unwrap()
         );
         assert_eq!(

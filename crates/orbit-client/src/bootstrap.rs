@@ -394,6 +394,7 @@ mod tests {
         ));
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn incompatible_binary_fails_preflight_before_the_protocol_handshake() {
         use std::os::unix::fs::PermissionsExt;
