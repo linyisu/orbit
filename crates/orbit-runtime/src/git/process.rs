@@ -21,6 +21,56 @@ pub enum InspectionOutput {
     Truncated(Vec<u8>),
 }
 
+/// Pin a Unix inspection child's working directory to an already authorized directory.
+/// The retained descriptor is used only in the child; the caller's directory is never changed.
+#[cfg(unix)]
+pub fn set_directory(command: &mut Command, directory: &std::fs::File) -> io::Result<()> {
+    use std::os::{fd::AsRawFd, unix::process::CommandExt};
+
+    let directory = directory.try_clone()?;
+    // SAFETY: fchdir is async-signal-safe and uses a retained descriptor without allocation.
+    unsafe {
+        command.pre_exec(move || {
+            if libc::fchdir(directory.as_raw_fd()) == 0 {
+                Ok(())
+            } else {
+                Err(io::Error::last_os_error())
+            }
+        });
+    }
+    Ok(())
+}
+
+/// Set a Windows inspection directory using a retained, non-delete-shared directory handle.
+/// The caller must retain that authorized handle until the inspection finishes.
+#[cfg(windows)]
+pub fn set_directory(command: &mut Command, directory: &std::fs::File) -> io::Result<()> {
+    use std::os::windows::{ffi::OsStringExt, io::AsRawHandle};
+    use windows_sys::Win32::Storage::FileSystem::GetFinalPathNameByHandleW;
+
+    // SAFETY: the directory handle is live; a null buffer queries the required UTF-16 capacity.
+    let capacity =
+        unsafe { GetFinalPathNameByHandleW(directory.as_raw_handle(), std::ptr::null_mut(), 0, 0) };
+    if capacity == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let mut path = vec![0u16; capacity as usize];
+    // SAFETY: path has capacity writable UTF-16 units and the directory remains pinned.
+    let length = unsafe {
+        GetFinalPathNameByHandleW(directory.as_raw_handle(), path.as_mut_ptr(), capacity, 0)
+    };
+    if length == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    if length >= capacity {
+        return Err(io::Error::other(
+            "inspection directory changed during lookup",
+        ));
+    }
+    command.current_dir(std::ffi::OsString::from_wide(&path[..length as usize]));
+    Ok(())
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum InspectionError {
     #[error("Git inspection cancelled")]
@@ -144,6 +194,10 @@ mod tests {
             println!("inspection complete");
             return;
         }
+        if role == "directory" {
+            println!("{}", std::fs::read_to_string("marker").unwrap());
+            return;
+        }
         std::thread::sleep(Duration::from_secs(30));
     }
 
@@ -153,6 +207,46 @@ mod tests {
             .args(["--ignored", "--exact", FIXTURE, "--nocapture"])
             .env(ROLE, role);
         command
+    }
+
+    #[test]
+    fn inspection_uses_the_retained_directory_without_changing_the_parent() {
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("repository");
+        std::fs::create_dir(&path).unwrap();
+        std::fs::write(path.join("marker"), "retained repository").unwrap();
+        let workspace = crate::filesystem::Workspace::new(&path).unwrap();
+        let directory = workspace
+            .open_directory(std::path::Path::new(""))
+            .unwrap();
+        let parent_directory = std::env::current_dir().unwrap();
+        let mut command = command("directory");
+        set_directory(&mut command, &directory).unwrap();
+        #[cfg(unix)]
+        {
+            std::fs::rename(&path, temporary.path().join("moved")).unwrap();
+            std::fs::create_dir(&path).unwrap();
+            std::fs::write(path.join("marker"), "replaced repository").unwrap();
+        }
+        #[cfg(windows)]
+        assert!(std::fs::rename(&path, temporary.path().join("moved")).is_err());
+        let result = inspect(
+            command,
+            CancellationToken::new(),
+            Instant::now() + Duration::from_secs(10),
+            OutputLimit::Complete(4_096),
+        )
+        .unwrap();
+        let InspectionOutput::Complete { stdout, status } = result else {
+            panic!("directory fixture output must be complete");
+        };
+        assert!(status.success());
+        assert!(
+            String::from_utf8(stdout)
+                .unwrap()
+                .contains("retained repository")
+        );
+        assert_eq!(std::env::current_dir().unwrap(), parent_directory);
     }
 
     #[test]

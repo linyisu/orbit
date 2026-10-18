@@ -5,8 +5,8 @@
 use std::{
     fs::{File, Metadata},
     io::{self, Read, Write},
-    os::{fd::AsRawFd, unix::fs::MetadataExt},
-    path::{Component, Path, PathBuf},
+    os::unix::fs::MetadataExt,
+    path::{Component, Path},
     sync::atomic::{AtomicU64, Ordering},
     time::Instant,
 };
@@ -349,20 +349,16 @@ impl<'a> IndexContext<'a> {
         limit: usize,
     ) -> Result<Vec<u8>, ToolError> {
         self.check_admin()?;
-        let mut pinned = vec![
-            format!("--git-dir={}", fd_path(&self.admin).display()),
-            format!("--work-tree={}", fd_path(&self.root).display()),
-        ];
-        pinned.extend(args);
         git_with_objects(
             self.workspace.root(),
-            pinned,
+            args,
             self.cancellation,
             limit,
             false,
             allow_one,
             index,
             objects,
+            Some(&self.admin),
             self.deadline,
         )
     }
@@ -798,6 +794,7 @@ fn raw_patch(
         true,
         None,
         None,
+        None,
         deadline,
     )?;
     let patch =
@@ -887,14 +884,6 @@ fn open_directory_absolute(path: &Path) -> Result<File, ToolError> {
         }
     }
     Ok(directory)
-}
-
-fn fd_path(file: &File) -> PathBuf {
-    PathBuf::from(format!(
-        "/proc/{}/fd/{}",
-        std::process::id(),
-        file.as_raw_fd()
-    ))
 }
 
 fn path_text(path: &Path) -> Result<String, ToolError> {

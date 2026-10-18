@@ -803,6 +803,7 @@ fn git_with_index(
         allows_difference_status,
         index,
         None,
+        None,
         deadline,
     )
 }
@@ -820,9 +821,10 @@ fn git_with_objects(
     allows_difference_status: bool,
     index: Option<&Path>,
     objects: Option<&Path>,
+    metadata: Option<&std::fs::File>,
     deadline: Instant,
 ) -> Result<Vec<u8>, ToolError> {
-    let keys = run_git(
+    let keys = run_git_index(
         root,
         vec![
             "config".into(),
@@ -840,6 +842,9 @@ fn git_with_objects(
             allows_difference_status: true,
             deadline,
         },
+        None,
+        None,
+        metadata,
     )?;
     let mut drivers = BTreeSet::new();
     for key in keys
@@ -879,6 +884,7 @@ fn git_with_objects(
         },
         index,
         objects,
+        metadata,
     )
 }
 
@@ -889,6 +895,7 @@ struct GitLimits {
     deadline: Instant,
 }
 
+#[cfg(test)]
 fn run_git(
     root: &Path,
     args: Vec<String>,
@@ -896,9 +903,10 @@ fn run_git(
     drivers: &BTreeSet<String>,
     limits: GitLimits,
 ) -> Result<Vec<u8>, ToolError> {
-    run_git_index(root, args, cancellation, drivers, limits, None, None)
+    run_git_index(root, args, cancellation, drivers, limits, None, None, None)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_git_index(
     root: &Path,
     args: Vec<String>,
@@ -907,6 +915,7 @@ fn run_git_index(
     limits: GitLimits,
     index: Option<&Path>,
     objects: Option<&Path>,
+    metadata: Option<&std::fs::File>,
 ) -> Result<Vec<u8>, ToolError> {
     if cancellation.is_cancelled() {
         return Err(ToolError::Cancelled);
@@ -946,9 +955,17 @@ fn run_git_index(
                 .arg(format!("{driver}.{suffix}"));
         }
     }
+    if let Some(metadata) = metadata {
+        orbit_runtime::git::process::set_directory(&mut command, metadata).map_err(failed)?;
+        // Index transactions supply captured blobs and an isolated index. Their builtins must
+        // never consult the mutable worktree; both Git paths resolve from the pinned metadata.
+        command
+            .arg("--git-dir=.")
+            .arg("--work-tree=.");
+    } else {
+        command.arg("-C").arg(root);
+    }
     command
-        .arg("-C")
-        .arg(root)
         .args(args)
         .env("GIT_CONFIG_NOSYSTEM", "1")
         .env("GIT_CONFIG_GLOBAL", NULL_DEVICE)
