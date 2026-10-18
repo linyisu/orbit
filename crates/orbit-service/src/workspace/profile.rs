@@ -118,7 +118,12 @@ pub(super) fn apply(
     if let Some(effort) = effort {
         config.reasoning_effort = Some(effort);
     }
-    resources.model = ModelClient::new(config)?;
+    resources.model = ModelClient::new(config.clone())?;
+    if let Some(subagents) = &resources.subagents {
+        let mut inherited = selected.clone();
+        inherited.config = config;
+        subagents.set_parent_model(inherited);
+    }
     resources.model_name = selected.qualified_name();
     resources.budget.context_tokens = selected.context_tokens;
     resources.budget.input_context_tokens = selected.input_context_tokens;

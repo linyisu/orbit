@@ -106,6 +106,11 @@ async fn fixture(
     let mut fixture = TestConfig::new().provider(provider);
     fixture.config.auto_compact = false;
     fixture.write(&path).unwrap();
+    let mut parent_model = fixture
+        .config
+        .select_model("orbit::orbit-model")
+        .unwrap();
+    parent_model.config.reasoning_effort = Some(ReasoningEffort::High);
     let store = Store::open(dir.join("orbit.db"))
         .await
         .unwrap();
@@ -139,6 +144,7 @@ async fn fixture(
             .collect(),
         active: Mutex::new(HashMap::new()),
         backend: Arc::new(move |_| Arc::new(model.clone())),
+        parent_model: std::sync::RwLock::new(parent_model),
     });
     (service, parent)
 }
@@ -197,6 +203,160 @@ async fn read(service: &Arc<Service>, args: Value) -> Result<Value> {
         )
         .await?;
     Ok(serde_json::from_str(&output.content)?)
+}
+
+#[tokio::test]
+async fn inherited_routes_survive_catalog_changes_and_respect_explicit_child_switches() {
+    let dir = tempfile::tempdir().unwrap();
+    let model = GatedModel::new();
+    model.gate.add_permits(4);
+    let (mut service, _parent) = fixture(dir.path(), model.clone(), Default::default()).await;
+    {
+        let mut inherited = service.parent_model.write().unwrap();
+        inherited.config.base_url = "http://127.0.0.1:9/synthetic-route".into();
+        inherited.config.api_key = Some("synthetic-parent-key".into());
+    }
+    let captured = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let capture = captured.clone();
+    let backend = model.clone();
+    Arc::get_mut(&mut service)
+        .unwrap()
+        .backend = Arc::new(move |client| {
+        capture
+            .lock()
+            .unwrap()
+            .push(client.config().clone());
+        Arc::new(backend.clone())
+    });
+    let inherited = service
+        .parent_model
+        .read()
+        .unwrap()
+        .clone();
+    TestConfig::new()
+        .provider(TestProvider::new("other").models([TestModel::new("other-model")]))
+        .write(&service.config_path)
+        .unwrap();
+
+    let first = spawn(&service, "inherited", CancellationToken::new()).await;
+    assert_eq!(first["model"], inherited.qualified_name());
+    service
+        .jobs
+        .wait(
+            &[first["job_id"].as_str().unwrap().into()],
+            true,
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    let next = TestModel::new("next-model").option("next");
+    Control(service.clone()).set_parent_model(next.clone());
+    let sent = service
+        .send(
+            ToolCall::function("followup", "SendAgentMessage", json!({})),
+            SendArgs {
+                agent_id: first["agent_id"]
+                    .as_str()
+                    .unwrap()
+                    .into(),
+                message: "Check one more function".into(),
+            },
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    let SendResult::Launched(LaunchResult::Started { job_id, .. }) = sent else {
+        panic!("expected a new child run");
+    };
+    service
+        .jobs
+        .wait(&[job_id], true, CancellationToken::new())
+        .await
+        .unwrap();
+    let second = spawn(&service, "new-profile", CancellationToken::new()).await;
+    service
+        .jobs
+        .wait(
+            &[second["job_id"]
+                .as_str()
+                .unwrap()
+                .into()],
+            true,
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    {
+        let routes = captured.lock().unwrap();
+        assert_eq!(routes.len(), 3);
+        for route in &routes[..2] {
+            assert_eq!(route.base_url, inherited.config.base_url);
+            assert_eq!(route.model, inherited.config.model);
+            assert_eq!(route.api_key, inherited.config.api_key);
+            assert_eq!(route.reasoning_effort, Some(ReasoningEffort::High));
+        }
+        assert_eq!(routes[2].model, next.config.model);
+    }
+    assert_eq!(second["model"], next.qualified_name());
+    {
+        let writer = service
+            .store
+            .acquire(first["agent_id"].as_str().unwrap())
+            .await
+            .unwrap();
+        writer
+            .set_model_profile("other::other-model".into(), None)
+            .await
+            .unwrap();
+    }
+    let args = json!({
+        "agent_id": first["agent_id"], "message": "Check the selected profile"
+    });
+    let sent = service
+        .clone()
+        .execute(
+            Action::Send,
+            ToolCall::function("changed-profile", "SendAgentMessage", args.clone()),
+            args,
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    let sent: Value = serde_json::from_str(&sent.content).unwrap();
+    service
+        .jobs
+        .wait(
+            &[sent["job_id"].as_str().unwrap().into()],
+            true,
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(sent["model"], "other::other-model");
+    {
+        let routes = captured.lock().unwrap();
+        assert_eq!(routes.len(), 4);
+        assert_eq!(routes[3].model, "other-model");
+        assert!(routes[3].api_key.is_none());
+    }
+
+    let args = json!({"task": "Inspect", "model": inherited.qualified_name()});
+    let error = service
+        .clone()
+        .execute(
+            Action::Spawn,
+            ToolCall::function("explicit", "SpawnAgent", args.clone()),
+            args,
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("not configured")
+    );
+    assert_eq!(captured.lock().unwrap().len(), 4);
 }
 
 #[tokio::test]
@@ -867,6 +1027,13 @@ async fn recovery_delivers_finished_results_once_and_never_replays_interrupted_w
         allowed_tools: service.allowed_tools.clone(),
         slots: Arc::new(Semaphore::new(8)),
         backend: service.backend.clone(),
+        parent_model: std::sync::RwLock::new(
+            service
+                .parent_model
+                .read()
+                .unwrap()
+                .clone(),
+        ),
     };
 
     drop(interrupted);
@@ -972,6 +1139,11 @@ async fn child_views_remain_read_only_when_delegation_is_disabled() {
         );
     }
 
+    let parent_model = service
+        .parent_model
+        .read()
+        .unwrap()
+        .clone();
     register(
         &mut tools,
         service.store.clone(),
@@ -985,6 +1157,7 @@ async fn child_views_remain_read_only_when_delegation_is_disabled() {
         },
         None,
         None,
+        parent_model,
     )
     .await
     .unwrap();

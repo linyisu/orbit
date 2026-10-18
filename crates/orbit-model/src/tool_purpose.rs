@@ -1,15 +1,15 @@
-//! Model-facing intent metadata, separated from validated tool arguments.
-use serde_json::{Value, json};
+//! Read legacy display metadata without advertising it to models.
+use serde_json::Value;
 
 use crate::types::{ToolCall, ToolDefinition};
 
 const PURPOSE_FIELD: &str = "_orbit_purpose";
 const MAX_PURPOSE_CHARS: usize = 160;
 
-/// Adds optional intent to object schemas without taking over an existing business field.
-/// Unsupported schemas retain their original contract and use parameter-based UI summaries.
-pub fn advertise(definition: &mut ToolDefinition) -> bool {
-    let schema = &mut definition.function.parameters;
+/// Only legacy-compatible object contracts permit removal of display metadata.
+/// A declared business field or a composed schema keeps its original arguments.
+pub fn accepts_legacy_purpose(definition: &ToolDefinition) -> bool {
+    let schema = &definition.function.parameters;
     if schema["type"] != "object"
         || [
             "$ref",
@@ -30,28 +30,13 @@ pub fn advertise(definition: &mut ToolDefinition) -> bool {
     {
         return false;
     }
-    let Some(schema) = schema.as_object_mut() else {
-        return false;
-    };
-    let Some(properties) = schema
-        .entry("properties")
-        .or_insert_with(|| json!({}))
-        .as_object_mut()
-    else {
-        return false;
-    };
-    if properties.contains_key(PURPOSE_FIELD) {
-        return false;
-    }
-    properties.insert(
-        PURPOSE_FIELD.into(),
-        json!({
-            "type": "string",
-            "description": "Briefly state this call's purpose in the user's language. Use one \
-                short phrase, not a result claim. Do not repeat it as a separate progress message."
-        }),
-    );
-    true
+    schema
+        .get("properties")
+        .is_none_or(|properties| {
+            properties
+                .as_object()
+                .is_some_and(|properties| !properties.contains_key(PURPOSE_FIELD))
+        })
 }
 
 /// Removes display-only metadata before argument validation and policy evaluation.
@@ -79,22 +64,13 @@ pub fn extract(call: &mut ToolCall) {
 }
 
 impl ToolCall {
-    /// Restores intent only in model history; executors receive the original business object.
+    /// Display metadata stays in the saved call, outside model-facing arguments.
     pub fn model_arguments(&self) -> Result<Value, serde_json::Error> {
-        let mut arguments = self.arguments_json()?;
-        if let (Some(purpose), Some(object)) = (&self.purpose, arguments.as_object_mut()) {
-            object.insert(PURPOSE_FIELD.into(), Value::String(purpose.clone()));
-        }
-        Ok(arguments)
+        self.arguments_json()
     }
 
     pub fn model_arguments_text(&self) -> String {
-        if self.purpose.is_none() {
-            return self.function.arguments.clone();
-        }
-        self.model_arguments()
-            .map(|arguments| arguments.to_string())
-            .unwrap_or_else(|_| self.function.arguments.clone())
+        self.function.arguments.clone()
     }
 }
 
@@ -102,9 +78,10 @@ impl ToolCall {
 mod tests {
     use super::*;
     use crate::types::{ChatMessage, ChatRequest};
+    use serde_json::json;
 
     #[test]
-    fn provider_history_restores_purpose_only_inside_tool_arguments() {
+    fn provider_history_keeps_legacy_purpose_out_of_model_arguments() {
         let mut call =
             ToolCall::function("generated-call", "inspect", json!({"entry": "module.rs"}));
         call.purpose = Some("Inspect module".into());
@@ -128,12 +105,12 @@ mod tests {
                 .unwrap(),
         )
         .unwrap();
-        assert_eq!(args[PURPOSE_FIELD], "Inspect module");
+        assert!(args.get(PURPOSE_FIELD).is_none());
         let (responses, _) =
             crate::openai::responses::encode("fixture", request.clone(), None, &Value::Null, false)
                 .unwrap();
         assert!(
-            responses["input"]
+            !responses["input"]
                 .as_array()
                 .unwrap()
                 .iter()
@@ -151,14 +128,16 @@ mod tests {
             false,
         )
         .unwrap();
-        assert_eq!(
-            anthropic["messages"][0]["content"][0]["input"][PURPOSE_FIELD],
-            "Inspect module"
+        assert!(
+            anthropic["messages"][0]["content"][0]["input"]
+                .get(PURPOSE_FIELD)
+                .is_none()
         );
         let (google, _) = crate::google::encode("fixture", request).unwrap();
-        assert_eq!(
-            google["request"]["contents"][0]["parts"][0]["functionCall"]["args"][PURPOSE_FIELD],
-            "Inspect module"
+        assert!(
+            google["request"]["contents"][0]["parts"][0]["functionCall"]["args"]
+                .get(PURPOSE_FIELD)
+                .is_none()
         );
     }
 
@@ -172,7 +151,10 @@ mod tests {
             json!({"entry": "module.rs"})
         );
         assert_eq!(call.purpose.as_deref(), Some("Inspect entry points"));
-        assert_eq!(call.model_arguments().unwrap(), arguments);
+        assert_eq!(
+            call.model_arguments().unwrap(),
+            json!({"entry": "module.rs"})
+        );
         let restored: ToolCall =
             serde_json::from_str(&serde_json::to_string(&call).unwrap()).unwrap();
         assert_eq!(restored, call);
@@ -195,8 +177,8 @@ mod tests {
     }
 
     #[test]
-    fn schema_extension_preserves_required_fields_and_reserved_business_names() {
-        let mut definition = ToolDefinition::function(
+    fn legacy_metadata_does_not_mutate_tool_contracts() {
+        let definition = ToolDefinition::function(
             "inspect",
             "Inspect",
             json!({
@@ -204,11 +186,13 @@ mod tests {
                 "required": ["entry"], "additionalProperties": false
             }),
         );
-        assert!(advertise(&mut definition));
+        assert!(accepts_legacy_purpose(&definition));
         assert_eq!(definition.function.parameters["required"], json!(["entry"]));
-        let before = definition.clone();
-        assert!(!advertise(&mut definition));
-        assert_eq!(before, definition);
+        assert!(
+            definition.function.parameters["properties"]
+                .get(PURPOSE_FIELD)
+                .is_none()
+        );
     }
 
     #[test]
@@ -219,8 +203,8 @@ mod tests {
             json!({"type": "object", "propertyNames": {"pattern": "^business_"}}),
             json!({"type": "object", "properties": {"_orbit_purpose": {"type": "number"}}}),
         ] {
-            let mut definition = ToolDefinition::function("dynamic", "Inspect", parameters.clone());
-            assert!(!advertise(&mut definition));
+            let definition = ToolDefinition::function("dynamic", "Inspect", parameters.clone());
+            assert!(!accepts_legacy_purpose(&definition));
             assert_eq!(definition.function.parameters, parameters);
         }
     }

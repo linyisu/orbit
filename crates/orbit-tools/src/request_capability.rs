@@ -45,7 +45,9 @@ impl Tool for RequestCapability {
             authorization_required. \
             Do not request proactively based on the path alone. Existing workspace access and \
             YOLO need no request. To create external \
-            files, request read_write for an existing parent directory. Any OS-accessible path \
+            files, request read_write for an existing parent directory on this workspace's host. \
+            This tool grants access; it does not create paths or mount resources from other hosts. \
+            Any OS-accessible path \
             may be granted. File-tool grants do not isolate Exec or external MCP servers. \
             Approved grants last for this session.";
 
@@ -106,7 +108,13 @@ impl Tool for RequestCapability {
                     ToolError::ExecutionFailed(format!("invalid path '{expanded_path}': {e}"))
                 })?;
 
-            if !resolved.canonical().exists() {
+            if !resolved
+                .canonical()
+                .try_exists()
+                .map_err(|error| {
+                    ToolError::ExecutionFailed(format!("cannot inspect '{expanded_path}': {error}"))
+                })?
+            {
                 let parent = resolved
                     .canonical()
                     .ancestors()
@@ -136,9 +144,10 @@ impl Tool for RequestCapability {
                         .into(),
                 };
 
-                return Err(ToolError::ExecutionFailed(format!(
-                    "path '{expanded_path}' does not exist. Explicit grants require existing \
-                        resources; {guidance}"
+                return Err(invalid(format!(
+                    "path '{expanded_path}' does not exist on this workspace's host. \
+                        RequestAccess requires an existing file or directory and does not create \
+                        or mount resources; {guidance}"
                 )));
             }
 

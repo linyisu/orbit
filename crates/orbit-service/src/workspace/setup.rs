@@ -288,7 +288,7 @@ async fn prepare_resolved_resources(
     let model_name = selected_model.qualified_name();
     let context_tokens = selected_model.context_tokens;
     let input_context_tokens = selected_model.input_context_tokens;
-    let client = ModelClient::new(selected_model.config)?;
+    let client = ModelClient::new(selected_model.config.clone())?;
     let mut skills = super::library::session_skills(session).await?;
     if policy.disabled(Capability::Skills) {
         skills = Default::default();
@@ -379,6 +379,7 @@ async fn prepare_resolved_resources(
             file_config.subagents.clone(),
             Some(approvals.clone()),
             Some(user_input.clone()),
+            selected_model,
         )
         .await?
     } else {
@@ -568,6 +569,7 @@ mod tests {
             names,
             [
                 "AskUser",
+                "CancelPlan",
                 "CheckEvidence",
                 "CodeSymbols",
                 "CommandOutput",

@@ -86,6 +86,13 @@ async fn typed_contract_preserves_defaults_cancellation_and_executor_arguments()
 
     let mut registry = ToolRegistry::default();
     registry.register(Inspect);
+    assert_eq!(
+        registry.definitions()[0]
+            .function
+            .parameters,
+        schema
+    );
+    assert!(!registry.contains("_orbit_purpose"));
     let policy = std::sync::Arc::new(InspectPolicy(std::sync::atomic::AtomicBool::new(false)));
     registry.set_policy(policy.clone());
     let call = ToolCall::function(
@@ -110,10 +117,13 @@ async fn typed_contract_preserves_defaults_cancellation_and_executor_arguments()
         "inspect_entries",
         json!({"count": 4, "extra": true}),
     );
-    assert!(matches!(
-        registry
-            .execute(call, CancellationToken::new())
-            .await,
-        Err(ToolError::InvalidArguments { .. })
-    ));
+    let error = registry
+        .execute(call, CancellationToken::new())
+        .await
+        .unwrap_err();
+    let ToolError::InvalidArguments { message, .. } = error else {
+        panic!("expected an argument error");
+    };
+    assert!(message.contains("allowed top-level fields: [count, verbose]"));
+    assert!(message.contains("required: [count]"));
 }

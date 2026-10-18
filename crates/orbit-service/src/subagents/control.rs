@@ -118,6 +118,10 @@ impl SendResult {
 }
 
 impl Control {
+    pub(crate) fn set_parent_model(&self, model: crate::models::ModelOption) {
+        *self.0.parent_model.write().unwrap() = model;
+    }
+
     /// Acquire the same current visibility and policy lease as a model tool call.
     fn authorize(
         &self,

@@ -9,6 +9,7 @@
 - [stream.rs](src/stream.rs)：工具增量、分片用量与终止证据的统一聚合。
 - [openai/](src/openai/)、[anthropic/](src/anthropic/)、[google.rs](src/google.rs)：供应商编码与流式解析。
 - [reasoning.rs](src/reasoning.rs)：思考参数适配。
+- [tool_purpose.rs](src/tool_purpose.rs)：旧展示元数据读取；不再注入工具定义或回填模型历史。
 - [discovery.rs](src/discovery.rs)：带认证、分页及容量限制的实时目录获取和 API Key 验证。
 - [catalog/](src/catalog/)：供应商目录、能力及公共规格解码，区分完整目录和部分观测。
 - [account_catalog.rs](src/account_catalog.rs)：固定来源的能力规格，仅补充已发现条目。

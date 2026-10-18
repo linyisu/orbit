@@ -54,7 +54,7 @@ pub fn register(
                 report(&store, &id, workspace, token, limits)
                     .await
                     .map(|r| r.to_string())
-                    .map_err(|e| ToolError::ExecutionFailed(e.to_string()))
+                    .map_err(ToolError::from_anyhow)
             }
         },
     ).with_capabilities(orbit_agent::tool::ToolCapabilities::READ));
@@ -67,7 +67,7 @@ pub async fn report(
     token: CancellationToken,
     limits: orbit_tools::run_command::CommandLimits,
 ) -> Result<Value> {
-    let current = fingerprint_configured(workspace, token, limits.into()).await?;
+    let current = fingerprint_configured(workspace.clone(), token.clone(), limits.into()).await?;
     let (baseline, changes, commands) = tokio::try_join!(
         store.workspace_baseline(id),
         store.workspace_changes(id),
@@ -75,6 +75,16 @@ pub async fn report(
     )?;
 
     let mut result = compare(&current, baseline.as_ref(), &changes, &commands);
+    let candidates = orbit_tools::project_overview::ProjectOverview::new(workspace)
+        .verification_candidates(
+            changed_paths(&current, baseline.as_ref(), &changes)
+                .into_iter()
+                .collect(),
+            token,
+        )
+        .await?;
+    result["verification_candidates"] = json!(candidates.candidates);
+    result["verification_candidates_incomplete"] = json!(candidates.incomplete);
 
     while orbit_agent::context::estimate_tokens(
         &[orbit_model::types::ChatMessage::tool(
@@ -84,13 +94,15 @@ pub async fn report(
         &[],
     ) > 6_000
     {
-        let key = if result["changes"]
-            .as_array()
-            .is_some_and(|a| !a.is_empty())
-        {
-            "changes"
-        } else {
-            "commands"
+        let Some(key) = ["verification_candidates", "changes", "commands"]
+            .into_iter()
+            .find(|key| {
+                result[*key]
+                    .as_array()
+                    .is_some_and(|a| !a.is_empty())
+            })
+        else {
+            break;
         };
 
         if result[key]
@@ -104,9 +116,36 @@ pub async fn report(
 
         let omitted = format!("{key}_omitted");
         result[&omitted] = json!(result[&omitted].as_u64().unwrap_or(0) + 1);
+        if key == "verification_candidates" {
+            result["verification_candidates_incomplete"] = json!(true);
+        }
     }
 
     Ok(result)
+}
+
+fn changed_paths(
+    current: &WorkspaceFingerprint,
+    baseline: Option<&WorkspaceFingerprint>,
+    changes: &[WorkspaceChange],
+) -> std::collections::BTreeSet<String> {
+    let mut paths = std::collections::BTreeSet::new();
+    paths.extend(
+        changes
+            .iter()
+            .map(|change| change.change.path.clone()),
+    );
+    if let Some(baseline) = baseline {
+        paths.extend(
+            baseline
+                .files
+                .keys()
+                .chain(current.files.keys())
+                .filter(|path| baseline.files.get(*path) != current.files.get(*path))
+                .cloned(),
+        );
+    }
+    paths
 }
 
 fn compare(
@@ -171,23 +210,7 @@ fn compare(
         })
         .collect();
 
-    let mut paths = std::collections::BTreeSet::new();
-
-    for c in changes {
-        paths.insert(c.change.path.clone());
-    }
-
-    if let Some(baseline) = baseline {
-        for path in baseline
-            .files
-            .keys()
-            .chain(current.files.keys())
-        {
-            if baseline.files.get(path) != current.files.get(path) {
-                paths.insert(path.clone());
-            }
-        }
-    }
+    let paths = changed_paths(current, baseline, changes);
 
     let total = paths.len();
     let paths: Vec<_> = paths
@@ -388,6 +411,66 @@ mod tests {
     use orbit_runtime::verification::{FileFingerprint, VerificationEvidence};
 
     use super::*;
+
+    #[tokio::test]
+    async fn changed_files_get_manifest_suggestions_without_becoming_verification_receipts() {
+        let directory = tempfile::tempdir().unwrap();
+        let project = directory.path().join("project");
+        std::fs::create_dir_all(project.join("src")).unwrap();
+        std::fs::write(
+            project.join("Cargo.toml"),
+            "[package]\nname = \"sample\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+        std::fs::write(project.join("src/lib.rs"), "pub fn value() -> u8 { 1 }\n").unwrap();
+        let workspace = Workspace::new(&project).unwrap();
+        let limits = orbit_tools::run_command::CommandLimits::default();
+        let baseline = fingerprint_configured(
+            workspace.clone(),
+            CancellationToken::new(),
+            limits.clone().into(),
+        )
+        .await
+        .unwrap();
+        let store = Store::open(directory.path().join("sessions.db"))
+            .await
+            .unwrap();
+        let writer = store
+            .create(project.display().to_string(), "fixture".into())
+            .await
+            .unwrap();
+        store
+            .save_workspace_baseline(writer.id(), &baseline)
+            .await
+            .unwrap();
+        std::fs::write(project.join("src/lib.rs"), "pub fn value() -> u8 { 2 }\n").unwrap();
+        let result = report(
+            &store,
+            writer.id(),
+            workspace,
+            CancellationToken::new(),
+            limits,
+        )
+        .await
+        .unwrap();
+        assert_eq!(result["command_count"], 0);
+        assert_eq!(result["verification_candidates_incomplete"], false);
+        assert_eq!(
+            result["verification_candidates"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+        assert!(
+            result["verification_candidates"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|candidate| { candidate["affected_paths"] == json!(["src/lib.rs"]) })
+        );
+        assert_eq!(result["changes"][0]["origin"], "unattributed_change");
+    }
 
     #[test]
     fn file_presence_and_execute_bit_changes_are_distinct_from_attribution() {

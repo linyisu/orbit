@@ -31,6 +31,161 @@ async fn fixture() -> (
     (dir, plan, writer)
 }
 
+#[tokio::test]
+async fn agent_can_discard_its_own_draft_without_approving_or_creating_tasks() {
+    let (_dir, plan, writer) = fixture().await;
+    let mut registry = ToolRegistry::new();
+    plan.register(&mut registry);
+    plan.install_policy(&mut registry);
+    registry
+        .execute(
+            ToolCall::function("enter", "EnterPlan", json!({})),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    let entered = plan.snapshot().await;
+    assert_eq!(entered.entered_by, PlanOrigin::Agent);
+    let saved = plan
+        .update(json!({
+            "generation": entered.generation,
+            "title": "Check a small change", "markdown": "Inspect the target function.",
+            "steps": ["Inspect"], "files": []
+        }))
+        .await
+        .unwrap();
+    assert!(
+        plan.cancel(entered.generation)
+            .await
+            .is_err()
+    );
+    registry
+        .execute(
+            ToolCall::function(
+                "cancel",
+                "CancelPlan",
+                json!({"generation": saved.generation}),
+            ),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    let state = plan.snapshot().await;
+    assert_eq!(state.mode, WorkMode::Build);
+    assert!(state.plan.is_none());
+    assert_eq!(
+        plan.0
+            .store
+            .planning(writer.id())
+            .await
+            .unwrap(),
+        state
+    );
+    assert!(
+        plan.0
+            .store
+            .tasks(
+                &plan
+                    .0
+                    .store
+                    .session(writer.id())
+                    .await
+                    .unwrap()
+                    .project_id,
+                true
+            )
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        registry
+            .policy()
+            .unwrap()
+            .visible(ToolCapabilities::WRITE)
+    );
+}
+
+#[tokio::test]
+async fn user_drafts_remain_user_controlled_after_reentering_from_build() {
+    let (_dir, plan, _writer) = fixture().await;
+    plan.enter_from(PlanOrigin::Agent)
+        .await
+        .unwrap();
+    plan.action(Action::Enter)
+        .await
+        .unwrap();
+    plan.enter_from(PlanOrigin::Agent)
+        .await
+        .unwrap();
+    assert_eq!(plan.snapshot().await.entered_by, PlanOrigin::User);
+    assert!(
+        plan.cancel(plan.snapshot().await.generation)
+            .await
+            .is_err()
+    );
+    draft(&plan, vec![]).await;
+    plan.action(Action::Leave)
+        .await
+        .unwrap();
+    plan.enter_from(PlanOrigin::Agent)
+        .await
+        .unwrap();
+    assert_eq!(plan.snapshot().await.entered_by, PlanOrigin::User);
+    assert!(
+        plan.cancel(plan.snapshot().await.generation)
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn interrupted_submissions_and_feedback_cannot_restore_autonomous_cancellation() {
+    let (_dir, plan, _writer) = fixture().await;
+    plan.enter_from(PlanOrigin::Agent)
+        .await
+        .unwrap();
+    let state = plan.snapshot().await;
+    plan.update(json!({
+        "generation": state.generation, "title": "Review needed",
+        "markdown": "Inspect before implementing.", "steps": ["Inspect"], "files": []
+    }))
+    .await
+    .unwrap();
+    let (task, token, generation) = reviewing(&plan).await;
+    assert!(plan.cancel(generation).await.is_err());
+    token.cancel();
+    assert!(task.await.unwrap().is_err());
+    assert!(plan.cancel(generation).await.is_err());
+    plan.update(json!({
+        "generation": generation,
+        "title": "Revised draft", "markdown": "Inspect the updated scope.",
+        "steps": ["Inspect"], "files": []
+    }))
+    .await
+    .unwrap();
+    assert_eq!(plan.snapshot().await.entered_by, PlanOrigin::User);
+    assert!(
+        plan.cancel(plan.snapshot().await.generation)
+            .await
+            .is_err()
+    );
+    let (task, _token, generation) = reviewing(&plan).await;
+    plan.action(Action::Feedback {
+        generation,
+        text: "Revise the scope".into(),
+    })
+    .await
+    .unwrap();
+    task.await.unwrap().unwrap();
+    assert_eq!(plan.snapshot().await.entered_by, PlanOrigin::User);
+    assert!(
+        plan.cancel(plan.snapshot().await.generation)
+            .await
+            .is_err()
+    );
+}
+
 async fn draft(plan: &Planning, files: Vec<&str>) -> State {
     plan.enter().await.unwrap();
     let current = plan.snapshot().await;

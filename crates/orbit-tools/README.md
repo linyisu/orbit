@@ -30,7 +30,7 @@ MCP 禁用与刷新按注册器中的来源处理，不依赖名称前缀。工�
 | 类别 | 名称与用途 |
 | --- | --- |
 | 子 Agent | `SpawnAgent` 创建、`ReadAgent` 查看、`SendAgentMessage` 追加消息、`WaitAgents` 等待、`StopAgents` 取消 |
-| 计划与问答 | `EnterPlan` 进入规划、`UpdatePlan` 保存计划、`SubmitPlan` 提交审阅、`AskUser` 提问 |
+| 计划与问答 | `EnterPlan` 进入规划、`UpdatePlan` 保存计划、`SubmitPlan` 提交审阅、`CancelPlan` 放弃自主草案、`AskUser` 提问 |
 | 项目任务 | `ListTasks` 列出任务、`UpdateTask` 创建或修改任务 |
 | 会话记忆 | `ListMemories` 列出、`SearchMemory` 搜索、`SaveMemory` 保存、`ForgetMemory` 停用 |
 | 上下文与证据 | `ReadHistory` 读取压缩前历史、`LoadSkill` 加载技能、`CheckEvidence` 检查已有执行证据 |
@@ -50,6 +50,7 @@ MCP 禁用与刷新按注册器中的来源处理，不依赖名称前缀。工�
 MCP 的启动开关和工具允许列表控制可用工具，调用时统一遵循上述审批模式；上游服务器自身的限制由其管理。
 
 后台命令支持状态、等待和取消，不跨服务重启恢复。`WaitCommands` 默认等待 30 秒，最长 60 秒；等待超时不会取消命令。
+状态、等待与完成通知附带 stdout/stderr 的尾部预览，每路最多 40 行、2048 字节；完整日志仍由 `CommandOutput` 读取。
 服务将命令原始日志保存在所属会话中，任务结束与服务重启后可继续读取；每路最多 16 MiB，每会话约 128 MiB，容量不足时按命令回收旧日志。
 `CommandOutput` 分别报告已有日志是否还有后页（`has_more`）和原始采集是否完整（`capture_complete`）；尚未完成或没有采集收据时后者为 `null`。
 删除会话同时删除其日志。文档页图与 MCP 图片使用临时附件，持久图片另由附件库管理。
@@ -73,6 +74,16 @@ Git 操作统一使用 `Exec`；内部 Git 检查仍为审阅和执行证据服�
   `release` 是交接未完成任务，不能绕过领取和依赖检查。
 - `CheckEvidence` 区分新增、删除和修改；没有直接写入收据的变化标记为来源未确认，
   不把命令运行期间观察到的文件自动归为本会话所有。执行权限仅在前后文件均存在时比较。
+  变更路径关联其上级清单中的验证候选，与 `ProjectOverview` 复用规则；候选不是已执行检查，
+  不构成完整测试依赖图。清单读取或候选输出超预算时明确标记，工具不会执行这些命令。
+- `SearchMemory.category` 支持按约束、决定、事实和偏好筛选；中文相邻双字匹配改善词法召回，
+  不等同于语义检索。`search_truncated` 表示候选未全部排序，可缩小查询或分类。
+- `ReadDocument` 保留 Markdown 与 PDF 分页；CSV/Excel/ODS 可通过 `sheet/start_row/max_rows`
+  选择行切片，行号从 1 开始且包含标题行。切片内容是 JSON 单元格文本数组，公式只读缓存值。
+  先用 `next_start_char` 读完同一切片，再按 `table.next_start_row` 续读；字符页未读完时不提供下一行游标。
+  转换仍在隔离进程中进行，行切片不承诺所有输入格式都使用流式解析。
+- `RequestAccess` 针对目标工作区所在主机的现有资源授权，不创建目录或进行跨主机挂载。
+  不存在的路径返回参数错误及现有父目录指导；创建外部文件时先请求合适父目录的读写权限。
 - `Grep.output_mode` 支持 `content`、`files`、`count`；内容模式每个匹配行只返回一次，分页按返回项计数。两端详情保留上下文行。
 - `ListFiles.glob` 按路径过滤结果，仍遍历未匹配的目录；深度、忽略规则及扫描预算继续生效。
 - 网页与图片请求默认只访问公网，复用环境代理和 `[web]` 配置。HTML 优先读取唯一的 `main` 或 `article`，没有明确正文区域时保留全文。

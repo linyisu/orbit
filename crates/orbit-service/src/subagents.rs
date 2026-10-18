@@ -46,6 +46,7 @@ struct ActiveAgent {
     job_id: String,
     inbox: AgentInbox,
     run_id: i64,
+    model: crate::models::ModelOption,
 }
 
 type BackendFactory = Arc<dyn Fn(ModelClient) -> Arc<dyn ModelBackend> + Send + Sync>;
@@ -65,6 +66,7 @@ struct Service {
     slots: Arc<Semaphore>,
     active: Mutex<HashMap<String, ActiveAgent>>,
     backend: BackendFactory,
+    parent_model: std::sync::RwLock<crate::models::ModelOption>,
 }
 
 struct ChildRun {
@@ -94,6 +96,7 @@ pub async fn register(
     limits: SubagentConfig,
     approvals: Option<orbit_tools::approval::ApprovalSender>,
     user_input: Option<crate::user_input::Questions>,
+    parent_model: crate::models::ModelOption,
 ) -> Result<Option<Control>> {
     if store.is_subagent(&parent).await? {
         restrict_child_tools(tools);
@@ -121,6 +124,7 @@ pub async fn register(
         limits,
         active: Mutex::new(HashMap::new()),
         backend: Arc::new(|client| Arc::new(ModelClientBackend::new(client))),
+        parent_model: std::sync::RwLock::new(parent_model),
     });
 
     service.recover().await?;
@@ -572,8 +576,11 @@ impl Service {
                     .clone()
                     .try_acquire_owned()
                     .context("subagent concurrency limit reached; wait for an existing agent")?;
-                let config =
+                let mut config =
                     crate::config::FileConfig::load(&self.config_path, &self.auth_directory)?;
+                // Cache resolution also supplies explicitly configured compaction models.
+                // Keep its refresh state off delegated-control stack frames.
+                Box::pin(crate::models::updater::load_cached(&mut config)).await;
                 let parent = self.store.session(&self.parent).await?;
                 let role_model = if args.role == "review" {
                     self.limits.review_model.as_deref()
@@ -582,24 +589,16 @@ impl Service {
                 } else {
                     None
                 };
-                let requested = args
-                    .model
-                    .as_deref()
-                    .or(role_model)
-                    .unwrap_or(&parent.model);
-                let mut model = crate::policy::select_model(&config, Some(requested))?;
-                let inherited = if args.model.is_none() && role_model.is_none() {
-                    parent
-                        .reasoning_effort
-                        .as_deref()
-                        .map(str::parse::<ReasoningEffort>)
-                        .transpose()
-                        .map_err(|_| anyhow::anyhow!("invalid saved parent reasoning effort"))?
+                let mut model = if let Some(requested) = args.model.as_deref().or(role_model) {
+                    crate::policy::select_model(&config, Some(requested))?
                 } else {
-                    None
+                    self.parent_model
+                        .read()
+                        .unwrap()
+                        .clone()
                 };
 
-                if let Some(effort) = args.reasoning_effort.or(inherited) {
+                if let Some(effort) = args.reasoning_effort {
                     ensure!(
                         model
                             .reasoning_efforts
@@ -1025,6 +1024,9 @@ impl Service {
             }
         }
 
+        let resolved_model = active
+            .get(&args.agent_id)
+            .map(|entry| entry.model.clone());
         drop(active);
         let permit = self
             .slots
@@ -1032,9 +1034,16 @@ impl Service {
             .try_acquire_owned()
             .context("subagent concurrency limit reached; wait for an existing agent")?;
         let writer = self.store.acquire(&agent.id).await?;
-        let config = crate::config::FileConfig::load(&self.config_path, &self.auth_directory)?;
+        let mut config = crate::config::FileConfig::load(&self.config_path, &self.auth_directory)?;
+        Box::pin(crate::models::updater::load_cached(&mut config)).await;
         let session = self.store.session(&agent.id).await?;
-        let mut model = crate::policy::select_model(&config, Some(&session.model))?;
+        let mut model = if let Some(model) =
+            resolved_model.filter(|model| model.qualified_name() == session.model)
+        {
+            model
+        } else {
+            crate::policy::select_model(&config, Some(&session.model))?
+        };
         if let Some(effort) = session
             .reasoning_effort
             .as_deref()
@@ -1284,6 +1293,7 @@ impl Service {
                 job_id: receipt.job_id.clone(),
                 inbox,
                 run_id,
+                model,
             },
         );
         Ok(LaunchResult::Started {

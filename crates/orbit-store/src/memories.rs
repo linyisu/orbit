@@ -6,7 +6,16 @@ use crate::{
     types::{MemoryCategory, SessionMemory},
 };
 use anyhow::{Context, Result, ensure};
+use sea_orm::sea_query::Expr;
 use sea_orm::*;
+
+const MAX_SEARCH_CANDIDATES: usize = 512;
+
+pub struct MemorySearchPage {
+    pub memories: Vec<SessionMemory>,
+    pub search_truncated: bool,
+}
+
 impl Store {
     /// Read a live ID-ordered page confined to one conversation.
     pub async fn session_memory_page(
@@ -70,6 +79,21 @@ impl Store {
         query: &str,
         limit: usize,
     ) -> Result<Vec<SessionMemory>> {
+        Ok(self
+            .search_session_memories_filtered(session_id, query, limit, None)
+            .await?
+            .memories)
+    }
+
+    /// Rank bounded database candidates, optionally confined to one category.
+    /// Chinese bigrams improve lexical recall; truncation means older matches were not ranked.
+    pub async fn search_session_memories_filtered(
+        &self,
+        session_id: &str,
+        query: &str,
+        limit: usize,
+        category: Option<MemoryCategory>,
+    ) -> Result<MemorySearchPage> {
         let query = query.trim();
         ensure!(!query.is_empty(), "memory search query must not be empty");
         ensure!(query.len() <= 512, "memory search query exceeds 512 bytes");
@@ -79,13 +103,68 @@ impl Store {
         );
 
         let phrase = query.to_lowercase();
-        let terms = phrase
+        let mut terms = phrase
             .split(|character: char| !character.is_alphanumeric())
             .filter(|term| term.chars().count() >= 2)
+            .map(str::to_owned)
             .collect::<Vec<_>>();
-        let mut matches = self
-            .session_memories(session_id, false)
-            .await?
+        let characters = phrase.chars().collect::<Vec<_>>();
+        terms.extend(
+            characters
+                .windows(2)
+                .filter(|pair| {
+                    pair.iter()
+                        .all(|c| matches!(*c, '\u{3400}'..='\u{9fff}'))
+                })
+                .map(|pair| pair.iter().collect::<String>()),
+        );
+        terms.sort_unstable();
+        terms.dedup();
+        let mut condition = Condition::any();
+        for term in std::iter::once(&phrase).chain(&terms) {
+            let pattern = format!(
+                "%{}%",
+                term.replace('\\', "\\\\")
+                    .replace('%', "\\%")
+                    .replace('_', "\\_")
+            );
+            for column in [memories::Column::Title, memories::Column::Content] {
+                condition = condition.add(
+                    Expr::expr(sea_orm::sea_query::Func::lower(Expr::col(column)))
+                        .like(sea_orm::sea_query::LikeExpr::new(pattern.clone()).escape('\\')),
+                );
+            }
+        }
+        // SQLite's built-in case folding is ASCII-only. Rank other scripts in Rust
+        // rather than excluding valid case-insensitive matches in the SQL prefilter.
+        let prefilter = phrase
+            .chars()
+            .all(|c| c.is_ascii() || matches!(c, '\u{3400}'..='\u{9fff}'));
+        let candidates = self
+            .read_access(|conn| async move {
+                let mut query = memories::Entity::find()
+                    .filter(memories::Column::SessionId.eq(session_id))
+                    .filter(memories::Column::Active.eq(true));
+                if prefilter {
+                    query = query.filter(condition);
+                }
+                if let Some(category) = category {
+                    query = query.filter(memories::Column::Category.eq(category.as_str()));
+                }
+                Ok(query
+                    .order_by_desc(memories::Column::UpdatedAt)
+                    .order_by_desc(memories::Column::Id)
+                    .limit((MAX_SEARCH_CANDIDATES + 1) as u64)
+                    .all(&conn)
+                    .await?)
+            })
+            .await?;
+        let search_truncated = candidates.len() > MAX_SEARCH_CANDIDATES;
+        let mut matches = candidates
+            .into_iter()
+            .take(MAX_SEARCH_CANDIDATES)
+            .map(memory)
+            .collect::<Result<Vec<_>>>()?
             .into_iter()
             .filter_map(|memory| {
                 let title = memory.title.to_lowercase();
@@ -101,11 +180,11 @@ impl Store {
                 }
 
                 for term in &terms {
-                    if title.contains(term) {
+                    if title.contains(term.as_str()) {
                         score += 10;
                     }
 
-                    if content.contains(term) {
+                    if content.contains(term.as_str()) {
                         score += 5;
                     }
                 }
@@ -121,11 +200,14 @@ impl Store {
                 .then_with(|| right.id.cmp(&left.id))
         });
 
-        Ok(matches
-            .into_iter()
-            .take(limit)
-            .map(|(_, memory)| memory)
-            .collect())
+        Ok(MemorySearchPage {
+            memories: matches
+                .into_iter()
+                .take(limit)
+                .map(|(_, memory)| memory)
+                .collect(),
+            search_truncated,
+        })
     }
 
     pub async fn remember_in_session(
@@ -208,4 +290,112 @@ fn validate_memory_fields(title: &str, content: &str) -> Result<()> {
     ensure!(content.len() <= 8_192, "memory content exceeds 8192 bytes");
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn filtered_search_handles_chinese_categories_literals_and_candidate_budgets() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path().join("memory.db"))
+            .await
+            .unwrap();
+        let writer = store
+            .create(dir.path().display().to_string(), "fixture".into())
+            .await
+            .unwrap();
+        let wanted = store
+            .remember_in_session(
+                writer.id(),
+                MemoryCategory::Constraint,
+                "缓存策略".into(),
+                "策略必须可以配置。".into(),
+            )
+            .await
+            .unwrap();
+        store
+            .remember_in_session(
+                writer.id(),
+                MemoryCategory::Fact,
+                "策略约束".into(),
+                "这是另一种分类。".into(),
+            )
+            .await
+            .unwrap();
+        let page = store
+            .search_session_memories_filtered(
+                writer.id(),
+                "策略约束",
+                8,
+                Some(MemoryCategory::Constraint),
+            )
+            .await
+            .unwrap();
+        assert_eq!(page.memories.len(), 1);
+        assert_eq!(page.memories[0].id, wanted.id);
+        assert!(!page.search_truncated);
+        store
+            .remember_in_session(
+                writer.id(),
+                MemoryCategory::Fact,
+                "Literal % character".into(),
+                "Use a literal symbol.".into(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            store
+                .search_session_memories(writer.id(), "%", 8)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+        let unicode = store
+            .remember_in_session(
+                writer.id(),
+                MemoryCategory::Preference,
+                "ÉTUDES".into(),
+                "Mixed-case lookup.".into(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            store
+                .search_session_memories(writer.id(), "études", 8)
+                .await
+                .unwrap()[0]
+                .id,
+            unicode.id
+        );
+        let session = writer.id().to_owned();
+        store
+            .write_access(|conn| async move {
+                memories::Entity::insert_many((0..MAX_SEARCH_CANDIDATES + 1).map(|index| {
+                    memories::ActiveModel {
+                        session_id: Set(session.clone()),
+                        category: Set("fact".into()),
+                        title: Set(format!("candidate {index}")),
+                        content: Set("ranked fixture".into()),
+                        active: Set(true),
+                        created_at: Set(now()),
+                        updated_at: Set(now()),
+                        ..Default::default()
+                    }
+                }))
+                .exec(&conn)
+                .await?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+        let page = store
+            .search_session_memories_filtered(writer.id(), "candidate", 5, None)
+            .await
+            .unwrap();
+        assert_eq!(page.memories.len(), 5);
+        assert!(page.search_truncated);
+    }
 }

@@ -5,6 +5,69 @@ use orbit_tools::read_document::ReadDocument;
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
+#[tokio::test]
+async fn native_worker_slices_csv_records_and_keeps_character_and_row_cursors_separate() {
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::write(
+        directory.path().join("records.csv"),
+        "key,value\nfirst,\"two\nlines\"\nsecond,\"a,b\"\n",
+    )
+    .unwrap();
+    let tool = ReadDocument::new(Workspace::new(directory.path()).unwrap())
+        .with_worker(env!("CARGO_BIN_EXE_orbit-document-worker").into());
+    let mut content = String::new();
+    let mut start = 0;
+    loop {
+        let output = tool
+            .execute(
+                ToolCall::function(
+                    "slice",
+                    "ReadDocument",
+                    json!({
+                        "path": "records.csv", "start_row": 2, "max_rows": 1,
+                        "start_char": start, "max_chars": 8
+                    }),
+                ),
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+        let page: Value = serde_json::from_str(&output.content).unwrap();
+        assert_eq!(page["table"]["total_rows"], 3);
+        content.push_str(page["content"].as_str().unwrap());
+        if let Some(next) = page["next_start_char"].as_u64() {
+            assert!(page["table"]["next_start_row"].is_null());
+            start = next;
+        } else {
+            assert_eq!(page["table"]["next_start_row"], 3);
+            break;
+        }
+    }
+    assert_eq!(
+        serde_json::from_str::<Value>(&content).unwrap(),
+        json!([["first", "two\nlines"]])
+    );
+    let output = tool
+        .execute(
+            ToolCall::function(
+                "next",
+                "ReadDocument",
+                json!({
+                    "path": "records.csv", "start_row": 3, "max_rows": 1
+                }),
+            ),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    let page: Value = serde_json::from_str(&output.content).unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(page["content"].as_str().unwrap()).unwrap(),
+        json!([["second", "a,b"]])
+    );
+    assert!(page["table"]["next_start_row"].is_null());
+}
+
 fn mixed_pdf() -> Vec<u8> {
     let page_count = 7;
     let kids = (0..page_count)

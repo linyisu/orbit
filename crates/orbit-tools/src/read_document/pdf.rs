@@ -167,6 +167,7 @@ fn render_pages(items: Vec<TextItem>, start: u32, end: u32, total: u32) -> Docum
     }
     Document {
         text,
+        table: None,
         pdf: Some(PdfPages {
             start_page: start,
             end_page: end,

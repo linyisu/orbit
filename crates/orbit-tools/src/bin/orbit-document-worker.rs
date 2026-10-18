@@ -10,7 +10,7 @@ fn main() -> Result<(), String> {
                 .ok_or("invalid render pages")?,
         );
     }
-    if (args.len() != 3 && args.len() != 5) || args[0] != "--internal-document-worker" {
+    if ![3, 5, 6].contains(&args.len()) || args[0] != "--internal-document-worker" {
         return Err("document worker requires input and output paths".into());
     }
     let page = |index: usize| -> Result<Option<u32>, String> {
@@ -25,10 +25,12 @@ fn main() -> Result<(), String> {
                 .map_err(|e| format!("invalid page: {e}")),
         }
     };
-    orbit_tools::read_document::document_worker(
+    orbit_tools::read_document::document_worker_with_selection(
         std::path::Path::new(&args[1]),
         std::path::Path::new(&args[2]),
         page(3)?,
         page(4)?,
+        args.get(5)
+            .and_then(|value| value.to_str()),
     )
 }

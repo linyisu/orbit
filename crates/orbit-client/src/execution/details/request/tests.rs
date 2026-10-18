@@ -57,6 +57,7 @@ fn operation_content_keeps_queries_paths_and_file_bodies_distinct() {
         ),
         ("ListFiles", json!({}), "."),
         ("SubmitPlan", json!({"generation": 3}), "提交计划供审阅"),
+        ("CancelPlan", json!({"generation": 4}), "放弃自主计划草稿"),
         (
             "SpawnAgent",
             json!({"task": "Inspect generated sources", "role": "review"}),
@@ -70,6 +71,12 @@ fn operation_content_keeps_queries_paths_and_file_bodies_distinct() {
         json!({"query": "needle", "glob": "**/*.rs", "regex": true}),
     );
     assert!(search.context().contains("**/*.rs") && search.context().contains("正则：true"));
+    let document = request(
+        "ReadDocument",
+        json!({"path": "sample.xlsx", "sheet": "North", "start_row": 5, "max_rows": 10}),
+    );
+    assert_eq!(document.content(), "sample.xlsx");
+    assert_eq!(document.context(), "工作表：North · 起始行：5 · 行数：10");
 }
 
 #[test]

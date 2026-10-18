@@ -8,6 +8,7 @@ use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
 mod pdf;
+mod table;
 mod vision;
 mod worker;
 
@@ -33,6 +34,9 @@ struct Arguments {
     #[serde(default)]
     images: vision::ImageMode,
     image_start_page: Option<u32>,
+    start_row: Option<usize>,
+    max_rows: Option<usize>,
+    sheet: Option<String>,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -40,6 +44,8 @@ struct Document {
     text: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pdf: Option<PdfPages>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    table: Option<table::Page>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -75,6 +81,7 @@ fn default_chars() -> usize {
 
 struct Converted {
     pdf: Option<PdfPages>,
+    table: Option<table::Page>,
     text: String,
     total_chars: usize,
     offsets: Vec<usize>,
@@ -82,7 +89,7 @@ struct Converted {
 
 impl Converted {
     fn new(document: Document) -> Self {
-        let Document { text, pdf } = document;
+        let Document { text, pdf, table } = document;
         let mut offsets = Vec::new();
         let mut total_chars = 0;
         for (index, (offset, _)) in text.char_indices().enumerate() {
@@ -94,6 +101,7 @@ impl Converted {
 
         Self {
             pdf,
+            table,
             text,
             total_chars,
             offsets,
@@ -150,10 +158,21 @@ impl Tool for ReadDocument {
                 as evidence that the original page lacks that information. Conversion is local \
                 and creates no project files. Continue with next_start_char and the SAME page \
                 range while truncated; then use next_start_page for the next PDF range. \
-                start_char/max_chars paginate the converted text within that range.",
+                start_char/max_chars paginate the converted text within that range. For CSV and \
+                spreadsheets, sheet/start_row/max_rows select a row slice (1-based, including \
+                header rows); content becomes JSON cell-text rows, with table metadata and \
+                next_start_row. Keep the selection unchanged while using next_start_char, then \
+                continue at table.next_start_row. Worksheet names are exact; omit sheet to use \
+                the first sheet. Spreadsheet values are cached values, not recalculated formulas.",
             json!({
                 "type": "object",
                 "properties": {
+                    "sheet": { "type": "string", "minLength": 1 },
+                    "start_row": { "type": "integer", "minimum": 1, "default": 1 },
+                    "max_rows": {
+                        "type": "integer", "minimum": 1, "maximum": table::MAX_ROWS,
+                        "default": table::DEFAULT_ROWS
+                    },
                     "path": {
                         "type": "string",
                         "description": "Path relative to the workspace root, or an outside path \
@@ -231,6 +250,27 @@ impl Tool for ReadDocument {
             }
 
             page_range(arguments.start_page, arguments.end_page).map_err(invalid)?;
+            let selection = if arguments.start_row.is_some()
+                || arguments.max_rows.is_some()
+                || arguments.sheet.is_some()
+            {
+                let selection = table::Selection {
+                    start_row: arguments.start_row.unwrap_or(1),
+                    max_rows: arguments
+                        .max_rows
+                        .unwrap_or(table::DEFAULT_ROWS),
+                    sheet: arguments.sheet.clone(),
+                };
+                selection.validate().map_err(invalid)?;
+                if arguments.start_page.is_some() || arguments.end_page.is_some() {
+                    return Err(invalid(
+                        "table selections cannot be combined with PDF page ranges",
+                    ));
+                }
+                Some(selection)
+            } else {
+                None
+            };
 
             if cancellation.is_cancelled() {
                 return Err(ToolError::Cancelled);
@@ -262,12 +302,13 @@ impl Tool for ReadDocument {
                 None => env!("CARGO_PKG_VERSION").to_owned(),
             };
             let key = format!(
-                "{}:{}:{}:{:?}:{:?}",
+                "{}:{}:{}:{:?}:{:?}:{}",
                 orbit_runtime::execution::content_hash(&bytes),
                 extension,
                 worker_version,
                 arguments.start_page,
                 arguments.end_page,
+                serde_json::to_string(&selection).map_err(failed)?,
             );
             let mut cache = tokio::select! {
                 _ = cancellation.cancelled() => return Err(ToolError::Cancelled),
@@ -293,12 +334,23 @@ impl Tool for ReadDocument {
                             for other documents",
                     ));
                 }
+                if selection.is_some()
+                    && !matches!(
+                        format,
+                        anydoc::Format::Csv | anydoc::Format::Excel | anydoc::Format::Ods
+                    )
+                {
+                    return Err(invalid(
+                        "sheet/start_row/max_rows require CSV or a spreadsheet",
+                    ));
+                }
                 let document = if let Some(worker) = &self.worker {
                     convert_worker(
                         worker,
                         &bytes,
                         &extension,
                         (arguments.start_page, arguments.end_page),
+                        selection.as_ref(),
                         cancellation.clone(),
                     )
                     .await?
@@ -306,8 +358,14 @@ impl Tool for ReadDocument {
                     // Only unit tests exercise the parser directly; production requires a worker.
                     #[cfg(test)]
                     {
-                        convert(&bytes, format, arguments.start_page, arguments.end_page)
-                            .map_err(failed)?
+                        convert_selected(
+                            &bytes,
+                            format,
+                            arguments.start_page,
+                            arguments.end_page,
+                            selection.as_ref(),
+                        )
+                        .map_err(failed)?
                     }
 
                     #[cfg(not(test))]
@@ -432,12 +490,18 @@ async fn convert_worker(
     bytes: &[u8],
     extension: &str,
     pages: (Option<u32>, Option<u32>),
+    selection: Option<&table::Selection>,
     cancellation: CancellationToken,
 ) -> Result<Document, ToolError> {
-    let arguments = [pages.0, pages.1].map(|page| {
-        page.map(|p| p.to_string())
-            .unwrap_or_else(|| "-".into())
-    });
+    let mut arguments = [pages.0, pages.1]
+        .map(|page| {
+            page.map(|p| p.to_string())
+                .unwrap_or_else(|| "-".into())
+        })
+        .to_vec();
+    if let Some(selection) = selection {
+        arguments.push(serde_json::to_string(selection).map_err(failed)?);
+    }
     let temporary_output = worker::run(
         worker,
         bytes,
@@ -466,6 +530,17 @@ pub fn document_worker(
     start: Option<u32>,
     end: Option<u32>,
 ) -> Result<(), String> {
+    document_worker_with_selection(input, output, start, end, None)
+}
+
+/// Decode an optional row selection and convert within the worker's resource limits.
+pub fn document_worker_with_selection(
+    input: &Path,
+    output: &Path,
+    start: Option<u32>,
+    end: Option<u32>,
+    selection: Option<&str>,
+) -> Result<(), String> {
     if std::fs::metadata(input)
         .map_err(|e| e.to_string())?
         .len()
@@ -477,12 +552,33 @@ pub fn document_worker(
     let format = anydoc::Format::from_bytes(&bytes)
         .or_else(|| anydoc::Format::from_path(input))
         .ok_or("unsupported document format")?;
-    let document = convert(&bytes, format, start, end)?;
+    let selection: Option<table::Selection> = selection
+        .map(serde_json::from_str)
+        .transpose()
+        .map_err(|error| error.to_string())?
+        .flatten();
+    let document = convert_selected(&bytes, format, start, end, selection.as_ref())?;
     if document.text.len() > 64 * 1_024 * 1_024 {
         return Err("converted document exceeds 64 MiB".into());
     }
     let output_file = std::fs::File::create(output).map_err(|e| e.to_string())?;
     serde_json::to_writer(output_file, &document).map_err(|e| e.to_string())
+}
+
+fn convert_selected(
+    bytes: &[u8],
+    format: anydoc::Format,
+    start: Option<u32>,
+    end: Option<u32>,
+    selection: Option<&table::Selection>,
+) -> Result<Document, String> {
+    if let Some(selection) = selection {
+        if start.is_some() || end.is_some() {
+            return Err("table selections cannot be combined with PDF page ranges".into());
+        }
+        return table::convert(bytes, format, selection);
+    }
+    convert(bytes, format, start, end)
 }
 
 fn convert(
@@ -496,7 +592,11 @@ fn convert(
             return Err("page ranges are supported only for PDFs".into());
         }
         return anydoc::to_markdown_bytes(bytes, format)
-            .map(|text| Document { text, pdf: None })
+            .map(|text| Document {
+                text,
+                pdf: None,
+                table: None,
+            })
             .map_err(|e| e.to_string());
     }
     pdf::convert(bytes, start, end)
@@ -522,6 +622,10 @@ fn page(arguments: &Arguments, format: &str, markdown: &Converted) -> Result<Str
         .take(arguments.max_chars)
         .collect();
     let next = arguments.start_char + content.chars().count();
+    let mut table = json!(markdown.table);
+    if next < total_chars && table.is_object() {
+        table["next_start_row"] = serde_json::Value::Null;
+    }
 
     Ok(json!({
         "path": arguments.path,
@@ -532,6 +636,7 @@ fn page(arguments: &Arguments, format: &str, markdown: &Converted) -> Result<Str
         "truncated": next < total_chars,
         "next_start_char": (next < total_chars).then_some(next),
         "pdf": markdown.pdf,
+        "table": table,
         "next_start_page": markdown
             .pdf
             .as_ref()
@@ -539,7 +644,12 @@ fn page(arguments: &Arguments, format: &str, markdown: &Converted) -> Result<Str
                 |pdf| (next >= total_chars && pdf.end_page < pdf.total_pages)
                     .then_some(pdf.end_page + 1)
             ),
-        "source_kind": "local_document_markdown"
+        "content_format": if markdown.table.is_some() { "json" } else { "markdown" },
+        "source_kind": if markdown.table.is_some() {
+            "local_document_table"
+        } else {
+            "local_document_markdown"
+        }
     })
     .to_string())
 }
@@ -659,6 +769,9 @@ mod tests {
             end_page: Some(1),
             images: Default::default(),
             image_start_page: None,
+            start_row: None,
+            max_rows: None,
+            sheet: None,
         };
         let short: serde_json::Value =
             serde_json::from_str(&page(&args(5), "pdf", &converted).unwrap()).unwrap();
@@ -753,6 +866,7 @@ mod tests {
         let document = Converted::new(Document {
             text: "中a".repeat(10_000),
             pdf: None,
+            table: None,
         });
         for start in [0, 4_095, 4_096, 4_097, 19_990, 20_000] {
             let output: serde_json::Value = serde_json::from_str(
@@ -765,6 +879,9 @@ mod tests {
                         end_page: None,
                         images: Default::default(),
                         image_start_page: None,
+                        start_row: None,
+                        max_rows: None,
+                        sheet: None,
                     },
                     "csv",
                     &document,

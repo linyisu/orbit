@@ -49,6 +49,10 @@ impl Request {
                     ("start_page", "起始页"),
                     ("end_page", "结束页"),
                     ("images", "页图"),
+                    ("sheet", "工作表"),
+                    ("start_row", "起始行"),
+                    ("max_rows", "行数"),
+                    ("start_char", "起始字符"),
                 ],
             ),
             "WriteFile" => ("写入内容", "content", "plaintext", &[("path", "文件")]),
@@ -112,7 +116,9 @@ impl Request {
                 ("Agent", "agent_ids", "plaintext", &[("all", "等待全部")])
             }
             "AskUser" => ("问题", "questions", "json", &[]),
-            "EnterPlan" | "SubmitPlan" => ("计划", "", "plaintext", &[]),
+            "EnterPlan" | "SubmitPlan" | "CancelPlan" => {
+                ("计划", "", "plaintext", &[("generation", "版本")])
+            }
             "UpdatePlan" => ("计划", "markdown", "markdown", &[("title", "标题")]),
             "RequestAccess" => (
                 "访问范围",
@@ -132,6 +138,8 @@ impl Request {
             request.content = "进入规划模式".into();
         } else if tool.name == "SubmitPlan" {
             request.content = "提交计划供审阅".into();
+        } else if tool.name == "CancelPlan" {
+            request.content = "放弃自主计划草稿".into();
         }
         let mut context: Vec<String> = fields
             .iter()

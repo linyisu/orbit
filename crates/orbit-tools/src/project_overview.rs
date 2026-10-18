@@ -13,7 +13,7 @@ use orbit_agent::{
 };
 use orbit_model::types::{ChatMessage, ToolCall, ToolDefinition};
 use orbit_runtime::filesystem::Workspace;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
@@ -22,6 +22,21 @@ const MAX_FILES: usize = 4_000;
 const MAX_FILE_BYTES: u64 = 128 * 1_024;
 const MAX_READ_BYTES: usize = 2 * 1_024 * 1_024;
 const MAX_READ_FILES: usize = 96;
+
+/// A manifest-based suggestion; never an authorization or a complete test dependency graph.
+#[derive(Clone, Debug, Serialize)]
+pub struct VerificationCandidate {
+    pub manifest: PathBuf,
+    pub cwd: PathBuf,
+    pub argv: Vec<String>,
+    pub basis: String,
+    pub affected_paths: Vec<String>,
+}
+
+pub struct VerificationCandidates {
+    pub candidates: Vec<VerificationCandidate>,
+    pub incomplete: bool,
+}
 
 struct IndexedSource {
     path: PathBuf,
@@ -67,6 +82,171 @@ impl ProjectOverview {
         self.index = index;
         self
     }
+
+    /// Read ancestor manifests of changed paths using the same candidate rules as the overview.
+    /// File and scan budgets bound the work; unreadable or omitted manifests mark it incomplete.
+    pub async fn verification_candidates(
+        &self,
+        paths: Vec<String>,
+        token: CancellationToken,
+    ) -> Result<VerificationCandidates, ToolError> {
+        let workspace = self.workspace.clone();
+        tokio::task::spawn_blocking(move || {
+            let mut manifests = BTreeMap::<PathBuf, Vec<String>>::new();
+            let mut incomplete = paths.len() > MAX_READ_FILES;
+            for path in paths.into_iter().take(MAX_READ_FILES) {
+                let relative = match workspace.checked_relative(Path::new(&path)) {
+                    Ok(relative) => relative,
+                    Err(_) => {
+                        incomplete = true;
+                        continue;
+                    }
+                };
+                for directory in relative
+                    .parent()
+                    .unwrap_or(Path::new(""))
+                    .ancestors()
+                {
+                    for name in ["Cargo.toml", "pyproject.toml", "package.json"] {
+                        let manifest = directory.join(name);
+                        if !manifests.contains_key(&manifest) && manifests.len() >= MAX_READ_FILES {
+                            incomplete = true;
+                            continue;
+                        }
+                        manifests
+                            .entry(manifest)
+                            .or_default()
+                            .push(path.clone());
+                    }
+                }
+            }
+            let mut candidates = Vec::new();
+            let mut read_bytes = 0;
+            for (path, affected) in manifests {
+                if token.is_cancelled() {
+                    return Err(ToolError::Cancelled);
+                }
+                let mut file = match workspace.open_read(&path) {
+                    Ok(file) => file,
+                    Err(orbit_runtime::filesystem::WorkspaceError::Io(error))
+                        if error.kind() == std::io::ErrorKind::NotFound =>
+                    {
+                        continue;
+                    }
+                    Err(_) => {
+                        incomplete = true;
+                        continue;
+                    }
+                };
+                let mut text = String::new();
+                if file
+                    .by_ref()
+                    .take(MAX_FILE_BYTES + 1)
+                    .read_to_string(&mut text)
+                    .is_err()
+                    || text.len() as u64 > MAX_FILE_BYTES
+                {
+                    incomplete = true;
+                    continue;
+                }
+                read_bytes += text.len();
+                if read_bytes > MAX_READ_BYTES {
+                    incomplete = true;
+                    break;
+                }
+                let Some(mut commands) = verification_commands(&path, &text) else {
+                    incomplete = true;
+                    continue;
+                };
+                for command in &mut commands {
+                    command.affected_paths = affected.clone();
+                }
+                candidates.extend(commands);
+            }
+            Ok(VerificationCandidates {
+                candidates,
+                incomplete,
+            })
+        })
+        .await
+        .map_err(|error| ToolError::ExecutionFailed(error.to_string()))?
+    }
+}
+
+fn verification_commands(path: &Path, text: &str) -> Option<Vec<VerificationCandidate>> {
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str());
+    let commands: Vec<(&str, Vec<&str>)> = match name {
+        Some("Cargo.toml") => {
+            toml::from_str::<toml::Table>(text).ok()?;
+            vec![
+                ("Cargo manifest convention", vec!["cargo", "fmt", "--check"]),
+                ("Cargo manifest convention", vec!["cargo", "test"]),
+            ]
+        }
+        Some("pyproject.toml") => {
+            let value = toml::from_str::<toml::Value>(text).ok()?;
+            if value
+                .get("tool")
+                .and_then(|tool| tool.get("pytest"))
+                .is_some()
+            {
+                vec![("tool.pytest configuration", vec!["python", "-m", "pytest"])]
+            } else {
+                Vec::new()
+            }
+        }
+        Some("package.json") => serde_json::from_str::<Value>(text)
+            .ok()
+            .map(|value| {
+                let manager = match value["packageManager"]
+                    .as_str()
+                    .and_then(|manager| manager.split('@').next())
+                    .unwrap_or("npm")
+                {
+                    "npm" => "npm",
+                    "pnpm" => "pnpm",
+                    "yarn" => "yarn",
+                    "bun" => "bun",
+                    _ => return Vec::new(),
+                };
+                ["test", "check", "lint"]
+                    .into_iter()
+                    .filter(|script| {
+                        value["scripts"][*script]
+                            .as_str()
+                            .is_some()
+                    })
+                    .map(|script| {
+                        (
+                            "declared package script; review before running",
+                            vec![manager, "run", script],
+                        )
+                    })
+                    .collect()
+            })?,
+        _ => Vec::new(),
+    };
+    Some(
+        commands
+            .into_iter()
+            .map(|(basis, argv)| VerificationCandidate {
+                manifest: path.to_owned(),
+                cwd: path
+                    .parent()
+                    .filter(|path| !path.as_os_str().is_empty())
+                    .unwrap_or(Path::new("."))
+                    .to_owned(),
+                argv: argv
+                    .into_iter()
+                    .map(str::to_owned)
+                    .collect(),
+                basis: basis.into(),
+                affected_paths: Vec::new(),
+            })
+            .collect(),
+    )
 }
 
 impl Tool for ProjectOverview {
@@ -730,16 +910,8 @@ fn manifest_evidence(path: &Path, text: &str) -> Value {
                 }
 
                 out["dependencies"] = json!(dependencies);
-                out["verification_candidates"] = json!([
-                    {
-                        "basis": "Cargo manifest convention",
-                        "argv": ["cargo", "fmt", "--check"]
-                    },
-                    {
-                        "basis": "Cargo manifest convention",
-                        "argv": ["cargo", "test"]
-                    }
-                ]);
+                out["verification_candidates"] =
+                    json!(verification_commands(path, text).unwrap_or_default());
             }
         }
 
@@ -752,6 +924,8 @@ fn manifest_evidence(path: &Path, text: &str) -> Value {
                 out["package_manager"] = value["packageManager"].clone();
                 out["workspaces"] = value["workspaces"].clone();
                 out["declared_scripts"] = value["scripts"].clone();
+                out["verification_candidates"] =
+                    json!(verification_commands(path, text).unwrap_or_default());
                 out["dependencies"] = json!(
                     ["dependencies", "devDependencies"]
                         .iter()
@@ -804,10 +978,8 @@ fn manifest_evidence(path: &Path, text: &str) -> Value {
                     .and_then(|v| v.get("pytest"))
                     .is_some()
                 {
-                    out["verification_candidates"] = json!([{
-                        "basis": "tool.pytest configuration",
-                        "argv": ["python", "-m", "pytest"]
-                    }]);
+                    out["verification_candidates"] =
+                        json!(verification_commands(path, text).unwrap_or_default());
                 }
             }
         }
@@ -961,6 +1133,57 @@ mod tests {
     use std::fs;
 
     use super::*;
+
+    #[tokio::test]
+    async fn verification_candidates_link_changed_paths_to_ancestor_manifests_without_running() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        fs::create_dir_all(root.join("crates/sample/src")).unwrap();
+        fs::write(
+            root.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"crates/sample\"]\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("crates/sample/Cargo.toml"),
+            "[package]\nname = \"sample\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("package.json"),
+            r#"{"packageManager":"pnpm@10","scripts":{"test":"touch should-not-exist"}}"#,
+        )
+        .unwrap();
+        let overview = ProjectOverview::new(Workspace::new(root).unwrap());
+        let changed = "crates/sample/src/removed.rs".to_owned();
+        let result = overview
+            .verification_candidates(vec![changed.clone()], CancellationToken::new())
+            .await
+            .unwrap();
+        assert!(!result.incomplete);
+        assert_eq!(result.candidates.len(), 5);
+        for candidate in &result.candidates {
+            assert_eq!(
+                candidate.affected_paths.as_slice(),
+                std::slice::from_ref(&changed)
+            );
+        }
+        assert!(
+            result
+                .candidates
+                .iter()
+                .any(|candidate| candidate.argv == ["pnpm", "run", "test"])
+        );
+        assert!(!root.join("should-not-exist").exists());
+        let token = CancellationToken::new();
+        token.cancel();
+        assert!(matches!(
+            overview
+                .verification_candidates(vec![changed], token)
+                .await,
+            Err(ToolError::Cancelled)
+        ));
+    }
 
     #[test]
     fn output_budget_can_trim_large_language_inventories() {

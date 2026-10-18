@@ -22,7 +22,7 @@ pub fn run() -> Result<bool> {
     if std::env::args().nth(1).as_deref() == Some("--internal-document-worker") {
         let args: Vec<_> = std::env::args_os().skip(2).collect();
         anyhow::ensure!(
-            args.len() == 2 || args.len() == 4,
+            [2, 4, 5].contains(&args.len()),
             "document worker requires input and output paths"
         );
         let page = |index: usize| -> Result<Option<u32>> {
@@ -34,11 +34,13 @@ pub fn run() -> Result<bool> {
                 Some(value) => Ok(Some(value.parse()?)),
             }
         };
-        orbit_tools::read_document::document_worker(
+        orbit_tools::read_document::document_worker_with_selection(
             Path::new(&args[0]),
             Path::new(&args[1]),
             page(2)?,
             page(3)?,
+            args.get(4)
+                .and_then(|value| value.to_str()),
         )
         .map_err(anyhow::Error::msg)?;
         return Ok(true);

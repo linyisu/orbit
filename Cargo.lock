@@ -7504,6 +7504,8 @@ dependencies = [
  "anydoc",
  "anyhow",
  "base64 0.22.1",
+ "calamine",
+ "csv",
  "encoding_rs",
  "futures-util",
  "globset",
@@ -7543,6 +7545,7 @@ dependencies = [
  "tree-sitter-rust",
  "tree-sitter-typescript",
  "url",
+ "zip",
 ]
 
 [[package]]

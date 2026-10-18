@@ -413,11 +413,7 @@ impl ToolRegistry {
                     .as_ref()
                     .is_none_or(|p| p.visible(tool.capabilities()))
             })
-            .map(|tool| {
-                let mut definition = tool.definition();
-                orbit_model::tool_purpose::advertise(&mut definition);
-                definition
-            })
+            .map(|tool| tool.definition())
             .collect::<Vec<_>>();
 
         definitions.sort_by(|left, right| {
@@ -433,10 +429,10 @@ impl ToolRegistry {
         self.tools.contains_key(name)
     }
 
-    /// Separates model intent only for tools whose schema advertises this extension.
+    /// Reads legacy display metadata without changing a tool's own business contract.
     pub fn normalize_call(&self, call: &mut ToolCall) {
         if let Some(tool) = self.tools.get(&call.function.name)
-            && orbit_model::tool_purpose::advertise(&mut tool.definition())
+            && orbit_model::tool_purpose::accepts_legacy_purpose(&tool.definition())
         {
             orbit_model::tool_purpose::extract(call);
         }
@@ -508,8 +504,45 @@ impl ToolRegistry {
                 .as_ref()
                 .map(|p| p.acquire(&call, capabilities))
                 .transpose()?;
-            tool.execute_with_context(call, cancellation, context)
+            match tool
+                .execute_with_context(call, cancellation, context)
                 .await
+            {
+                Err(ToolError::InvalidArguments {
+                    tool: name,
+                    mut message,
+                }) => {
+                    let definition = tool.definition();
+                    let schema = &definition.function.parameters;
+                    if let Some(properties) = schema["properties"].as_object() {
+                        let fields = properties
+                            .keys()
+                            .map(String::as_str)
+                            .collect::<Vec<_>>();
+                        let required = schema["required"]
+                            .as_array()
+                            .map(|fields| {
+                                fields
+                                    .iter()
+                                    .filter_map(serde_json::Value::as_str)
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
+                            })
+                            .unwrap_or_default();
+                        message.push_str(&format!(
+                            "; allowed top-level fields: [{}]; required: [{}]. \
+                                Use the declared schema; unknown fields are not ignored.",
+                            fields.join(", "),
+                            required
+                        ));
+                    }
+                    Err(ToolError::InvalidArguments {
+                        tool: name,
+                        message,
+                    })
+                }
+                result => result,
+            }
         })
     }
 }

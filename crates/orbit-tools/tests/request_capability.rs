@@ -30,8 +30,10 @@ async fn missing_paths_suggest_an_existing_parent() {
             CancellationToken::new(),
         )
         .await
-        .unwrap_err()
-        .to_string();
+        .unwrap_err();
+    let envelope: Value = serde_json::from_str(&error.model_content()).unwrap();
+    assert_eq!(envelope["error"]["code"], "invalid_arguments");
+    let error = error.to_string();
     assert!(error.contains(&format!(
         "existing eligible parent '{}'",
         outside.path().display()

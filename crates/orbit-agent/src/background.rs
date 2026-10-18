@@ -714,6 +714,8 @@ fn bounded(text: &str, limit: usize) -> String {
 }
 
 fn compact_output(content: &str) -> serde_json::Value {
+    const MAX_PREVIEW_BYTES: usize = 2_048;
+    const MAX_PREVIEW_LINES: usize = 40;
     let Ok(mut value) = serde_json::from_str::<serde_json::Value>(content) else {
         return serde_json::Value::String(bounded(content, 4_096));
     };
@@ -722,8 +724,25 @@ fn compact_output(content: &str) -> serde_json::Value {
             .get(field)
             .and_then(serde_json::Value::as_str)
         {
-            let preview = bounded(text, 2_048);
-            if preview != text {
+            let mut start = text
+                .len()
+                .saturating_sub(MAX_PREVIEW_BYTES);
+            while !text.is_char_boundary(start) {
+                start += 1;
+            }
+            let tail = &text[start..];
+            if let Some((offset, _)) = tail
+                .strip_suffix('\n')
+                .unwrap_or(tail)
+                .match_indices('\n')
+                .rev()
+                .nth(MAX_PREVIEW_LINES - 1)
+            {
+                start += offset + 1;
+            }
+            let preview = text[start..].to_owned();
+            let truncated = preview != text;
+            if truncated {
                 value["completion_preview_truncated"] = true.into();
             }
             value[field] = preview.into();
@@ -965,8 +984,8 @@ mod tests {
         let value = compact_output(
             &serde_json::json!({
                 "exit_code": 7,
-                "stdout": "轨道".repeat(3_000),
-                "stderr": "轨道".repeat(3_000),
+                "stdout": format!("{}\nfinal result", "轨道\n".repeat(3_000)),
+                "stderr": format!("{}\nfinal failure", "轨道".repeat(3_000)),
                 "output_id": "cmd-orbit",
                 "timed_out": false,
             })
@@ -978,6 +997,34 @@ mod tests {
         assert_eq!(value["completion_preview_truncated"], true);
         assert!(value["stdout"].as_str().unwrap().len() < 2_100);
         assert!(value["stderr"].as_str().unwrap().len() < 2_100);
+        assert!(
+            value["stdout"]
+                .as_str()
+                .unwrap()
+                .ends_with("final result")
+        );
+        assert!(
+            value["stdout"]
+                .as_str()
+                .unwrap()
+                .lines()
+                .count()
+                <= 40
+        );
+        assert!(
+            value["stderr"]
+                .as_str()
+                .unwrap()
+                .ends_with("final failure")
+        );
+        let complete = "line\n".repeat(40);
+        let value = compact_output(&serde_json::json!({"stdout": complete}).to_string());
+        assert_eq!(value["stdout"], complete);
+        assert!(
+            value
+                .get("completion_preview_truncated")
+                .is_none()
+        );
     }
 
     #[test]
