@@ -2711,7 +2711,7 @@ impl StreamState {
         }
     }
 
-    /// Reset state for a new streaming window (e.g., after 30s limit).
+    /// Reset for a new utterance, retaining the tokenizer and cumulative work counters.
     pub fn reset(&mut self) {
         self.enc_cache.clear();
         self.enc_cached_seq_total = 0;
@@ -2790,9 +2790,27 @@ impl StreamState {
         self.work
     }
 
-    /// Get how many samples have been processed so far.
+    /// Number of processed samples relative to the currently retained audio buffer.
     pub fn audio_cursor(&self) -> usize {
         self.audio_cursor
+    }
+
+    /// Release PCM belonging to discarded encoder windows, preserving text and KV caches.
+    /// `samples` must be the same accumulated buffer used by `stream_push_audio`, and
+    /// `config` must be the stream's unchanged encoder configuration. Append subsequent
+    /// audio to this compacted buffer; callers must not keep an independent sample cursor.
+    pub fn compact_audio(&mut self, samples: &mut Vec<f32>, config: &QwenConfig) {
+        let window_samples = config.enc_n_window_infer.clamp(100, 800) * HOP_LENGTH;
+        let discard = self.enc_cache_base_windows * window_samples;
+        assert!(discard <= self.audio_cursor && self.audio_cursor <= samples.len());
+        if discard == 0 {
+            return;
+        }
+        samples.drain(..discard);
+        self.audio_cursor -= discard;
+        self.last_partial_cursor = self.last_partial_cursor.saturating_sub(discard);
+        self.ml_scan_cursor = self.ml_scan_cursor.saturating_sub(discard);
+        self.enc_cache_base_windows = 0;
     }
 
     /// Number of encoder windows currently cached. Drops to a small value at an
@@ -2812,7 +2830,8 @@ impl StreamState {
 
 /// Process all available new audio incrementally.
 ///
-/// `samples` is the **full** audio buffer accumulated so far (16 kHz mono f32).
+/// `samples` is the retained accumulated audio buffer (16 kHz mono f32), optionally
+/// compacted with `StreamState::compact_audio` between calls.
 /// Processes all full chunks from `state.audio_cursor` to end of `samples`.
 /// When `finalize` is true, also processes any remaining partial chunk and
 /// emits all rollback-buffered tokens.
@@ -3381,6 +3400,46 @@ pub fn stream_push_audio(
 #[cfg(test)]
 mod orbit_stream_tests {
     use super::StreamState;
+
+    #[test]
+    fn compaction_rebases_audio_without_resetting_transcription_or_work() {
+        let mut state = StreamState::new();
+        let mut config = crate::config::QwenConfig::default();
+        config.enc_n_window_infer = 200;
+        let mut samples: Vec<f32> = (0..96_007).map(|sample| sample as f32).collect();
+        state.enc_cache_base_windows = 2;
+        state.audio_cursor = 96_000;
+        state.last_partial_cursor = 80_000;
+        state.ml_scan_cursor = 96_000;
+        state.chunk_idx = 42;
+        state.result_bytes = b"stable".to_vec();
+        state.provisional_bytes = b" tail".to_vec();
+        state.raw_tokens = vec![1, 2, 3];
+        state.work.encoder_samples = 96_000;
+        state.compact_audio(&mut samples, &config);
+        assert_eq!(samples.len(), 32_007);
+        assert_eq!(samples[0], 64_000.);
+        assert_eq!(samples[32_006], 96_006.);
+        assert_eq!(state.audio_cursor(), 32_000);
+        assert_eq!(state.last_partial_cursor, 16_000);
+        assert_eq!(state.ml_scan_cursor, 32_000);
+        assert_eq!(state.enc_cache_base_windows, 0);
+        assert_eq!(state.chunk_idx, 42);
+        assert_eq!(state.raw_tokens, [1, 2, 3]);
+        assert_eq!(state.hypothesis(), "stable tail");
+        assert_eq!(state.work().encoder_samples, 96_000);
+        state.compact_audio(&mut samples, &config);
+        assert_eq!(samples.len(), 32_007);
+        state.enc_cache_base_windows = 1;
+        state.last_partial_cursor = 0;
+        state.ml_scan_cursor = 0;
+        state.compact_audio(&mut samples, &config);
+        assert_eq!(samples.len(), 7);
+        assert_eq!(state.audio_cursor(), 0);
+        assert_eq!(state.last_partial_cursor, 0);
+        assert_eq!(state.ml_scan_cursor, 0);
+        assert_eq!(state.hypothesis(), "stable tail");
+    }
 
     #[test]
     fn segment_reset_keeps_committed_text_but_does_not_carry_output_tokens() {

@@ -8,7 +8,8 @@
 仅调整原生增量路径：停止时即使没有新采样也提交回滚尾部；UTF-8 跨 token 拼接；
 长录音每六个增量块重锚，先提交当前块，再清理对应的音频与输出 token 前缀；
 回滚不得越过已确认文字，避免漏字、重复提交和切片越界。公开累计编码采样数、窗口数
-和预填充复用计数用于真实增量验收。模型无关的边界回归位于 transcribe::orbit_stream_tests。
+和预填充复用计数用于真实增量验收。释放编码窗口后可原位压缩累计 PCM，
+同步重定位音频及静音扫描游标，保留转写、KV 缓存和工作计数，避免连续录音保留全部音频。模型无关的边界回归位于 transcribe::orbit_stream_tests。
 
 库只生成 Rust rlib。Linux 的 blas feature 静态依赖 openblas-src 0.10.16，避免用户机器
 额外安装 BLAS；macOS 仍使用系统 Accelerate。线程上限及可移植 CPU 内核由根 Cargo 配置控制。

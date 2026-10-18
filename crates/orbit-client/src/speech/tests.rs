@@ -1,16 +1,67 @@
+use std::sync::mpsc;
+
 use super::*;
 
-#[test]
-fn capture_is_bounded_and_preserves_pcm() {
-    let (sender, receiver) = mpsc::sync_channel(1);
-    let mut capture = Capture { sender, samples: 0 };
-    capture
-        .push(&[i16::MIN, 0, i16::MAX])
+#[tokio::test]
+#[ignore = "requires verified Qwen weights and independent continuous speech longer than two minutes"]
+async fn local_model_keeps_recording_with_native_callback_cadence_beyond_two_minutes() {
+    use std::time::{Duration, Instant};
+
+    let directory = PathBuf::from(std::env::var_os("ORBIT_SPEECH_TEST_MODEL_DIRECTORY").unwrap());
+    let path = std::env::var("ORBIT_SPEECH_LONG_TEST_WAV").unwrap();
+    let samples: Vec<_> = qwen_asr::audio::load_wav(&path)
+        .unwrap()
+        .into_iter()
+        .map(|sample| (sample.clamp(-1., 1.) * 32_767.) as i16)
+        .collect();
+    assert!(samples.len() > SAMPLE_RATE_HZ * 120);
+    let (progress, _) = watch::channel(Progress::default());
+    let engine = prepare(directory, CancellationToken::new(), progress)
+        .await
         .unwrap();
-    assert!(capture.push(&[1]).is_err());
-    assert_eq!(receiver.recv().unwrap(), [-1., 0., 32_767. / 32_768.]);
-    capture.samples = SAMPLE_RATE_HZ * MAX_RECORDING_SECONDS;
-    assert!(capture.push(&[1]).is_err());
+    let (updates, partials) = watch::channel(String::new());
+    let (mut capture, recognition) = engine.start(CancellationToken::new(), updates);
+    let worker = tokio::task::spawn_blocking(move || recognition.run());
+    let started = Instant::now();
+    let mut first_text = None;
+    let mut slowest_push = Duration::ZERO;
+    for (index, chunk) in samples
+        .chunks(SAMPLE_RATE_HZ / 100)
+        .enumerate()
+    {
+        let deadline = started + Duration::from_millis((index as u64 + 1) * 10);
+        tokio::time::sleep(deadline.saturating_duration_since(Instant::now())).await;
+        let pushing = Instant::now();
+        capture.push(chunk).unwrap();
+        slowest_push = slowest_push.max(pushing.elapsed());
+        if !partials.borrow().is_empty() {
+            first_text.get_or_insert_with(|| started.elapsed());
+        }
+    }
+    assert!(
+        first_text.is_some(),
+        "no preview while the microphone was open"
+    );
+    drop(capture);
+    let finishing = Instant::now();
+    let text = tokio::time::timeout(Duration::from_secs(60), worker)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert!(!text.is_empty());
+    assert!(!text.contains('�'));
+    assert_eq!(*partials.borrow(), text);
+    eprintln!(
+        "QWEN_NATIVE_CALLBACKS={}",
+        serde_json::json!({
+            "audio_seconds": samples.len() as f64 / SAMPLE_RATE_HZ as f64,
+            "first_text_seconds": first_text.unwrap().as_secs_f64(),
+            "finish_seconds": finishing.elapsed().as_secs_f64(),
+            "slowest_capture_seconds": slowest_push.as_secs_f64(),
+            "text": text,
+        })
+    );
 }
 
 #[tokio::test]
@@ -122,19 +173,6 @@ async fn local_model_streams_and_corrects_before_input_finishes() {
             .unwrap()
             .is_err()
     );
-}
-
-#[test]
-fn capture_accounts_for_frames_accepted_before_a_queue_overrun() {
-    let (sender, receiver) = mpsc::sync_channel(1);
-    let mut capture = Capture { sender, samples: 0 };
-    assert!(
-        capture
-            .push(&vec![1; AUDIO_CHUNK_SAMPLES + 1])
-            .is_err()
-    );
-    assert_eq!(capture.samples, AUDIO_CHUNK_SAMPLES);
-    assert_eq!(receiver.recv().unwrap().len(), AUDIO_CHUNK_SAMPLES);
 }
 
 #[tokio::test]

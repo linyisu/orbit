@@ -16,9 +16,9 @@ impl AudioInput for FileInput {
                 format.sample_rate() == speech::SAMPLE_RATE_HZ as u32 && format.channels() == 1,
                 "test audio requires 16 kHz mono"
             );
+            const MAX_FIXTURE_BYTES: u64 = 16 * 1_024 * 1_024;
             anyhow::ensure!(
-                std::fs::metadata(&self.0)?.len()
-                    <= (speech::SAMPLE_RATE_HZ * speech::MAX_RECORDING_SECONDS * 2) as u64,
+                std::fs::metadata(&self.0)?.len() <= MAX_FIXTURE_BYTES,
                 "test audio is too large"
             );
             let bytes = std::fs::read(&self.0)?;
@@ -35,10 +35,10 @@ impl AudioInput for FileInput {
         })()
         .map_err(SpeechError::input)?;
         let task = cx.spawn(async move |cx| {
-            let count = speech::SAMPLE_RATE_HZ / 10;
+            let count = speech::SAMPLE_RATE_HZ / 100;
             for chunk in samples.chunks(count) {
                 cx.background_executor()
-                    .timer(Duration::from_millis(100))
+                    .timer(Duration::from_millis(10))
                     .await;
                 cx.update(|cx| sink.push(chunk.to_vec(), cx));
             }

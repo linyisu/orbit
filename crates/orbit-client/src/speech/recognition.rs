@@ -1,5 +1,6 @@
 //! Incremental Qwen audio windows and KV reuse; capture and all native work stay separate.
-use std::{sync::mpsc, time::Duration};
+#[cfg(test)]
+use std::time::Duration;
 
 use anyhow::{Context, Result, ensure};
 use qwen_asr::{context::QwenCtx, transcribe::StreamState};
@@ -9,7 +10,6 @@ use super::{
     transcript::Transcript,
 };
 
-const INPUT_POLL: Duration = Duration::from_millis(100);
 const DECODE_CHUNK_SAMPLES: usize = SAMPLE_RATE_HZ * 2;
 const PRE_ROLL_SAMPLES: usize = SAMPLE_RATE_HZ / 5;
 const TRAILING_SILENCE_SAMPLES: usize = SAMPLE_RATE_HZ * 3 / 5;
@@ -132,6 +132,8 @@ impl StreamingSession {
         ensure!(!cancel.is_cancelled(), "语音转写已取消");
         self.transcript
             .preview(self.state.hypothesis());
+        self.state
+            .compact_audio(&mut self.audio.samples, &self.decoder.config);
         Ok(())
     }
 
@@ -152,13 +154,8 @@ impl Recognition {
     /// the remaining window and rollback tail; cancellation prevents further publication.
     pub fn run(self) -> Result<String> {
         let mut session = StreamingSession::new(&self.engine, &self.cancel)?;
-        loop {
-            ensure!(!self.cancel.is_cancelled(), "语音转写已取消");
-            match self.receiver.recv_timeout(INPUT_POLL) {
-                Ok(samples) => session.push(&samples, &self.cancel)?,
-                Err(mpsc::RecvTimeoutError::Timeout) => continue,
-                Err(mpsc::RecvTimeoutError::Disconnected) => break,
-            }
+        while let Some(samples) = self.input.receive(&self.cancel)? {
+            session.push(&samples, &self.cancel)?;
             self.publish(session.transcript.text())?;
         }
         session.finish(&self.cancel)?;
@@ -242,12 +239,16 @@ mod tests {
             let mut revisions = 0;
             let mut slowest = Duration::ZERO;
             let mut max_cached_windows = 0;
+            let mut max_retained_audio_samples = 0;
             for (index, chunk) in samples.chunks(1_600).enumerate() {
                 let deadline = started + Duration::from_millis((index as u64 + 1) * 100);
                 std::thread::sleep(deadline.saturating_duration_since(Instant::now()));
                 let processing = Instant::now();
                 session.push(chunk, &cancel).unwrap();
                 max_cached_windows = max_cached_windows.max(session.state.enc_window_count());
+                max_retained_audio_samples =
+                    max_retained_audio_samples.max(session.audio.samples.len());
+                assert!(max_retained_audio_samples <= SAMPLE_RATE_HZ * 14 + 1_600);
                 assert!(
                     max_cached_windows <= 7,
                     "encoder context grew beyond fourteen seconds"
@@ -292,6 +293,7 @@ mod tests {
                     "encoder_samples": work.encoder_samples,
                     "encoder_windows": work.encoder_windows,
                     "max_cached_windows": max_cached_windows,
+                    "max_retained_audio_samples": max_retained_audio_samples,
                     "reused_prefill_rows": work.reused_prefill_rows,
                     "prefill_rows": work.prefill_rows,
                 })

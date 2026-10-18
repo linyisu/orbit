@@ -1,26 +1,19 @@
 //! Client-host Qwen incremental speech recognition and background model preparation.
 //! Only verified model downloads use the network; audio stays on this client host.
 mod cache;
+mod input;
 mod model;
 mod recognition;
 mod transcript;
 
-use std::{
-    path::PathBuf,
-    sync::{
-        Arc,
-        mpsc::{self, Receiver, SyncSender},
-    },
-};
+use std::{path::PathBuf, sync::Arc};
 
 use anyhow::{Context, Result, ensure};
 use tokio::sync::watch;
 pub use tokio_util::sync::CancellationToken;
 
 pub const SAMPLE_RATE_HZ: usize = 16_000;
-pub const MAX_RECORDING_SECONDS: usize = 120;
 const AUDIO_CHUNK_SAMPLES: usize = 1_600;
-const AUDIO_QUEUE_CHUNKS: usize = 32;
 
 /// The current background preparation phase. Byte counters include cached assets.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -78,55 +71,31 @@ pub struct Recognizer {
 
 /// Bounded microphone input. Dropping it ends the input; cancellation discards all hypotheses.
 pub struct Capture {
-    sender: SyncSender<Vec<f32>>,
-    samples: usize,
+    input: Arc<input::Input>,
 }
 
-impl Capture {
-    /// Queue short PCM chunks without blocking the UI. Overrun fails explicitly rather than
-    /// silently dropping samples and producing an incomplete transcript.
-    pub fn push(&mut self, samples: &[i16]) -> Result<()> {
-        ensure!(
-            samples.len() <= SAMPLE_RATE_HZ * MAX_RECORDING_SECONDS - self.samples,
-            "录音最长为 {MAX_RECORDING_SECONDS} 秒，请分段输入"
-        );
-        for chunk in samples.chunks(AUDIO_CHUNK_SAMPLES) {
-            self.sender
-                .try_send(
-                    chunk
-                        .iter()
-                        .map(|sample| *sample as f32 / 32_768.)
-                        .collect(),
-                )
-                .context("本地语音处理未跟上录音或已停止，请缩短录音后重试")?;
-            self.samples += chunk.len();
-        }
-        Ok(())
-    }
-}
-
-/// One bounded recording session. Run it on a worker; updates replace the full voice span.
+/// One incremental recording session. Run it on a worker; updates replace the full voice span.
 pub struct Recognition {
     engine: Arc<Recognizer>,
-    receiver: Receiver<Vec<f32>>,
+    input: Arc<input::Input>,
     cancel: CancellationToken,
     updates: watch::Sender<String>,
 }
 
 impl Recognizer {
     /// Start a session without performing inference on the caller thread.
-    /// PCM input retains at most 3.2 seconds of backlog; total audio is capped at 120 seconds.
+    /// PCM backlog is bounded by sample count; recording has no fixed duration limit.
     pub fn start(
         self: &Arc<Self>,
         cancel: CancellationToken,
         updates: watch::Sender<String>,
     ) -> (Capture, Recognition) {
-        let (sender, receiver) = mpsc::sync_channel(AUDIO_QUEUE_CHUNKS);
+        let (capture, input) = input::Input::start();
         (
-            Capture { sender, samples: 0 },
+            capture,
             Recognition {
                 engine: self.clone(),
-                receiver,
+                input,
                 cancel,
                 updates,
             },
@@ -136,3 +105,9 @@ impl Recognizer {
 
 #[cfg(test)]
 mod tests;
+
+impl Drop for Recognition {
+    fn drop(&mut self) {
+        self.input.stop();
+    }
+}
