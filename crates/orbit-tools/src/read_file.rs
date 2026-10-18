@@ -18,7 +18,7 @@ const MAX_PAGE_LINES: usize = 500;
 #[derive(Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct ReadArguments {
-    /// Path relative to the workspace root, or an outside path granted via RequestAccess.
+    /// Workspace-relative or outside path. Outside access needs a grant except in YOLO.
     path: String,
     #[serde(default)]
     /// Pass next_cursor unchanged to resume this file version.
@@ -89,11 +89,11 @@ impl Tool for ReadFile {
         orbit_agent::tool::ToolCapabilities::READ
     }
 
-    /// Read a UTF-8 file inside the workspace (or outside path granted via RequestAccess).
+    /// Read a UTF-8 file. Outside access needs RequestAccess except in YOLO.
     /// Use a relative path or granted outside path, and optional 1-based start_line/max_lines.
     /// If a long line is truncated, resume with the returned next_start_line and
     /// next_start_char (Unicode character offset within that line). Returns JSON with numbered
-    /// lines. Protected configuration files are rejected. Reads incrementally with a
+    /// lines. Reads incrementally with a
     /// configurable scan budget per call (default 64 MiB) and 32 KiB content limit. Resume
     /// using next_cursor to avoid rescanning; cursors are rejected if the file changed.
     /// total_lines is null until EOF is reached.

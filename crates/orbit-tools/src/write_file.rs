@@ -337,10 +337,12 @@ impl Tool for WriteFile {
                 content is the entire new file, not a patch; omitted existing content is lost. \
                 For a small change to an existing file, read the relevant region and use \
                 EditFile instead. Parent directories must exist. Use workspace paths or outside \
-                paths granted via RequestAccess. Auto approves workspace-local writes; \
-                external writes require approval. Old and new files are each limited to 1 MiB. \
-                Protected metadata, escaping symlinks and hard links are rejected; concurrent \
-                changes cause a conflict. Never retry a denied write without a new user request.",
+                paths granted via RequestAccess. YOLO directly allows any OS-accessible path. \
+                Auto approves workspace-local writes; external writes require approval. \
+                Old and new files are each limited to 1 MiB. Hard links are rejected for atomic \
+                replacement; symlink targets require the same authorization as direct paths; \
+                concurrent changes cause a conflict. Never retry a denied write without a new \
+                user request.",
             json!({
                 "type": "object",
                 "properties": {

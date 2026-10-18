@@ -24,8 +24,8 @@ pub struct WorkspaceRuntime {
 #[allow(clippy::too_many_arguments)]
 pub async fn workspace_tools(
     directory: &Path,
-    config: &Path,
-    auth_directory: &Path,
+    _config: &Path,
+    _auth_directory: &Path,
     database: Option<&Path>,
     approvals: Option<ApprovalSender>,
     command_limits: orbit_tools::run_command::CommandLimits,
@@ -35,14 +35,14 @@ pub async fn workspace_tools(
     command_output: Option<orbit_runtime::execution::output::CommandOutputs>,
     snapshot_directory: Option<std::path::PathBuf>,
     permissions: Option<orbit_runtime::policy::WorkspacePermissions>,
+    approval_policy: orbit_runtime::policy::ApprovalPolicy,
 ) -> Result<WorkspaceRuntime> {
-    let workspace = protected_workspace(
+    let approvals = approvals.map(|sender| sender.for_workspace(directory));
+    let workspace = configured_workspace(
         directory,
-        config,
-        auth_directory,
-        database,
         permissions,
         command_limits.network,
+        approval_policy,
     )?;
     let mut tools = ToolRegistry::new();
     tools.register(
@@ -129,134 +129,144 @@ pub async fn workspace_tools(
 
 pub fn workspace_writer(
     directory: &Path,
-    config: &Path,
-    auth_directory: &Path,
-    database: &Path,
+    _config: &Path,
+    _auth_directory: &Path,
+    _database: &Path,
     approvals: ApprovalSender,
     permissions: Option<orbit_runtime::policy::WorkspacePermissions>,
 ) -> Result<WriteFile> {
     Ok(WriteFile::new(
-        protected_workspace(
+        configured_workspace(
             directory,
-            config,
-            auth_directory,
-            Some(database),
             permissions,
             orbit_runtime::capability::NetworkPolicy::Allow,
+            approvals.policy().clone(),
         )?,
-        approvals,
+        approvals.for_workspace(directory),
     ))
 }
 
-fn protected_workspace(
+fn configured_workspace(
     directory: &Path,
-    config: &Path,
-    auth_directory: &Path,
-    database: Option<&Path>,
     permissions: Option<orbit_runtime::policy::WorkspacePermissions>,
     network: orbit_runtime::capability::NetworkPolicy,
+    approval_policy: orbit_runtime::policy::ApprovalPolicy,
 ) -> Result<Workspace> {
     let mut workspace = Workspace::new(directory)?;
-    workspace.protect_opaque_runtime_root(crate::workspace::runtime_directory()?)?;
-    workspace.protect(config)?;
-    workspace.protect(auth_directory)?;
-    workspace
-        .protect_opaque_runtime_root(orbit_runtime::execution::output::CommandOutputs::root())?;
-
-    if let Some(database) = database {
-        workspace.protect(database)?;
-        workspace.protect_opaque_runtime_root(database.with_extension("session-locks"))?;
-        workspace.protect_opaque_runtime_root(database.with_extension("workspaces"))?;
-        workspace.protect_opaque_runtime_root(database.with_extension("command-output"))?;
-        workspace.protect_opaque_runtime_root(database.with_extension("artifacts"))?;
-
-        for suffix in ["-wal", "-shm", "-journal"] {
-            let mut sidecar = database.as_os_str().to_os_string();
-            sidecar.push(suffix);
-            workspace.protect(std::path::PathBuf::from(sidecar))?;
-        }
-    }
-
     workspace.configure_policy(permissions.unwrap_or_default(), network)?;
-
+    let mut policy = workspace.policy().clone();
+    policy.set_approval_policy(approval_policy);
+    workspace.set_policy(policy);
     Ok(workspace)
 }
 
 #[cfg(test)]
-mod auth_tests {
+mod tests {
     use super::*;
+    use orbit_agent::tool::ToolError;
+    use orbit_model::types::ToolCall;
+    use orbit_tools::approval::ApprovalMode;
+    use serde_json::json;
+    use tokio_util::sync::CancellationToken;
 
-    #[test]
-    fn first_launch_protects_credentials_with_missing_parent_directories() {
+    #[tokio::test]
+    async fn executors_share_yolo_without_an_approval_consumer_or_extra_access_calls() {
         let root = tempfile::tempdir().unwrap();
         let project = root.path().join("project");
         std::fs::create_dir(&project).unwrap();
-
-        for auth in [
-            root.path()
-                .join("home/.config/orbit/auth"),
-            project.join("private/config/orbit/auth"),
+        let config = root.path().join("config.toml");
+        std::fs::write(&config, "synthetic configuration").unwrap();
+        let (sender, receiver) = orbit_tools::approval::channel();
+        sender
+            .policy()
+            .set_mode(ApprovalMode::Yolo);
+        let runtime = workspace_tools(
+            &project,
+            &config,
+            &root.path().join("auth"),
+            None,
+            Some(sender.clone()),
+            Default::default(),
+            Default::default(),
+            Default::default(),
+            false,
+            None,
+            None,
+            None,
+            sender.policy().clone(),
+        )
+        .await
+        .unwrap();
+        drop(receiver);
+        for (name, arguments) in [
+            ("ReadFile", json!({"path": config})),
+            ("ListFiles", json!({"path": ".."})),
+            ("Grep", json!({"path": config, "query": "synthetic"})),
+            (
+                "WriteFile",
+                json!({"path": root.path().join("created.txt"), "content": "created"}),
+            ),
+            ("Exec", json!({"command": "printf executed"})),
         ] {
-            let workspace = protected_workspace(
-                &project,
-                &project.join("config.toml"),
-                &auth,
-                None,
-                None,
-                orbit_runtime::capability::NetworkPolicy::Allow,
-            )
-            .unwrap();
-
-            assert!(
-                !auth.exists(),
-                "startup must not create credential directories"
-            );
-            assert!(workspace.protected().contains(&auth));
-
-            std::fs::create_dir_all(&auth).unwrap();
-            std::fs::write(auth.join("test.json"), "secret").unwrap();
-
-            assert!(
-                workspace
-                    .authorize_read(&auth.join("test.json"))
-                    .is_err()
-            );
-            if let Ok(relative) = auth.strip_prefix(&project) {
-                assert!(
-                    workspace
-                        .open_read(&relative.join("test.json"))
-                        .is_err()
-                );
-                assert!(
-                    workspace
-                        .write_parent(&relative.join("test.json"))
-                        .is_err()
-                );
+            let output = runtime
+                .tools
+                .execute(
+                    ToolCall::function(name, name, arguments),
+                    CancellationToken::new(),
+                )
+                .await
+                .unwrap();
+            if name == "Exec" {
+                let result: serde_json::Value = serde_json::from_str(&output.content).unwrap();
+                assert_eq!(result["exit_code"], 0);
+                assert_eq!(result["stdout"], "executed");
             }
         }
-    }
-
-    #[test]
-    fn credential_directory_is_protected_inside_a_project() {
-        let root = tempfile::tempdir().unwrap();
-        let auth = root.path().join("auth");
-        std::fs::create_dir(&auth).unwrap();
-        std::fs::write(auth.join("test.json"), "secret").unwrap();
-        let workspace = protected_workspace(
-            root.path(),
-            &root.path().join("config.toml"),
-            &auth,
+        assert_eq!(
+            std::fs::read_to_string(root.path().join("created.txt")).unwrap(),
+            "created"
+        );
+        sender
+            .policy()
+            .set_mode(ApprovalMode::Auto);
+        let error = runtime
+            .tools
+            .execute(
+                ToolCall::function("blocked", "ReadFile", json!({"path": config})),
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(error, ToolError::AuthorizationRequired(_)));
+        // Read-only delegates use the same mode handle while retaining their tool ceiling.
+        let readonly = workspace_tools(
+            &project,
+            &config,
+            &root.path().join("auth"),
             None,
             None,
-            orbit_runtime::capability::NetworkPolicy::Allow,
+            Default::default(),
+            Default::default(),
+            Default::default(),
+            false,
+            None,
+            None,
+            None,
+            sender.policy().clone(),
         )
+        .await
         .unwrap();
-
-        let read = workspace.open_read(Path::new("auth/test.json"));
-        let write = workspace.write_parent(Path::new("auth/test.json"));
-
-        assert!(read.is_err());
-        assert!(write.is_err());
-        assert!(workspace.protected().contains(&auth));
+        assert!(!readonly.tools.contains("WriteFile"));
+        sender
+            .policy()
+            .set_mode(ApprovalMode::Yolo);
+        readonly
+            .tools
+            .execute(
+                ToolCall::function("read", "ReadFile", json!({"path": config})),
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
     }
 }

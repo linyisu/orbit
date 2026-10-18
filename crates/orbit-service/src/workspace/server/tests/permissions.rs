@@ -3,6 +3,45 @@ use serde_json::json;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 #[tokio::test]
+async fn yolo_starts_external_writes_without_an_access_tool_round_trip() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .unwrap();
+    let fixture = Fixture::new(&format!("http://{}/v1", listener.local_addr().unwrap())).await;
+    let target = fixture
+        ._root
+        .path()
+        .join("ungranted.txt");
+    let model = tokio::spawn(write_model(listener, target.clone()));
+    let info = fixture.mode(Mode::Yolo).await;
+    fixture
+        .request(Request::Start {
+            session: info.id,
+            request_id: "direct-yolo".into(),
+            prompt: "write the synthetic files".into(),
+            images: vec![],
+            compact: false,
+            model: None,
+        })
+        .await
+        .unwrap();
+    let done = fixture.wait(|page| !page.busy).await;
+    model.await.unwrap();
+    assert_eq!(fs::read_to_string(&target).unwrap(), "outside");
+    assert!(done.approvals.is_empty());
+    fixture.mode(Mode::Auto).await;
+    assert!(
+        fixture
+            .handle
+            .workspace
+            .read()
+            .unwrap()
+            .authorize_read(&target)
+            .is_err()
+    );
+}
+
+#[tokio::test]
 async fn permission_changes_release_only_eligible_waiters_and_reach_all_observers() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
@@ -155,6 +194,17 @@ async fn failed_permission_persistence_never_publishes_or_confirms_the_change() 
             .is_err()
     );
     let after = fixture.handle.current_info().await;
+    assert_eq!(
+        fixture
+            .handle
+            .workspace
+            .read()
+            .unwrap()
+            .policy()
+            .approval_policy()
+            .mode(),
+        orbit_tools::approval::ApprovalMode::Ask
+    );
     assert_eq!(
         (after.mode, after.mode_revision),
         (before.mode, before.mode_revision)

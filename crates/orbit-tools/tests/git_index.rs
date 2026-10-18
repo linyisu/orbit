@@ -316,15 +316,19 @@ fn unsupported_index_and_symlink_admin_preserve_readonly_review() {
 }
 
 #[test]
-fn protected_alias_and_symlink_worktree_cannot_receive_mutation_receipts() {
+fn hardlinks_can_be_reviewed_while_symlinks_have_no_index_receipt() {
     let directory = repository();
     let root = directory.path();
     let secret = root.join("private.txt");
     fs::write(&secret, "private\n").unwrap();
     fs::hard_link(&secret, root.join("alias.txt")).unwrap();
-    let mut workspace = Workspace::new(root).unwrap();
-    workspace.protect(secret).unwrap();
-    assert!(review_index_patch(&workspace, "alias.txt", false, true).is_err());
+    let workspace = Workspace::new(root).unwrap();
+    assert!(
+        review_index_patch(&workspace, "alias.txt", false, true)
+            .unwrap()
+            .index_receipt
+            .is_some()
+    );
     symlink("tracked.txt", root.join("link.txt")).unwrap();
     let reviewed = review_index_patch(&workspace, "link.txt", false, true).unwrap();
     assert!(reviewed.patch.contains("120000"));

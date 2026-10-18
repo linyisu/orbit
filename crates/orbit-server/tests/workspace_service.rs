@@ -584,7 +584,7 @@ async fn disconnect_preserves_approval_and_run_duplicate_submission_does_not_rep
                 "path": "config.toml"
             }))
             .await["type"],
-        "error"
+        "file"
     );
     assert_eq!(
         client

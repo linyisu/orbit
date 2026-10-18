@@ -3,6 +3,54 @@ use std::path::Path;
 use super::*;
 
 #[test]
+fn all_paths_are_grantable_and_yolo_is_live_and_environment_scoped() {
+    let root = tempfile::tempdir().unwrap();
+    let project = root.path().join("project");
+    std::fs::create_dir(&project).unwrap();
+    let engine = PolicyEngine::new(ResolvedPath::resolve(&project, None).unwrap());
+    for path in ["/", "/tmp", "/opt", "/proc", "/dev", "/sys"] {
+        let capability = FilesystemCapability::local_read(Path::new(path));
+        assert!(matches!(
+            engine.check_filesystem(&capability),
+            PolicyDecision::NeedsApproval(_)
+        ));
+        engine.record_grant(FilesystemGrant::read_only(
+            EnvironmentId::Local,
+            ResolvedPath::resolve(path, None).unwrap(),
+        ));
+        assert_eq!(
+            engine.check_filesystem(&capability),
+            PolicyDecision::Granted
+        );
+        engine.clear_session_grants();
+    }
+    let capability = FilesystemCapability::local_read(root.path());
+    engine
+        .approval_policy()
+        .set_mode(ApprovalMode::Yolo);
+    assert_eq!(
+        engine.check_filesystem(&capability),
+        PolicyDecision::Granted
+    );
+    let remote = FilesystemCapability::new(
+        EnvironmentId::Remote("synthetic-target".into()),
+        root.path(),
+        FilesystemAccess::Read,
+    );
+    assert!(matches!(
+        engine.check_filesystem(&remote),
+        PolicyDecision::NeedsApproval(_)
+    ));
+    engine
+        .approval_policy()
+        .set_mode(ApprovalMode::Auto);
+    assert!(matches!(
+        engine.check_filesystem(&capability),
+        PolicyDecision::NeedsApproval(_)
+    ));
+}
+
+#[test]
 fn workspace_paths_are_always_granted() {
     let tmp = tempfile::tempdir().unwrap();
     let workspace = ResolvedPath::resolve(tmp.path(), None).unwrap();
@@ -130,82 +178,6 @@ fn session_store_prunes_redundant_subpaths() {
 }
 
 #[test]
-fn rejects_ancestor_of_workspace_as_capability() {
-    let tmp = tempfile::tempdir().unwrap();
-    let proj = tmp.path().join("proj");
-    std::fs::create_dir_all(&proj).unwrap();
-
-    let workspace = ResolvedPath::resolve(&proj, None).unwrap();
-    let engine = PolicyEngine::new(workspace);
-
-    let cap = FilesystemCapability::local_read(tmp.path());
-
-    match engine.check_filesystem(&cap) {
-        PolicyDecision::Denied(reason) => {
-            assert!(reason.contains("ancestor of the workspace"));
-        }
-        other => panic!("expected Denied, got {other:?}"),
-    }
-}
-
-#[test]
-fn rejects_protected_path_and_its_ancestor_and_descendant() {
-    let tmp_ws = tempfile::tempdir().unwrap();
-    let tmp_ext = tempfile::tempdir().unwrap();
-    let secret = tmp_ext
-        .path()
-        .join("nested")
-        .join("orbit.db");
-    std::fs::create_dir_all(secret.parent().unwrap()).unwrap();
-    std::fs::write(&secret, "database").unwrap();
-
-    let workspace = ResolvedPath::resolve(tmp_ws.path(), None).unwrap();
-    let engine = PolicyEngine::new(workspace);
-    engine.add_protected_path(secret.clone());
-
-    let cap_direct = FilesystemCapability::local_read(&secret);
-
-    match engine.check_filesystem(&cap_direct) {
-        PolicyDecision::Denied(reason) => {
-            assert!(reason.contains("inside protected path"));
-        }
-        other => panic!("expected Denied, got {other:?}"),
-    }
-
-    let cap_parent = FilesystemCapability::local_read(tmp_ext.path());
-
-    match engine.check_filesystem(&cap_parent) {
-        PolicyDecision::Denied(reason) => {
-            assert!(reason.contains("contains protected path"));
-        }
-        other => panic!("expected Denied, got {other:?}"),
-    }
-}
-
-#[test]
-fn rejects_reserved_runtime_paths() {
-    let tmp = tempfile::tempdir().unwrap();
-    let workspace = ResolvedPath::resolve(tmp.path(), None).unwrap();
-    let engine = PolicyEngine::new(workspace);
-
-    for reserved in [
-        "/",
-        "/tmp",
-        "/opt",
-        "/proc/cpuinfo",
-        "/dev/null",
-        "/sys/kernel",
-    ] {
-        let cap = FilesystemCapability::local_read(Path::new(reserved));
-
-        assert!(
-            matches!(engine.check_filesystem(&cap), PolicyDecision::Denied(_)),
-            "expected {reserved} to be denied"
-        );
-    }
-}
-
-#[test]
 fn persistent_permissions_upfront_validation_and_overlap_rejection() {
     let tmp_ws = tempfile::tempdir().unwrap();
     let tmp_ext = tempfile::tempdir().unwrap();
@@ -241,7 +213,7 @@ fn persistent_permissions_upfront_validation_and_overlap_rejection() {
 
     assert!(
         PolicyEngine::try_with_permissions(ws.clone(), perms_ancestor, NetworkPolicy::Allow)
-            .is_err()
+            .is_ok()
     );
 
     let inside = tmp_ws.path().join("src");
@@ -253,11 +225,8 @@ fn persistent_permissions_upfront_validation_and_overlap_rejection() {
         read_write: Vec::new(),
     };
 
-    let err = PolicyEngine::try_with_permissions(ws.clone(), perms_inside, NetworkPolicy::Allow)
-        .unwrap_err();
     assert!(
-        err.to_string()
-            .contains("is inside the workspace")
+        PolicyEngine::try_with_permissions(ws.clone(), perms_inside, NetworkPolicy::Allow).is_ok()
     );
 
     let sub_dir = ext_dir.join("secret");
@@ -323,7 +292,7 @@ fn ordinary_system_files_can_receive_scoped_user_grants() {
         engine.check_filesystem(&FilesystemCapability::local_read(Path::new(
             "/proc/self/status"
         ))),
-        PolicyDecision::Denied(_)
+        PolicyDecision::NeedsApproval(_)
     ));
 }
 

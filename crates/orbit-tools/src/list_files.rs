@@ -59,12 +59,12 @@ impl Tool for ListFiles {
         orbit_agent::tool::ToolCapabilities::READ
     }
 
-    /// Browse files and directories in the workspace (or outside paths granted via
-    /// RequestAccess) without running a shell. Paths are relative to the workspace root,
-    /// or absolute paths granted via RequestAccess. Defaults to one directory level; depth
+    /// Browse files and directories without running a shell. Paths are relative to the workspace
+    /// root or absolute; external paths require a grant unless YOLO is active. Defaults to one
+    /// directory level; depth
     /// 1–8, deterministic breadth-first ordering, paginated with offset/next_offset. Hidden
-    /// entries are omitted by default; include_hidden includes hidden entries but never
-    /// protected paths. Generated directories are listed but not recursively traversed; select
+    /// entries are omitted by default; include_hidden includes hidden entries.
+    /// Generated directories are listed but not recursively traversed; select
     /// their path explicitly to browse them. Does not apply .gitignore. Symlinks and special
     /// files are omitted. Results are bounded to 32 KiB and 20000 examined entries; narrow path
     /// if scan_truncated is true.
@@ -127,13 +127,6 @@ fn list(
         .transpose()?;
     let target_path = Path::new(&args.path);
 
-    if target_path
-        .components()
-        .any(|c| matches!(c, std::path::Component::ParentDir))
-    {
-        return Err(invalid("use a workspace-relative path without '..'"));
-    }
-
     let is_curdir = target_path
         .components()
         .all(|part| part == std::path::Component::CurDir);
@@ -144,26 +137,18 @@ fn list(
             .map_err(failed)?;
         (PathBuf::new(), false)
     } else {
-        match workspace.checked_relative(target_path) {
-            Ok(rel) => {
-                workspace
-                    .open_directory(&rel)
-                    .map_err(failed)?;
-                (rel, false)
-            }
-
-            Err(WorkspaceError::ProtectedPath) => {
-                return Err(failed(WorkspaceError::ProtectedPath));
-            }
-            Err(_) => {
-                let canonical = target_path
-                    .canonicalize()
-                    .map_err(failed)?;
-                workspace
-                    .authorize_directory(&canonical)
-                    .map_err(failed)?;
-                (canonical, true)
-            }
+        workspace
+            .authorize_directory(target_path)
+            .map_err(ToolError::from)?;
+        let resolved =
+            orbit_runtime::filesystem::ResolvedPath::resolve(target_path, Some(workspace.root()))
+                .map_err(failed)?;
+        match resolved
+            .canonical()
+            .strip_prefix(workspace.root())
+        {
+            Ok(relative) => (relative.to_owned(), false),
+            Err(_) => (resolved.canonical().to_owned(), true),
         }
     };
 

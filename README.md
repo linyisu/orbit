@@ -29,7 +29,7 @@ cp config.example.toml config.toml
 - `/skills`、`/plugins` 管理本机全局扩展库；技能和插件按需应用到指定会话，SSH/WSL 使用独立快照。
 - `/file`、`/review`、`/tasks`、`/queue` 管理文件、变更、任务和暂存消息。两端入口见 [功能对照](FRONTEND_PARITY.md)。
 
-命令以目标用户权限执行；审批声明不提供操作系统隔离，内置文件工具另有路径保护。详见 [工具与审批](crates/orbit-tools/README.md)。
+命令以目标用户权限执行；审批声明不提供操作系统隔离。工具没有内置路径黑名单，文件访问遵循会话审批模式和授权。详见 [工具与审批](crates/orbit-tools/README.md)。
 
 ## 工作区
 

@@ -349,7 +349,7 @@ fn collect_indexed(
         if !relative.starts_with(&scope) {
             continue;
         }
-        // Descriptor-based access also rejects protected hard links and paths swapped for symlinks.
+        // Descriptor-based access verifies the current target before indexing.
         if workspace.open_read(relative).is_err() {
             skipped += 1;
             continue;
@@ -1105,7 +1105,7 @@ mod tests {
     }
 
     #[test]
-    fn ignore_protected_links_binary_and_budgets_are_enforced() {
+    fn ignore_rules_links_binary_and_budgets_are_enforced() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path();
         put(root, ".gitignore", "ignored/\n");
@@ -1122,10 +1122,7 @@ mod tests {
         put(root, "binary.py", "\0def binary(): pass");
         fs::hard_link(root.join("secret.toml"), root.join("pyproject.toml")).unwrap();
         std::os::unix::fs::symlink(root.join("secret.toml"), root.join("Cargo.toml")).unwrap();
-        let mut workspace = Workspace::new(root).unwrap();
-        workspace
-            .protect(root.join("secret.toml"))
-            .unwrap();
+        let workspace = Workspace::new(root).unwrap();
 
         for index in 0..100 {
             put(
@@ -1155,14 +1152,7 @@ mod tests {
         assert_eq!(result["truncated"]["output"], true);
         assert_eq!(result["truncated"]["content"], true);
 
-        for forbidden in [
-            "PRIVATE",
-            "ignored_secret",
-            "generated",
-            "secret.toml",
-            "pyproject.toml",
-            "Cargo.toml",
-        ] {
+        for forbidden in ["ignored_secret", "generated"] {
             assert!(!output.contains(forbidden), "{forbidden}");
         }
         assert!(

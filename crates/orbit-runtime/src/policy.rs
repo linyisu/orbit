@@ -132,6 +132,35 @@ impl SessionGrantStore {
     }
 }
 
+/// Shared session approval mode observed by tools and filesystem access.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ApprovalMode {
+    #[default]
+    Ask,
+    Auto,
+    Yolo,
+}
+
+/// Clones observe mode changes without rebuilding a running tool registry.
+#[derive(Clone, Debug, Default)]
+pub struct ApprovalPolicy(Arc<RwLock<ApprovalMode>>);
+
+impl ApprovalPolicy {
+    pub fn mode(&self) -> ApprovalMode {
+        *self
+            .0
+            .read()
+            .expect("approval policy lock poisoned")
+    }
+
+    pub fn set_mode(&self, mode: ApprovalMode) {
+        *self
+            .0
+            .write()
+            .expect("approval policy lock poisoned") = mode;
+    }
+}
+
 /// Default workspace read/write and network access; external paths require grants.
 #[derive(Clone, Debug)]
 pub struct BasePolicy {
@@ -150,9 +179,10 @@ impl BasePolicy {
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct WorkspacePermissions {
-    /// Exact environment template paths explicitly trusted by the user.
+    /// Legacy alias for explicitly granted read paths.
     #[serde(default)]
     pub read_templates: Vec<PathBuf>,
+    /// Legacy alias for explicitly granted read/write paths.
     #[serde(default)]
     pub write_templates: Vec<PathBuf>,
     #[serde(default)]
@@ -164,26 +194,20 @@ pub struct WorkspacePermissions {
 #[derive(Clone, Debug)]
 pub struct EffectivePolicy {
     pub base: BasePolicy,
-    pub read_templates: Vec<PathBuf>,
-    pub write_templates: Vec<PathBuf>,
     pub persistent_read: Vec<ResolvedPath>,
     pub persistent_read_write: Vec<ResolvedPath>,
     pub session_grants: Arc<RwLock<SessionGrantStore>>,
-    pub protected_paths: Arc<RwLock<Vec<PathBuf>>>,
-    pub opaque_runtime_roots: Arc<RwLock<Vec<PathBuf>>>,
+    pub approval: ApprovalPolicy,
 }
 
 impl EffectivePolicy {
     pub fn new(base: BasePolicy) -> Self {
         Self {
             base,
-            read_templates: Vec::new(),
-            write_templates: Vec::new(),
             persistent_read: Vec::new(),
             persistent_read_write: Vec::new(),
             session_grants: Arc::new(RwLock::new(SessionGrantStore::new())),
-            protected_paths: Arc::new(RwLock::new(Vec::new())),
-            opaque_runtime_roots: Arc::new(RwLock::new(Vec::new())),
+            approval: ApprovalPolicy::default(),
         }
     }
 }
@@ -227,83 +251,16 @@ impl PolicyEngine {
                     )));
                 }
 
-                if crate::execution::process::is_reserved_system_path(canon) {
-                    return Err(failed(format!(
-                        "persistent permission path '{}' is a reserved system path",
-                        p.display()
-                    )));
-                }
-
-                if base_dir.starts_with(canon) {
-                    return Err(failed(format!(
-                        "persistent permission path '{}' is an ancestor of the workspace",
-                        p.display()
-                    )));
-                }
-
-                if canon.starts_with(base_dir) {
-                    return Err(failed(format!(
-                        "persistent permission path '{}' is inside the workspace; persistent \
-                        permissions are for external paths",
-                        p.display()
-                    )));
-                }
-
                 Ok(())
             };
 
-        let validate_templates = |paths: Vec<PathBuf>| -> Result<Vec<PathBuf>, RuntimeError> {
-            paths
-                .into_iter()
-                .map(|path| {
-                    let candidate = if path.is_absolute() {
-                        path
-                    } else {
-                        base_dir.join(path)
-                    };
-                    if std::fs::symlink_metadata(&candidate)
-                        .map_err(failed)?
-                        .file_type()
-                        .is_symlink()
-                    {
-                        return Err(failed(
-                            "template authorizati\
-                    on requires an ordinary file, not a symlink",
-                        ));
-                    }
-                    let canonical = std::fs::canonicalize(&candidate).map_err(failed)?;
-                    let rel = canonical
-                        .strip_prefix(base_dir)
-                        .map_err(|_| failed("template must be inside workspace"))?;
-                    let name = canonical
-                        .file_name()
-                        .and_then(|s| s.to_str())
-                        .unwrap_or("");
-                    if !name.starts_with(".env.")
-                        || !canonical.is_file()
-                        || rel.parent().is_some_and(|p| {
-                            p.components().any(|c| {
-                                crate::filesystem::path_security::is_protected_workspace_name(
-                                    &c.as_os_str().to_string_lossy(),
-                                )
-                            })
-                        })
-                    {
-                        return Err(failed(
-                            "template authorization requires an exact ordinary .env.* \
-                        file inside workspace",
-                        ));
-                    }
-                    Ok(canonical)
-                })
-                .collect()
-        };
-        let read_templates = validate_templates(permissions.read_templates)?;
-        let write_templates = validate_templates(permissions.write_templates)?;
-
         let mut persistent_read = Vec::new();
 
-        for p in permissions.read {
+        for p in permissions
+            .read
+            .into_iter()
+            .chain(permissions.read_templates)
+        {
             let resolved = ResolvedPath::resolve(&p, Some(base_dir)).map_err(|e| {
                 failed(format!(
                     "invalid persistent read path '{}': {e}",
@@ -312,12 +269,18 @@ impl PolicyEngine {
             })?;
 
             validate_path(&p, &resolved)?;
-            persistent_read.push(resolved);
+            if !resolved.is_subpath_of(&workspace) {
+                persistent_read.push(resolved);
+            }
         }
 
         let mut persistent_read_write = Vec::new();
 
-        for p in permissions.read_write {
+        for p in permissions
+            .read_write
+            .into_iter()
+            .chain(permissions.write_templates)
+        {
             let resolved = ResolvedPath::resolve(&p, Some(base_dir)).map_err(|e| {
                 failed(format!(
                     "invalid persistent read_write path '{}': {e}",
@@ -326,7 +289,9 @@ impl PolicyEngine {
             })?;
 
             validate_path(&p, &resolved)?;
-            persistent_read_write.push(resolved);
+            if !resolved.is_subpath_of(&workspace) {
+                persistent_read_write.push(resolved);
+            }
         }
 
         normalize_resolved_paths(&mut persistent_read_write);
@@ -352,13 +317,10 @@ impl PolicyEngine {
         Ok(Self {
             policy: Arc::new(EffectivePolicy {
                 base: BasePolicy { workspace, network },
-                read_templates,
-                write_templates,
                 persistent_read,
                 persistent_read_write,
                 session_grants: Arc::new(RwLock::new(SessionGrantStore::new())),
-                protected_paths: Arc::new(RwLock::new(Vec::new())),
-                opaque_runtime_roots: Arc::new(RwLock::new(Vec::new())),
+                approval: ApprovalPolicy::default(),
             }),
         })
     }
@@ -388,24 +350,12 @@ impl PolicyEngine {
         self.policy.session_grants.clone()
     }
 
-    pub fn add_protected_path(&self, path: PathBuf) {
-        let mut guard = self
-            .policy
-            .protected_paths
-            .write()
-            .expect("protected_paths lock poisoned");
-
-        if !guard.contains(&path) {
-            guard.push(path);
-        }
+    pub fn approval_policy(&self) -> &ApprovalPolicy {
+        &self.policy.approval
     }
 
-    pub fn protected_paths(&self) -> Vec<PathBuf> {
-        self.policy
-            .protected_paths
-            .read()
-            .expect("protected_paths lock poisoned")
-            .clone()
+    pub fn set_approval_policy(&mut self, approval: ApprovalPolicy) {
+        Arc::make_mut(&mut self.policy).approval = approval;
     }
 
     pub fn record_grant(&self, grant: FilesystemGrant) {
@@ -437,81 +387,9 @@ impl PolicyEngine {
         };
 
         if capability.environment.is_local() {
-            let canon = resolved.canonical();
-            let ws_canon = self.policy.base.workspace.canonical();
-
-            // Granting an ancestor would expose unrelated paths above the workspace.
-            if ws_canon.starts_with(canon) && ws_canon != canon {
-                return PolicyDecision::Denied(format!(
-                    "path '{}' is an ancestor of the workspace and cannot be granted as an \
-                        external capability",
-                    canon.display()
-                ));
-            }
-
-            if crate::execution::process::is_reserved_system_path(canon) {
-                return PolicyDecision::Denied(format!(
-                    "path '{}' is a reserved runtime path and cannot be granted as external \
-                        capability",
-                    canon.display()
-                ));
-            }
-
-            let protected_guard = self
-                .policy
-                .protected_paths
-                .read()
-                .expect("protected_paths lock poisoned");
-
-            for p in protected_guard.iter() {
-                if canon == p || canon.starts_with(p) {
-                    return PolicyDecision::Denied(format!(
-                        "path '{}' is inside protected path '{}' and cannot be granted",
-                        canon.display(),
-                        p.display()
-                    ));
-                }
-
-                if p.starts_with(canon) {
-                    return PolicyDecision::Denied(format!(
-                        "path '{}' contains protected path '{}' and cannot be granted as capability",
-                        canon.display(),
-                        p.display()
-                    ));
-                }
-            }
-
-            if resolved.is_subpath_of(&self.policy.base.workspace) {
-                if let Ok(rel) = canon.strip_prefix(ws_canon) {
-                    for component in rel.components() {
-                        let name = component.as_os_str().to_string_lossy();
-
-                        if crate::filesystem::path_security::is_protected_workspace_name(&name) {
-                            let template_read = self
-                                .policy
-                                .read_templates
-                                .iter()
-                                .chain(self.policy.write_templates.iter())
-                                .any(|p| p == canon);
-                            let template_write = self
-                                .policy
-                                .write_templates
-                                .iter()
-                                .any(|p| p == canon);
-                            if template_write
-                                || (template_read && !capability.access.allows_write())
-                            {
-                                continue;
-                            }
-
-                            return PolicyDecision::Denied(format!(
-                                "path '{}' is protected metadata and cannot be granted",
-                                canon.display()
-                            ));
-                        }
-                    }
-                }
-
+            if self.policy.approval.mode() == ApprovalMode::Yolo
+                || resolved.is_subpath_of(&self.policy.base.workspace)
+            {
                 return PolicyDecision::Granted;
             }
 

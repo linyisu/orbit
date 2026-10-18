@@ -51,13 +51,6 @@ async fn project_resources_follow_the_destination_without_changing_process_cwd()
         .unwrap();
 
     assert!(!options.auth_directory.exists());
-    assert!(
-        prepared
-            .resources
-            .workspace
-            .protected()
-            .contains(&options.auth_directory)
-    );
     let id = prepared.session.id().to_owned();
 
     let resources = prepare_workspace_resources(&options, &new, &prepared.session)

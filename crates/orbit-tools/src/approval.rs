@@ -1,5 +1,6 @@
 use std::path::Path;
 
+pub use orbit_runtime::policy::{ApprovalMode, ApprovalPolicy};
 use tokio::sync::{mpsc, oneshot};
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -148,13 +149,12 @@ pub fn auto_allows(preview: &ApprovalPreview, workspace: &Path) -> bool {
 
         ApprovalPreview::Write(write) => workspace_local_file(&write.path, workspace),
         ApprovalPreview::Delete(delete) => workspace_local_file(&delete.path, workspace),
-        ApprovalPreview::Mcp(_) | ApprovalPreview::Capability(_) => false,
+        ApprovalPreview::Mcp(_) => true,
+        ApprovalPreview::Capability(_) => false,
     }
 }
 
-/// An MCP server is an external program with capabilities Orbit cannot
-/// reliably infer from its advertised schema. Keep every invocation behind
-/// the same explicit approval boundary as other side-effecting tools.
+/// MCP invocations follow the same session approval mode as built-in tools.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct McpPreview {
     pub server: String,
@@ -179,22 +179,165 @@ pub enum ApprovalPreview {
     Capability(CapabilityPreview),
 }
 
+#[derive(Debug)]
 pub struct ApprovalRequest {
     pub preview: ApprovalPreview,
     pub decision: oneshot::Sender<bool>,
 }
 
-pub type ApprovalSender = mpsc::Sender<ApprovalRequest>;
+#[derive(Clone)]
+pub struct ApprovalSender {
+    sender: mpsc::Sender<ApprovalRequest>,
+    policy: ApprovalPolicy,
+    workspace: Option<std::sync::Arc<std::path::PathBuf>>,
+}
+
+impl ApprovalSender {
+    /// Bind Auto decisions to this executor's workspace while sharing live mode changes.
+    pub fn for_workspace(&self, workspace: &Path) -> Self {
+        Self {
+            workspace: Some(std::sync::Arc::new(workspace.to_owned())),
+            ..self.clone()
+        }
+    }
+
+    pub fn policy(&self) -> &ApprovalPolicy {
+        &self.policy
+    }
+
+    /// Automatically allowed requests never enter the actor's approval queue.
+    pub async fn send(
+        &self,
+        request: ApprovalRequest,
+    ) -> Result<(), Box<mpsc::error::SendError<ApprovalRequest>>> {
+        let allowed = match self.policy.mode() {
+            ApprovalMode::Yolo => true,
+            ApprovalMode::Auto => self
+                .workspace
+                .as_deref()
+                .is_some_and(|root| auto_allows(&request.preview, root)),
+            ApprovalMode::Ask => false,
+        };
+        if allowed {
+            let _ = request.decision.send(true);
+            Ok(())
+        } else {
+            self.sender
+                .send(request)
+                .await
+                .map_err(Box::new)
+        }
+    }
+}
 
 pub type ApprovalReceiver = mpsc::Receiver<ApprovalRequest>;
 
 pub fn channel() -> (ApprovalSender, ApprovalReceiver) {
-    mpsc::channel(1)
+    let (sender, receiver) = mpsc::channel(1);
+    (
+        ApprovalSender {
+            sender,
+            policy: ApprovalPolicy::default(),
+            workspace: None,
+        },
+        receiver,
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn live_modes_bypass_the_queue_only_for_automatically_allowed_operations() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let (sender, mut receiver) = channel();
+        let sender = sender.for_workspace(root.path());
+        let cloned = sender.clone();
+        for (mode, preview, automatic) in [
+            (
+                ApprovalMode::Ask,
+                ApprovalPreview::Mcp(McpPreview {
+                    server: "fixture".into(),
+                    tool: "Inspect".into(),
+                    arguments: "{}".into(),
+                }),
+                false,
+            ),
+            (
+                ApprovalMode::Auto,
+                ApprovalPreview::Mcp(McpPreview {
+                    server: "fixture".into(),
+                    tool: "Inspect".into(),
+                    arguments: "{}".into(),
+                }),
+                true,
+            ),
+            (
+                ApprovalMode::Yolo,
+                ApprovalPreview::Write(WritePreview {
+                    path: outside
+                        .path()
+                        .join("config.toml")
+                        .display()
+                        .to_string(),
+                    before: None,
+                    after: "test".into(),
+                }),
+                true,
+            ),
+            (
+                ApprovalMode::Auto,
+                ApprovalPreview::Write(WritePreview {
+                    path: outside
+                        .path()
+                        .join("config.toml")
+                        .display()
+                        .to_string(),
+                    before: None,
+                    after: "test".into(),
+                }),
+                false,
+            ),
+        ] {
+            sender.policy().set_mode(mode);
+            let (decision, answer) = oneshot::channel();
+            cloned
+                .send(ApprovalRequest { preview, decision })
+                .await
+                .unwrap();
+            if automatic {
+                assert!(receiver.try_recv().is_err());
+            } else {
+                receiver
+                    .recv()
+                    .await
+                    .unwrap()
+                    .decision
+                    .send(true)
+                    .unwrap();
+            }
+            assert!(answer.await.unwrap());
+        }
+        drop(receiver);
+        sender
+            .policy()
+            .set_mode(ApprovalMode::Yolo);
+        let (decision, answer) = oneshot::channel();
+        sender
+            .send(ApprovalRequest {
+                preview: ApprovalPreview::Mcp(McpPreview {
+                    server: "fixture".into(),
+                    tool: "Inspect".into(),
+                    arguments: "{}".into(),
+                }),
+                decision,
+            })
+            .await
+            .unwrap();
+        assert!(answer.await.unwrap());
+    }
 
     #[test]
     fn workspace_write_scope_resolves_parent_symlinks() {

@@ -68,20 +68,6 @@ pub fn system_executable(name: &str) -> Option<PathBuf> {
         })
 }
 
-pub const RESERVED_CAPABILITY_PATHS: &[&str] = &["/", "/tmp", "/opt"];
-
-/// Host pseudo-filesystems and their descendants are not grantable to file tools.
-pub const RESERVED_CAPABILITY_TREES: &[&str] = &["/proc", "/dev", "/sys"];
-
-pub fn is_reserved_system_path(path: &Path) -> bool {
-    RESERVED_CAPABILITY_PATHS
-        .iter()
-        .any(|exact| path == Path::new(exact))
-        || RESERVED_CAPABILITY_TREES
-            .iter()
-            .any(|prefix| path.starts_with(Path::new(prefix)))
-}
-
 #[derive(Debug, Serialize)]
 pub struct CommandResult {
     pub exit_code: Option<i32>,

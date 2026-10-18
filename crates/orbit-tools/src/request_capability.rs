@@ -2,7 +2,6 @@ use orbit_agent::tool::{Tool, ToolError, ToolFuture, ToolOutput};
 use orbit_model::types::{ToolCall, ToolDefinition};
 use orbit_runtime::{
     capability::{EnvironmentId, FilesystemAccess, FilesystemCapability},
-    execution::process::{RESERVED_CAPABILITY_PATHS, RESERVED_CAPABILITY_TREES},
     filesystem::{ResolvedPath, Workspace},
     policy::{FilesystemGrant, PolicyDecision},
 };
@@ -42,19 +41,13 @@ impl Tool for RequestCapability {
     }
 
     fn definition(&self) -> ToolDefinition {
-        let description = format!(
-            "Request session permission for an existing file or directory outside the workspace. \
-                Only eligible paths prompt the user for approval. Existing workspace access needs \
-                no request. To create external files, request read_write for an existing eligible \
-                parent directory. Policy denials are permanent and never open an approval dialog: \
-                workspace ancestors, protected files/directories and these exact host paths: {}; \
-                these host directories and all descendants: {}. The whole host /tmp is reserved, \
-                but an existing specific /tmp child may be eligible. File-tool grants do not \
-                isolate shell commands; Exec uses real host paths. Approved grants last \
-                for this session.",
-            RESERVED_CAPABILITY_PATHS.join(", "),
-            RESERVED_CAPABILITY_TREES.join(", ")
-        );
+        let description = "Request session permission only after a tool reports \
+            authorization_required. \
+            Do not request proactively based on the path alone. Existing workspace access and \
+            YOLO need no request. To create external \
+            files, request read_write for an existing parent directory. Any OS-accessible path \
+            may be granted. File-tool grants do not isolate Exec or external MCP servers. \
+            Approved grants last for this session.";
 
         ToolDefinition::function(
             "RequestAccess",
@@ -144,7 +137,7 @@ impl Tool for RequestCapability {
                 };
 
                 return Err(ToolError::ExecutionFailed(format!(
-                    "path '{expanded_path}' does not exist. Capability mounts require existing \
+                    "path '{expanded_path}' does not exist. Explicit grants require existing \
                         resources; {guidance}"
                 )));
             }
@@ -174,10 +167,7 @@ impl Tool for RequestCapability {
                 )),
 
                 PolicyDecision::Denied(reason) => Err(ToolError::PolicyDenied(format!(
-                    "permission permanently denied: {reason}. This policy denial cannot be \
-                        overridden by user approval; do not retry the same request. Use an \
-                        eligible external path, the workspace, or Exec's isolated \
-                        temporary directories."
+                    "cannot authorize path: {reason}"
                 ))),
 
                 PolicyDecision::NeedsApproval(caps) => {

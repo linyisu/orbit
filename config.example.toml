@@ -65,7 +65,7 @@ network = "allow" # 允许声明联网；仅用于审批，不限制原生进程
 read_file_scan_bytes = 67108864 # 每次文件读取最多扫描 64 MiB；0 表示不限扫描量
 
 [permissions]
-# 用户明确确认这些文件是可公开的模板后，填写工作区内的精确路径。
-# 读取与写入分别授权；write_templates 同时允许读取。不会按文件后缀自动信任。
+# 旧配置字段，分别等价于 read / read_write；文件名和目录不再触发特殊保护。
+# 外部授权按访问范围授予；工作区路径本身已可访问。
 read_templates = [] # 例如 [".env.example"]
 write_templates = []

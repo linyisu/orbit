@@ -141,7 +141,7 @@ async fn searches_literal_and_regex_with_context_globs_and_pagination() {
 }
 
 #[tokio::test]
-async fn respects_ignore_rules_and_workspace_protection() {
+async fn respects_ignore_rules_without_hiding_metadata_by_filename() {
     use std::os::unix::fs::symlink;
 
     let directory = tempfile::tempdir().unwrap();
@@ -183,13 +183,29 @@ async fn respects_ignore_rules_and_workspace_protection() {
 
     assert_eq!(
         result["matches"],
-        json!([{
-            "path": "visible.txt",
-            "line": 1,
-            "column": 1,
-            "text": "needle visible",
-            "context": []
-        }])
+        json!([
+            {
+                "path": ".env",
+                "line": 1,
+                "column": 1,
+                "text": "needle secret",
+                "context": []
+            },
+            {
+                "path": ".git/config",
+                "line": 1,
+                "column": 1,
+                "text": "needle secret",
+                "context": []
+            },
+            {
+                "path": "visible.txt",
+                "line": 1,
+                "column": 1,
+                "text": "needle visible",
+                "context": []
+            }
+        ])
     );
 }
 
@@ -210,10 +226,6 @@ async fn rejects_invalid_patterns_paths_and_cancelled_searches() {
         json!({
             "query": "text",
             "glob": "["
-        }),
-        json!({
-            "query": "text",
-            "path": ".."
         }),
         json!({
             "query": "text",
@@ -241,6 +253,14 @@ async fn rejects_invalid_patterns_paths_and_cancelled_searches() {
         );
     }
 
+    assert!(matches!(
+        tool.execute(
+            ToolCall::function("outside", "Grep", json!({"query": "text", "path": ".."})),
+            CancellationToken::new(),
+        )
+        .await,
+        Err(ToolError::AuthorizationRequired(_))
+    ));
     let token = CancellationToken::new();
     token.cancel();
 

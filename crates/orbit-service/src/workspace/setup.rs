@@ -97,6 +97,16 @@ pub(super) async fn prepare_service(
     prepare_service_with_policy(options, resume, Default::default()).await
 }
 
+pub(in crate::workspace) fn approval_mode(
+    mode: orbit_protocol::Mode,
+) -> orbit_tools::approval::ApprovalMode {
+    match mode {
+        orbit_protocol::Mode::Ask => orbit_tools::approval::ApprovalMode::Ask,
+        orbit_protocol::Mode::Auto => orbit_tools::approval::ApprovalMode::Auto,
+        orbit_protocol::Mode::Yolo => orbit_tools::approval::ApprovalMode::Yolo,
+    }
+}
+
 pub(super) async fn prepare_service_with_policy(
     options: &WorkspaceOptions,
     resume: Option<String>,
@@ -233,6 +243,19 @@ async fn prepare_resolved_resources(
         instructions::MAX_INSTRUCTION_BYTES,
     );
     let (approvals, approval_receiver) = orbit_tools::approval::channel();
+    let mode = match session
+        .store
+        .tui_mode(session.id())
+        .await?
+        .as_str()
+    {
+        "ask" => orbit_protocol::Mode::Ask,
+        "YOLO" => orbit_protocol::Mode::Yolo,
+        _ => orbit_protocol::Mode::Auto,
+    };
+    approvals
+        .policy()
+        .set_mode(approval_mode(mode));
     file_config
         .disabled_tools
         .sort_unstable();
@@ -311,6 +334,7 @@ async fn prepare_resolved_resources(
                 .join(session.id()),
         ),
         Some(file_config.permissions.clone()),
+        approvals.policy().clone(),
     )
     .await?;
     let audit_workspace = runtime.workspace.clone();
@@ -353,7 +377,7 @@ async fn prepare_resolved_resources(
             options.auth_directory.clone(),
             instructions.clone(),
             file_config.subagents.clone(),
-            (!policy.read_only).then_some(approvals.clone()),
+            Some(approvals.clone()),
             Some(user_input.clone()),
         )
         .await?
@@ -402,16 +426,7 @@ async fn prepare_resolved_resources(
         model_refresh,
         mode_revision: 0,
         planning,
-        mode: match session
-            .store
-            .tui_mode(session.id())
-            .await?
-            .as_str()
-        {
-            "ask" => orbit_protocol::Mode::Ask,
-            "YOLO" => orbit_protocol::Mode::Yolo,
-            _ => orbit_protocol::Mode::Auto,
-        },
+        mode,
         options: options.clone(),
         policy,
         disabled_tools,

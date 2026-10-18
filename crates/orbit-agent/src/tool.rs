@@ -189,7 +189,6 @@ impl From<orbit_runtime::filesystem::WorkspaceError> for ToolError {
         use orbit_runtime::filesystem::WorkspaceError;
         match error {
             WorkspaceError::PermissionDenied(message) => Self::AuthorizationRequired(message),
-            WorkspaceError::ProtectedPath => Self::PolicyDenied(error.to_string()),
             _ => Self::ExecutionFailed(error.to_string()),
         }
     }
@@ -656,7 +655,7 @@ mod tests {
     fn orchestration_context_preserves_typed_cancellation_and_policy_failures() {
         let error = anyhow::Error::new(ToolError::Cancelled).context("plan review interrupted");
         assert_eq!(ToolError::from_anyhow(error), ToolError::Cancelled);
-        let error = ToolError::from(orbit_runtime::filesystem::WorkspaceError::ProtectedPath);
+        let error = ToolError::PolicyDenied("plan mode requires read-only tools".into());
         let receipt: serde_json::Value = serde_json::from_str(&error.model_content()).unwrap();
         assert_eq!(receipt["error"]["code"], "policy_denied");
         assert_eq!(receipt["error"]["recovery"], "choose_permitted_operation");

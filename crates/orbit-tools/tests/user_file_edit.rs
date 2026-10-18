@@ -106,7 +106,7 @@ async fn user_save_refuses_stale_missing_binary_and_oversized_files() {
 }
 
 #[tokio::test]
-async fn user_save_rejects_protected_paths_hardlinks_and_escaping_symlinks() {
+async fn user_save_preserves_atomicity_and_external_authorization() {
     let root = tempfile::tempdir().unwrap();
     let outside = tempfile::tempdir().unwrap();
     let tool = writer(root.path());
@@ -136,15 +136,17 @@ async fn user_save_rejects_protected_paths_hardlinks_and_escaping_symlinks() {
     );
     fs::create_dir(root.path().join(".git")).unwrap();
     fs::write(root.path().join(".git/config"), "metadata").unwrap();
-    assert!(
-        tool.save_user_edit(
-            ".git/config".into(),
-            "metadata".into(),
-            "new".into(),
-            CancellationToken::new()
-        )
-        .await
-        .is_err()
+    tool.save_user_edit(
+        ".git/config".into(),
+        "metadata".into(),
+        "new".into(),
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        fs::read_to_string(root.path().join(".git/config")).unwrap(),
+        "new"
     );
     assert_eq!(
         fs::read_to_string(outside.path().join("note")).unwrap(),

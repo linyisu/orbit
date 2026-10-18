@@ -109,7 +109,7 @@ async fn paginates_breadth_first_and_supports_explicit_generated_directories() {
 }
 
 #[tokio::test]
-async fn excludes_protected_aliases_symlinks_and_special_files() {
+async fn lists_hidden_metadata_and_skips_ungranted_links_and_special_files() {
     use std::os::unix::fs::symlink;
 
     let dir = tempfile::tempdir().unwrap();
@@ -140,16 +140,7 @@ async fn excludes_protected_aliases_symlinks_and_special_files() {
         0,
     )
     .unwrap();
-    let mut workspace = Workspace::new(dir.path()).unwrap();
-    // Orbit protects its explicitly supplied config path at runtime. This is
-    // not a filename blacklist: an ordinary project config remains visible
-    // unless the caller registers it as protected.
-    workspace
-        .protect(dir.path().join("config.toml"))
-        .unwrap();
-    workspace
-        .protect(dir.path().join("credentials.json"))
-        .unwrap();
+    let workspace = Workspace::new(dir.path()).unwrap();
     let tool = ListFiles::new(workspace);
 
     assert_eq!(
@@ -161,13 +152,17 @@ async fn excludes_protected_aliases_symlinks_and_special_files() {
             })
         )
         .await["entries"],
-        json!([{
-            "path": "public",
-            "kind": "file"
-        }])
+        json!([
+            {"path": ".env", "kind": "file"},
+            {"path": ".git", "kind": "directory"},
+            {"path": "alias", "kind": "file"},
+            {"path": "config.toml", "kind": "file"},
+            {"path": "credentials.json", "kind": "file"},
+            {"path": "public", "kind": "file"}
+        ])
     );
 
-    for path in ["..", "/tmp", "linked-dir", ".git", "public"] {
+    for path in ["..", "linked-dir", "public"] {
         assert!(
             tool.execute(
                 ToolCall::function(

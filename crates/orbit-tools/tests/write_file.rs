@@ -354,9 +354,6 @@ async fn rejects_unsafe_paths_links_binary_large_files_and_missing_parents_befor
     for path in [
         "../escape",
         "/tmp/escape",
-        ".git/new",
-        ".env",
-        ".orbit-write-owned",
         "binary",
         "large",
         "hard",
@@ -427,22 +424,8 @@ async fn ordinary_config_filename_requires_approval_instead_of_a_blanket_ban() {
 }
 
 #[tokio::test]
-async fn protected_custom_files_and_parent_replacement_cannot_be_written() {
+async fn parent_replacement_after_approval_is_rejected() {
     let root = Fixture::new();
-    let mut workspace = Workspace::new(root.0.path()).unwrap();
-    workspace
-        .protect(root.0.path().join("private.db"))
-        .unwrap();
-    let (sender, mut receiver) = approval::channel();
-    let tool = WriteFile::new(workspace, sender);
-
-    assert!(
-        tool.execute(call("private.db", "x"), CancellationToken::new())
-            .await
-            .is_err()
-    );
-    assert!(receiver.try_recv().is_err());
-
     fs::create_dir(root.0.path().join("dir")).unwrap();
     let (tool, mut approvals) = root.tool();
     let task = start(tool, "dir/file", "x", CancellationToken::new());
@@ -460,24 +443,4 @@ async fn protected_custom_files_and_parent_replacement_cannot_be_written() {
             .join("moved/file")
             .exists()
     );
-}
-
-#[tokio::test]
-async fn protects_descendants_of_session_lock_directory() {
-    let root = Fixture::new();
-    fs::create_dir(root.0.path().join("session-locks")).unwrap();
-    fs::write(root.0.path().join("session-locks/id"), "").unwrap();
-    let mut workspace = Workspace::new(root.0.path()).unwrap();
-    workspace
-        .protect(root.0.path().join("session-locks"))
-        .unwrap();
-    let (sender, mut receiver) = approval::channel();
-    let tool = WriteFile::new(workspace, sender);
-
-    assert!(
-        tool.execute(call("session-locks/id", "x"), CancellationToken::new())
-            .await
-            .is_err()
-    );
-    assert!(receiver.try_recv().is_err());
 }

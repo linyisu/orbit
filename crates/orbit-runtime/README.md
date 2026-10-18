@@ -5,11 +5,13 @@
 ## 入口
 
 - [execution/](src/execution/)：目标 shell 环境、进程组、后台任务、超时、取消与有界输出。
-- [filesystem/](src/filesystem/)：文件描述符访问、保护路径和原子写入。
+- [filesystem/](src/filesystem/)：文件描述符访问和原子写入。
 - [policy.rs](src/policy.rs)、[capability.rs](src/capability.rs)：文件访问策略与外部授权。
 - [git/](src/git/)、[verification.rs](src/verification.rs)：Git 分类与执行证据。
 
-命令使用目标用户的真实目录、HOME 和工具链，按操作系统用户权限运行。`workspace_access`、`network` 用于审批，不是进程隔离；内置文件工具另有路径保护。
+命令使用目标用户的真实目录、HOME 和工具链，按操作系统用户权限运行。`workspace_access`、`network` 用于审批，不是进程隔离。
+文件工具没有内置路径黑名单；YOLO 允许直接访问系统用户可访问的路径，其他模式保留工作区与外部授权边界。
+审批模式通过共享策略实时生效，切出 YOLO 不会遗留由该模式产生的文件授权。
 
 `ExecutionEnvironment` 是工作目录和环境变量的唯一来源；`ExecutionRequest` 只携带命令、执行预算及验证输入。
 

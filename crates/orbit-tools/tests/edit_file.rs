@@ -393,20 +393,16 @@ async fn denial_cancellation_and_concurrent_changes_never_overwrite_the_file() {
 }
 
 #[tokio::test]
-async fn rejects_protected_files_and_links() {
+async fn rejects_non_atomic_link_edits() {
     let root = tempfile::tempdir().unwrap();
-    fs::write(root.path().join("config.toml"), "text").unwrap();
     fs::write(root.path().join("file"), "text").unwrap();
     std::os::unix::fs::symlink("file", root.path().join("sym")).unwrap();
     fs::hard_link(root.path().join("file"), root.path().join("hard")).unwrap();
-    let mut workspace = Workspace::new(root.path()).unwrap();
-    workspace
-        .protect(root.path().join("config.toml"))
-        .unwrap();
+    let workspace = Workspace::new(root.path()).unwrap();
     let (sender, mut approvals) = approval::channel();
     let tool = EditFile::new(workspace, sender);
 
-    for path in ["config.toml", "sym", "hard"] {
+    for path in ["sym", "hard"] {
         let result = tokio::time::timeout(
             Duration::from_secs(2),
             tool.execute(
@@ -423,7 +419,7 @@ async fn rejects_protected_files_and_links() {
             ),
         )
         .await
-        .expect("protected edit unexpectedly requested approval");
+        .expect("non-atomic edit unexpectedly requested approval");
         assert!(result.is_err(), "{path}");
         assert!(approvals.try_recv().is_err());
         assert_eq!(fs::read_to_string(root.path().join(path)).unwrap(), "text");

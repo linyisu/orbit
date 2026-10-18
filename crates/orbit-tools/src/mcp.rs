@@ -142,6 +142,7 @@ pub async fn register(
     approvals: Option<ApprovalSender>,
     allow_start: bool,
 ) -> Vec<McpServerStatus> {
+    let approvals = approvals.map(|sender| sender.for_workspace(workspace));
     let mut statuses = Vec::new();
     let server_names: Vec<_> = config
         .servers
@@ -341,7 +342,7 @@ impl Tool for McpTool {
             };
 
             if !approved {
-                return Err(ToolError::ExecutionFailed(
+                return Err(ToolError::PermissionDenied(
                     "MCP tool call was not approved; do not retry automatically".into(),
                 ));
             }

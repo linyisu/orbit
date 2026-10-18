@@ -109,7 +109,7 @@ fn desktop_review_distinguishes_index_worktree_and_untracked_content() {
 }
 
 #[test]
-fn desktop_review_retains_protected_paths_and_inode_checks_but_allows_deleted_files() {
+fn desktop_review_allows_config_and_keeps_external_boundaries() {
     use std::os::unix::fs::symlink;
     let directory = repository();
     let external = tempfile::tempdir().unwrap();
@@ -159,22 +159,9 @@ fn desktop_review_retains_protected_paths_and_inode_checks_but_allows_deleted_fi
     .unwrap();
     fs::remove_file(directory.path().join("removed/old.txt")).unwrap();
     fs::remove_dir(directory.path().join("removed")).unwrap();
-    let mut workspace = Workspace::new(directory.path()).unwrap();
-    workspace
-        .protect(directory.path().join("config.toml"))
-        .unwrap();
-    workspace
-        .protect(directory.path().join("private"))
-        .unwrap();
+    let workspace = Workspace::new(directory.path()).unwrap();
 
-    for path in [
-        "config.toml",
-        "config-alias.txt",
-        "private/auth.json",
-        "auth-alias.txt",
-        "outside-alias.txt",
-        "outside-directory/outside.txt",
-    ] {
+    for path in ["outside-alias.txt", "outside-directory/outside.txt"] {
         assert!(
             review_patch(&workspace, path, false, false).is_err(),
             "{path}"
@@ -191,7 +178,8 @@ fn desktop_review_retains_protected_paths_and_inode_checks_but_allows_deleted_fi
         .iter()
         .map(|entry| entry["path"].as_str().unwrap())
         .collect();
-    assert_eq!(paths, ["removed/old.txt"]);
+    assert!(paths.contains(&"removed/old.txt"));
+    assert!(paths.contains(&"config.toml"));
     let deletion = review_patch(&workspace, "removed/old.txt", false, false).unwrap();
     assert!(deletion.contains("-deleted tracked text"));
     assert_eq!(

@@ -198,7 +198,7 @@ impl WorkspaceScan {
                     }
                 }
 
-                Err(WorkspaceError::ProtectedPath | WorkspaceError::Io(_)) => self.skipped += 1,
+                Err(WorkspaceError::Io(_)) => self.skipped += 1,
                 Err(error) => return Err(failed(error)),
             }
         }

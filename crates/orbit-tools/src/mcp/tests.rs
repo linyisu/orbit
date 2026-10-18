@@ -130,9 +130,14 @@ fn rejects_remote_transport_until_credential_boundary_exists() {
 async fn discovers_and_calls_a_stdio_server() {
     use std::os::unix::fs::PermissionsExt;
 
-    let directory = tempfile::tempdir().unwrap();
-    let script = directory.path().join("server.sh");
-    std::fs::write(
+    for mode in [
+        crate::approval::ApprovalMode::Ask,
+        crate::approval::ApprovalMode::Auto,
+        crate::approval::ApprovalMode::Yolo,
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let script = directory.path().join("server.sh");
+        std::fs::write(
             &script,
             r#"#!/bin/sh
 while IFS= read -r line; do
@@ -151,80 +156,88 @@ done
 "#,
         )
         .unwrap();
-    let mut permissions = std::fs::metadata(&script)
-        .unwrap()
-        .permissions();
-    permissions.set_mode(0o700);
-    std::fs::set_permissions(&script, permissions).unwrap();
-    let config = McpConfig {
-        servers: BTreeMap::from([(
-            "fixture".into(),
-            McpServerConfig {
-                transport: "stdio".into(),
-                command: script.to_string_lossy().into_owned(),
-                args: Vec::new(),
-                env: BTreeMap::new(),
-                timeout_seconds: 2,
-                tools: Vec::new(),
-                enabled: true,
-            },
-        )]),
-    };
-    let mut registry = ToolRegistry::new();
-    let (approvals, mut receiver) = crate::approval::channel();
-    let approval = tokio::spawn(async move {
-        let request = receiver
-            .recv()
-            .await
-            .expect("MCP call requests approval");
-        let ApprovalPreview::Mcp(preview) = request.preview else {
-            panic!("expected MCP approval");
+        let mut permissions = std::fs::metadata(&script)
+            .unwrap()
+            .permissions();
+        permissions.set_mode(0o700);
+        std::fs::set_permissions(&script, permissions).unwrap();
+        let config = McpConfig {
+            servers: BTreeMap::from([(
+                "fixture".into(),
+                McpServerConfig {
+                    transport: "stdio".into(),
+                    command: script.to_string_lossy().into_owned(),
+                    args: Vec::new(),
+                    env: BTreeMap::new(),
+                    timeout_seconds: 2,
+                    tools: Vec::new(),
+                    enabled: true,
+                },
+            )]),
         };
+        let mut registry = ToolRegistry::new();
+        let (approvals, mut receiver) = crate::approval::channel();
+        approvals.policy().set_mode(mode);
+        let approval = if mode == crate::approval::ApprovalMode::Ask {
+            Some(tokio::spawn(async move {
+                let request = receiver
+                    .recv()
+                    .await
+                    .expect("MCP call requests approval");
+                let ApprovalPreview::Mcp(preview) = request.preview else {
+                    panic!("expected MCP approval");
+                };
 
-        assert_eq!(preview.server, "fixture");
-        assert_eq!(preview.tool, "echo");
+                assert_eq!(preview.server, "fixture");
+                assert_eq!(preview.tool, "echo");
 
-        request.decision.send(true).unwrap();
-    });
-    let statuses = register(
-        &mut registry,
-        &config,
-        directory.path(),
-        Some(approvals),
-        true,
-    )
-    .await;
-
-    assert_eq!(statuses[0].tool_count, 1, "{statuses:?}");
-    assert_eq!(
-        statuses[0].tools,
-        vec![McpToolStatus {
-            name: "MCP_Fixture_Echo".into(),
-            description: "Echo input".into(),
-        }]
-    );
-
-    let output = registry
-        .execute(
-            ToolCall::function(
-                "call",
-                "MCP_Fixture_Echo",
-                json!({
-                    "message": "hello"
-                }),
-            ),
-            CancellationToken::new(),
+                request.decision.send(true).unwrap();
+            }))
+        } else {
+            None
+        };
+        let statuses = register(
+            &mut registry,
+            &config,
+            directory.path(),
+            Some(approvals),
+            true,
         )
-        .await
-        .unwrap();
+        .await;
 
-    approval.await.unwrap();
+        assert_eq!(statuses[0].tool_count, 1, "{statuses:?}");
+        assert_eq!(
+            statuses[0].tools,
+            vec![McpToolStatus {
+                name: "MCP_Fixture_Echo".into(),
+                description: "Echo input".into(),
+            }]
+        );
 
-    assert!(
-        output
-            .content
-            .contains("\"text\":\"ok\"")
-    );
+        let output = registry
+            .execute(
+                ToolCall::function(
+                    "call",
+                    "MCP_Fixture_Echo",
+                    json!({
+                        "message": "hello"
+                    }),
+                ),
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+
+        if let Some(approval) = approval {
+            approval.await.unwrap();
+        }
+
+        assert!(
+            output
+                .content
+                .contains("\"text\":\"ok\"")
+        );
+    }
 }
 
 #[tokio::test]

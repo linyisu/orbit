@@ -88,7 +88,7 @@ impl Tool for SearchText {
     /// unless case_sensitive=true. Rust regex syntax is line-based; no lookaround or backreferences.
     /// Narrow by path/glob. output_mode selects matching lines, file paths or occurrence counts.
     /// offset/next_offset paginate returned entries, not individual occurrences within a line.
-    /// Respects .gitignore/.ignore; hidden files are opt-in, protected paths and symlinks excluded.
+    /// Respects .gitignore/.ignore; hidden files are opt-in and directory scans skip symlinks.
     /// Large, binary or unreadable files are skipped; scan_truncated means search was incomplete.
     /// Use ReadFile for full source around a hit. Paths may be workspace-relative or explicitly granted.
     #[orbit_agent::tool(name = "Grep")]
@@ -382,57 +382,22 @@ fn search(
 }
 
 fn scope(workspace: &Workspace, path: &str) -> Result<SearchScope, ToolError> {
-    let target_path = Path::new(path);
-
-    if target_path
-        .components()
-        .any(|c| matches!(c, std::path::Component::ParentDir))
-    {
-        return Err(invalid("use a workspace-relative path without '..'"));
+    let target = Path::new(path);
+    let resolved = orbit_runtime::filesystem::ResolvedPath::resolve(target, Some(workspace.root()))
+        .map_err(failed)?;
+    let canonical = resolved.canonical();
+    match workspace.authorize_directory(canonical) {
+        Ok(_) => {}
+        Err(WorkspaceError::NotDirectory) => {
+            workspace
+                .authorize_read(canonical)
+                .map_err(ToolError::from)?;
+        }
+        Err(error) => return Err(error.into()),
     }
-
-    if target_path
-        .components()
-        .all(|component| component == std::path::Component::CurDir)
-    {
-        return Ok(SearchScope::Workspace(PathBuf::new()));
-    }
-
-    match workspace.checked_relative(target_path) {
-        Ok(relative) => {
-            if workspace
-                .open_directory(&relative)
-                .is_err()
-                && workspace.open_read(&relative).is_err()
-            {
-                return Err(invalid(
-                    "path must name a readable workspace file or directory",
-                ));
-            }
-
-            Ok(SearchScope::Workspace(relative))
-        }
-
-        Err(WorkspaceError::ProtectedPath) => {
-            Err(invalid(WorkspaceError::ProtectedPath.to_string()))
-        }
-        Err(_) => {
-            let canonical = target_path
-                .canonicalize()
-                .map_err(failed)?;
-
-            match workspace.authorize_directory(&canonical) {
-                Ok(_) => Ok(SearchScope::External(canonical)),
-                Err(WorkspaceError::NotDirectory) => match workspace.authorize_read(&canonical) {
-                    Ok(_) => Ok(SearchScope::External(canonical)),
-                    Err(WorkspaceError::PermissionDenied(err)) => Err(failed(err)),
-                    Err(_) => Err(invalid("path must name a readable file or directory")),
-                },
-
-                Err(WorkspaceError::PermissionDenied(err)) => Err(failed(err)),
-                Err(_) => Err(invalid("path must name a readable file or directory")),
-            }
-        }
+    match canonical.strip_prefix(workspace.root()) {
+        Ok(relative) => Ok(SearchScope::Workspace(relative.to_owned())),
+        Err(_) => Ok(SearchScope::External(canonical.to_owned())),
     }
 }
 

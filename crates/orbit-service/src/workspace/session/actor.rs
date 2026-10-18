@@ -541,6 +541,12 @@ impl Actor {
                         .await?;
                 }
                 self.setup.resources.mode = mode;
+                self.setup
+                    .resources
+                    .workspace
+                    .policy()
+                    .approval_policy()
+                    .set_mode(super::super::setup::approval_mode(mode));
                 self.setup.resources.mode_revision += 1;
                 self.profile().await;
                 let allowed: Vec<_> = self
@@ -1130,13 +1136,12 @@ impl Actor {
                 .workspace,
         );
         let key = approval_key(preview, workspace);
-        self.undo.is_none()
-            && (self.setup.resources.mode == Mode::Yolo
-                || key
-                    .as_ref()
-                    .is_some_and(|key| self.remembered.contains(key))
-                || (self.setup.resources.mode == Mode::Auto
-                    && orbit_tools::approval::auto_allows(preview, workspace)))
+        self.setup.resources.mode == Mode::Yolo
+            || key
+                .as_ref()
+                .is_some_and(|key| self.remembered.contains(key))
+            || (self.setup.resources.mode == Mode::Auto
+                && orbit_tools::approval::auto_allows(preview, workspace))
     }
 
     async fn resolve_approval(&mut self, id: u64, allow: bool) -> Result<()> {

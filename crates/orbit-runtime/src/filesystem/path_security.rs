@@ -5,13 +5,6 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
-/// Reserved names shared by file access and capability policy.
-pub(crate) fn is_protected_workspace_name(name: &str) -> bool {
-    matches!(name, ".git" | ".env")
-        || name.starts_with(".env.")
-        || name.starts_with(".orbit-write-")
-}
-
 /// Requested spelling paired with its normalized canonical path.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ResolvedPath {

@@ -8,40 +8,11 @@ use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
 #[tokio::test]
-async fn reserved_paths_never_prompt_and_nested_missing_paths_suggest_an_eligible_parent() {
+async fn missing_paths_suggest_an_existing_parent() {
     let ws_temp = tempfile::tempdir().unwrap();
     let outside = tempfile::tempdir().unwrap();
     let (sender, mut receiver) = approval::channel();
     let tool = RequestCapability::new(Workspace::new(ws_temp.path()).unwrap(), sender);
-
-    for path in ["/", "/tmp", "/proc", "/proc/cpuinfo"] {
-        let error = tool
-            .execute(
-                ToolCall::function(
-                    "reserved",
-                    "RequestAccess",
-                    json!({
-                        "path": path,
-                        "access": "read",
-                        "reason": "test reserved paths"
-                    }),
-                ),
-                CancellationToken::new(),
-            )
-            .await
-            .unwrap_err()
-            .to_string();
-
-        assert!(
-            error.contains("permission permanently denied"),
-            "{path}: {error}"
-        );
-        assert!(error.contains("cannot be overridden by user approval"));
-        assert!(matches!(
-            receiver.try_recv(),
-            Err(tokio::sync::mpsc::error::TryRecvError::Empty)
-        ));
-    }
 
     let error = tool
         .execute(

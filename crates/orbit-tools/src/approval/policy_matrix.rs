@@ -63,7 +63,7 @@ fn auto_trusts_workspace_command_cwd_instead_of_shell_syntax() {
 }
 
 #[test]
-fn auto_keeps_file_targets_mcp_and_new_capabilities_separate_from_command_trust() {
+fn auto_trusts_enabled_mcp_but_requires_external_file_grants() {
     let workspace = tempfile::tempdir().unwrap();
     let outside = tempfile::tempdir().unwrap();
     let root = workspace.path();
@@ -86,7 +86,7 @@ fn auto_keeps_file_targets_mcp_and_new_capabilities_separate_from_command_trust(
             assert_eq!(auto_allows(&preview, root), allowed);
         }
     }
-    assert!(!auto_allows(
+    assert!(auto_allows(
         &ApprovalPreview::Mcp(McpPreview {
             server: "files".into(),
             tool: "ReadFile".into(),

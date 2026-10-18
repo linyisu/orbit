@@ -103,7 +103,7 @@ async fn a_long_unicode_line_can_be_read_without_losing_its_tail() {
 }
 
 #[tokio::test]
-async fn rejects_escape_paths_symlinks_and_private_metadata() {
+async fn rejects_ungranted_external_paths_and_links() {
     let root = Fixture::new();
     let outside = Fixture::new();
     fs::write(outside.0.path().join("secret"), "private").unwrap();
@@ -128,9 +128,6 @@ async fn rejects_escape_paths_symlinks_and_private_metadata() {
             .unwrap(),
         "linked-dir/secret",
         "linked-file",
-        ".env",
-        ".env.local",
-        ".git/config",
     ] {
         let result = root
             .tool()
@@ -194,7 +191,7 @@ async fn permits_ordinary_configuration_filenames() {
 }
 
 #[tokio::test]
-async fn protects_custom_config_and_its_hard_links() {
+async fn reads_configuration_and_its_hard_links() {
     let root = Fixture::new();
     fs::write(root.0.path().join("credentials.toml"), "private").unwrap();
     fs::hard_link(
@@ -202,24 +199,16 @@ async fn protects_custom_config_and_its_hard_links() {
         root.0.path().join("alias.txt"),
     )
     .unwrap();
-    let mut workspace = Workspace::new(root.0.path()).unwrap();
-    workspace
-        .protect(root.0.path().join("credentials.toml"))
-        .unwrap();
+    let workspace = Workspace::new(root.0.path()).unwrap();
     let tool = ReadFile::new(workspace);
 
     for path in ["credentials.toml", "alias.txt"] {
-        let error = tool
-            .execute(
-                call(json!({
-                    "path": path
-                })),
-                CancellationToken::new(),
-            )
+        let output = tool
+            .execute(call(json!({"path": path})), CancellationToken::new())
             .await
-            .unwrap_err();
-
-        assert!(error.to_string().contains("blocked"));
+            .unwrap();
+        let value: Value = serde_json::from_str(&output.content).unwrap();
+        assert_eq!(value["content"], "1: private\n");
     }
 }
 
@@ -470,7 +459,7 @@ async fn reads_middle_of_large_files_and_resumes_versioned_cursor() {
 }
 
 #[tokio::test]
-async fn permits_internal_links_and_rejects_secret_targets_and_loops() {
+async fn permits_internal_metadata_links_and_rejects_loops() {
     let root = Fixture::new();
     fs::create_dir(root.0.path().join("actual")).unwrap();
     fs::write(root.0.path().join("actual/file"), "inside").unwrap();
@@ -490,18 +479,20 @@ async fn permits_internal_links_and_rejects_secret_targets_and_loops() {
         .unwrap()
         .contains("inside")
     );
-    for path in ["secret-alias", "loop"] {
-        assert!(
-            tool.execute(
-                call(json!({
-                    "path": path
-                })),
-                CancellationToken::new()
-            )
+    assert!(
+        tool.execute(
+            call(json!({"path": "secret-alias"})),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap()
+        .contains("secret")
+    );
+    assert!(
+        tool.execute(call(json!({"path": "loop"})), CancellationToken::new())
             .await
             .is_err()
-        );
-    }
+    );
 }
 
 #[tokio::test]

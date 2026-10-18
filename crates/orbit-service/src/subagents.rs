@@ -1101,6 +1101,10 @@ impl Service {
                     .join(&agent.id),
             ),
             Some(config.permissions.clone()),
+            self.approvals
+                .as_ref()
+                .map(|sender| sender.policy().clone())
+                .unwrap_or_default(),
         )
         .await?;
         let mut tools = runtime.tools;
