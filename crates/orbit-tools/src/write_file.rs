@@ -1,16 +1,15 @@
 use std::{
     fs::File,
     io::{self, Read, Write},
-    os::unix::fs::MetadataExt,
     path::Path,
     sync::atomic::{AtomicU64, Ordering},
 };
 
 use orbit_agent::tool::{FileChange, Tool, ToolError, ToolFuture, ToolOutput};
 use orbit_model::types::{ToolCall, ToolDefinition};
-use orbit_runtime::filesystem::{Workspace, WorkspaceError};
-use rustix::fs::{
-    AtFlags, Mode, OFlags, RenameFlags, fchmod, openat, renameat, renameat_with, unlinkat,
+use orbit_runtime::filesystem::{
+    Workspace, WorkspaceError, hard_link_count,
+    mutation::{self, FileIdentity, FileState, Replacement},
 };
 use serde::Deserialize;
 use serde_json::json;
@@ -216,9 +215,9 @@ impl WriteFile {
 struct DeletePrepared {
     workspace: Workspace,
     path: String,
-    before: Fingerprint,
+    before: FileState,
     text: String,
-    parent: (u64, u64),
+    parent: FileIdentity,
 }
 
 impl DeletePrepared {
@@ -226,7 +225,7 @@ impl DeletePrepared {
         let (parent, _) = workspace
             .open_granted_write_parent(Path::new(&path))
             .map_err(failed)?;
-        let parent_metadata = parent.metadata().map_err(failed)?;
+        let parent_identity = FileIdentity::read(&parent).map_err(failed)?;
         let (before, text) = snapshot(&workspace, &path)?;
         let Some(before) = before else {
             return Err(failed("cannot undo: the created file is already absent"));
@@ -246,7 +245,7 @@ impl DeletePrepared {
             path,
             before,
             text,
-            parent: (parent_metadata.dev(), parent_metadata.ino()),
+            parent: parent_identity,
         })
     }
 
@@ -295,9 +294,9 @@ impl DeletePrepared {
             .workspace
             .open_granted_write_parent(path)
             .map_err(failed)?;
-        let parent_metadata = parent.metadata().map_err(failed)?;
+        let parent_identity = FileIdentity::read(&parent).map_err(failed)?;
 
-        if (parent_metadata.dev(), parent_metadata.ino()) != self.parent {
+        if parent_identity != self.parent {
             return Err(failed(
                 "cannot undo: parent directory changed; request a new preview",
             ));
@@ -313,8 +312,8 @@ impl DeletePrepared {
         }
 
         check_cancelled(&cancellation)?;
-        unlinkat(&parent, &name, AtFlags::empty()).map_err(failed)?;
-        let synced = parent.sync_all().is_ok();
+        mutation::remove_file(&parent, &name).map_err(failed)?;
+        let synced = mutation::sync_directory(&parent).is_ok();
 
         Ok(json!({
             "path": self.path,
@@ -391,32 +390,11 @@ impl Tool for WriteFile {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
-struct Fingerprint {
-    device: u64,
-    inode: u64,
-    modified: (i64, i64),
-    changed: (i64, i64),
-    mode: u32,
-}
-
-fn fingerprint(file: &File) -> Result<Fingerprint, ToolError> {
-    let metadata = file.metadata().map_err(failed)?;
-
-    Ok(Fingerprint {
-        device: metadata.dev(),
-        inode: metadata.ino(),
-        modified: (metadata.mtime(), metadata.mtime_nsec()),
-        changed: (metadata.ctime(), metadata.ctime_nsec()),
-        mode: metadata.mode(),
-    })
-}
-
 struct Prepared {
     workspace: Workspace,
     preview: WritePreview,
-    before: Option<Fingerprint>,
-    parent: (u64, u64),
+    before: Option<FileState>,
+    parent: FileIdentity,
 }
 
 impl Prepared {
@@ -424,7 +402,7 @@ impl Prepared {
         let (parent, _) = workspace
             .authorize_write_parent(Path::new(&args.path))
             .map_err(ToolError::from)?;
-        let metadata = parent.metadata().map_err(failed)?;
+        let parent_identity = FileIdentity::read(&parent).map_err(failed)?;
         let (before, text) = snapshot(&workspace, &args.path)?;
 
         Ok(Self {
@@ -435,7 +413,7 @@ impl Prepared {
                 after: args.content,
             },
             before,
-            parent: (metadata.dev(), metadata.ino()),
+            parent: parent_identity,
         })
     }
 
@@ -492,9 +470,9 @@ impl Prepared {
             .workspace
             .authorize_write_parent(path)
             .map_err(ToolError::from)?;
-        let metadata = parent.metadata().map_err(failed)?;
+        let parent_identity = FileIdentity::read(&parent).map_err(failed)?;
 
-        if (metadata.dev(), metadata.ino()) != self.parent {
+        if parent_identity != self.parent {
             return Err(ToolError::Conflict(
                 "write conflict: parent directory changed; request a new preview".into(),
             ));
@@ -505,39 +483,37 @@ impl Prepared {
             std::process::id(),
             NEXT_TEMP.fetch_add(1, Ordering::Relaxed)
         );
-        let fd = openat(
-            &parent,
-            temp_name.as_str(),
-            OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::CLOEXEC | OFlags::NOFOLLOW,
-            Mode::RUSR | Mode::WUSR,
-        )
-        .map_err(failed)?;
-        let mut file = File::from(fd);
-        let _cleanup = TempFile {
+        let file =
+            mutation::create_private(&parent, std::ffi::OsStr::new(&temp_name)).map_err(failed)?;
+        let mut temporary = TempFile {
             parent: &parent,
             name: &temp_name,
+            file,
+            published: false,
         };
-        file.write_all(self.preview.after.as_bytes())
+        temporary
+            .file
+            .write_all(self.preview.after.as_bytes())
             .map_err(failed)?;
 
         if let Some(before) = &self.before {
-            fchmod(&file, Mode::from_bits_truncate((before.mode & 0o777) as _)).map_err(failed)?;
+            before
+                .apply_permissions(&temporary.file)
+                .map_err(failed)?;
         }
 
-        file.sync_all().map_err(failed)?;
+        temporary
+            .file
+            .sync_all()
+            .map_err(failed)?;
         let (now, text) = snapshot(&self.workspace, &self.preview.path)?;
         let (current_parent, _) = self
             .workspace
             .open_granted_write_parent(path)
             .map_err(failed)?;
-        let current = current_parent
-            .metadata()
-            .map_err(failed)?;
+        let current = FileIdentity::read(&current_parent).map_err(failed)?;
 
-        if now != self.before
-            || text != self.preview.before
-            || (current.dev(), current.ino()) != self.parent
-        {
+        if now != self.before || text != self.preview.before || current != self.parent {
             return Err(ToolError::Conflict(
                 "write conflict: file changed after preview; request a new preview".into(),
             ));
@@ -545,23 +521,24 @@ impl Prepared {
 
         check_cancelled(&cancellation)?;
 
-        if self.before.is_none() {
-            renameat_with(
-                &parent,
-                temp_name.as_str(),
-                &parent,
-                &name,
-                RenameFlags::NOREPLACE,
-            )
-            .map_err(failed)?;
-        } else {
-            renameat(&parent, temp_name.as_str(), &parent, &name).map_err(failed)?;
-        }
+        mutation::publish(
+            &parent,
+            &temporary.file,
+            std::ffi::OsStr::new(&temp_name),
+            &name,
+            if self.before.is_none() {
+                Replacement::Create
+            } else {
+                Replacement::Replace
+            },
+        )
+        .map_err(failed)?;
+
+        temporary.published = true;
 
         // The rename has committed; do not turn a subsequent cancellation into a
         // misleading 'not written' result. Report directory sync separately.
-        let sync_error = parent
-            .sync_all()
+        let sync_error = mutation::sync_directory(&parent)
             .err()
             .map(|error| error.to_string());
 
@@ -579,18 +556,26 @@ impl Prepared {
 struct TempFile<'a> {
     parent: &'a File,
     name: &'a str,
+    file: File,
+    published: bool,
 }
 
 impl Drop for TempFile<'_> {
     fn drop(&mut self) {
-        let _ = unlinkat(self.parent, self.name, AtFlags::empty());
+        if !self.published {
+            let _ = mutation::discard_unpublished(
+                self.parent,
+                std::ffi::OsStr::new(self.name),
+                &self.file,
+            );
+        }
     }
 }
 
 fn snapshot(
     workspace: &Workspace,
     path: &str,
-) -> Result<(Option<Fingerprint>, Option<String>), ToolError> {
+) -> Result<(Option<FileState>, Option<String>), ToolError> {
     let file = match workspace.authorize_read(Path::new(path)) {
         Ok(file) => file,
         Err(WorkspaceError::Io(error)) if error.kind() == io::ErrorKind::NotFound => {
@@ -599,11 +584,11 @@ fn snapshot(
         Err(error) => return Err(error.into()),
     };
 
-    if file.metadata().map_err(failed)?.nlink() != 1 {
+    if hard_link_count(&file).map_err(failed)? != 1 {
         return Err(failed("refusing to replace a hard-linked file"));
     }
 
-    let before = fingerprint(&file)?;
+    let before = FileState::read(&file).map_err(failed)?;
     let mut bytes = Vec::new();
     (&file)
         .take(MAX_WRITE_BYTES as u64 + 1)
@@ -619,7 +604,7 @@ fn snapshot(
     if text.contains('\0') {
         return Err(failed("existing file contains binary data"));
     }
-    if fingerprint(&file)? != before {
+    if FileState::read(&file).map_err(failed)? != before {
         return Err(ToolError::Conflict(
             "file changed while preparing preview".into(),
         ));

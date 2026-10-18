@@ -36,7 +36,7 @@ use windows_sys::Win32::{
     },
 };
 
-struct LocalAllocation(*mut c_void);
+pub(super) struct LocalAllocation(pub(super) *mut c_void);
 
 impl Drop for LocalAllocation {
     fn drop(&mut self) {
@@ -111,12 +111,12 @@ pub fn user_id() -> io::Result<String> {
     }
 }
 
-fn security() -> io::Result<LocalAllocation> {
+pub(super) fn security() -> io::Result<LocalAllocation> {
     let sid = user_id()?;
     security_descriptor(&format!("O:{sid}D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;{sid})"))
 }
 
-fn security_descriptor(sddl: &str) -> io::Result<LocalAllocation> {
+pub(super) fn security_descriptor(sddl: &str) -> io::Result<LocalAllocation> {
     let sddl: Vec<u16> = sddl
         .encode_utf16()
         .chain(Some(0))

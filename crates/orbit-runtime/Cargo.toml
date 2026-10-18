@@ -28,4 +28,5 @@ windows-sys = { workspace = true, features = [
     "Win32_System_Diagnostics_ToolHelp", "Win32_System_Console",
     "Win32_Security_Authorization", "Win32_System_SystemServices",
     "Win32_System_SystemInformation",
+    "Wdk_Foundation", "Wdk_Storage_FileSystem", "Win32_System_IO",
 ] }

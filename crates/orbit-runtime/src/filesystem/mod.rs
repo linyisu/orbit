@@ -1,4 +1,5 @@
 mod access;
+pub mod mutation;
 pub mod path_security;
 #[cfg(windows)]
 pub mod private;
