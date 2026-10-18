@@ -36,3 +36,9 @@ orbit-config = { workspace = true, features = ["test-support"] }
 rusqlite.workspace = true
 orbit-client.workspace = true
 image.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = [
+    "Win32_Security", "Win32_Security_Authorization", "Win32_System_Pipes",
+    "Win32_System_Threading",
+] }

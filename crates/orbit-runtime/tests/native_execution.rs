@@ -29,7 +29,7 @@ async fn environment_is_the_single_source_of_command_working_directory() {
         )
         .await
         .unwrap();
-    assert!(result.is_success());
+    assert!(result.is_success(), "{result:?}");
     assert_eq!(std::fs::read(directory.join("marker")).unwrap(), b"ready");
     assert!(!root.path().join("marker").exists());
 }
@@ -62,7 +62,7 @@ async fn native_execution_uses_host_paths_and_retains_output() {
         .await
         .unwrap();
 
-    assert!(result.is_success());
+    assert!(result.is_success(), "{result:?}");
     assert_eq!(result.sandbox, "native");
     assert_eq!(result.stdout, root.path().to_string_lossy());
     assert_eq!(result.stderr, "err");
@@ -216,7 +216,7 @@ async fn native_cmd_preserves_operators_and_spaces_without_a_posix_shell() {
         )
         .await
         .unwrap();
-    assert!(result.is_success());
+    assert!(result.is_success(), "{result:?}");
     assert_eq!(result.stdout.trim(), "native-output");
     assert_eq!(result.stderr.trim(), "native-error");
     assert_eq!(

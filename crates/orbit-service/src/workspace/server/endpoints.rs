@@ -3,6 +3,7 @@ use super::*;
 
 // These released versions included the wire version in their endpoint key.
 // Keep their addresses as aliases so already-open terminals can reconnect.
+#[cfg(unix)]
 const LEGACY_VERSIONS: [u32; 2] = [7, 8];
 
 fn address(root: &Path, identity: impl serde::Serialize) -> Result<PathBuf> {
@@ -18,6 +19,12 @@ pub(super) fn shared(root: &Path, database: &Path) -> Result<PathBuf> {
 }
 
 pub(super) fn legacy(root: &Path, database: &Path) -> Result<Vec<(u32, PathBuf)>> {
+    #[cfg(windows)]
+    {
+        let _ = (root, database);
+        Ok(Vec::new())
+    }
+    #[cfg(unix)]
     LEGACY_VERSIONS
         .into_iter()
         .map(|version| {
@@ -42,12 +49,15 @@ pub(super) fn lock_legacy(root: &Path, database: &Path) -> Result<Vec<fs::File>>
 }
 
 pub(super) fn publish_aliases(root: &Path, database: &Path, socket: &Path) -> Result<()> {
+    #[cfg(windows)]
+    let _ = socket;
     for (_, alias) in legacy(root, database)? {
         match fs::remove_file(&alias) {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => return Err(error.into()),
         }
+        #[cfg(unix)]
         std::os::unix::fs::symlink(socket, alias)?;
     }
     Ok(())

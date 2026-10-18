@@ -1,13 +1,14 @@
 //! Share one daemon per database, with an orderly handover between builds.
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
 use std::{
     io::Read,
-    os::unix::process::CommandExt,
     process::{Command, Stdio},
 };
 
 use super::*;
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests;
 
 pub(super) fn build_generation() -> u64 {
@@ -22,7 +23,7 @@ pub(super) async fn connect_or_start(
     config: &Path,
     database: &Path,
     auth: &Path,
-) -> Result<UnixStream> {
+) -> Result<Stream> {
     tokio::time::timeout(START_TIMEOUT, async {
         // Keep the database endpoint stable so all terminals share session
         // actors. Serialize replacement rather than creating a daemon per build.
@@ -44,7 +45,7 @@ pub(super) async fn connect_or_start(
             if fs::read_link(address).ok().as_deref() == Some(socket) {
                 continue;
             }
-            match UnixStream::connect(address).await {
+            match Stream::connect(address).await {
                 Ok(mut stream) => {
                     verify_owner(&stream)?;
                     ensure!(
@@ -63,14 +64,14 @@ pub(super) async fn connect_or_start(
                 Err(error) => return Err(error.into()),
             }
         }
-        if let Ok(mut stream) = UnixStream::connect(socket).await {
+        if let Ok(mut stream) = Stream::connect(socket).await {
             if same_executable(&stream).await? {
                 return Ok(stream);
             }
             if !retire(&mut stream, args, config, auth).await? {
                 // Negotiation consumed its own Hello. The actual client needs
                 // a fresh stream for its connection context and handshake.
-                return Ok(UnixStream::connect(socket).await?);
+                return Ok(Stream::connect(socket).await?);
             }
             drop(stream);
             // Shutdown acknowledges before its daemon releases the endpoint.
@@ -81,7 +82,7 @@ pub(super) async fn connect_or_start(
         }
         launch(socket, args, config, database, auth)?;
         loop {
-            if let Ok(stream) = UnixStream::connect(socket).await {
+            if let Ok(stream) = Stream::connect(socket).await {
                 ensure!(
                     same_executable(&stream).await?,
                     "工作区服务切换失败：连接到了其他构建的服务"
@@ -101,6 +102,11 @@ pub(super) async fn connect_or_start(
 }
 
 pub(super) fn private_file(path: &Path) -> Result<std::fs::File> {
+    #[cfg(windows)]
+    return Ok(orbit_runtime::filesystem::private::open_file(
+        path, true, false,
+    )?);
+    #[cfg(unix)]
     Ok(OpenOptions::new()
         .create(true)
         .truncate(false)
@@ -122,13 +128,14 @@ async fn acquire(file: &std::fs::File) -> Result<()> {
     }
 }
 
-fn verify_owner(stream: &UnixStream) -> Result<i32> {
+#[cfg(unix)]
+fn verify_owner(stream: &Stream) -> Result<i32> {
     let credentials = stream.peer_cred()?;
     ensure!(
         credentials.uid() == unsafe { libc::geteuid() },
         "workspace daemon belongs to another user"
     );
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(all(unix, not(target_os = "macos")))]
     {
         credentials
             .pid()
@@ -161,15 +168,39 @@ fn verify_owner(stream: &UnixStream) -> Result<i32> {
     }
 }
 
-async fn same_executable(stream: &UnixStream) -> Result<bool> {
+#[cfg(windows)]
+fn verify_owner(stream: &Stream) -> Result<u32> {
+    Ok(stream.peer_pid()?)
+}
+
+async fn same_executable(stream: &Stream) -> Result<bool> {
     let pid = verify_owner(stream)?;
     tokio::task::spawn_blocking(move || {
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(all(unix, not(target_os = "macos")))]
         {
             compare_executables(
                 Path::new("/proc/self/exe"),
                 &PathBuf::from(format!("/proc/{pid}/exe")),
             )
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::{ffi::OsStringExt, io::AsRawHandle};
+            use windows_sys::Win32::System::Threading::QueryFullProcessImageNameW;
+            const IMAGE_PATH_CHARS: usize = 32_768;
+            let peer = transport::peer_process(pid)?;
+            let mut path = vec![0u16; IMAGE_PATH_CHARS];
+            let mut length = path.len() as u32;
+            // SAFETY: peer is live and the UTF-16 buffer has the provided capacity.
+            if unsafe {
+                QueryFullProcessImageNameW(peer.as_raw_handle(), 0, path.as_mut_ptr(), &mut length)
+            } == 0
+            {
+                return Err(std::io::Error::last_os_error())
+                    .context("cannot inspect workspace daemon");
+            }
+            let path = PathBuf::from(std::ffi::OsString::from_wide(&path[..length as usize]));
+            compare_executables(&std::env::current_exe()?, &path)
         }
         #[cfg(target_os = "macos")]
         {
@@ -199,9 +230,13 @@ fn compare_executables(current: &Path, peer: &Path) -> Result<bool> {
     let current_metadata = current.metadata()?;
     let peer_metadata = peer.metadata()?;
     // Normal connections use the same immutable cache file: no hashing needed.
-    if (current_metadata.dev(), current_metadata.ino())
-        == (peer_metadata.dev(), peer_metadata.ino())
-    {
+    #[cfg(unix)]
+    let identical = (current_metadata.dev(), current_metadata.ino())
+        == (peer_metadata.dev(), peer_metadata.ino());
+    #[cfg(windows)]
+    let identical = orbit_runtime::filesystem::private::identity(&current)?
+        == orbit_runtime::filesystem::private::identity(&peer)?;
+    if identical {
         return Ok(true);
     }
     if current_metadata.len() != peer_metadata.len() {
@@ -224,7 +259,7 @@ fn compare_executables(current: &Path, peer: &Path) -> Result<bool> {
 }
 
 async fn retire(
-    stream: &mut UnixStream,
+    stream: &mut Stream,
     args: &ServiceOptions,
     config: &Path,
     auth: &Path,
@@ -233,7 +268,7 @@ async fn retire(
 }
 
 async fn retire_version(
-    stream: &mut UnixStream,
+    stream: &mut Stream,
     args: &ServiceOptions,
     config: &Path,
     auth: &Path,
@@ -242,7 +277,10 @@ async fn retire_version(
     let owner = verify_owner(stream)?;
     // macOS may no longer expose the peer address after a released daemon
     // closes a rejected handshake. Retain it while the connection is live.
+    #[cfg(unix)]
     let address = stream.peer_addr()?;
+    #[cfg(windows)]
+    let address = stream.endpoint().to_path_buf();
     let mut retried = false;
     let hello = loop {
         protocol::write(
@@ -273,10 +311,13 @@ async fn retire_version(
         {
             // Released daemons close a mismatched Hello. Reconnect using the
             // announced version only for Hello/Shutdown, never for sessions.
+            #[cfg(windows)]
+            let socket = address.as_path();
+            #[cfg(unix)]
             let socket = address
                 .as_pathname()
                 .context("后台服务没有可重连的地址")?;
-            let replacement = UnixStream::connect(socket).await?;
+            let replacement = Stream::connect(socket).await?;
             ensure!(
                 verify_owner(&replacement)? == owner,
                 "协商更新时后台服务发生了变化，请重试"
@@ -325,6 +366,9 @@ fn launch(
     database: &Path,
     auth: &Path,
 ) -> Result<()> {
+    #[cfg(windows)]
+    let log = orbit_runtime::filesystem::private::open_append(&socket.with_extension("log"))?;
+    #[cfg(unix)]
     let log = OpenOptions::new()
         .create(true)
         .truncate(false)
@@ -347,6 +391,13 @@ fn launch(
     if args.allow_mcp_start {
         command.arg("--allow-mcp-start");
     }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        use windows_sys::Win32::System::Threading::{CREATE_NEW_PROCESS_GROUP, DETACHED_PROCESS};
+        command.creation_flags(CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS);
+    }
+    #[cfg(unix)]
     unsafe {
         command.pre_exec(|| {
             if libc::setsid() < 0 {

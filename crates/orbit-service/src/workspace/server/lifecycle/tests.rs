@@ -19,7 +19,7 @@ fn executable_identity_uses_content_and_keeps_equal_copies_compatible() {
 async fn equal_build_clients_reuse_the_same_database_endpoint() {
     let root = tempfile::tempdir().unwrap();
     let socket = root.path().join("service.sock");
-    let listener = UnixListener::bind(&socket).unwrap();
+    let listener = Listener::bind(&socket).unwrap();
     let args = ServiceOptions {
         workspace: root
             .path()
@@ -64,7 +64,7 @@ async fn service_handover_respects_busy_refusal_and_uses_orderly_shutdown() {
             daemon: false,
             allow_mcp_start: false,
         };
-        let (mut proxy, mut daemon) = UnixStream::pair().unwrap();
+        let (mut proxy, mut daemon) = Stream::pair().unwrap();
         let fake = tokio::spawn(async move {
             let context: ConnectionContext = protocol::read(&mut daemon)
                 .await
@@ -150,10 +150,8 @@ async fn handover_negotiates_the_running_daemon_version_without_forcing_busy_shu
     ] {
         let root = tempfile::tempdir().unwrap();
         let socket = root.path().join("service.sock");
-        let listener = UnixListener::bind(&socket).unwrap();
-        let mut client = UnixStream::connect(&socket)
-            .await
-            .unwrap();
+        let listener = Listener::bind(&socket).unwrap();
+        let mut client = Stream::connect(&socket).await.unwrap();
         let fake = tokio::spawn(async move {
             let (mut daemon, _) = listener.accept().await.unwrap();
             let _: ConnectionContext = protocol::read(&mut daemon)
@@ -296,7 +294,7 @@ async fn legacy_protocol_endpoints_retire_before_connecting_to_shared_service() 
             let root = tempfile::tempdir().unwrap();
             let database = root.path().join("db");
             let socket = endpoints::shared(root.path(), &database).unwrap();
-            let listener = UnixListener::bind(&socket).unwrap();
+            let listener = Listener::bind(&socket).unwrap();
             let old_socket = endpoints::legacy(root.path(), &database)
                 .unwrap()
                 .into_iter()
@@ -304,7 +302,7 @@ async fn legacy_protocol_endpoints_retire_before_connecting_to_shared_service() 
                 .unwrap()
                 .1;
             assert_ne!(socket, old_socket);
-            let old_listener = UnixListener::bind(&old_socket).unwrap();
+            let old_listener = Listener::bind(&old_socket).unwrap();
             let old_lock = private_file(&old_socket.with_extension("lock")).unwrap();
             old_lock.try_lock().unwrap();
             let daemon = tokio::spawn(async move {
@@ -406,7 +404,7 @@ async fn legacy_aliases_share_one_listener_and_block_competing_daemons() {
     let root = tempfile::tempdir().unwrap();
     let database = root.path().join("db");
     let socket = endpoints::shared(root.path(), &database).unwrap();
-    let listener = UnixListener::bind(&socket).unwrap();
+    let listener = Listener::bind(&socket).unwrap();
     let locks = endpoints::lock_legacy(root.path(), &database).unwrap();
     endpoints::publish_aliases(root.path(), &database, &socket).unwrap();
     // Historical addresses still route to the owner; Hello negotiates schema separately.
@@ -417,9 +415,7 @@ async fn legacy_aliases_share_one_listener_and_block_competing_daemons() {
             competing.try_lock(),
             Err(std::fs::TryLockError::WouldBlock)
         ));
-        let client = UnixStream::connect(alias)
-            .await
-            .unwrap();
+        let client = Stream::connect(alias).await.unwrap();
         let _accepted = listener.accept().await.unwrap();
         assert!(same_executable(&client).await.unwrap());
     }

@@ -1,7 +1,10 @@
+#[cfg(unix)]
+use std::fs::OpenOptions;
+#[cfg(unix)]
+use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::{
     collections::HashMap,
-    fs::{self, OpenOptions},
-    os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt},
+    fs,
     path::{Path, PathBuf},
     sync::{
         Arc,
@@ -15,7 +18,6 @@ use base64::Engine;
 use sha2::{Digest, Sha256};
 use tokio::{
     io::{AsyncRead, AsyncWrite, AsyncWriteExt},
-    net::{UnixListener, UnixStream},
     sync::{Mutex, Semaphore},
 };
 
@@ -33,6 +35,13 @@ const MAX_FILE_BYTES: u64 = 20 * 1_024 * 1_024;
 
 mod endpoints;
 mod lifecycle;
+#[cfg(unix)]
+#[path = "server/transport/unix.rs"]
+mod transport;
+#[cfg(windows)]
+#[path = "server/transport/windows.rs"]
+mod transport;
+use transport::{Listener, Stream};
 
 #[derive(serde::Serialize, serde::Deserialize)]
 struct ConnectionContext {
@@ -66,6 +75,9 @@ pub async fn serve(
             .parent()
             .context("database has no parent")?,
     )?;
+    #[cfg(windows)]
+    orbit_runtime::filesystem::private::open_file(&database, true, false)?;
+    #[cfg(unix)]
     OpenOptions::new()
         .create(true)
         .truncate(false)
@@ -89,7 +101,7 @@ pub async fn serve(
             },
         )
         .await?;
-        let (mut reader, mut writer) = child.split();
+        let (mut reader, mut writer) = tokio::io::split(&mut child);
         let mut stdin = tokio::io::stdin();
         let mut stdout = tokio::io::stdout();
         stdout
@@ -108,25 +120,21 @@ pub async fn serve(
     }
     orbit_runtime::execution::shell_environment::initialize().await;
 
-    let lock = OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .read(true)
-        .write(true)
-        .mode(0o600)
-        .open(socket.with_extension("lock"))?;
+    let lock = lifecycle::private_file(&socket.with_extension("lock"))?;
     if lock.try_lock().is_err() {
         return Ok(());
     }
     // Retain the old daemon locks for the entire lifetime of the shared server.
     // Older launchers can connect through aliases but cannot start a rival.
     let _legacy_locks = endpoints::lock_legacy(&root, &database)?;
+    #[cfg(unix)]
     match fs::remove_file(&socket) {
         Ok(()) => {}
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => return Err(error.into()),
     }
-    let listener = UnixListener::bind(&socket)?;
+    let mut listener = Listener::bind(&socket)?;
+    #[cfg(unix)]
     fs::set_permissions(&socket, fs::Permissions::from_mode(0o600))?;
     endpoints::publish_aliases(&root, &database, &socket)?;
     let home = std::env::var_os("HOME").map(PathBuf::from);
@@ -160,15 +168,15 @@ pub async fn serve(
     let mut idle = tokio::time::interval(Duration::from_secs(30));
     loop {
         tokio::select! {
-            connection = listener.accept() => {
-                let (socket, _) = connection?;
+            connection = transport::accept(&mut listener) => {
+                let socket = connection?;
                 let Ok(permit) = permits.clone().try_acquire_owned() else {
                     continue;
                 };
                 let service = service.clone();
                 tokio::spawn(async move {
                     let _permit = permit;
-                    let (reader, writer) = socket.into_split();
+                    let (reader, writer) = tokio::io::split(socket);
                     if let Err(error) = service.client(reader, writer).await
                         && !error
                             .downcast_ref::<std::io::Error>()
@@ -209,10 +217,12 @@ pub async fn serve(
             .command(session::Command::Close)
             .await?;
     }
+    #[cfg(unix)]
     fs::remove_file(socket)?;
     Ok(())
 }
 
+#[cfg(unix)]
 pub fn runtime_directory() -> Result<PathBuf> {
     let uid = unsafe { libc::geteuid() };
     let directory = std::env::temp_dir().join(format!("orbit-workspace-{uid}"));
@@ -229,6 +239,14 @@ pub fn runtime_directory() -> Result<PathBuf> {
         metadata.is_dir() && metadata.uid() == uid && metadata.mode() & 0o077 == 0,
         "workspace runtime directory must be private and owned by the current user"
     );
+    Ok(directory)
+}
+
+#[cfg(windows)]
+pub fn runtime_directory() -> Result<PathBuf> {
+    let sid = orbit_runtime::filesystem::private::user_id()?;
+    let directory = std::env::temp_dir().join(format!("orbit-workspace-{sid}"));
+    orbit_runtime::filesystem::private::create_directory(&directory)?;
     Ok(directory)
 }
 
@@ -1139,7 +1157,16 @@ async fn capabilities() -> orbit_protocol::Capabilities {
             orbit_protocol::Capabilities {
                 system: std::env::consts::OS.into(),
                 architecture: std::env::consts::ARCH.into(),
-                shell: std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into()),
+                shell: std::env::var("SHELL").unwrap_or_else(|_| {
+                    #[cfg(windows)]
+                    {
+                        std::env::var("ComSpec").unwrap_or_else(|_| "cmd.exe".into())
+                    }
+                    #[cfg(unix)]
+                    {
+                        "/bin/sh".into()
+                    }
+                }),
                 native_processes: true,
                 files: true,
                 features: [

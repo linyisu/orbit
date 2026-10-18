@@ -254,6 +254,22 @@ pub fn open_file(path: &Path, create: bool, exclusive: bool) -> io::Result<File>
     Ok(file)
 }
 
+/// Open a validated private log in append mode, without following final reparse points.
+pub fn open_append(path: &Path) -> io::Result<File> {
+    use std::os::windows::fs::OpenOptionsExt;
+    let created = open_file(path, true, false)?;
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .append(true)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path)?;
+    validate(&file, false)?;
+    if identity(&file)? != identity(&created)? {
+        return Err(io::Error::other("private log changed during open"));
+    }
+    Ok(file)
+}
+
 fn open(path: &Path, create: bool, exclusive: bool, directory: bool) -> io::Result<File> {
     let descriptor = security()?;
     let attributes = SECURITY_ATTRIBUTES {

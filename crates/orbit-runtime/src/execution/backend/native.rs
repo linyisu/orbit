@@ -40,7 +40,7 @@ impl ExecutionBackend for NativeBackend {
 
             let shell = shell(&env.env_vars)?;
             let mut command = Command::new(&shell);
-            command.args(shell_arguments(&shell, &request.command));
+            configure_shell_command(&mut command, &shell, &request.command);
             command
                 .current_dir(&env.cwd)
                 .env_clear()
@@ -158,7 +158,7 @@ fn shell(environment: &std::collections::BTreeMap<String, String>) -> std::io::R
     }
 }
 
-fn shell_arguments<'a>(shell: &str, command: &'a str) -> Vec<&'a str> {
+fn configure_shell_command(command: &mut Command, shell: &str, script: &str) {
     #[cfg(windows)]
     {
         let name = std::path::Path::new(shell)
@@ -167,19 +167,24 @@ fn shell_arguments<'a>(shell: &str, command: &'a str) -> Vec<&'a str> {
             .to_string_lossy()
             .to_ascii_lowercase();
         if name == "cmd" {
-            return vec!["/D", "/S", "/C", command];
+            // cmd.exe parses its /C tail itself; CRT argument escaping changes quotes and operators.
+            command
+                .args(["/D", "/S", "/C"])
+                .raw_arg(format!("\"{script}\""));
+            return;
         }
         if matches!(name.as_str(), "powershell" | "pwsh") {
-            return vec![
+            command.args([
                 "-NoLogo",
                 "-NoProfile",
                 "-NonInteractive",
                 "-Command",
-                command,
-            ];
+                script,
+            ]);
+            return;
         }
     }
     #[cfg(unix)]
     let _ = shell;
-    vec!["-c", command]
+    command.args(["-c", script]);
 }
