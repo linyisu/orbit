@@ -11,18 +11,30 @@ pub(crate) struct Preview {
     pub text: std::sync::Arc<str>,
 }
 
+impl Preview {
+    pub fn bytes(&self) -> u64 {
+        self.stamp.length
+    }
+}
+
 #[cfg(test)]
 pub fn read_command_stdout(dir: &std::path::Path, output_id: &str) -> Option<String> {
     Some(
-        read_preview(dir, output_id, None)?
-            .text
-            .to_string(),
+        read_preview(
+            dir,
+            output_id,
+            orbit_protocol::tool_output::Stream::Stdout,
+            None,
+        )?
+        .text
+        .to_string(),
     )
 }
 
 pub(crate) fn read_preview(
     dir: &std::path::Path,
     output_id: &str,
+    stream: orbit_protocol::tool_output::Stream,
     previous: Option<Preview>,
 ) -> Option<Preview> {
     use std::io::{Read, Seek, SeekFrom};
@@ -36,7 +48,11 @@ pub(crate) fn read_preview(
         return None;
     }
 
-    let path = dir.join(format!("{output_id}.stdout"));
+    let suffix = match stream {
+        orbit_protocol::tool_output::Stream::Stdout => "stdout",
+        orbit_protocol::tool_output::Stream::Stderr => "stderr",
+    };
+    let path = dir.join(format!("{output_id}.{suffix}"));
     let metadata = std::fs::symlink_metadata(&path).ok()?;
     if !metadata.is_file() || metadata.file_type().is_symlink() {
         return None;

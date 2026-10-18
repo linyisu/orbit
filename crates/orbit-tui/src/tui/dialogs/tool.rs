@@ -21,6 +21,7 @@ pub(super) struct Header {
     request: details::Request,
     status: String,
     streams: &'static [details::Stream],
+    manual_stream: bool,
     active: Pane,
     area: Rect,
     scroll: usize,
@@ -38,6 +39,7 @@ impl Header {
 
     pub(super) fn select_result(&mut self) {
         self.active = Pane::Result;
+        self.manual_stream = true;
         self.copied = None;
     }
 
@@ -64,6 +66,7 @@ impl InfoDialog {
             request: details::Request::new(record, workspace),
             status: String::new(),
             streams: &[],
+            manual_stream: false,
             active: Pane::Result,
             area: Rect::default(),
             scroll: 0,
@@ -84,11 +87,22 @@ impl InfoDialog {
             .streams
             .get(self.selected_page)
             .copied();
+        let follow_log = record.name == "Exec"
+            && matches!(
+                header.record.status,
+                orbit_client::execution::ToolStatus::Running
+                    | orbit_client::execution::ToolStatus::Background
+            )
+            && self.scroll >= self.max_scroll;
         header.record = record.clone();
+        if !record.changes.is_empty() {
+            header.request = details::Request::new(record, "");
+            header.active = Pane::Result;
+        }
         header.streams = details::streams(record);
         header.status = details::status(record);
         let selected = previous
-            .filter(|stream| header.streams.contains(stream))
+            .filter(|stream| header.manual_stream && header.streams.contains(stream))
             .unwrap_or_else(|| details::default_stream(record));
         self.selected_page = header
             .streams
@@ -98,6 +112,9 @@ impl InfoDialog {
         if previous != Some(selected) {
             self.scroll = 0;
             header.copied = None;
+        }
+        if follow_log {
+            self.scroll = usize::MAX;
         }
         let streams = header.streams;
         self.title = record.name.clone();
@@ -143,12 +160,14 @@ impl InfoDialog {
             let record = header.record.clone();
             let connection = connection.clone();
             let session = session.to_owned();
+            let (revision, previous) = header.retained.pending().unwrap();
             header.pending = Some(tokio_util::task::AbortOnDropHandle::new(tokio::spawn(
                 async move {
-                    let result = details::retained::fetch(&connection, session, agent, &record)
-                        .await
-                        .map_err(|error| format!("{error:#}"));
-                    (record.output.unwrap_or_default(), result)
+                    let result =
+                        details::retained::fetch(&connection, session, agent, &record, previous)
+                            .await
+                            .map_err(|error| format!("{error:#}"));
+                    (revision, result)
                 },
             )));
             changed = true;
@@ -199,9 +218,6 @@ impl InfoDialog {
         }
         Some(match header.active {
             Pane::Parameters => header.request.content(),
-            Pane::Result if matches!(header.retained, details::retained::Retained::Loading(_)) => {
-                return None;
-            }
             Pane::Result => &self.content,
         })
     }
@@ -223,7 +239,9 @@ impl InfoDialog {
                     header.retained = details::retained::Retained::default();
                     return true;
                 }
-                if key.code == KeyCode::Char('p') {
+                if key.code == KeyCode::Char('p')
+                    && header.request.layout() == details::RequestLayout::Body
+                {
                     header.active = if header.active == Pane::Parameters {
                         Pane::Result
                     } else {
@@ -294,11 +312,17 @@ impl InfoDialog {
         };
         use ratatui::layout::{Constraint, Layout};
         let area = inner.inner(ratatui::layout::Margin::new(1, 0));
+        let request_body = header.request.layout() == details::RequestLayout::Body;
+        let hidden = header.request.layout() == details::RequestLayout::Hidden;
         let [title, label, parameters, context, tabs, body, footer] = Layout::vertical([
             Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Length((area.height / 4).clamp(1, 5)),
-            Constraint::Length(u16::from(!header.request.context().is_empty())),
+            Constraint::Length(u16::from(!hidden)),
+            Constraint::Length(if request_body {
+                (area.height / 4).clamp(1, 5)
+            } else {
+                0
+            }),
+            Constraint::Length(u16::from(!hidden && !header.request.context().is_empty())),
             Constraint::Length(1),
             Constraint::Min(1),
             Constraint::Length(1),
@@ -317,7 +341,11 @@ impl InfoDialog {
         frame.render_widget(
             Paragraph::new(format!(
                 "{}{active}  {}",
-                header.request.heading(),
+                if header.request.layout() == details::RequestLayout::Summary {
+                    header.request.content()
+                } else {
+                    header.request.heading()
+                },
                 header.status
             ))
             .style(super::super::components::muted()),
@@ -337,7 +365,13 @@ impl InfoDialog {
         );
         header.area = parameters;
         let parameter_text = super::super::render::safe_multiline_output(header.request.content());
-        header.max_scroll = draw_content(frame, parameters, &parameter_text, &mut header.scroll);
+        header.max_scroll = draw_content(
+            frame,
+            parameters,
+            &parameter_text,
+            &mut header.scroll,
+            false,
+        );
         frame.render_widget(
             Paragraph::new(header.icon(Pane::Parameters)).style(super::super::components::accent()),
             header.copy_parameters,
@@ -388,12 +422,16 @@ impl InfoDialog {
             body,
             &super::super::render::safe_multiline_output(&self.content),
             &mut self.scroll,
+            header.streams[self.selected_page] == details::Stream::Changes,
         );
         frame.render_widget(
             Paragraph::new(header.icon(Pane::Result)).style(super::super::components::accent()),
             header.copy_result,
         );
-        let mut actions = "P 调用/结果 · Tab 切页 · Y ⧉ · Alt+←/→ 切换调用 · Esc 关闭".to_owned();
+        let mut actions = "Tab 切页 · Y ⧉ · Alt+←/→ 切换调用 · Esc 关闭".to_owned();
+        if request_body {
+            actions = format!("P 调用/结果 · {actions}");
+        }
         if let Some(target) = &self.target {
             actions = format!("A {} · {actions}", target.label());
         }
@@ -410,7 +448,13 @@ impl InfoDialog {
     }
 }
 
-fn draw_content(frame: &mut Frame<'_>, area: Rect, content: &str, scroll: &mut usize) -> usize {
+fn draw_content(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    content: &str,
+    scroll: &mut usize,
+    diff: bool,
+) -> usize {
     let body = Rect::new(area.x, area.y, area.width.saturating_sub(4), area.height);
     let paragraph = Paragraph::new(content).wrap(Wrap { trim: false });
     let max_scroll = paragraph
@@ -438,9 +482,27 @@ fn draw_content(frame: &mut Frame<'_>, area: Rect, content: &str, scroll: &mut u
         }
     }
     frame.render_widget(
-        Paragraph::new(visible)
-            .wrap(Wrap { trim: false })
-            .scroll((remaining.min(u16::MAX as usize) as u16, 0)),
+        Paragraph::new(Text::from(
+            visible
+                .lines()
+                .map(|line| {
+                    let style = if diff && line.starts_with('+') && !line.starts_with("+++") {
+                        Style::default()
+                            .fg(super::super::theme::THEME.diff_added)
+                            .bg(super::super::theme::THEME.diff_added_bg)
+                    } else if diff && line.starts_with('-') && !line.starts_with("---") {
+                        Style::default()
+                            .fg(super::super::theme::THEME.diff_removed)
+                            .bg(super::super::theme::THEME.diff_removed_bg)
+                    } else {
+                        Style::default()
+                    };
+                    Line::styled(line.to_owned(), style)
+                })
+                .collect::<Vec<_>>(),
+        ))
+        .wrap(Wrap { trim: false })
+        .scroll((remaining.min(u16::MAX as usize) as u16, 0)),
         body,
     );
     if max_scroll > 0 && !area.is_empty() {
@@ -577,18 +639,14 @@ mod tests {
         record.status = ToolStatus::Running;
         record.output = None;
         let mut dialog = InfoDialog::tool(&record, "");
-        dialog.select_page(2);
+        dialog.select_page(1);
         record = self::record();
-        let mut result: serde_json::Value =
-            serde_json::from_str(record.output.as_deref().unwrap()).unwrap();
-        result["stderr"] = "".into();
-        record.output = Some(result.to_string());
         dialog.update_tool(&record);
         assert_eq!(
             dialog.pages[dialog.selected_page].label,
-            details::Stream::Raw.label()
+            details::Stream::Stderr.label()
         );
-        assert!(dialog.content.contains("stdout"));
+        assert_eq!(dialog.content, "error\n");
     }
 
     #[test]

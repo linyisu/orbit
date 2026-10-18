@@ -48,6 +48,7 @@ pub enum Command {
     ToolOutput {
         session: String,
         tool: Box<crate::execution::ToolRun>,
+        previous: crate::execution::details::retained::Contents,
         result: tokio::sync::oneshot::Sender<
             Result<crate::execution::details::retained::Contents, String>,
         >,
@@ -300,6 +301,7 @@ pub async fn observe(
                     Command::ToolOutput {
                         session,
                         tool,
+                        previous,
                         result,
                     } => {
                         let connection = connection.clone();
@@ -309,6 +311,7 @@ pub async fn observe(
                                 session,
                                 None,
                                 &tool,
+                                previous,
                             )
                             .await
                             .map_err(|error| format!("{error:#}"));

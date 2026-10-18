@@ -12,6 +12,15 @@ pub struct Request {
     content: String,
     language: &'static str,
     context: String,
+    layout: RequestLayout,
+}
+
+/// Request depth follows the operation; confirmed file changes own the entire inspector.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RequestLayout {
+    Body,
+    Summary,
+    Hidden,
 }
 
 impl Request {
@@ -23,6 +32,7 @@ impl Request {
             content: pretty(&tool.arguments),
             language: "json",
             context: String::new(),
+            layout: RequestLayout::Body,
         };
         let Ok(args @ Value::Object(_)) = serde_json::from_str::<Value>(&tool.arguments) else {
             return request;
@@ -130,6 +140,24 @@ impl Request {
         };
         request.heading = heading;
         request.language = language;
+        request.layout = if !tool.changes.is_empty() {
+            RequestLayout::Hidden
+        } else if matches!(
+            tool.name.as_str(),
+            "ReadFile"
+                | "ReadImage"
+                | "ReadDocument"
+                | "ListFiles"
+                | "Grep"
+                | "WebSearch"
+                | "WebFetch"
+                | "ProjectOverview"
+                | "CodeSymbols"
+        ) {
+            RequestLayout::Summary
+        } else {
+            RequestLayout::Body
+        };
         if let Some(value) = args.get(key) {
             request.content = literal(value);
         } else if matches!(tool.name.as_str(), "ListFiles" | "ProjectOverview") {
@@ -204,6 +232,10 @@ impl Request {
 
     pub fn context(&self) -> &str {
         &self.context
+    }
+
+    pub fn layout(&self) -> RequestLayout {
+        self.layout
     }
 }
 

@@ -190,6 +190,8 @@ mod tests {
             .push(orbit_protocol::ToolProgress {
                 call_id: "operation".into(),
                 stdout: Some("partial".into()),
+                stderr: None,
+                command: None,
                 elapsed_ms: None,
             });
         assert!(state.changed(&page).unwrap());

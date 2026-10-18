@@ -32,8 +32,10 @@ pub(crate) struct Conversation {
     rows: Vec<Entity<TurnView>>,
     order: Vec<RowKey>,
     scroll: Entity<MessageScrollerState>,
+    scrolled_up: bool,
     navigation: Entity<navigation::Navigation>,
     navigation_controls: Entity<navigation::Controls>,
+    tail_control: Entity<navigation::TailControl>,
     viewport_height: Rc<Cell<Pixels>>,
     viewport_bounds: Rc<Cell<Bounds<Pixels>>>,
 }
@@ -52,6 +54,7 @@ struct TurnView {
     parts: Vec<Entity<MessageRow>>,
     groups: BTreeMap<usize, Entity<ToolGroup>>,
     reply: SharedString,
+    completed: bool,
     viewport_bounds: Rc<Cell<Bounds<Pixels>>>,
     _subscriptions: Vec<Subscription>,
 }
@@ -81,6 +84,7 @@ struct MessageRow {
     deferred_text: Option<String>,
     muted: bool,
     user: bool,
+    copy_ready: bool,
     images: Vec<MessageImage>,
     files: Vec<orbit_protocol::MessageImage>,
     expanded: bool,
@@ -111,15 +115,19 @@ impl Conversation {
         let navigation =
             cx.new(|cx| navigation::Navigation::new(scroll.clone(), viewport_height.clone(), cx));
         let navigation_controls = cx.new(|cx| navigation::Controls::new(navigation.clone(), cx));
+        let tail_control = cx.new(|cx| navigation::TailControl::new(navigation.clone(), cx));
+
         Self {
             _subscriptions: vec![],
             navigation,
             navigation_controls,
+            tail_control,
             transcript: Transcript::default(),
             activity: Default::default(),
             rows: vec![],
             order: vec![],
             scroll,
+            scrolled_up: false,
             viewport_height,
             viewport_bounds: Rc::new(Cell::new(Bounds::default())),
         }
@@ -127,6 +135,10 @@ impl Conversation {
 
     pub(crate) fn navigation_controls(&self) -> Entity<navigation::Controls> {
         self.navigation_controls.clone()
+    }
+
+    pub(crate) fn tail_control(&self) -> Entity<navigation::TailControl> {
+        self.tail_control.clone()
     }
 
     pub(crate) fn is_empty(&self) -> bool {
@@ -151,6 +163,17 @@ impl Conversation {
     }
 
     pub(crate) fn apply(&mut self, update: Update, cx: &mut Context<Self>) {
+        let running = match &update {
+            Update::Started { .. } => Some(true),
+            Update::Finished { .. } => Some(false),
+            _ => None,
+        };
+        if let Some(running) = running {
+            self.tail_control
+                .update(cx, |control, cx| {
+                    control.set_running(running, cx);
+                });
+        }
         if let Update::Agent(event) = &update {
             self.activity.apply(event);
         }
@@ -165,6 +188,7 @@ impl Conversation {
                 parts: Vec::new(),
                 groups: BTreeMap::new(),
                 reply: "".into(),
+                completed: false,
                 viewport_bounds: self.viewport_bounds.clone(),
                 _subscriptions: Vec::new(),
             });
@@ -234,11 +258,6 @@ impl Conversation {
         } else {
             format!("{} · {progress}", self.activity.label())
         }
-    }
-
-    pub(crate) fn reveal_activity(&mut self, cx: &mut Context<Self>) {
-        self.scroll
-            .update(cx, |scroll, cx| scroll.scroll_to_end(cx));
     }
 
     fn remeasure_part(&mut self, turn: usize, part: usize, cx: &mut Context<Self>) {
@@ -371,6 +390,7 @@ impl Conversation {
 impl TurnView {
     fn sync(&mut self, turn: &Turn, changed: Option<usize>, cx: &mut Context<Self>) {
         self.reply = turn.reply().into();
+        self.completed = turn.completed;
         if self.user.is_none()
             && let Some(prompt) = &turn.prompt
         {
@@ -427,6 +447,7 @@ impl TurnView {
             self.parts[index].update(cx, |row, cx| {
                 row.title = part.title.clone().into();
                 row.tool = part.tool.clone();
+                row.copy_ready = turn.completed;
                 if part.kind == Kind::Notice {
                     row.expanded = true;
                 }
@@ -552,7 +573,7 @@ impl Render for ToolGroup {
 
 impl Render for TurnView {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        div().when(!self.reply.is_empty(), |view| {
+        div().when(self.completed && !self.reply.is_empty(), |view| {
             view.child(
                 gpui_kit::component::clipboard::Clipboard::new("copy-answer")
                     .value(self.reply.clone())
@@ -666,6 +687,25 @@ impl Render for Conversation {
                     .flex_1()
                     .min_w_0()
                     .h_full()
+                    .on_scroll_wheel(cx.listener(|view, event: &ScrollWheelEvent, window, cx| {
+                        if event
+                            .delta
+                            .pixel_delta(window.line_height())
+                            .y
+                            < px(0.)
+                        {
+                            let scroll = view.scroll.clone();
+                            // Short transcripts may never have been scrolled up. A downward
+                            // gesture at their end also resumes following after a disclosure.
+                            cx.defer(move |cx| {
+                                scroll.update(cx, |scroll, cx| {
+                                    if !scroll.is_following_tail() && !scroll.is_scrolled_up() {
+                                        scroll.scroll_to_end(cx);
+                                    }
+                                });
+                            });
+                        }
+                    }))
                     .child(scroller)
                     .child(
                         canvas(
@@ -694,6 +734,31 @@ impl Render for Conversation {
                                             cx.notify();
                                         });
                                     });
+                                }
+                                // Scrollbar drags refresh the window without notifying Kit's
+                                // message-scroller entity. Observe the resolved position here.
+                                if let Some(view) = owner.upgrade() {
+                                    let view = view.read(cx);
+                                    let state = view.scroll.read(cx);
+                                    let scrolled_up = state.is_scrolled_up();
+                                    if scrolled_up != view.scrolled_up {
+                                        let owner = owner.clone();
+                                        cx.defer(move |cx| {
+                                            let _ = owner.update(cx, |view, cx| {
+                                                let state = view.scroll.read(cx);
+                                                let scrolled_up = state.is_scrolled_up();
+                                                let resume = view.scrolled_up
+                                                    && !scrolled_up
+                                                    && !state.is_following_tail();
+                                                view.scrolled_up = scrolled_up;
+                                                if resume {
+                                                    view.scroll.update(cx, |state, cx| {
+                                                        state.scroll_to_end(cx);
+                                                    });
+                                                }
+                                            });
+                                        });
+                                    }
                                 }
                                 let row = navigation::current_row(&measured.borrow(), bounds.top());
                                 measured.borrow_mut().clear();
@@ -756,6 +821,7 @@ impl MessageRow {
             deferred_text: muted.then(|| source.to_owned()),
             muted,
             user,
+            copy_ready: user,
             images: vec![],
             files: vec![],
             expanded: !muted,
@@ -783,6 +849,50 @@ impl Render for MessageRow {
                         .gap_2()
                         .child(
                             div()
+                                .w_4()
+                                .flex_shrink_0()
+                                .when(
+                                    matches!(
+                                        tool.status,
+                                        orbit_client::execution::ToolStatus::Running
+                                            | orbit_client::execution::ToolStatus::Background
+                                    ),
+                                    |slot| {
+                                        slot.child(
+                                            Icon::new(IconName::LoaderCircle)
+                                                .small()
+                                                .with_animation(
+                                                    "tool-running",
+                                                    Animation::new(std::time::Duration::from_secs(
+                                                        2,
+                                                    ))
+                                                    .repeat(),
+                                                    |icon, delta| {
+                                                        icon.transform(Transformation::rotate(
+                                                            percentage(delta),
+                                                        ))
+                                                    },
+                                                ),
+                                        )
+                                    },
+                                )
+                                .when(
+                                    tool.status == orbit_client::execution::ToolStatus::Failed,
+                                    |slot| {
+                                        slot.child(
+                                            Icon::new(IconName::CircleAlert)
+                                                .small()
+                                                .text_color(cx.theme().danger),
+                                        )
+                                    },
+                                )
+                                .when(
+                                    tool.status == orbit_client::execution::ToolStatus::Stopped,
+                                    |slot| slot.child(Icon::new(IconName::Square).small()),
+                                ),
+                        )
+                        .child(
+                            div()
                                 .max_w(rems(16.))
                                 .text_ellipsis()
                                 .child(tool.name.clone()),
@@ -794,24 +904,6 @@ impl Render for MessageRow {
                                 .text_ellipsis()
                                 .text_color(cx.theme().muted_foreground)
                                 .child(tool.summary()),
-                        )
-                        .when(
-                            tool.status != orbit_client::execution::ToolStatus::Complete,
-                            |row| {
-                                row.child(
-                                    Icon::new(match tool.status {
-                                        orbit_client::execution::ToolStatus::Running
-                                        | orbit_client::execution::ToolStatus::Background => {
-                                            IconName::LoaderCircle
-                                        }
-                                        orbit_client::execution::ToolStatus::Failed => {
-                                            IconName::CircleAlert
-                                        }
-                                        _ => IconName::Square,
-                                    })
-                                    .small(),
-                                )
-                            },
                         ),
                 )
                 .accessibility_label(format!("{} · {}", tool.status.label(), tool.summary()))
@@ -940,13 +1032,15 @@ impl Render for MessageRow {
                     .when(!self.user, |view| view.w_full())
                     .min_w_0()
                     .style(crate::theme::document_style(cx))
-                    .code_block_actions(|block, _, _| {
-                        let code = block.code();
-                        Clipboard::new("copy-code")
-                            .xsmall()
-                            .value(code)
-                            .tooltip("复制代码")
-                            .accessibility_label("复制代码")
+                    .when(self.copy_ready, |view| {
+                        view.code_block_actions(|block, _, _| {
+                            let code = block.code();
+                            Clipboard::new("copy-code")
+                                .xsmall()
+                                .value(code)
+                                .tooltip("复制代码")
+                                .accessibility_label("复制代码")
+                        })
                     })
                     .plugin(crate::math::MathPlugin::inline())
                     .plugin(crate::math::MathPlugin::display())

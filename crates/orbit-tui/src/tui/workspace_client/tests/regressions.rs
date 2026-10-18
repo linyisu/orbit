@@ -723,6 +723,8 @@ fn running_command_updates_stdout_without_overwriting_a_finished_result() {
     frame.tool_progress = vec![orbit_protocol::ToolProgress {
         call_id: call.id.clone(),
         stdout: Some("first\nsecond".into()),
+        stderr: None,
+        command: None,
         elapsed_ms: Some(12_345),
     }];
     tab.apply(Response::Page(frame));
@@ -756,6 +758,8 @@ fn running_command_updates_stdout_without_overwriting_a_finished_result() {
     frame.tool_progress = vec![orbit_protocol::ToolProgress {
         call_id: call.id,
         stdout: Some("stale tail".into()),
+        stderr: None,
+        command: None,
         elapsed_ms: None,
     }];
     tab.apply(Response::Page(frame));

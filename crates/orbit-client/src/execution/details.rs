@@ -4,7 +4,7 @@ use serde_json::Value;
 
 mod request;
 pub mod retained;
-pub use request::Request;
+pub use request::{Request, RequestLayout};
 
 #[cfg(test)]
 mod streams_tests;
@@ -76,28 +76,21 @@ impl Stream {
 /// Available pages are derived once for both frontends, including dynamic tools.
 pub fn streams(tool: &ToolRun) -> &'static [Stream] {
     if !tool.changes.is_empty() {
-        &[Stream::Changes, Stream::Raw]
+        &[Stream::Changes]
     } else if tool.command_result().is_some()
-        || (tool.is_foreground_command()
-            && (tool.status == ToolStatus::Running || tool.stdout_preview.is_some()))
+        || (tool.name == "Exec"
+            && (matches!(tool.status, ToolStatus::Running | ToolStatus::Background)
+                || tool.stdout_preview.is_some()
+                || tool.stderr_preview.is_some()))
     {
         if tool
             .command_result()
             .is_some_and(|result| result.stderr.is_empty())
         {
-            &[Stream::Stdout, Stream::Raw]
+            &[Stream::Stdout]
         } else {
-            &[Stream::Stdout, Stream::Stderr, Stream::Raw]
+            &[Stream::Stdout, Stream::Stderr]
         }
-    } else if tool
-        .output
-        .as_deref()
-        .is_some_and(|output| {
-            serde_json::from_str::<Value>(output).is_ok()
-                && structured(&tool.name, output) != pretty(output)
-        })
-    {
-        &[Stream::Result, Stream::Raw]
     } else {
         &[Stream::Result]
     }
@@ -106,9 +99,8 @@ pub fn streams(tool: &ToolRun) -> &'static [Stream] {
 pub fn default_stream(tool: &ToolRun) -> Stream {
     let pages = streams(tool);
     if pages.contains(&Stream::Stderr)
-        && tool
-            .command_result()
-            .is_some_and(|result| result.stdout.is_empty() && !result.stderr.is_empty())
+        && content(tool, Stream::Stdout).is_empty()
+        && !content(tool, Stream::Stderr).is_empty()
     {
         Stream::Stderr
     } else {
@@ -163,7 +155,10 @@ pub fn content(tool: &ToolRun, stream: Stream) -> String {
             .unwrap_or_default();
     }
     if stream == Stream::Stderr {
-        return String::new();
+        return tool
+            .stderr_preview
+            .clone()
+            .unwrap_or_default();
     }
     let Some(output) = &tool.output else {
         return String::new();
@@ -363,6 +358,22 @@ fn structured(name: &str, output: &str) -> String {
         return output.to_owned();
     };
     match name {
+        "WebSearch" => {
+            if let Some(results) = value["results"].as_array() {
+                return results
+                    .iter()
+                    .map(|result| {
+                        ["title", "url", "snippet"]
+                            .into_iter()
+                            .filter_map(|key| result[key].as_str())
+                            .filter(|text| !text.is_empty())
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n\n");
+            }
+        }
         "ReadFile" | "ReadDocument" | "CommandOutput" | "WebFetch" => {
             if let Some(content) = value["content"].as_str() {
                 return content.to_owned();
@@ -464,7 +475,7 @@ fn pagination(value: &Value) -> String {
 fn describe(value: &Value, depth: usize, text: &mut String) {
     const MAX_DETAIL_DEPTH: usize = 24;
     if depth >= MAX_DETAIL_DEPTH {
-        text.push_str("…（深层结构请查看原始结果）\n");
+        text.push_str("…\n");
         return;
     }
     match value {
@@ -485,7 +496,7 @@ fn describe(value: &Value, depth: usize, text: &mut String) {
                             .and_then(Value::as_str)
                             .is_some_and(|kind| matches!(kind, "image" | "audio")))
                 {
-                    text.push_str("[二进制附件，原始结果中保留完整数据]\n");
+                    text.push_str("[二进制附件]\n");
                     continue;
                 }
                 if value.is_object() || value.is_array() {
@@ -561,11 +572,11 @@ mod tests {
         assert_eq!(default_stream(&tool), Stream::Changes);
         let diff = content(&tool, Stream::Changes);
         assert!(diff.contains("-old\n+new\n"));
-        assert_eq!(streams(&tool)[0], Stream::Changes);
+        assert_eq!(streams(&tool), &[Stream::Changes]);
     }
 
     #[test]
-    fn generic_mcp_blocks_keep_text_readable_and_binary_payload_in_raw_page() {
+    fn generic_mcp_blocks_show_readable_text_without_a_binary_payload_page() {
         let call = ToolCall::function("dynamic-1", "mcp_generated_inspect", json!({}));
         let mut tool = ToolRun::new(&call);
         tool.output = Some(
@@ -578,31 +589,30 @@ mod tests {
         let text = content(&tool, Stream::Result);
         assert!(text.contains("first line\nsecond line"));
         assert!(!text.contains("generated-payload"));
+        assert_eq!(streams(&tool), &[Stream::Result]);
         assert!(content(&tool, Stream::Raw).contains("generated-payload"));
     }
 
     #[test]
     fn command_default_page_selects_stderr_only_when_stdout_is_empty() {
         let mut tool = ToolRun::new(&ToolCall::function("fixture", "Exec", json!({})));
+        tool.stderr_preview = Some("live diagnostic\n".into());
+        assert_eq!(default_stream(&tool), Stream::Stderr);
+        assert_eq!(content(&tool, Stream::Stderr), "live diagnostic\n");
         for (stdout, stderr, expected, pages) in [
-            ("", "", Stream::Stdout, &[Stream::Stdout, Stream::Raw][..]),
-            (
-                "out",
-                "",
-                Stream::Stdout,
-                &[Stream::Stdout, Stream::Raw][..],
-            ),
+            ("", "", Stream::Stdout, &[Stream::Stdout][..]),
+            ("out", "", Stream::Stdout, &[Stream::Stdout][..]),
             (
                 "",
                 "err",
                 Stream::Stderr,
-                &[Stream::Stdout, Stream::Stderr, Stream::Raw][..],
+                &[Stream::Stdout, Stream::Stderr][..],
             ),
             (
                 "out",
                 "err",
                 Stream::Stdout,
-                &[Stream::Stdout, Stream::Stderr, Stream::Raw][..],
+                &[Stream::Stdout, Stream::Stderr][..],
             ),
         ] {
             tool.set_output(

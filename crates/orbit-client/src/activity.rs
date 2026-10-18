@@ -37,11 +37,8 @@ impl Activity {
                 self.phase = Phase::Thinking;
             }
             AgentEvent::Model(StreamEvent::TextDelta(text)) if !text.is_empty() => {
-                if !matches!(self.phase, Phase::Responding) {
-                    self.progress.clear();
-                }
                 self.phase = Phase::Responding;
-                self.progress.push_str(text);
+                self.progress.clear();
             }
             AgentEvent::ReasoningFinished { .. } if matches!(self.phase, Phase::Thinking) => {
                 self.phase = Phase::Waiting;
@@ -120,11 +117,11 @@ mod tests {
         activity.apply(&AgentEvent::Model(StreamEvent::TextDelta(
             " confirmed".into(),
         )));
-        assert_eq!(activity.progress(), "First result confirmed");
+        assert!(activity.progress().is_empty());
         activity.apply(&AgentEvent::Model(StreamEvent::ReasoningDelta(
             "private scratch".into(),
         )));
-        assert_eq!(activity.progress(), "First result confirmed");
+        assert!(activity.progress().is_empty());
         activity.apply(&AgentEvent::ReasoningFinished { elapsed_ms: 4 });
         assert_ne!(activity.label(), "正在思考");
         activity.apply(&AgentEvent::Cancelled);

@@ -47,6 +47,13 @@ fn command_stdout_snapshots_and_nonzero_exit_survive_native_transport() {
             .as_deref()
             .unwrap();
         assert!(initial.contains("build output line 0"));
+        assert!(
+            first.tool_progress[0]
+                .stderr
+                .as_deref()
+                .unwrap()
+                .contains("diagnostic frame")
+        );
         let Event::Response(Response::Page(second)) = until(&mut events, |event| {
             matches!(
                 event,
@@ -173,11 +180,20 @@ fn complete_output_uses_read_only_paging_without_resubmitting_tools() {
         ] {
             let mut tool = ToolRun::new(&ToolCall::function("generated", name, json!({})));
             tool.set_output(ToolStatus::Complete, receipt.to_string());
+            if name == "Exec" {
+                tool.status = ToolStatus::Running;
+                tool.command_progress = Some(orbit_protocol::CommandProgress {
+                    output_id: "cmd-inspector".into(),
+                    stdout_bytes: 10_000,
+                    stderr_bytes: 4_000,
+                });
+            }
             let (result, response) = tokio::sync::oneshot::channel();
             backend
                 .send(Command::ToolOutput {
                     session: info.id.clone(),
-                    tool: Box::new(tool),
+                    tool: Box::new(tool.clone()),
+                    previous: Vec::new(),
                     result,
                 })
                 .unwrap();
@@ -189,11 +205,35 @@ fn complete_output_uses_read_only_paging_without_resubmitting_tools() {
             for (stream, first, last) in expected {
                 let content = &contents
                     .iter()
-                    .find(|(page, _)| *page == stream)
+                    .find(|page| page.stream == stream)
                     .unwrap()
-                    .1;
+                    .text;
                 assert!(content.contains(first) && content.contains(last));
                 assert!(!content.contains("preview"));
+            }
+            if name == "Exec" {
+                let previous = contents
+                    .iter()
+                    .map(|page| {
+                        let text = &page.text;
+                        let end = text.find('\n').unwrap() + 1;
+                        orbit_client::execution::details::retained::Content {
+                            stream: page.stream,
+                            text: text[..end].to_owned(),
+                            offset: Some(end as u64),
+                        }
+                    })
+                    .collect();
+                let (result, response) = tokio::sync::oneshot::channel();
+                backend
+                    .send(Command::ToolOutput {
+                        session: info.id.clone(),
+                        tool: Box::new(tool),
+                        previous,
+                        result,
+                    })
+                    .unwrap();
+                assert_eq!(response.await.unwrap().unwrap(), contents);
             }
         }
     });

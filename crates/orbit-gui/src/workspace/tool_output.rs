@@ -4,12 +4,14 @@ use super::*;
 use crate::execution::{ToolRun, ToolStatus};
 use gpui_kit::component::{
     clipboard::Clipboard,
-    input::{Editor, EditorState},
+    diff::{Diff, DiffFile, DiffState},
+    input::{Editor, EditorState, RopeExt},
     tab::{Tab, TabBar},
 };
 
 use orbit_client::execution::details::{
-    Request as ToolRequest, Stream, content, default_stream, retained::Retained, status,
+    Request as ToolRequest, RequestLayout, Stream, content, default_stream, retained::Retained,
+    status,
 };
 
 pub(super) struct ToolOutput {
@@ -19,6 +21,9 @@ pub(super) struct ToolOutput {
     workspace: String,
     tool: ToolRun,
     stream: Stream,
+    selected_stream: bool,
+    diff: Entity<DiffState>,
+    diff_patch: Option<String>,
     editor: Entity<EditorState>,
     request_editor: Entity<EditorState>,
     request: ToolRequest,
@@ -45,6 +50,9 @@ impl ToolOutput {
         let displayed = content(&tool, stream);
         let request = ToolRequest::new(&tool, &workspace);
         Self {
+            diff: cx.new(|cx| DiffState::new([], cx)),
+            diff_patch: None,
+            selected_stream: false,
             owner,
             options,
             session,
@@ -55,6 +63,7 @@ impl ToolOutput {
                     .line_number(true)
                     .folding(false)
                     .soft_wrap(true)
+                    .scroll_beyond_last_line(Some(0))
                     .default_value(displayed.clone())
             }),
             request_editor: cx.new(|cx| {
@@ -63,6 +72,7 @@ impl ToolOutput {
                     .line_number(true)
                     .folding(false)
                     .soft_wrap(true)
+                    .scroll_beyond_last_line(Some(0))
                     .default_value(request.content())
             }),
             request,
@@ -71,7 +81,7 @@ impl ToolOutput {
             retained: Retained::default(),
             tool,
             stream,
-            displayed,
+            displayed: String::new(),
             paused: false,
             disconnected: false,
             closed: false,
@@ -102,6 +112,7 @@ impl ToolOutput {
             return;
         }
         self.tool = tool.clone();
+        self.request = ToolRequest::new(tool, &self.workspace);
         if !self.paused && !self.closed {
             self.refresh(window, cx);
         }
@@ -116,7 +127,7 @@ impl ToolOutput {
 
     fn refresh(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.pages = orbit_client::execution::details::streams(&self.tool);
-        if !self.pages.contains(&self.stream) {
+        if !self.selected_stream || !self.pages.contains(&self.stream) {
             self.stream = default_stream(&self.tool);
         }
         self.status = status(&self.tool);
@@ -124,11 +135,7 @@ impl ToolOutput {
             let (result, response) = tokio::sync::oneshot::channel();
             let session = self.session.clone();
             let tool = Box::new(self.tool.clone());
-            let output = self
-                .tool
-                .output
-                .clone()
-                .unwrap_or_default();
+            let (output, previous) = self.retained.pending().unwrap();
             let owner = self.owner.clone();
             cx.spawn_in(window, async move |view, cx| {
                 // Opening and syncing can run inside the workspace's update.
@@ -138,6 +145,7 @@ impl ToolOutput {
                         Command::ToolOutput {
                             session,
                             tool,
+                            previous,
                             result,
                         },
                         cx,
@@ -147,7 +155,7 @@ impl ToolOutput {
                     .await
                     .unwrap_or_else(|_| Err("读取已取消或连接已断开".into()));
                 let _ = view.update_in(cx, |view, window, cx| {
-                    if view.retained.receive(&output, result) && !view.closed {
+                    if view.retained.receive(&output, result) && !view.closed && !view.paused {
                         view.refresh(window, cx);
                     }
                     cx.notify();
@@ -159,18 +167,95 @@ impl ToolOutput {
             .retained
             .content(&self.tool, self.stream);
         if next != self.displayed {
+            if self.stream == Stream::Changes && self.diff_patch.as_deref() != Some(&next) {
+                let patch = next.clone();
+                cx.spawn(async move |view, cx| {
+                    let parsed = cx
+                        .background_spawn({
+                            let patch = patch.clone();
+                            async move { DiffFile::parse(&patch) }
+                        })
+                        .await;
+                    let _ = view.update(cx, |view, cx| {
+                        if view.displayed == patch
+                            && let Ok(files) = parsed
+                        {
+                            view.diff
+                                .update(cx, |diff, cx| diff.set_files(files, cx));
+                            view.diff_patch = Some(patch);
+                            cx.notify();
+                        }
+                    });
+                })
+                .detach();
+            }
+            let live_log = self.tool.name == "Exec"
+                && matches!(self.stream, Stream::Stdout | Stream::Stderr)
+                && (matches!(
+                    self.tool.status,
+                    ToolStatus::Running | ToolStatus::Background
+                ) || !self.displayed.is_empty());
+            let append_from =
+                (live_log && !self.displayed.is_empty() && next.starts_with(&self.displayed))
+                    .then_some(self.displayed.len());
+            let language = match self.stream {
+                Stream::Raw => "json",
+                Stream::Changes => "diff",
+                Stream::Result if self.tool.name == "ReadFile" => {
+                    orbit_syntax::label_for_path(self.request.content())
+                }
+                _ => "plaintext",
+            };
+            let previous_focus = window.focused(cx);
             self.editor.update(cx, |editor, cx| {
-                editor.set_value(next.clone(), window, cx);
+                let offset = editor.scroll_offset();
+                let selection = editor.selected_range();
+                let following = live_log
+                    && selection.is_empty()
+                    && editor
+                        .visible_row_range()
+                        .is_none_or(|range| range.end >= editor.text().lines_len());
+                if editor.language_name().as_ref() != language {
+                    editor.set_highlighter(language, cx);
+                }
+                if let Some(start) = append_from {
+                    let end = editor.text().len();
+                    editor.set_selected_range(end..end, cx);
+                    editor.insert(next[start..].to_owned(), window, cx);
+                    editor.set_selected_range(selection, cx);
+                } else {
+                    editor.set_value(next.clone(), window, cx);
+                }
+                if following {
+                    let end = editor
+                        .text()
+                        .offset_to_position(editor.text().len());
+                    editor.set_cursor_position(end, window, cx);
+                } else {
+                    editor.set_scroll_offset(offset, cx);
+                }
             });
+            if let Some(focus) = previous_focus {
+                window.focus(&focus, cx);
+            }
             self.displayed = next;
         }
     }
 
     fn select(&mut self, stream: Stream, window: &mut Window, cx: &mut Context<Self>) {
         self.stream = stream;
+        self.selected_stream = true;
         self.refresh(window, cx);
-        self.editor
-            .update(cx, |editor, cx| editor.focus(window, cx));
+        if stream == Stream::Changes {
+            self.diff
+                .focus_handle(cx)
+                .focus(window, cx);
+        } else {
+            self.editor.update(cx, |editor, cx| {
+                editor.set_scroll_offset(point(px(0.), px(0.)), cx);
+                editor.focus(window, cx);
+            });
+        }
         cx.notify();
     }
 
@@ -319,14 +404,15 @@ impl Render for ToolOutput {
             .content()
             .lines()
             .count()
-            .clamp(2, 6) as f32;
+            .clamp(1, 6) as f32;
         let header_height = (window.rem_size() * (request_lines * 1.5 + 1.))
             .min(window.viewport_size().height * 0.20);
-        let copy = (!matches!(self.retained, Retained::Loading(_))).then(|| {
+        let copy_owner = cx.entity().downgrade();
+        let copy = || {
             Clipboard::new(("copy-tool-output", self.stream as usize))
                 .small()
                 .value_fn({
-                    let view = cx.entity().downgrade();
+                    let view = copy_owner.clone();
                     move |_, cx| {
                         view.upgrade()
                             .map(|view| view.read(cx).displayed.clone())
@@ -336,7 +422,7 @@ impl Render for ToolOutput {
                 })
                 .tooltip("复制结果")
                 .accessibility_label(format!("复制{}", self.stream.label()))
-        });
+        };
         v_flex()
             .size_full()
             .min_w_0()
@@ -346,75 +432,117 @@ impl Render for ToolOutput {
             .on_action(|_: &gpui_kit::component::input::Escape, window, cx| {
                 window.dispatch_action(Box::new(gpui_kit::base::actions::Cancel), cx)
             })
-            .child(
-                v_flex()
-                    .flex_shrink_0()
-                    .min_h_0()
-                    .min_w_0()
-                    .rounded_md()
-                    .border_1()
-                    .border_color(cx.theme().border)
-                    .overflow_hidden()
-                    .child(
-                        h_flex()
-                            .px_3()
-                            .h(rems(2.))
-                            .flex_shrink_0()
-                            .gap_2()
-                            .text_xs()
-                            .child(self.request.heading())
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .text_ellipsis()
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child(status),
-                            )
-                            .when_some(target, |bar, target| {
-                                bar.child(
-                                    Button::new("inspect-tool-target")
-                                        .small()
-                                        .ghost()
-                                        .label(target.label())
-                                        .on_click(cx.listener(|view, _, window, cx| {
-                                            view.inspect_target(window, cx)
-                                        })),
-                                )
-                            }),
-                    )
-                    .child(
-                        div()
-                            .h(header_height)
-                            .min_h_0()
-                            .min_w_0()
-                            .child(editor_content(
-                                &self.request_editor,
-                                Some(
-                                    Clipboard::new("copy-tool-request")
-                                        .small()
-                                        .value(self.request.content().to_owned())
-                                        .tooltip("复制调用内容")
-                                        .accessibility_label("复制调用内容"),
-                                ),
-                                self.request.heading().into(),
-                            )),
-                    )
-                    .when(!self.request.context().is_empty(), |view| {
-                        view.child(
-                            div()
-                                .id("tool-request-context")
-                                .max_h(rems(4.))
-                                .overflow_y_scroll()
+            .when(self.request.layout() == RequestLayout::Body, |view| {
+                view.child(
+                    v_flex()
+                        .flex_shrink_0()
+                        .min_h_0()
+                        .min_w_0()
+                        .rounded_md()
+                        .border_1()
+                        .border_color(cx.theme().border)
+                        .overflow_hidden()
+                        .child(
+                            h_flex()
                                 .px_3()
-                                .py_2()
-                                .text_sm()
-                                .text_color(cx.theme().muted_foreground)
-                                .whitespace_normal()
-                                .child(self.request.context().to_owned()),
+                                .h(rems(2.))
+                                .flex_shrink_0()
+                                .gap_2()
+                                .text_xs()
+                                .child(self.request.heading())
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .text_ellipsis()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child(status),
+                                )
+                                .when_some(target.clone(), |bar, target| {
+                                    bar.child(
+                                        Button::new("inspect-tool-target")
+                                            .small()
+                                            .ghost()
+                                            .label(target.label())
+                                            .on_click(cx.listener(|view, _, window, cx| {
+                                                view.inspect_target(window, cx)
+                                            })),
+                                    )
+                                }),
                         )
-                    }),
-            )
+                        .child(
+                            div()
+                                .h(header_height)
+                                .min_h_0()
+                                .min_w_0()
+                                .child(editor_content(
+                                    &self.request_editor,
+                                    Some(
+                                        Clipboard::new("copy-tool-request")
+                                            .small()
+                                            .value(self.request.content().to_owned())
+                                            .tooltip("复制调用内容")
+                                            .accessibility_label("复制调用内容"),
+                                    ),
+                                    self.request.heading().into(),
+                                )),
+                        )
+                        .when(!self.request.context().is_empty(), |view| {
+                            view.child(
+                                div()
+                                    .id("tool-request-context")
+                                    .max_h(rems(4.))
+                                    .overflow_y_scroll()
+                                    .px_3()
+                                    .py_2()
+                                    .text_sm()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .whitespace_normal()
+                                    .child(self.request.context().to_owned()),
+                            )
+                        }),
+                )
+            })
+            .when(self.request.layout() == RequestLayout::Summary, |view| {
+                view.child(
+                    v_flex()
+                        .flex_shrink_0()
+                        .min_w_0()
+                        .gap_1()
+                        .child(
+                            h_flex()
+                                .min_w_0()
+                                .gap_2()
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .text_sm()
+                                        .whitespace_normal()
+                                        .child(self.request.content().to_owned()),
+                                )
+                                .when_some(target, |bar, target| {
+                                    bar.child(
+                                        Button::new("inspect-tool-target")
+                                            .small()
+                                            .ghost()
+                                            .label(target.label())
+                                            .on_click(cx.listener(|view, _, window, cx| {
+                                                view.inspect_target(window, cx)
+                                            })),
+                                    )
+                                }),
+                        )
+                        .when(!self.request.context().is_empty(), |view| {
+                            view.child(
+                                div()
+                                    .text_xs()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(self.request.context().to_owned()),
+                            )
+                        }),
+                )
+            })
             .child(
                 v_flex()
                     .flex_1()
@@ -451,8 +579,11 @@ impl Render for ToolOutput {
                             .when(
                                 self.paused
                                     || (!self.disconnected
-                                        && self.tool.status == ToolStatus::Running
-                                        && self.tool.is_foreground_command()),
+                                        && matches!(
+                                            self.tool.status,
+                                            ToolStatus::Running | ToolStatus::Background
+                                        )
+                                        && self.tool.name == "Exec"),
                                 |bar| {
                                     bar.child(
                                         Button::new("pause-output-updates")
@@ -504,11 +635,44 @@ impl Render for ToolOutput {
                             .overflow_hidden()
                             .border_t_1()
                             .border_color(cx.theme().border)
-                            .child(editor_content(
-                                &self.editor,
-                                copy,
-                                format!("工具输出 {}", self.stream.label()).into(),
-                            )),
+                            .when(
+                                self.stream == Stream::Changes
+                                    && self.diff_patch.as_deref() == Some(&self.displayed),
+                                |body| {
+                                    body.child(
+                                        div()
+                                            .relative()
+                                            .size_full()
+                                            .child(
+                                                Diff::new(&self.diff)
+                                                    .single_line_number(true)
+                                                    .soft_wrap(true)
+                                                    .render_header_suffix(|_, _, _| {
+                                                        div().w_8().flex_shrink_0()
+                                                    })
+                                                    .size_full(),
+                                            )
+                                            .child(
+                                                div()
+                                                    .absolute()
+                                                    .top_2()
+                                                    .right_2()
+                                                    .child(copy()),
+                                            ),
+                                    )
+                                },
+                            )
+                            .when(
+                                self.stream != Stream::Changes
+                                    || self.diff_patch.as_deref() != Some(&self.displayed),
+                                |body| {
+                                    body.child(editor_content(
+                                        &self.editor,
+                                        Some(copy()),
+                                        format!("工具输出 {}", self.stream.label()).into(),
+                                    ))
+                                },
+                            ),
                     ),
             )
     }

@@ -308,10 +308,6 @@ impl Render for Controls {
         }
         let active = navigation.active;
         let count = navigation.anchors.len();
-        let scrolled_up = navigation
-            .messages
-            .read(cx)
-            .is_scrolled_up();
         v_flex()
             .w(rems(crate::theme::NAVIGATION_WIDTH_REM))
             .items_center()
@@ -336,24 +332,74 @@ impl Render for Controls {
                             });
                     })),
             )
-            .when(scrolled_up, |view| {
-                view.child(
-                    Button::new("latest-round")
-                        .flex_shrink_0()
-                        .ghost()
+            .into_any_element()
+    }
+}
+
+/// Composer-adjacent progress and return control observes the same scroll owner as the rail.
+pub(crate) struct TailControl {
+    navigation: Entity<Navigation>,
+    running: bool,
+    _subscription: Subscription,
+}
+
+impl TailControl {
+    pub(super) fn new(navigation: Entity<Navigation>, cx: &mut Context<Self>) -> Self {
+        let subscription = cx.observe(&navigation, |_, _, cx| cx.notify());
+        Self {
+            navigation,
+            running: false,
+            _subscription: subscription,
+        }
+    }
+
+    pub(super) fn set_running(&mut self, running: bool, cx: &mut Context<Self>) {
+        if self.running != running {
+            self.running = running;
+            cx.notify();
+        }
+    }
+}
+
+impl Render for TailControl {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let navigation = self.navigation.read(cx);
+        let scrolled_up = navigation
+            .messages
+            .read(cx)
+            .is_scrolled_up();
+        if !self.running && !scrolled_up {
+            return div().into_any_element();
+        }
+        Button::new("latest-output")
+            .small()
+            .outline()
+            .w_8()
+            .h_8()
+            .p_0()
+            .rounded_full()
+            .when(self.running, |button| {
+                button.child(
+                    gpui_kit::component::Icon::new(gpui_kit::assets::IconName::Ellipsis)
                         .small()
-                        .icon(gpui_kit::assets::IconName::ArrowDown)
-                        .tooltip("回到最新消息 · End")
-                        .accessibility_label("回到最新消息")
-                        .on_click(cx.listener(|view, _, window, cx| {
-                            view.navigation
-                                .update(cx, |navigation, cx| {
-                                    window.focus(&navigation.focus, cx);
-                                    navigation.latest(cx);
-                                });
-                        })),
+                        .with_animation(
+                            "reply-progress",
+                            Animation::new(std::time::Duration::from_secs(2)).repeat(),
+                            |icon, delta| {
+                                icon.opacity(0.4 + 0.6 * (delta * std::f32::consts::PI).sin())
+                            },
+                        ),
                 )
             })
+            .when(!self.running, |button| {
+                button.icon(gpui_kit::assets::IconName::ArrowDown)
+            })
+            .tooltip("回到最新输出 · End")
+            .accessibility_label("回到最新输出")
+            .on_click(cx.listener(|view, _, _, cx| {
+                view.navigation
+                    .update(cx, |navigation, cx| navigation.latest(cx));
+            }))
             .into_any_element()
     }
 }

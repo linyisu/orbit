@@ -663,6 +663,8 @@ fn progress_snapshots_are_bounded_and_do_not_hide_ledger_events() {
         progress: vec![orbit_protocol::ToolProgress {
             call_id: "large-output".into(),
             stdout: Some("x".repeat(PAGE_BYTES)),
+            stderr: None,
+            command: None,
             elapsed_ms: None,
         }],
     };

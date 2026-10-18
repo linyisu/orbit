@@ -172,6 +172,7 @@ pub(super) fn progress(events: &[Value]) -> Vec<Value> {
     vec![json!({
         "call_id": "output-command",
         "stdout": stdout,
+        "stderr": format!("diagnostic frame {count}\n"),
         "elapsed_ms": count * 250
     })]
 }
@@ -251,7 +252,8 @@ pub(super) fn retained_page(request: &Value) -> Value {
         "type": "tool_output",
         "value": {
             "content": content[start..end],
-            "next_offset": (end < content.len()).then_some(end)
+            "next_offset": (end < content.len()).then_some(end),
+            "read_offset": end
         }
     })
 }

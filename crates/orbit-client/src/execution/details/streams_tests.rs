@@ -12,6 +12,8 @@ fn tool(name: &str, arguments: serde_json::Value, output: Option<serde_json::Val
         arguments: arguments.to_string(),
         generation: 1,
         stdout_preview: None,
+        stderr_preview: None,
+        command_progress: None,
         elapsed_ms: None,
         live: false,
         run_finished: false,
@@ -158,7 +160,7 @@ fn headers_preserve_all_arguments_without_duplicate_result_pages() {
     assert_eq!(parameters.matches(command).count(), 1);
     assert!(parameters.contains("cwd: /generated/project/src"));
     assert!(parameters.contains("timeout_seconds: 10") && parameters.contains("MODE"));
-    assert_eq!(super::streams(&record), &[Stream::Stdout, Stream::Raw]);
+    assert_eq!(super::streams(&record), &[Stream::Stdout]);
     assert_eq!(content(&record, Stream::Stdout), "actual output");
     record.name = "mcp_fixture".into();
     record.arguments = serde_json::json!({"_orbit_purpose": 4}).to_string();
@@ -177,5 +179,5 @@ fn file_pages_contain_only_the_received_text_and_completed_status_is_empty() {
     );
     assert_eq!(content(&record, Stream::Result), "1: fn generated() {}");
     assert!(status(&record).is_empty());
-    assert_eq!(super::streams(&record), &[Stream::Result, Stream::Raw]);
+    assert_eq!(super::streams(&record), &[Stream::Result]);
 }

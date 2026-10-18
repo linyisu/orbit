@@ -78,6 +78,11 @@ impl ToolRow {
             record.stdout_preview = value["stdout"]
                 .as_str()
                 .map(str::to_owned);
+            record.stderr_preview = value["stderr"]
+                .as_str()
+                .map(str::to_owned);
+            record.command_progress =
+                serde_json::from_value(value["command_progress"].clone()).ok();
         }
         record
     }
@@ -427,7 +432,11 @@ impl UiState {
                 .rev()
                 .find_map(|(index, item)| match item {
                     TranscriptItem::Tool(tool)
-                        if tool.id == update.call_id && tool.status == ToolStatus::Running =>
+                        if tool.id == update.call_id
+                            && matches!(
+                                tool.status,
+                                ToolStatus::Running | ToolStatus::Background
+                            ) =>
                     {
                         Some((index, tool))
                     }
@@ -442,6 +451,14 @@ impl UiState {
                 .unwrap_or_else(|| serde_json::json!({}));
             if let Some(stdout) = update.stdout {
                 output["stdout"] = stdout.into();
+                output["running"] = true.into();
+            }
+            if let Some(stderr) = update.stderr {
+                output["stderr"] = stderr.into();
+                output["running"] = true.into();
+            }
+            if let Some(command) = update.command {
+                output["command_progress"] = serde_json::to_value(command).unwrap();
                 output["running"] = true.into();
             }
             if let Some(elapsed) = update.elapsed_ms {

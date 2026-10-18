@@ -61,35 +61,36 @@ impl Workspace {
             }))
             .w_full()
             .gap_2()
+            .child(
+                h_flex()
+                    .w_full()
+                    .justify_center()
+                    .child(
+                        self.conversation
+                            .read(cx)
+                            .tail_control(),
+                    ),
+            )
             .when(self.busy, |view| {
                 view.child(
-                    Button::new("conversation-progress")
-                        .ghost()
-                        .small()
-                        .w_full()
-                        .child(
-                            h_flex()
-                                .w_full()
-                                .min_w_0()
-                                .gap_2()
-                                .child(Icon::new(IconName::Clock).small())
-                                .child(
-                                    div()
-                                        .flex_1()
-                                        .min_w_0()
-                                        .text_ellipsis()
-                                        .child(
-                                            self.conversation
-                                                .read(cx)
-                                                .activity_label(),
-                                        ),
-                                ),
-                        )
-                        .tooltip("定位当前输出")
-                        .on_click(cx.listener(|view, _, _, cx| {
-                            view.conversation
-                                .update(cx, |conversation, cx| conversation.reveal_activity(cx));
-                        })),
+                    div().px_2().py_1().w_full().child(
+                        h_flex()
+                            .w_full()
+                            .min_w_0()
+                            .gap_2()
+                            .child(Icon::new(IconName::Clock).small())
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .text_ellipsis()
+                                    .child(
+                                        self.conversation
+                                            .read(cx)
+                                            .activity_label(),
+                                    ),
+                            ),
+                    ),
                 )
             })
             .when(self.is_new_conversation(cx), |view| {

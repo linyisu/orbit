@@ -401,7 +401,19 @@ pub struct Approval<A> {
 pub struct ToolProgress {
     pub call_id: String,
     pub stdout: Option<String>,
+    #[serde(default)]
+    pub stderr: Option<String>,
+    #[serde(default)]
+    pub command: Option<CommandProgress>,
     pub elapsed_ms: Option<u64>,
+}
+
+/// Session-owned log identity and observed byte lengths for incremental viewers.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CommandProgress {
+    pub output_id: String,
+    pub stdout_bytes: u64,
+    pub stderr_bytes: u64,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

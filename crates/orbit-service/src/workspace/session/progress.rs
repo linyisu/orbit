@@ -3,7 +3,13 @@ use orbit_protocol::ToolProgress;
 use std::collections::BTreeMap;
 
 #[derive(Default)]
-pub(super) struct Deliveries(BTreeMap<u64, BTreeMap<String, [u8; 32]>>);
+pub(super) struct Deliveries(BTreeMap<u64, BTreeMap<String, StreamDigests>>);
+
+#[derive(Default)]
+struct StreamDigests {
+    stdout: Option<[u8; 32]>,
+    stderr: Option<[u8; 32]>,
+}
 
 impl Deliveries {
     pub fn reset_started_tools(&mut self, viewer: u64, updates: &[super::Update]) {
@@ -27,10 +33,19 @@ impl Deliveries {
                 .any(|update| &update.call_id == id)
         });
         for update in updates {
-            if let Some(stdout) = &update.stdout {
-                let digest: [u8; 32] = Sha256::digest(stdout.as_bytes()).into();
-                if seen.insert(update.call_id.clone(), digest) == Some(digest) {
-                    update.stdout = None;
+            let previous = seen
+                .entry(update.call_id.clone())
+                .or_default();
+            for (text, previous) in [
+                (&mut update.stdout, &mut previous.stdout),
+                (&mut update.stderr, &mut previous.stderr),
+            ] {
+                if let Some(content) = text {
+                    let digest: [u8; 32] = Sha256::digest(content.as_bytes()).into();
+                    if *previous == Some(digest) {
+                        *text = None;
+                    }
+                    *previous = Some(digest);
                 }
             }
         }
@@ -51,14 +66,20 @@ struct Call {
 #[derive(Default)]
 pub(super) struct Progress {
     calls: BTreeMap<String, Call>,
-    previews: BTreeMap<String, crate::tools::command_output::Preview>,
+    previews: BTreeMap<String, CommandPreview>,
     generation: u64,
 }
 
 pub(super) struct Snapshot {
     updates: Vec<ToolProgress>,
-    previews: BTreeMap<String, crate::tools::command_output::Preview>,
+    previews: BTreeMap<String, CommandPreview>,
     generations: BTreeMap<String, u64>,
+}
+
+#[derive(Default)]
+struct CommandPreview {
+    stdout: Option<crate::tools::command_output::Preview>,
+    stderr: Option<crate::tools::command_output::Preview>,
 }
 
 impl Progress {
@@ -130,27 +151,52 @@ impl Progress {
             let updates = calls
                 .into_iter()
                 .filter_map(|(call_id, call)| {
-                    let (stdout, elapsed_ms) = if call.name == "Exec" {
-                        let stdout = jobs
+                    let (stdout, stderr, command, elapsed_ms) = if call.name == "Exec" {
+                        let mut preview = previews
+                            .remove(&call_id)
+                            .unwrap_or_default();
+                        let command = jobs
                             .output_id_for_call(&call_id)
                             .and_then(|id| {
-                                crate::tools::command_output::read_preview(
-                                    lease.as_ref()?.path(),
+                                use orbit_protocol::tool_output::Stream;
+                                let directory = lease.as_ref()?.path();
+                                preview.stdout = crate::tools::command_output::read_preview(
+                                    directory,
                                     &id,
-                                    previews.remove(&call_id),
-                                )
-                            })
-                            .and_then(|preview| {
-                                let text =
-                                    (!preview.text.is_empty()).then(|| preview.text.to_string());
-                                previews.insert(call_id.clone(), preview);
-                                text
+                                    Stream::Stdout,
+                                    preview.stdout.take(),
+                                );
+                                preview.stderr = crate::tools::command_output::read_preview(
+                                    directory,
+                                    &id,
+                                    Stream::Stderr,
+                                    preview.stderr.take(),
+                                );
+                                Some(orbit_protocol::CommandProgress {
+                                    output_id: id,
+                                    stdout_bytes: preview
+                                        .stdout
+                                        .as_ref()
+                                        .map_or(0, |log| log.bytes()),
+                                    stderr_bytes: preview
+                                        .stderr
+                                        .as_ref()
+                                        .map_or(0, |log| log.bytes()),
+                                })
                             });
+                        let text = |preview: &Option<crate::tools::command_output::Preview>| {
+                            preview
+                                .as_ref()
+                                .map(|preview| preview.text.to_string())
+                        };
+                        let stdout = text(&preview.stdout);
+                        let stderr = text(&preview.stderr);
+                        previews.insert(call_id.clone(), preview);
                         let elapsed = snapshots
                             .iter()
                             .find(|job| job.call_id == call_id)
                             .map(|job| job.elapsed_ms);
-                        (stdout, elapsed)
+                        (stdout, stderr, command, elapsed)
                     } else {
                         let elapsed = call
                             .job
@@ -166,11 +212,13 @@ impl Progress {
                                     })
                             })
                             .map(|job| job.elapsed_ms);
-                        (None, elapsed)
+                        (None, None, None, elapsed)
                     };
-                    (stdout.is_some() || elapsed_ms.is_some()).then_some(ToolProgress {
+                    (command.is_some() || elapsed_ms.is_some()).then_some(ToolProgress {
                         call_id,
                         stdout,
+                        stderr,
+                        command,
                         elapsed_ms,
                     })
                 })
@@ -223,7 +271,7 @@ impl Progress {
 mod tests {
     use super::*;
     #[tokio::test]
-    async fn command_progress_follows_current_stdout_and_stops_when_the_call_finishes() {
+    async fn command_progress_follows_both_streams_and_stops_when_the_call_finishes() {
         let output = orbit_runtime::execution::output::CommandOutputs::default();
         let _task = output.begin_run().unwrap();
         let _log = output.create_log().await.unwrap();
@@ -240,6 +288,18 @@ mod tests {
             .path()
             .join("cmd-orbit-preview.stdout");
         std::fs::write(&path, "first line").unwrap();
+        std::fs::write(
+            directory
+                .path()
+                .join("cmd-orbit-preview.stderr"),
+            "diagnostic\n",
+        )
+        .unwrap();
+        let first = progress.snapshot(&tools, &output).await;
+        assert_eq!(first[0].stderr.as_deref(), Some("diagnostic\n"));
+        let command = first[0].command.as_ref().unwrap();
+        assert_eq!(command.output_id, "cmd-orbit-preview");
+        assert_eq!((command.stdout_bytes, command.stderr_bytes), (10, 11));
         assert_eq!(
             progress.snapshot(&tools, &output).await[0]
                 .stdout
@@ -247,6 +307,9 @@ mod tests {
             Some("first line")
         );
         let text = progress.previews["active-call"]
+            .stdout
+            .as_ref()
+            .unwrap()
             .text
             .clone();
         assert_eq!(
@@ -257,7 +320,11 @@ mod tests {
         );
         assert!(std::sync::Arc::ptr_eq(
             &text,
-            &progress.previews["active-call"].text
+            &progress.previews["active-call"]
+                .stdout
+                .as_ref()
+                .unwrap()
+                .text
         ));
         std::fs::write(path, "first line\nsecond line").unwrap();
         assert_eq!(
@@ -301,6 +368,8 @@ mod tests {
         let update = |text: &str| ToolProgress {
             call_id: "command".into(),
             stdout: Some(text.into()),
+            stderr: None,
+            command: None,
             elapsed_ms: Some(100),
         };
         for viewer in [1, 2] {
@@ -313,8 +382,14 @@ mod tests {
             assert_eq!(same[0].elapsed_ms, Some(100));
         }
         let mut changed = [update("first line\nsecond line")];
+        changed[0].stderr = Some("warning".into());
         delivery.filter(1, &mut changed);
         assert!(changed[0].stdout.is_some());
+        assert_eq!(changed[0].stderr.as_deref(), Some("warning"));
+        let mut repeated = [update("first line\nsecond line")];
+        repeated[0].stderr = Some("warning".into());
+        delivery.filter(1, &mut repeated);
+        assert!(repeated[0].stdout.is_none() && repeated[0].stderr.is_none());
         delivery.forget(1);
         delivery.filter(1, &mut changed);
         assert!(changed[0].stdout.is_some());

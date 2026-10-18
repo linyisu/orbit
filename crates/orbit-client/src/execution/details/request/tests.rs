@@ -25,6 +25,7 @@ fn command_copy_preserves_the_script_without_field_names_or_execution_policy() {
     assert_eq!(view.content(), script);
     assert_eq!(view.context(), "目录：/project/src");
     assert_eq!(view.language(), "bash");
+    assert_eq!(view.layout(), RequestLayout::Body);
 }
 
 #[test]
@@ -77,6 +78,23 @@ fn operation_content_keeps_queries_paths_and_file_bodies_distinct() {
     );
     assert_eq!(document.content(), "sample.xlsx");
     assert_eq!(document.context(), "工作表：North · 起始行：5 · 行数：10");
+    assert_eq!(document.layout(), RequestLayout::Summary);
+
+    let mut edited = ToolRun::new(&ToolCall::function(
+        "write",
+        "WriteFile",
+        json!({
+            "path": "generated.rs", "content": "requested text"
+        }),
+    ));
+    edited
+        .changes
+        .push(crate::execution::FileChange {
+            path: "generated.rs".into(),
+            before: None,
+            after: "confirmed text\n".into(),
+        });
+    assert_eq!(Request::new(&edited, "").layout(), RequestLayout::Hidden);
 }
 
 #[test]

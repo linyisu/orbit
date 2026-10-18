@@ -87,6 +87,8 @@ pub struct ToolRun {
     pub arguments: String,
     pub generation: u64,
     pub stdout_preview: Option<String>,
+    pub stderr_preview: Option<String>,
+    pub command_progress: Option<orbit_protocol::CommandProgress>,
     pub elapsed_ms: Option<u64>,
     pub live: bool,
     pub run_finished: bool,
@@ -115,6 +117,8 @@ impl ToolRun {
             arguments: call.function.arguments.clone(),
             generation: TOOL_GENERATION.fetch_add(1, Ordering::Relaxed),
             stdout_preview: None,
+            stderr_preview: None,
+            command_progress: None,
             elapsed_ms: None,
             live: false,
             run_finished: false,
@@ -485,18 +489,26 @@ impl Execution {
         }
     }
 
-    /// Progress contains replacement stdout tails, not append-only chunks.
-    /// Background receipts and historical completed calls are never live.
+    /// Progress contains replacement tails and retained-log cursors, not append-only chunks.
+    /// Historical completed calls never become live again.
     pub fn apply_progress(&mut self, updates: &[orbit_protocol::ToolProgress]) {
         for update in updates {
             if let Some(tool) = self.tools.iter_mut().find(|tool| {
                 tool.id == update.call_id
-                    && tool.status == ToolStatus::Running
-                    && tool.is_foreground_command()
+                    && !tool.run_finished
+                    && matches!(tool.status, ToolStatus::Running | ToolStatus::Background)
+                    && tool.name == "Exec"
             }) {
                 if let Some(stdout) = &update.stdout {
                     tool.stdout_preview = Some(stdout.clone());
                     tool.live = true;
+                }
+                if let Some(stderr) = &update.stderr {
+                    tool.stderr_preview = Some(stderr.clone());
+                    tool.live = true;
+                }
+                if let Some(command) = &update.command {
+                    tool.command_progress = Some(command.clone());
                 }
                 if let Some(elapsed) = update.elapsed_ms {
                     tool.elapsed_ms = Some(elapsed);
@@ -1269,6 +1281,8 @@ mod tests {
         let progress = |stdout: Option<&str>| orbit_protocol::ToolProgress {
             call_id: "command".into(),
             stdout: stdout.map(str::to_owned),
+            stderr: None,
+            command: None,
             elapsed_ms: Some(50),
         };
         state.apply_progress(&[progress(Some("first\n"))]);
@@ -1312,7 +1326,7 @@ mod tests {
     }
 
     #[test]
-    fn background_and_reused_call_ids_cannot_inherit_a_live_foreground_tail() {
+    fn background_calls_receive_live_output_without_inheriting_a_reused_calls_tail() {
         let mut state = Execution::default();
         let old = ToolCall::function(
             "same-id",
@@ -1325,6 +1339,8 @@ mod tests {
         state.apply_progress(&[orbit_protocol::ToolProgress {
             call_id: "same-id".into(),
             stdout: Some("old tail".into()),
+            stderr: None,
+            command: None,
             elapsed_ms: Some(50),
         }]);
         let generation = state.tools()[0].generation;
@@ -1348,9 +1364,17 @@ mod tests {
         state.apply_progress(&[orbit_protocol::ToolProgress {
             call_id: "same-id".into(),
             stdout: Some("background".into()),
+            stderr: None,
+            command: None,
             elapsed_ms: Some(60),
         }]);
-        assert!(!state.tools()[0].live);
+        assert!(state.tools()[0].live);
+        assert_eq!(
+            state.tools()[0]
+                .stdout_preview
+                .as_deref(),
+            Some("background")
+        );
         state.agent(&AgentEvent::ToolFinished {
             outcome: None,
             call: old,

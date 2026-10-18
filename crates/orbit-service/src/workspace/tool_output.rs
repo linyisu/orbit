@@ -40,6 +40,7 @@ pub(super) async fn read(directory: PathBuf, source: Source, offset: u64) -> Res
                 next_offset: (value["has_more"] == true)
                     .then(|| value["next_offset"].as_u64())
                     .flatten(),
+                read_offset: value["next_offset"].as_u64(),
             })
         }
         Source::Web { snapshot_id } => {
@@ -64,6 +65,7 @@ pub(super) async fn read(directory: PathBuf, source: Source, offset: u64) -> Res
                 Ok(Page {
                     content: text[start..end].to_owned(),
                     next_offset: (end < text.len()).then_some(end as u64),
+                    read_offset: Some(end as u64),
                 })
             })
             .await?
@@ -124,6 +126,40 @@ mod tests {
                 .await
                 .is_err()
         );
+    }
+
+    #[tokio::test]
+    async fn live_log_cursor_uses_raw_bytes_even_when_decoding_replaces_invalid_text() {
+        use std::io::Write;
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let directory = tempfile::tempdir_in(root.path()).unwrap();
+        for path in [root.path(), directory.path()] {
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let path = directory.path().join("cmd-live.stderr");
+        std::fs::write(&path, b"first\xff\n").unwrap();
+        let source = Source::Command {
+            output_id: "cmd-live".into(),
+            stream: Stream::Stderr,
+        };
+        let first = read(directory.path().into(), source.clone(), 0)
+            .await
+            .unwrap();
+        assert_eq!(first.content, "first\u{fffd}\n");
+        assert_eq!(first.read_offset, Some(7));
+        assert!(first.next_offset.is_none());
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(path)
+            .unwrap()
+            .write_all(b"second\n")
+            .unwrap();
+        let second = read(directory.path().into(), source, first.read_offset.unwrap())
+            .await
+            .unwrap();
+        assert_eq!(second.content, "second\n");
+        assert_eq!(second.read_offset, Some(14));
     }
 
     #[tokio::test]
