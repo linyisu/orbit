@@ -10,7 +10,7 @@ use toml::Value;
 
 const DEPENDENCIES: &[(&str, &[&str])] = &[
     ("orbit-build", &[]),
-    ("orbit-auth", &[]),
+    ("orbit-auth", &["orbit-runtime"]),
     ("orbit-protocol", &[]),
     ("orbit-syntax", &[]),
     (

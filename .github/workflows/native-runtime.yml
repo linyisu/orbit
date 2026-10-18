@@ -90,6 +90,7 @@ jobs:
     timeout-minutes: 30
     env:
       CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
       CARGO_INCREMENTAL: '0'
     steps:
       - uses: actions/checkout@v4
@@ -104,3 +105,9 @@ jobs:
       - name: Test native writes and Git index transactions
         if: ${{ !cancelled() }}
         run: cargo test -p orbit-tools --locked --test native_files
+      - name: Test native credential storage
+        if: ${{ !cancelled() }}
+        run: cargo test -p orbit-auth --locked --lib store::tests
+      - name: Test native SSH prompt channels
+        if: ${{ !cancelled() }}
+        run: cargo test -p orbit-client --locked --lib interaction::tests

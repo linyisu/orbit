@@ -17,3 +17,6 @@ tempfile.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 url.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+orbit-runtime.workspace = true

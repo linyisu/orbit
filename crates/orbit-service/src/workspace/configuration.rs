@@ -14,18 +14,26 @@ impl Installed {
         configuration: Configuration,
         options: &super::setup::WorkspaceOptions,
     ) -> Result<Installed> {
-        use std::{
-            io::Write,
-            os::unix::fs::{OpenOptionsExt, PermissionsExt},
-        };
+        use std::io::Write;
+        #[cfg(unix)]
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 
+        #[cfg(unix)]
         let directory = tempfile::Builder::new()
             .prefix("configuration-")
             .permissions(std::fs::Permissions::from_mode(0o700))
             .tempdir_in(super::runtime_directory()?)?;
+        #[cfg(windows)]
+        let directory = orbit_runtime::filesystem::private::temporary_directory(
+            &super::runtime_directory()?,
+            "configuration-",
+        )?;
         let mut options = options.clone();
         options.config = directory.path().join("config.toml");
         options.auth_directory = directory.path().join("auth");
+        #[cfg(windows)]
+        let mut file = orbit_runtime::filesystem::private::open_file(&options.config, true, true)?;
+        #[cfg(unix)]
         let mut file = std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)

@@ -1,9 +1,7 @@
 #[derive(Clone, PartialEq, Eq)]
 struct Stamp {
     length: u64,
-    modified: std::time::SystemTime,
-    inode: u64,
-    device: u64,
+    version: orbit_runtime::filesystem::FileVersion,
 }
 
 pub(crate) struct Preview {
@@ -38,7 +36,6 @@ pub(crate) fn read_preview(
     previous: Option<Preview>,
 ) -> Option<Preview> {
     use std::io::{Read, Seek, SeekFrom};
-    use std::os::unix::fs::MetadataExt;
     if !output_id.starts_with("cmd-")
         || output_id.len() > 160
         || !output_id
@@ -53,22 +50,17 @@ pub(crate) fn read_preview(
         orbit_protocol::tool_output::Stream::Stderr => "stderr",
     };
     let path = dir.join(format!("{output_id}.{suffix}"));
-    let metadata = std::fs::symlink_metadata(&path).ok()?;
-    if !metadata.is_file() || metadata.file_type().is_symlink() {
-        return None;
-    }
+    let mut file = orbit_runtime::execution::output::open_retained_file(&path).ok()?;
+    let metadata = file.metadata().ok()?;
     let stamp = Stamp {
         length: metadata.len(),
-        modified: metadata.modified().ok()?,
-        inode: metadata.ino(),
-        device: metadata.dev(),
+        version: orbit_runtime::filesystem::FileVersion::read(&file).ok()?,
     };
     if let Some(previous) = previous
         && previous.stamp == stamp
     {
         return Some(previous);
     }
-    let mut file = std::fs::File::open(path).ok()?;
     let start = metadata
         .len()
         .saturating_sub(16 * 1_024);

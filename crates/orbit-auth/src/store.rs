@@ -1,9 +1,12 @@
 use std::{
-    fs::{self, File, OpenOptions},
+    fs::{self, File},
     io::{Read, Write},
     path::{Path, PathBuf},
     time::Duration,
 };
+
+#[cfg(unix)]
+use std::fs::OpenOptions;
 
 use url::Url;
 
@@ -270,7 +273,11 @@ impl AuthStore {
     }
 
     fn write(&self, name: &str, credential: &Credential) -> Result<()> {
+        #[cfg(unix)]
         let mut temporary = tempfile::NamedTempFile::new_in(&self.directory)?;
+        #[cfg(windows)]
+        let mut temporary =
+            orbit_runtime::filesystem::private::temporary_file(&self.directory, "credential-")?;
         serde_json::to_writer(&mut temporary, credential).map_err(|_| AuthError::Storage)?;
         temporary.write_all(b"\n")?;
         temporary.as_file().sync_all()?;
@@ -280,6 +287,7 @@ impl AuthStore {
         self.sync_directory()
     }
 
+    #[cfg(unix)]
     fn create_directory(&self) -> Result<()> {
         let mut builder = fs::DirBuilder::new();
         builder.recursive(true);
@@ -292,6 +300,19 @@ impl AuthStore {
         self.validate_directory()
     }
 
+    #[cfg(windows)]
+    fn create_directory(&self) -> Result<()> {
+        orbit_runtime::filesystem::private::create_directory_all(&self.directory)?;
+        self.validate_directory()
+    }
+
+    #[cfg(windows)]
+    fn validate_directory(&self) -> Result<()> {
+        orbit_runtime::filesystem::private::validate_directory(&self.directory)?;
+        Ok(())
+    }
+
+    #[cfg(unix)]
     fn validate_directory(&self) -> Result<()> {
         let metadata = fs::symlink_metadata(&self.directory)?;
         if !metadata.is_dir() || metadata.file_type().is_symlink() {
@@ -307,6 +328,8 @@ impl AuthStore {
     fn sync_directory(&self) -> Result<()> {
         #[cfg(unix)]
         File::open(&self.directory)?.sync_all()?;
+        #[cfg(windows)]
+        orbit_runtime::filesystem::private::sync_directory(&self.directory)?;
         Ok(())
     }
 }
@@ -332,6 +355,12 @@ fn api_key_credential(key: String, base_url: &str) -> Result<Credential> {
     })
 }
 
+#[cfg(windows)]
+pub(crate) fn private_file(path: &Path, create: bool) -> std::io::Result<File> {
+    orbit_runtime::filesystem::private::open_file(path, create, false)
+}
+
+#[cfg(unix)]
 pub(crate) fn private_file(path: &Path, create: bool) -> std::io::Result<File> {
     let mut options = OpenOptions::new();
     options
@@ -367,6 +396,7 @@ pub(crate) fn private_file(path: &Path, create: bool) -> std::io::Result<File> {
     Ok(file)
 }
 
+#[cfg(unix)]
 fn validate_owner(metadata: &fs::Metadata) -> std::io::Result<()> {
     #[cfg(unix)]
     {
@@ -596,6 +626,26 @@ mod tests {
         assert!(store.load("test").is_err());
         fs::remove_file(&path).unwrap();
         symlink(root.path().join("linked"), &path).unwrap();
+        assert!(store.load("test").is_err());
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn native_credentials_are_private_and_reject_link_aliases() {
+        let root = tempfile::tempdir().unwrap();
+        let store = AuthStore::new(root.path().join("auth")).unwrap();
+        store
+            .set_api_key("test", "synthetic-key".into(), "https://example.invalid")
+            .await
+            .unwrap();
+        orbit_runtime::filesystem::private::validate_directory(store.directory()).unwrap();
+        let path = store.path("test");
+        orbit_runtime::filesystem::private::open_file(&path, false, false).unwrap();
+        let alias = root.path().join("alias");
+        fs::hard_link(&path, &alias).unwrap();
+        assert!(store.load("test").is_err());
+        fs::remove_file(&path).unwrap();
+        std::os::windows::fs::symlink_file(&alias, &path).unwrap();
         assert!(store.load("test").is_err());
     }
 }
