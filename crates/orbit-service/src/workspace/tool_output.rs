@@ -181,16 +181,16 @@ mod tests {
 
     #[tokio::test]
     async fn reads_web_snapshot_from_start_to_end_without_network() {
-        let directory = tempfile::tempdir().unwrap();
+        let root = orbit_runtime::filesystem::temporary_directory("output-test-").unwrap();
+        let directory = log_directory(root.path());
         let id = format!("web-{}", "a".repeat(64));
         let text = "甲乙\n".repeat(12_000);
-        std::fs::write(
-            directory
+        write_log(
+            &directory
                 .path()
                 .join(format!("{id}.json")),
             serde_json::json!({"content": text}).to_string(),
-        )
-        .unwrap();
+        );
         let source = Source::Web { snapshot_id: id };
         let mut offset = 0;
         let mut actual = String::new();

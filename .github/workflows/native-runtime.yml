@@ -116,6 +116,7 @@ jobs:
         if: ${{ !cancelled() }}
         run: |
           cargo test -p orbit-service --locked --lib workspace::configuration::tests
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test -p orbit-service --locked --lib workspace::tool_output::tests
       - name: Test native credential storage
         if: ${{ !cancelled() }}
