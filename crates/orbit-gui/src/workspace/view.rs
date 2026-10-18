@@ -61,16 +61,6 @@ impl Workspace {
             }))
             .w_full()
             .gap_2()
-            .child(
-                h_flex()
-                    .w_full()
-                    .justify_center()
-                    .child(
-                        self.conversation
-                            .read(cx)
-                            .tail_control(),
-                    ),
-            )
             .when(self.busy, |view| {
                 view.child(
                     div().px_2().py_1().w_full().child(

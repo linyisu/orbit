@@ -279,6 +279,38 @@ pub(super) fn specialized_history(workspace: &str) -> Vec<Value> {
     let mut history = vec![json!({"Started": {"prompt": "Inspect generated tool views"}})];
     for (id, name, args, output) in [
         (
+            "wrapped-command",
+            "Exec",
+            json!({
+                "command": format!(
+                    "samplectl inspect {} --label '换行末尾 COMMAND-END'",
+                    (1..=14).map(|n| format!("--record=sample-{n:02} ")).collect::<String>()
+                ),
+                "cwd": workspace
+            }),
+            json!({
+                "exit_code": 0,
+                "elapsed": {"secs": 0, "nanos": 12_000_000},
+                "stdout": "Generated command preview\n",
+                "stderr": "",
+                "timed_out": false,
+                "cancelled": false
+            }),
+        ),
+        (
+            "short-command",
+            "Exec",
+            json!({"command": "samplectl status", "cwd": workspace}),
+            json!({
+                "exit_code": 0,
+                "elapsed": {"secs": 0, "nanos": 12_000_000},
+                "stdout": "Ready\n",
+                "stderr": "",
+                "timed_out": false,
+                "cancelled": false
+            }),
+        ),
+        (
             "source",
             "ReadFile",
             json!({"path": "generated.rs", "start_line": 97}),

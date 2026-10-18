@@ -14,6 +14,16 @@ use orbit_client::execution::details::{
     retained::Retained, source_text, status,
 };
 
+enum ImageContent {
+    Idle,
+    Loading,
+    Ready {
+        image: std::sync::Arc<Image>,
+        dimensions: (u32, u32),
+    },
+    Failed(SharedString),
+}
+
 pub(super) struct ToolOutput {
     owner: WeakEntity<Workspace>,
     options: Options,
@@ -26,6 +36,8 @@ pub(super) struct ToolOutput {
     diff_patch: Option<String>,
     editor: Entity<EditorState>,
     request_editor: Entity<EditorState>,
+    request_height: Option<Pixels>,
+    image: ImageContent,
     request: ToolRequest,
     pages: &'static [Stream],
     status: String,
@@ -78,6 +90,8 @@ impl ToolOutput {
                     .default_value(request.content())
             }),
             request,
+            request_height: None,
+            image: ImageContent::Idle,
             pages: orbit_client::execution::details::streams(&tool),
             status: status(&tool),
             retained: Retained::default(),
@@ -314,6 +328,11 @@ impl ToolOutput {
                 window.close_dialog(cx);
             }
             Target::Image(path) => {
+                if !matches!(self.image, ImageContent::Idle) {
+                    return;
+                }
+                self.image = ImageContent::Loading;
+                cx.notify();
                 let (result, response) = tokio::sync::oneshot::channel();
                 let _ = self.owner.update(cx, |workspace, cx| {
                     workspace.command(
@@ -344,18 +363,12 @@ impl ToolOutput {
                                 .map_err(|error| error.to_string())
                         })
                         .await;
-                    let _ = panel.update_in(cx, |panel, window, cx| {
-                        if panel.closed {
-                            return;
-                        }
-                        match image {
-                            Ok((image, size)) => {
-                                crate::image_preview::open(Ok(Some(image)), Some(size), window, cx)
-                            }
-                            Err(error) => {
-                                crate::image_preview::open(Err(error.into()), None, window, cx)
-                            }
-                        }
+                    let _ = panel.update(cx, |panel, cx| {
+                        panel.image = match image {
+                            Ok((image, dimensions)) => ImageContent::Ready { image, dimensions },
+                            Err(error) => ImageContent::Failed(error.into()),
+                        };
+                        cx.notify();
                     });
                 })
                 .detach();
@@ -366,49 +379,67 @@ impl ToolOutput {
 }
 
 pub(super) fn present(panel: Entity<ToolOutput>, window: &mut Window, cx: &mut App) {
-    if matches!(
+    let image = matches!(
         orbit_client::execution::details::target(&panel.read(cx).tool),
         Some(orbit_client::execution::details::Target::Image(_))
-    ) {
-        panel.update(cx, |panel, cx| {
-            panel.closed = false;
-            // The caller may still lease Workspace; resolve the image after that update ends.
-            cx.defer_in(window, |panel, window, cx| panel.inspect_target(window, cx));
-        });
-        return;
-    }
+    );
     panel.update(cx, |panel, cx| {
         panel.closed = false;
         panel.refresh(window, cx);
+        if image {
+            // The caller may still lease Workspace; resolve the image after that update ends.
+            cx.defer_in(window, |panel, window, cx| panel.inspect_target(window, cx));
+        }
     });
-    crate::dialog::open(window, cx, move |dialog, window, cx| {
-        let close = panel.downgrade();
-        let height = (window.rem_size() * 46.).min(window.viewport_size().height * 0.8);
-        let content = panel.clone();
-        dialog
-            .title(panel.read(cx).tool.name.clone())
-            .h(height)
-            // The editor owns scrolling; Dialog's ordinary child slot adds
-            // a second scroll viewport around the entire inspector.
-            .content(move |body, _, _| {
-                body.size_full()
-                    .min_h_0()
-                    .min_w_0()
-                    .overflow_hidden()
-                    .child(content.clone())
-            })
-            .on_ok(|_, _, _| false)
-            .on_close(move |_, _, cx| {
-                let _ = close.update(cx, |panel, cx| {
-                    panel.closed = true;
-                    cx.notify();
-                });
-            })
-    });
+    let build =
+        move |dialog: gpui_kit::component::dialog::Dialog, window: &mut Window, cx: &mut App| {
+            let close = panel.downgrade();
+            let height = (window.rem_size() * if image { 16. } else { 46. })
+                .min(window.viewport_size().height * 0.8);
+            let content = panel.clone();
+            dialog
+                .title(panel.read(cx).tool.name.clone())
+                .h(height)
+                // The editor owns scrolling; Dialog's ordinary child slot adds
+                // a second scroll viewport around the entire inspector.
+                .content(move |body, _, _| {
+                    body.size_full()
+                        .min_h_0()
+                        .min_w_0()
+                        .overflow_hidden()
+                        .child(content.clone())
+                })
+                .on_ok(|_, _, _| false)
+                .on_close(move |_, _, cx| {
+                    let _ = close.update(cx, |panel, cx| {
+                        panel.closed = true;
+                        cx.notify();
+                    });
+                })
+        };
+    if image {
+        window.open_dialog(cx, move |dialog, window, cx| {
+            build(dialog, window, cx)
+                .width((window.rem_size() * 28.).min(crate::dialog::width(window)))
+                .margin_top(window.viewport_size().height * 0.1)
+                .p_4()
+                .gap_4()
+        });
+    } else {
+        crate::dialog::open(window, cx, build);
+    }
 }
 
 impl Render for ToolOutput {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if matches!(
+            orbit_client::execution::details::target(&self.tool),
+            Some(orbit_client::execution::details::Target::Image(_))
+        ) {
+            return self
+                .render_image(window, cx)
+                .into_any_element();
+        }
         let has_owner = self.owner.upgrade().is_some();
         let status = if self.disconnected || !has_owner {
             "连接已断开，保留已接收输出".to_owned()
@@ -426,14 +457,14 @@ impl Render for ToolOutput {
             .iter()
             .position(|stream| *stream == self.stream)
             .unwrap_or(0);
-        let request_lines = self
-            .request
-            .content()
-            .lines()
-            .count()
-            .clamp(1, 6) as f32;
-        let header_height = (window.rem_size() * (request_lines * 1.5 + 1.))
+        let request_padding = window.rem_size() * 3.;
+        let header_height = self
+            .request_height
+            .unwrap_or(window.rem_size() * 4.)
             .min(window.viewport_size().height * 0.20);
+        let request_owner = cx.entity().downgrade();
+        let request_editor = self.request_editor.clone();
+        let measured_height = self.request_height;
         let background = cx
             .theme()
             .highlight_theme
@@ -506,7 +537,9 @@ impl Render for ToolOutput {
                         )
                         .child(
                             div()
+                                .relative()
                                 .h(header_height)
+                                .flex_shrink_0()
                                 .min_h_0()
                                 .min_w_0()
                                 .child(editor_content(
@@ -520,8 +553,44 @@ impl Render for ToolOutput {
                                     ),
                                     self.request.heading().into(),
                                     background,
-                                    window.rem_size() * 3.,
-                                )),
+                                    request_padding,
+                                ))
+                                .child(
+                                    canvas(
+                                        |_, _, _| {},
+                                        move |_, _, _, cx| {
+                                            let editor = request_editor.read(cx);
+                                            let Some(line_height) = editor.line_height() else {
+                                                return;
+                                            };
+                                            // Editor publishes its geometry during paint. Read
+                                            // after it so wrapping and font metrics agree.
+                                            // Editor also requires a two-row minimum viewport.
+                                            let height = line_height
+                                                * editor
+                                                    .display_map()
+                                                    .display_row_count()
+                                                    .max(2)
+                                                + request_padding / 3.;
+                                            if measured_height == Some(height) {
+                                                return;
+                                            }
+                                            let owner = request_owner.clone();
+                                            cx.defer(move |cx| {
+                                                let _ = owner.update(cx, |view, cx| {
+                                                    if view.request_height != Some(height) {
+                                                        view.request_height = Some(height);
+                                                        cx.notify();
+                                                    }
+                                                });
+                                            });
+                                        },
+                                    )
+                                    .absolute()
+                                    .top_0()
+                                    .left_0()
+                                    .size_full(),
+                                ),
                         )
                         .when(!self.request.context().is_empty(), |view| {
                             view.child(
@@ -752,6 +821,78 @@ impl Render for ToolOutput {
                                 },
                             ),
                     ),
+            )
+            .into_any_element()
+    }
+}
+
+impl ToolOutput {
+    fn render_image(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        v_flex()
+            .size_full()
+            .min_w_0()
+            .gap_2()
+            .child(
+                div()
+                    .w_full()
+                    .text_sm()
+                    .whitespace_normal()
+                    .child(self.request.content().to_owned()),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .w_full()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(match &self.image {
+                        ImageContent::Ready { image, dimensions } => {
+                            let image = image.clone();
+                            let dimensions = *dimensions;
+                            Button::new("tool-image-thumbnail")
+                                .ghost()
+                                .w((window.rem_size() * 12.).min(crate::dialog::width(window)))
+                                .h((window.rem_size() * 8.)
+                                    .min(window.viewport_size().height * 0.4))
+                                .p_0()
+                                .accessibility_label("查看大图")
+                                .tooltip("查看大图")
+                                .child(
+                                    img(image.clone())
+                                        .size_full()
+                                        .object_fit(ObjectFit::Contain),
+                                )
+                                .on_click(move |_, window, cx| {
+                                    crate::image_preview::open(
+                                        Ok(Some(image.clone())),
+                                        Some(dimensions),
+                                        window,
+                                        cx,
+                                    );
+                                })
+                                .into_any_element()
+                        }
+                        ImageContent::Failed(error) => div()
+                            .text_sm()
+                            .whitespace_normal()
+                            .child(error.clone())
+                            .into_any_element(),
+                        ImageContent::Idle
+                            if self.disconnected || self.owner.upgrade().is_none() =>
+                        {
+                            div()
+                                .text_sm()
+                                .child("连接已断开，无法加载图片")
+                                .into_any_element()
+                        }
+                        ImageContent::Idle | ImageContent::Loading => div()
+                            .text_sm()
+                            .text_color(cx.theme().muted_foreground)
+                            .child("加载图片…")
+                            .into_any_element(),
+                    }),
             )
     }
 }

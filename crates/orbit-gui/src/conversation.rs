@@ -22,6 +22,8 @@ pub(crate) use navigation::bind_keys;
 use orbit_client::protocol::Update;
 use std::{cell::Cell, rc::Rc, sync::Arc};
 
+const ROW_BOTTOM_PADDING_REM: f32 = 0.75;
+
 pub(crate) struct Conversation {
     _subscriptions: Vec<Subscription>,
     transcript: Transcript,
@@ -122,10 +124,6 @@ impl Conversation {
 
     pub(crate) fn navigation_controls(&self) -> Entity<navigation::Controls> {
         self.navigation_controls.clone()
-    }
-
-    pub(crate) fn tail_control(&self) -> Entity<navigation::TailControl> {
-        self.tail_control.clone()
     }
 
     pub(crate) fn is_empty(&self) -> bool {
@@ -485,7 +483,7 @@ impl Render for TurnView {
 }
 
 impl Render for Conversation {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if self.rows.is_empty() {
             return v_flex()
                 .size_full()
@@ -509,6 +507,8 @@ impl Render for Conversation {
         let owner = cx.weak_entity();
         let viewport_height = self.viewport_height.clone();
         let viewport_bounds = self.viewport_bounds.clone();
+        let last_row = self.order.len() - 1;
+        let tail_padding = window.rem_size() * ROW_BOTTOM_PADDING_REM;
         let scroller =
             MessageScroller::new("conversation", self.scroll.clone(), move |index, _, cx| {
                 weak.upgrade()
@@ -564,17 +564,20 @@ impl Render for Conversation {
                     .unwrap_or_else(|| div().into_any_element())
             })
             .jump_button(false)
-            .with_list_style(StyleRefinement::default().py_6())
+            // GPUI's scrollbar extent excludes list padding. Keep spacing in
+            // measured rows so wheel and scrollbar scrolling can reach the tail.
+            .with_list_style(StyleRefinement::default().py_0())
             .with_row_style(
                 StyleRefinement::default()
                     .pl(rems(crate::theme::CONTENT_GUTTER_REM))
                     .pr(rems(
                         crate::theme::CONTENT_GUTTER_REM - crate::theme::NAVIGATION_WIDTH_REM,
                     ))
-                    .pb_3(),
+                    .pb(rems(ROW_BOTTOM_PADDING_REM)),
             )
             .size_full();
         h_flex()
+            .relative()
             .size_full()
             .items_stretch()
             .child(
@@ -631,22 +634,29 @@ impl Render for Conversation {
                                         });
                                     });
                                 }
-                                // Scrollbar drags refresh the window without notifying Kit's
-                                // message-scroller entity. Observe the resolved position here.
+                                // Unmeasured history can make the list's total height unknown.
+                                // The last rendered row and our own insets still identify the tail.
+                                let scrolled_up = !navigation::tail_visible(
+                                    &measured.borrow(),
+                                    last_row,
+                                    bounds.bottom(),
+                                    tail_padding,
+                                );
                                 if let Some(view) = owner.upgrade() {
                                     let view = view.read(cx);
-                                    let state = view.scroll.read(cx);
-                                    let scrolled_up = state.is_scrolled_up();
                                     if scrolled_up != view.scrolled_up {
                                         let owner = owner.clone();
                                         cx.defer(move |cx| {
                                             let _ = owner.update(cx, |view, cx| {
                                                 let state = view.scroll.read(cx);
-                                                let scrolled_up = state.is_scrolled_up();
                                                 let resume = view.scrolled_up
                                                     && !scrolled_up
                                                     && !state.is_following_tail();
                                                 view.scrolled_up = scrolled_up;
+                                                view.tail_control
+                                                    .update(cx, |control, cx| {
+                                                        control.set_scrolled_up(scrolled_up, cx);
+                                                    });
                                                 if resume {
                                                     view.scroll.update(cx, |state, cx| {
                                                         state.scroll_to_end(cx);
@@ -675,6 +685,15 @@ impl Render for Conversation {
                     ),
             )
             .child(self.navigation.clone())
+            .child(
+                h_flex()
+                    .absolute()
+                    .bottom_2()
+                    .left_0()
+                    .right(rems(crate::theme::NAVIGATION_WIDTH_REM))
+                    .justify_center()
+                    .child(self.tail_control.clone()),
+            )
             .into_any_element()
     }
 }

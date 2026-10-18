@@ -340,6 +340,7 @@ impl Render for Controls {
 pub(crate) struct TailControl {
     navigation: Entity<Navigation>,
     running: bool,
+    scrolled_up: bool,
     _subscription: Subscription,
 }
 
@@ -349,6 +350,7 @@ impl TailControl {
         Self {
             navigation,
             running: false,
+            scrolled_up: false,
             _subscription: subscription,
         }
     }
@@ -359,16 +361,18 @@ impl TailControl {
             cx.notify();
         }
     }
+
+    pub(super) fn set_scrolled_up(&mut self, scrolled_up: bool, cx: &mut Context<Self>) {
+        if self.scrolled_up != scrolled_up {
+            self.scrolled_up = scrolled_up;
+            cx.notify();
+        }
+    }
 }
 
 impl Render for TailControl {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let navigation = self.navigation.read(cx);
-        let scrolled_up = navigation
-            .messages
-            .read(cx)
-            .is_scrolled_up();
-        if !scrolled_up {
+        if !self.scrolled_up {
             return div().into_any_element();
         }
         Button::new("latest-output")
@@ -404,6 +408,18 @@ impl Render for TailControl {
     }
 }
 
+/// Tail visibility is independent of whether older virtual rows have been measured.
+pub(super) fn tail_visible(
+    rows: &[(usize, Bounds<Pixels>)],
+    last_row: usize,
+    bottom: Pixels,
+    padding: Pixels,
+) -> bool {
+    rows.iter()
+        .find(|(index, _)| *index == last_row)
+        .is_some_and(|(_, bounds)| bounds.bottom() + padding <= bottom)
+}
+
 /// The row at the viewport's top owns the current-round marker, including
 /// the gap before the next row. List overdraw must not select an offscreen row.
 pub(super) fn current_row(rows: &[(usize, Bounds<Pixels>)], top: Pixels) -> Option<usize> {
@@ -419,8 +435,21 @@ pub(super) fn current_row(rows: &[(usize, Bounds<Pixels>)], top: Pixels) -> Opti
 
 #[cfg(test)]
 mod tests {
-    use super::current_row;
+    use super::{current_row, tail_visible};
     use gpui_kit::{Bounds, point, px, size};
+
+    #[test]
+    fn tail_visibility_uses_the_last_row_and_includes_trailing_insets() {
+        let last = [(
+            479,
+            Bounds::new(point(px(0.), px(250.)), size(px(400.), px(80.))),
+        )];
+        assert!(!tail_visible(&last, 479, px(360.), px(36.)));
+        assert!(tail_visible(&last, 479, px(366.), px(36.)));
+        assert!(!tail_visible(&last, 480, px(500.), px(36.)));
+        assert!(!tail_visible(&[], 479, px(500.), px(36.)));
+    }
+
     #[test]
     fn viewport_anchor_ignores_overdraw_and_keeps_the_round_in_row_gaps() {
         let rows =
