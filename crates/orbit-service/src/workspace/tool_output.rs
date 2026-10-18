@@ -80,7 +80,11 @@ mod tests {
     fn log_directory(root: &std::path::Path) -> tempfile::TempDir {
         #[cfg(unix)]
         {
-            tempfile::tempdir_in(root).unwrap()
+            use std::os::unix::fs::PermissionsExt;
+            let directory = tempfile::tempdir_in(root).unwrap();
+            std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700))
+                .unwrap();
+            directory
         }
         #[cfg(windows)]
         {
