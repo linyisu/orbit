@@ -376,6 +376,7 @@ impl Render for TailControl {
             return div().into_any_element();
         }
         Button::new("latest-output")
+            .block_mouse_except_scroll()
             .small()
             .outline()
             .w_8()

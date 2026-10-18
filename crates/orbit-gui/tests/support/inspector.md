@@ -48,3 +48,6 @@ env -u WAYLAND_DISPLAY DISPLAY=:91 XDG_RUNTIME_DIR="$qa_root/runtime" \
 用 `--resume navigation` 检查大量未排版历史：向上滚动出现悬浮的圆形返回按钮，
 它不占输入框上方整行，也不遮盖整条会话内容。用滚轮或拖动滚动条回到底部，
 按钮应自动消失；继续滚动或点击按钮后均可恢复跟随。
+
+以 `--resume tool-history` 打开，滚动至返回按钮覆盖工具行：悬停按钮不能触发
+下方整行高亮，点击只回到最新输出；鼠标位于按钮上时仍能用滚轮滚动会话。
