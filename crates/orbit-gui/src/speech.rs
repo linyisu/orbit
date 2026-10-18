@@ -413,7 +413,7 @@ impl Render for Dictation {
                             .small(),
                     )
                     .when(status == SpeechStatus::Stopping, |bar| {
-                        bar.child(div().text_sm().child("转写中…"))
+                        bar.child(div().text_sm().child("校正句尾…"))
                     })
                     .child(
                         Button::new("finish-dictation")
@@ -435,16 +435,7 @@ impl Render for Dictation {
                     .small()
                     .into_any_element(),
                 Setup::Preparing { progress, .. } => {
-                    let label = if progress.total_bytes == 0 {
-                        "准备语音…".to_owned()
-                    } else if progress.received_bytes == progress.total_bytes {
-                        "加载语音模型…".to_owned()
-                    } else {
-                        format!(
-                            "下载语音模型 {}%",
-                            progress.received_bytes * 100 / progress.total_bytes
-                        )
-                    };
+                    let label = preparation_label(*progress);
                     h_flex()
                         .gap_1()
                         .child(
@@ -472,7 +463,8 @@ impl Render for Dictation {
                 Setup::Idle | Setup::Failed(_) => {
                     let tooltip = match &model.setup {
                         Setup::Failed(error) => format!("{error}；点击重试"),
-                        _ => "启用本地语音输入，首次下载约 226 MiB；音频不会上传".to_owned(),
+                        _ => "启用本地语音输入，首次下载约 4 GB；支持后台续传，音频不会上传"
+                            .to_owned(),
                     };
                     Button::new("prepare-speech")
                         .small()
@@ -490,5 +482,58 @@ impl Render for Dictation {
                         .into_any_element()
                 }
             })
+    }
+}
+
+fn preparation_label(progress: Progress) -> String {
+    match progress {
+        Progress::Waiting => "准备语音…".into(),
+        Progress::Verifying {
+            completed_bytes: completed,
+            total_bytes: total,
+        } => {
+            format!("校验语音 {}%", completed * 100 / total.max(1))
+        }
+        Progress::Downloading {
+            received_bytes: received,
+            total_bytes: total,
+        } => {
+            format!("下载语音 {}%", received * 100 / total.max(1))
+        }
+        Progress::LoadingPreview => "加载实时语音…".into(),
+        Progress::LoadingCorrection => "加载 Qwen…".into(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Progress, preparation_label};
+
+    #[test]
+    fn preparation_ui_distinguishes_download_completion_from_native_loading() {
+        assert_eq!(
+            preparation_label(Progress::Downloading {
+                received_bytes: 50,
+                total_bytes: 100
+            }),
+            "下载语音 50%"
+        );
+        assert_eq!(
+            preparation_label(Progress::Downloading {
+                received_bytes: 100,
+                total_bytes: 100
+            }),
+            "下载语音 100%"
+        );
+        assert_eq!(
+            preparation_label(Progress::Verifying {
+                completed_bytes: 100,
+                total_bytes: 100
+            }),
+            "校验语音 100%"
+        );
+        assert_eq!(preparation_label(Progress::LoadingCorrection), "加载 Qwen…");
+        assert_eq!(preparation_label(Progress::LoadingPreview), "加载实时语音…");
+        assert_eq!(preparation_label(Progress::Waiting), "准备语音…");
     }
 }

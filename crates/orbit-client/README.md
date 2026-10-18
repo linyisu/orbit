@@ -27,15 +27,25 @@ GUI 与 TUI 使用同一路由。全局保存成功不依赖远程会话在线�
 ## 本机语音
 
 `local-speech` 功能通过 [speech.rs](src/speech.rs) 提供本机 CPU 转写。
-使用 [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) 和
-[Paraformer 中文、英文流式模型](https://huggingface.co/csukuangfj/sherpa-onnx-streaming-paraformer-bilingual-zh-en)：首次准备时
-下载约 226 MiB，校验固定的大小和 SHA-256 后原子保存到
-`$XDG_CACHE_HOME/orbit/speech/paraformer-zh-en-int8`，缺省根目录为 `~/.cache`。
-损坏、截断或取消的下载不替换缓存；后续使用无需联网。
-音频按 16 kHz 单声道 PCM 分块输入，队列最多保留 3.2 秒待处理音频，单次最多 120 秒；
-逐块解码并发布可替换的全文假设，不保留或反复识别整段录音。
-不写入会话、目标工作区或网络请求。取消会中止推理；失败或取消不产生最终成功结果，实时假设不构成完整转写。
-GUI 的录音和草稿插入属于平台适配，模型准备与转写逻辑不进入界面。
+[speech/model.rs](src/speech/model.rs) 固定模型来源、版本、大小与 SHA-256：
+[Paraformer 中文、英文流式模型](https://huggingface.co/csukuangfj/sherpa-onnx-streaming-paraformer-bilingual-zh-en)
+逐块提供实时预览，[Qwen3-ASR 0.6B](https://huggingface.co/Qwen/Qwen3-ASR-0.6B)
+在句尾根据对应音频校正文字和标点。
+Qwen 使用非量化 FP32 ONNX 权重，避免 INT8 在中英混说上的实测退化。首次合计下载约 4 GB，
+已有 Paraformer 缓存直接复用；Qwen 缓存子目录为 `qwen3-asr-0.6b-fp32`。
+两者通过 [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) 在后台运行，不要求 Python 或云端识别服务。
+
+缓存位于 `$XDG_CACHE_HOME/orbit/speech`，缺省根目录为 `~/.cache`，独立于项目与 SSH/WSL 目标。
+准备阶段区分缓存校验、累计下载进度和两个模型的加载；取消下载保留固定版本的 `.part` 文件，
+重试使用 HTTP Range 继续，服务端忽略 Range 时安全重新下载。完整文件通过大小和 SHA-256
+校验后原子替换缓存；损坏下载不替换既有文件。跨进程准备使用可取消的缓存锁，已验证缓存离线可用。
+取消加载立即结束调用方等待；无法中断的原生加载在后台结束并丢弃结果，重试不会与旧加载竞争。
+
+音频按 16 kHz 单声道 PCM 输入，采集队列最多保留 3.2 秒待处理音频，单次最多 120 秒。
+实时解码与串行句尾校正在不同工作线程运行，每句音频只校正一次，不反复识别越来越长的录音前缀。
+停止录音会补齐预览并等待校正，较早句子的结果不能覆盖后续语音。取消丢弃后续结果，
+失败保留已经发布的预览但不返回完整转写成功。音频不写入会话、工作区或网络请求。
+GUI 只负责录音、进度展示和草稿插入，模型准备与转写逻辑不进入界面。
 
 ## 入口
 
