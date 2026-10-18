@@ -28,7 +28,9 @@ pub enum WorkspaceError {
     Io(#[from] io::Error),
 }
 
-fn open_canonical_parent_stepwise(canonical_parent: &Path) -> Result<File, WorkspaceError> {
+pub(super) fn open_canonical_parent_stepwise(
+    canonical_parent: &Path,
+) -> Result<File, WorkspaceError> {
     if !canonical_parent.is_absolute() {
         return Err(WorkspaceError::InvalidPath);
     }

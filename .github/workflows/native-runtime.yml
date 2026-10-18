@@ -81,6 +81,8 @@ jobs:
         run: cargo test -p orbit-tools --locked --test write_file
       - name: Test native Git inspection and index transactions
         run: cargo test -p orbit-tools --locked --test git_inspect --test git_index
+      - name: Test portable file transactions
+        run: cargo test -p orbit-tools --locked --test native_files
 
   windows-backend:
     name: Windows native backend
@@ -99,3 +101,6 @@ jobs:
         run: python .github/scripts/test-native-windows-io.py
       - name: Check complete native backend dependency graph
         run: cargo check -p orbit-server -p orbit-client --locked
+      - name: Test native writes and Git index transactions
+        if: ${{ !cancelled() }}
+        run: cargo test -p orbit-tools --locked --test native_files

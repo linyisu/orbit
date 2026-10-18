@@ -24,6 +24,11 @@ impl FileIdentity {
     pub fn read(file: &File) -> io::Result<Self> {
         native::identity(file).map(Self)
     }
+
+    /// Encode the complete native identity for binding an ephemeral transaction receipt.
+    pub fn bytes(&self) -> Vec<u8> {
+        native::identity_bytes(&self.0)
+    }
 }
 
 /// A change stamp and permission snapshot captured before approval.
@@ -66,6 +71,39 @@ fn leaf(name: &OsStr) -> io::Result<()> {
     #[cfg(windows)]
     super::path_security::validate_windows_path(path)?;
     Ok(())
+}
+
+/// Open one directory entry without following links under an authorized directory handle.
+pub fn open_directory(parent: &File, name: &OsStr) -> io::Result<File> {
+    leaf(name)?;
+    super::access::open_directory(parent, Path::new(name))
+}
+
+/// Open an absolute directory by traversing each component without following links.
+/// This preserves path identity checks; it does not grant workspace access.
+pub fn open_directory_path(path: &Path) -> Result<File, super::WorkspaceError> {
+    #[cfg(windows)]
+    super::path_security::validate_windows_path(path)?;
+    super::workspace::open_canonical_parent_stepwise(path)
+}
+
+/// Open one regular file without following links under an authorized directory handle.
+pub fn open_regular(parent: &File, name: &OsStr) -> io::Result<File> {
+    leaf(name)?;
+    let file = super::access::open_read(parent, Path::new(name))?;
+    if !file.metadata()?.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "expected a regular file",
+        ));
+    }
+    Ok(file)
+}
+
+/// Create one directory entry without traversing a mutable pathname.
+pub fn create_directory(parent: &File, name: &OsStr) -> io::Result<()> {
+    leaf(name)?;
+    native::create_directory(parent, name)
 }
 
 /// Create a private regular file exclusively under an already authorized directory handle.

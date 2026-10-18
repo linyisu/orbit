@@ -11,6 +11,14 @@ pub(super) fn identity(file: &File) -> io::Result<Identity> {
     Ok((metadata.dev(), metadata.ino()))
 }
 
+pub(super) fn identity_bytes(identity: &Identity) -> Vec<u8> {
+    [identity.0.to_be_bytes(), identity.1.to_be_bytes()].concat()
+}
+
+pub(super) fn create_directory(parent: &File, name: &OsStr) -> io::Result<()> {
+    rustix::fs::mkdirat(parent, name, Mode::from_raw_mode(0o755)).map_err(Into::into)
+}
+
 pub(super) fn permissions(file: &File) -> io::Result<Permissions> {
     Ok(file.metadata()?.mode())
 }

@@ -3,18 +3,18 @@
 //! Build an index privately, then publish it under Git's index lock after
 //! checking the complete reviewed state again. No checkout/add/reset is used.
 use std::{
-    fs::{File, Metadata},
+    ffi::OsStr,
+    fs::File,
     io::{self, Read, Write},
-    os::unix::fs::MetadataExt,
     path::{Component, Path},
     sync::atomic::{AtomicU64, Ordering},
     time::Instant,
 };
 
 use orbit_agent::tool::ToolError;
-use orbit_runtime::filesystem::Workspace;
-use rustix::fs::{
-    AtFlags, Mode, OFlags, RenameFlags, fchmod, mkdirat, openat, renameat, renameat_with, unlinkat,
+use orbit_runtime::filesystem::{
+    Workspace, hard_link_count,
+    mutation::{self, FileIdentity, FileState, Replacement},
 };
 use sha2::{Digest, Sha256};
 use tokio_util::sync::CancellationToken;
@@ -113,7 +113,7 @@ pub fn update_review_index(
 
     // Keep temporary files outside the working tree and inaccessible to other
     // users. Git sees only this private index and the pinned metadata directory.
-    let temporary = tempfile::tempdir().map_err(failed)?;
+    let temporary = orbit_runtime::filesystem::temporary_directory("orbit-git-").map_err(failed)?;
     let index = temporary.path().join("index");
     if let Some(bytes) = &before.index {
         let mut file = private_file(&index)?;
@@ -243,14 +243,11 @@ pub fn update_review_index(
     lock.publish(&context.admin)?;
     // A failed directory sync follows the atomic publish; clearly report that
     // the result may already be visible instead of suggesting a blind retry.
-    context
-        .admin
-        .sync_all()
-        .map_err(|error| {
-            failed(format!(
-                "暂存区可能已更新，但持久化未确认；请刷新后再操作：{error}"
-            ))
-        })?;
+    mutation::sync_directory(&context.admin).map_err(|error| {
+        failed(format!(
+            "暂存区可能已更新，但持久化未确认；请刷新后再操作：{error}"
+        ))
+    })?;
     Ok(())
 }
 
@@ -298,17 +295,12 @@ impl<'a> IndexContext<'a> {
         let root = open_directory_absolute(self.workspace.root())?;
         let admin = directory_at(&root, ".git")?;
         let objects = directory_at(&admin, "objects")?;
-        if identity(&root.metadata().map_err(failed)?)
-            != identity(&self.root.metadata().map_err(failed)?)
-            || identity(&admin.metadata().map_err(failed)?)
-                != identity(&self.admin.metadata().map_err(failed)?)
-            || identity(&objects.metadata().map_err(failed)?)
-                != identity(
-                    &self
-                        .objects
-                        .metadata()
-                        .map_err(failed)?,
-                )
+        if FileIdentity::read(&root).map_err(failed)?
+            != FileIdentity::read(&self.root).map_err(failed)?
+            || FileIdentity::read(&admin).map_err(failed)?
+                != FileIdentity::read(&self.admin).map_err(failed)?
+            || FileIdentity::read(&objects).map_err(failed)?
+                != FileIdentity::read(&self.objects).map_err(failed)?
         {
             return Err(conflict());
         }
@@ -502,7 +494,11 @@ impl<'a> IndexContext<'a> {
             validate_oid(head, hash_bytes)?;
             Some(head.to_owned())
         };
-        let worktree = read_worktree(self.workspace, path)?;
+        let indexed_mode = index_entries(index.as_deref(), hash_bytes)?
+            .iter()
+            .find(|entry| entry.path == path.as_bytes())
+            .map(|entry| entry.mode);
+        let worktree = read_worktree(self.workspace, path, indexed_mode)?;
         let mut digest = Sha256::new();
         for bytes in [
             b"orbit-review-index-v1".as_slice(),
@@ -529,16 +525,16 @@ impl<'a> IndexContext<'a> {
                 read_relative_admin(&self.admin, name, MAX_ADMIN_BYTES)?.as_deref(),
             );
         }
-        let root_identity = identity(&self.root.metadata().map_err(failed)?);
-        let admin_identity = identity(&self.admin.metadata().map_err(failed)?);
-        for value in [
-            root_identity.0,
-            root_identity.1,
-            admin_identity.0,
-            admin_identity.1,
-        ] {
-            digest.update(value.to_be_bytes());
-        }
+        digest.update(
+            FileIdentity::read(&self.root)
+                .map_err(failed)?
+                .bytes(),
+        );
+        digest.update(
+            FileIdentity::read(&self.admin)
+                .map_err(failed)?
+                .bytes(),
+        );
         if let Some(worktree) = &worktree {
             digest.update(worktree.mode.to_be_bytes());
             digest_field(&mut digest, Some(&worktree.bytes));
@@ -592,9 +588,9 @@ impl<'a> IndexContext<'a> {
     fn install_object(&self, temporary: &Path, oid: &str) -> Result<(), ToolError> {
         self.check_admin()?;
         let (prefix, suffix) = oid.split_at(2);
-        match mkdirat(&self.objects, prefix, Mode::from_raw_mode(0o755)) {
+        match mutation::create_directory(&self.objects, OsStr::new(prefix)) {
             Ok(()) => {}
-            Err(error) if error == rustix::io::Errno::EXIST => {}
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
             Err(error) => return Err(failed(error)),
         }
         let shard = directory_at(&self.objects, prefix)?;
@@ -609,23 +605,38 @@ impl<'a> IndexContext<'a> {
         let mut object = GitLock::acquire(&shard, &name)?;
         let mut source = File::open(temporary.join(prefix).join(suffix)).map_err(failed)?;
         io::copy(&mut source, &mut object.file).map_err(failed)?;
-        fchmod(&object.file, Mode::from_raw_mode(0o444)).map_err(failed)?;
+        let mut permissions = object
+            .file
+            .metadata()
+            .map_err(failed)?
+            .permissions();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            permissions.set_mode(0o444);
+        }
+        #[cfg(windows)]
+        permissions.set_readonly(true);
+        object
+            .file
+            .set_permissions(permissions)
+            .map_err(failed)?;
         object.file.sync_all().map_err(failed)?;
         if !object.owns_path() {
             return Err(conflict());
         }
-        match renameat_with(
+        match mutation::publish(
             &shard,
-            name.as_str(),
-            &shard,
-            suffix,
-            RenameFlags::NOREPLACE,
+            &object.file,
+            OsStr::new(&name),
+            OsStr::new(suffix),
+            Replacement::Create,
         ) {
             Ok(()) => {
                 object.published = true;
-                shard.sync_all().map_err(failed)?;
+                mutation::sync_directory(&shard).map_err(failed)?;
             }
-            Err(error) if error == rustix::io::Errno::EXIST => {
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
                 let existing = read_at(&shard, suffix, MAX_FILE_BYTES + MAX_ADMIN_BYTES)?
                     .ok_or_else(conflict)?;
                 let intended = read_path(
@@ -667,14 +678,8 @@ impl GitLock {
     /// A descriptor exhaustion after CREATE must not strand a lock.
     fn acquire(parent: &File, name: &str) -> Result<Self, ToolError> {
         let parent = parent.try_clone().map_err(failed)?;
-        let fd = openat(
-            &parent,
-            name,
-            OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-            Mode::from_raw_mode(0o600),
-        )
-        .map_err(|error| {
-            if error == rustix::io::Errno::EXIST {
+        let file = mutation::create_private(&parent, OsStr::new(name)).map_err(|error| {
+            if error.kind() == io::ErrorKind::AlreadyExists {
                 failed("Git 操作正在进行（锁已存在），请等待完成后刷新")
             } else {
                 failed(error)
@@ -683,33 +688,40 @@ impl GitLock {
         Ok(Self {
             parent,
             name: name.into(),
-            file: File::from(fd),
+            file,
             published: false,
         })
     }
 
     fn owns_path(&self) -> bool {
-        let Ok(fd) = openat(
-            &self.parent,
-            self.name.as_str(),
-            OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC | OFlags::NONBLOCK,
-            Mode::empty(),
-        ) else {
+        let Ok(current) = mutation::open_regular(&self.parent, OsStr::new(&self.name)) else {
             return false;
         };
-        let Ok(current) = File::from(fd).metadata() else {
-            return false;
-        };
-        self.file.metadata().is_ok_and(|owned| {
-            identity(&current) == identity(&owned) && current.is_file() && current.nlink() == 1
-        })
+        match (FileIdentity::read(&current), FileIdentity::read(&self.file)) {
+            (Ok(current), Ok(owned)) => {
+                current == owned && hard_link_count(&self.file).is_ok_and(|count| count == 1)
+            }
+            _ => false,
+        }
     }
 
     fn publish(&mut self, admin: &File) -> Result<(), ToolError> {
         if !self.owns_path() {
             return Err(conflict());
         }
-        renameat(&self.parent, self.name.as_str(), admin, "index").map_err(failed)?;
+        if FileIdentity::read(&self.parent).map_err(failed)?
+            != FileIdentity::read(admin).map_err(failed)?
+        {
+            return Err(conflict());
+        }
+        mutation::publish(
+            &self.parent,
+            &self.file,
+            OsStr::new(&self.name),
+            OsStr::new("index"),
+            Replacement::Replace,
+        )
+        .map_err(failed)?;
         self.published = true;
         Ok(())
     }
@@ -718,19 +730,24 @@ impl GitLock {
 impl Drop for GitLock {
     fn drop(&mut self) {
         if !self.published && self.owns_path() {
-            let _ = unlinkat(&self.parent, self.name.as_str(), AtFlags::empty());
+            let _ = mutation::discard_unpublished(&self.parent, OsStr::new(&self.name), &self.file);
         }
     }
 }
 
 fn private_file(path: &Path) -> Result<File, ToolError> {
-    use std::os::unix::fs::OpenOptionsExt;
-    std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(path)
-        .map_err(failed)
+    let parent = path
+        .parent()
+        .ok_or_else(|| failed("invalid private file path"))?
+        .canonicalize()
+        .map_err(failed)?;
+    let parent = open_directory_absolute(&parent)?;
+    mutation::create_private(
+        &parent,
+        path.file_name()
+            .ok_or_else(|| failed("invalid private file name"))?,
+    )
+    .map_err(failed)
 }
 
 fn raw_patch(
@@ -746,7 +763,7 @@ fn raw_patch(
     // Fixed filenames in an isolated directory ensure that even a reviewed
     // .gitattributes file cannot supply attributes for either input. No actual
     // repository configuration, clean filter or EOL conversion participates.
-    let temporary = tempfile::tempdir().map_err(failed)?;
+    let temporary = orbit_runtime::filesystem::temporary_directory("orbit-git-").map_err(failed)?;
     for (side, file) in [("a", base), ("b", target)] {
         if let Some(file) = file {
             let directory = temporary.path().join(side);
@@ -755,8 +772,12 @@ fn raw_patch(
             output
                 .write_all(&file.bytes)
                 .map_err(failed)?;
+            #[cfg(unix)]
             if file.mode == 0o100755 {
-                fchmod(&output, Mode::from_raw_mode(0o700)).map_err(failed)?;
+                use std::os::unix::fs::PermissionsExt;
+                output
+                    .set_permissions(std::fs::Permissions::from_mode(0o700))
+                    .map_err(failed)?;
             }
         }
     }
@@ -802,8 +823,47 @@ fn raw_patch(
     let old = quoted_patch_path(&format!("a/{path}"));
     let new = quoted_patch_path(&format!("b/{path}"));
     let mut result = String::with_capacity(patch.len() + path.len() * 4);
+    #[cfg(windows)]
+    let mode_change = match (base, target) {
+        (Some(base), Some(target)) if base.mode != target.mode => {
+            format!("old mode {:o}\nnew mode {:o}\n", base.mode, target.mode)
+        }
+        _ => String::new(),
+    };
+    #[cfg(windows)]
+    if patch.is_empty() && !mode_change.is_empty() {
+        return Ok(format!("diff --git {old} {new}\n{mode_change}"));
+    }
     for line in patch.split_inclusive('\n') {
         let body = line.strip_suffix('\n').unwrap_or(line);
+        #[cfg(windows)]
+        {
+            if body.starts_with("old mode ") || body.starts_with("new mode ") {
+                continue;
+            }
+            if body.starts_with("new file mode ") {
+                result.push_str(&format!("new file mode {:o}\n", target.unwrap().mode));
+                continue;
+            }
+            if body.starts_with("deleted file mode ") {
+                result.push_str(&format!("deleted file mode {:o}\n", base.unwrap().mode));
+                continue;
+            }
+            if body.starts_with("index ") {
+                let hashes = body
+                    .split_whitespace()
+                    .nth(1)
+                    .ok_or_else(|| failed("invalid Git patch header"))?;
+                result.push_str(&format!("index {hashes}"));
+                if let (Some(base), Some(target)) = (base, target)
+                    && base.mode == target.mode
+                {
+                    result.push_str(&format!(" {:o}", base.mode));
+                }
+                result.push('\n');
+                continue;
+            }
+        }
         let replacement = if body.starts_with("diff --git ") {
             Some(format!("diff --git {old} {new}"))
         } else if body == "--- a/review" {
@@ -831,6 +891,10 @@ fn raw_patch(
             result.push_str(&replacement);
             if line.ends_with('\n') {
                 result.push('\n');
+            }
+            #[cfg(windows)]
+            if body.starts_with("diff --git ") {
+                result.push_str(&mode_change);
             }
         } else {
             // Preserve CRLF in hunk contents verbatim.
@@ -863,27 +927,12 @@ fn quoted_patch_path(path: &str) -> String {
     quoted
 }
 
-fn directory_at(parent: &File, name: impl rustix::path::Arg) -> Result<File, ToolError> {
-    openat(
-        parent,
-        name,
-        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-        Mode::empty(),
-    )
-    .map(File::from)
-    .map_err(failed)
+fn directory_at(parent: &File, name: impl AsRef<OsStr>) -> Result<File, ToolError> {
+    mutation::open_directory(parent, name.as_ref()).map_err(failed)
 }
 
 fn open_directory_absolute(path: &Path) -> Result<File, ToolError> {
-    let mut directory = File::open("/").map_err(failed)?;
-    for component in path.components() {
-        match component {
-            Component::RootDir => {}
-            Component::Normal(name) => directory = directory_at(&directory, name)?,
-            _ => return Err(failed("invalid repository directory")),
-        }
-    }
-    Ok(directory)
+    mutation::open_directory_path(path).map_err(failed)
 }
 
 fn path_text(path: &Path) -> Result<String, ToolError> {
@@ -892,29 +941,17 @@ fn path_text(path: &Path) -> Result<String, ToolError> {
         .ok_or_else(|| failed("temporary Git path is not UTF-8"))
 }
 
-fn identity(metadata: &Metadata) -> (u64, u64) {
-    (metadata.dev(), metadata.ino())
-}
-
-fn fingerprint(metadata: &Metadata) -> (u64, u64, u64, u32, i64, i64, i64, i64) {
-    (
-        metadata.dev(),
-        metadata.ino(),
-        metadata.len(),
-        metadata.mode(),
-        metadata.mtime(),
-        metadata.mtime_nsec(),
-        metadata.ctime(),
-        metadata.ctime_nsec(),
-    )
-}
-
 fn read_file(mut file: File, limit: usize) -> Result<Vec<u8>, ToolError> {
-    let before = file.metadata().map_err(failed)?;
-    if !before.is_file() || before.nlink() != 1 {
+    let before = FileState::read(&file).map_err(failed)?;
+    if !file
+        .metadata()
+        .map_err(failed)?
+        .is_file()
+        || hard_link_count(&file).map_err(failed)? != 1
+    {
         return Err(failed("Git 管理文件必须是无硬链接的普通文件"));
     }
-    if before.len() > limit as u64 {
+    if file.metadata().map_err(failed)?.len() > limit as u64 {
         return Err(failed(format!("文件超过 {limit} 字节的安全上限")));
     }
     let mut bytes = Vec::new();
@@ -922,30 +959,27 @@ fn read_file(mut file: File, limit: usize) -> Result<Vec<u8>, ToolError> {
         .take(limit as u64 + 1)
         .read_to_end(&mut bytes)
         .map_err(failed)?;
-    if bytes.len() > limit || fingerprint(&before) != fingerprint(&file.metadata().map_err(failed)?)
-    {
+    if bytes.len() > limit || before != FileState::read(&file).map_err(failed)? {
         return Err(conflict());
     }
     Ok(bytes)
 }
 
 fn read_at(parent: &File, name: &str, limit: usize) -> Result<Option<Vec<u8>>, ToolError> {
-    match openat(
-        parent,
-        name,
-        OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC | OFlags::NONBLOCK,
-        Mode::empty(),
-    ) {
-        Ok(fd) => read_file(File::from(fd), limit).map(Some),
-        Err(error) if error == rustix::io::Errno::NOENT => Ok(None),
+    match mutation::open_regular(parent, OsStr::new(name)) {
+        Ok(file) => read_file(file, limit).map(Some),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(failed(error)),
     }
 }
 
 fn read_path(path: &Path, limit: usize) -> Result<Option<Vec<u8>>, ToolError> {
     let parent = open_directory_absolute(
-        path.parent()
-            .ok_or_else(|| failed("invalid index path"))?,
+        &path
+            .parent()
+            .ok_or_else(|| failed("invalid index path"))?
+            .canonicalize()
+            .map_err(failed)?,
     )?;
     read_at(
         &parent,
@@ -973,14 +1007,9 @@ fn admin_parent(admin: &File, name: &str) -> Result<Option<(File, String)>, Tool
                     .into(),
             )));
         }
-        match openat(
-            &parent,
-            component,
-            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-            Mode::empty(),
-        ) {
-            Ok(fd) => parent = File::from(fd),
-            Err(error) if error == rustix::io::Errno::NOENT => return Ok(None),
+        match mutation::open_directory(&parent, component) {
+            Ok(directory) => parent = directory,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
             Err(error) => return Err(failed(error)),
         }
     }
@@ -1000,35 +1029,32 @@ fn read_relative_admin(
 
 /// Unlike read-only review, index updates intentionally refuse all symlink components so a regular
 /// file snapshot can never stage a symlink target.
-fn read_worktree(workspace: &Workspace, path: &str) -> Result<Option<Worktree>, ToolError> {
+fn read_worktree(
+    workspace: &Workspace,
+    path: &str,
+    indexed_mode: Option<u32>,
+) -> Result<Option<Worktree>, ToolError> {
     let root = workspace
         .open_directory(Path::new(""))
         .map_err(failed)?;
     let Some((parent, leaf)) = admin_parent(&root, path)? else {
         return Ok(None);
     };
-    match openat(
-        &parent,
-        leaf.as_str(),
-        OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC,
-        Mode::empty(),
-    ) {
-        Ok(fd) => {
-            let mut file = File::from(fd);
-            let before = file.metadata().map_err(failed)?;
-            if !before.is_file() {
-                return Err(failed("非普通文件仅供审查，暂不支持修改暂存区"));
-            }
+    match mutation::open_regular(&parent, OsStr::new(&leaf)) {
+        Ok(mut file) => {
+            let before = FileState::read(&file).map_err(failed)?;
             // The strict nofollow descriptor supplies the bytes; the retained
             // Workspace separately authorizes that exact inode (including
             // protected hardlink aliases), rather than a newly built registry.
             let authorized = workspace
                 .open_read(Path::new(path))
                 .map_err(failed)?;
-            if identity(&before) != identity(&authorized.metadata().map_err(failed)?) {
+            if FileIdentity::read(&file).map_err(failed)?
+                != FileIdentity::read(&authorized).map_err(failed)?
+            {
                 return Err(conflict());
             }
-            if before.len() > MAX_FILE_BYTES as u64 {
+            if file.metadata().map_err(failed)?.len() > MAX_FILE_BYTES as u64 {
                 return Err(failed("文件超过 8MiB，暂不支持原生暂存"));
             }
             let mut bytes = Vec::new();
@@ -1036,25 +1062,40 @@ fn read_worktree(workspace: &Workspace, path: &str) -> Result<Option<Worktree>, 
                 .take(MAX_FILE_BYTES as u64 + 1)
                 .read_to_end(&mut bytes)
                 .map_err(failed)?;
-            if bytes.len() > MAX_FILE_BYTES
-                || fingerprint(&before) != fingerprint(&file.metadata().map_err(failed)?)
-            {
+            if bytes.len() > MAX_FILE_BYTES || before != FileState::read(&file).map_err(failed)? {
                 return Err(conflict());
             }
             Ok(Some(Worktree {
                 bytes,
-                mode: if before.mode() & 0o111 != 0 {
-                    0o100755
-                } else {
-                    0o100644
-                },
+                mode: worktree_mode(&file, indexed_mode)?,
             }))
         }
-        Err(error) if error == rustix::io::Errno::NOENT => Ok(None),
-        Err(error) if error == rustix::io::Errno::LOOP => {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        #[cfg(unix)]
+        Err(error) if error.raw_os_error() == Some(libc::ELOOP) => {
             Err(failed("符号链接仅供审查，暂不支持修改暂存区"))
         }
         Err(error) => Err(failed(error)),
+    }
+}
+
+fn worktree_mode(file: &File, indexed_mode: Option<u32>) -> Result<u32, ToolError> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let _ = indexed_mode;
+        Ok(if file.metadata().map_err(failed)?.mode() & 0o111 != 0 {
+            0o100755
+        } else {
+            0o100644
+        })
+    }
+    #[cfg(windows)]
+    {
+        let _ = file;
+        // Windows has no executable permission bit. Preserve the reviewed index mode,
+        // matching Git's core.filemode=false behavior instead of clearing executable entries.
+        Ok(indexed_mode.unwrap_or(0o100644))
     }
 }
 

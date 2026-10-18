@@ -19,7 +19,7 @@ use windows_sys::{
             FILE_NON_DIRECTORY_FILE, FILE_OPEN, FILE_OPEN_REPARSE_POINT, FILE_RENAME_INFORMATION,
             FILE_RENAME_POSIX_SEMANTICS, FILE_RENAME_REPLACE_IF_EXISTS,
             FILE_SYNCHRONOUS_IO_NONALERT, FileDispositionInformation, FileRenameInformationEx,
-            NtCreateFile, NtSetInformationFile,
+            NtCreateFile, NtSetInformationFile, NtSetSecurityObject,
         },
     },
     Win32::{
@@ -27,9 +27,9 @@ use windows_sys::{
         Security::{
             Authorization::{
                 ConvertSecurityDescriptorToStringSecurityDescriptorW, GetSecurityInfo,
-                SDDL_REVISION_1, SE_FILE_OBJECT, SetSecurityInfo,
+                SDDL_REVISION_1, SE_FILE_OBJECT,
             },
-            DACL_SECURITY_INFORMATION, GetSecurityDescriptorControl, GetSecurityDescriptorDacl,
+            DACL_SECURITY_INFORMATION, GetSecurityDescriptorControl,
             PROTECTED_DACL_SECURITY_INFORMATION, SE_DACL_PROTECTED,
             UNPROTECTED_DACL_SECURITY_INFORMATION,
         },
@@ -75,6 +75,14 @@ fn status(result: i32) -> io::Result<()> {
 
 pub(super) fn identity(file: &File) -> io::Result<Identity> {
     private::identity(file)
+}
+
+pub(super) fn identity_bytes(identity: &Identity) -> Vec<u8> {
+    [identity.0.to_be_bytes().as_slice(), &identity.1].concat()
+}
+
+pub(super) fn create_directory(parent: &File, name: &OsStr) -> io::Result<()> {
+    cap_std::fs::Dir::from_std_file(parent.try_clone()?).create_dir(name)
 }
 
 pub(super) fn permissions(file: &File) -> io::Result<Permissions> {
@@ -124,7 +132,11 @@ pub(super) fn permissions(file: &File) -> io::Result<Permissions> {
     let allocation = LocalAllocation(text.cast());
     // SAFETY: the API returned length UTF-16 units including the trailing NUL.
     let text = unsafe { std::slice::from_raw_parts(text, length as usize) };
-    let dacl = String::from_utf16(text.strip_suffix(&[0]).unwrap_or(text))
+    let end = text
+        .iter()
+        .position(|unit| *unit == 0)
+        .unwrap_or(text.len());
+    let dacl = String::from_utf16(&text[..end])
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
     drop(allocation);
     Ok(Permissions { dacl, attributes })
@@ -132,19 +144,10 @@ pub(super) fn permissions(file: &File) -> io::Result<Permissions> {
 
 pub(super) fn apply_permissions(file: &File, permissions: &Permissions) -> io::Result<()> {
     let descriptor = private::security_descriptor(&permissions.dacl)?;
-    let mut acl = ptr::null_mut();
-    let mut present = 0;
-    let mut defaulted = 0;
     let mut control = 0;
     let mut revision = 0;
     // SAFETY: descriptor owns a valid parsed descriptor and all output pointers are live.
     unsafe {
-        check(GetSecurityDescriptorDacl(
-            descriptor.0,
-            &mut present,
-            &mut acl,
-            &mut defaulted,
-        ))?;
         check(GetSecurityDescriptorControl(
             descriptor.0,
             &mut control,
@@ -155,18 +158,11 @@ pub(super) fn apply_permissions(file: &File, permissions: &Permissions) -> io::R
         } else {
             UNPROTECTED_DACL_SECURITY_INFORMATION
         };
-        let result = SetSecurityInfo(
+        status(NtSetSecurityObject(
             file.as_raw_handle(),
-            SE_FILE_OBJECT,
             DACL_SECURITY_INFORMATION | inheritance,
-            ptr::null_mut(),
-            ptr::null_mut(),
-            acl,
-            ptr::null_mut(),
-        );
-        if result != 0 {
-            return Err(io::Error::from_raw_os_error(result as i32));
-        }
+            descriptor.0,
+        ))?;
     }
     let basic = FILE_BASIC_INFO {
         FileAttributes: permissions.attributes,
@@ -180,7 +176,14 @@ pub(super) fn apply_permissions(file: &File, permissions: &Permissions) -> io::R
             ptr::from_ref(&basic).cast(),
             size_of::<FILE_BASIC_INFO>() as u32,
         )
-    })
+    })?;
+    if &self::permissions(file)? != permissions {
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "replacement permissions could not be preserved exactly",
+        ));
+    }
+    Ok(())
 }
 
 fn open_at(parent: &File, name: &OsStr, create: bool) -> io::Result<File> {
