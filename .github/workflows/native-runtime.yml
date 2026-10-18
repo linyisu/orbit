@@ -71,3 +71,16 @@ jobs:
         run: cargo test -p orbit-service --locked workspace::server::lifecycle::tests
       - name: Test atomic writes and permission preservation
         run: cargo test -p orbit-tools --locked --test write_file
+
+  windows-backend:
+    name: Windows native backend
+    runs-on: windows-2022
+    timeout-minutes: 30
+    env:
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_INCREMENTAL: '0'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Check complete native backend dependency graph
+        run: cargo check -p orbit-server -p orbit-client --locked
