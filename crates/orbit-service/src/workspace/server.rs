@@ -70,11 +70,14 @@ pub async fn serve(
             .map(|path| resolve_database(path, &directory))
             .transpose()?,
     )?;
-    fs::create_dir_all(
-        database
-            .parent()
-            .context("database has no parent")?,
-    )?;
+    let database_directory = database
+        .parent()
+        .context("database has no parent")?;
+    #[cfg(unix)]
+    fs::create_dir_all(database_directory)?;
+    #[cfg(windows)]
+    orbit_runtime::filesystem::private::create_directory_all(database_directory)
+        .context("database directory must be private to protect SQLite journal files")?;
     #[cfg(windows)]
     orbit_runtime::filesystem::private::open_file(&database, true, false)?;
     #[cfg(unix)]

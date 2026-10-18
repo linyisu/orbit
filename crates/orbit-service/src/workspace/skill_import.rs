@@ -390,17 +390,7 @@ fn copy_directory(
                 "技能资源文件超过 8 MiB：{}",
                 entry.path().display()
             );
-            // O_NOFOLLOW closes the final-component check/open race on supported
-            // Unix workspace servers; parent paths were checked during traversal.
-            let mut options = fs::OpenOptions::new();
-            options.read(true);
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::OpenOptionsExt;
-                options.custom_flags(libc::O_NOFOLLOW);
-            }
-            let mut input = options
-                .open(entry.path())?
+            let mut input = orbit_runtime::filesystem::open_regular_file(&entry.path())?
                 .take(MAX_FILE_BYTES + 1);
             let mut content = Vec::new();
             input.read_to_end(&mut content)?;

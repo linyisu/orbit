@@ -340,7 +340,7 @@ pub async fn verify_native(bundle: &Path) -> Result<()> {
         .arg("--config")
         .arg(root.join("missing.toml"))
         .arg("--database")
-        .arg(root.join("sessions.db"))
+        .arg(root.join("state/sessions.db"))
         .arg("--auth-dir")
         .arg(root.join("auth"))
         .env("HOME", &root)
@@ -485,11 +485,11 @@ mod tests {
         fs::write(&empty, "").unwrap();
         assert_eq!(
             find_certificates(Some(explicit.clone()), [system.clone()]).unwrap(),
-            explicit
+            explicit.canonicalize().unwrap()
         );
         assert_eq!(
             find_certificates(Some(empty), [dir.path().join("missing"), system.clone()]).unwrap(),
-            system
+            system.canonicalize().unwrap()
         );
         let error = find_certificates(None, [dir.path().join("missing")])
             .unwrap_err()
@@ -505,6 +505,9 @@ mod tests {
         let link = dir.path().join("link.pem");
         fs::write(&bundle, "test certificate").unwrap();
         std::os::unix::fs::symlink(&bundle, &link).unwrap();
-        assert_eq!(find_certificates(Some(link), []).unwrap(), bundle);
+        assert_eq!(
+            find_certificates(Some(link), []).unwrap(),
+            bundle.canonicalize().unwrap()
+        );
     }
 }

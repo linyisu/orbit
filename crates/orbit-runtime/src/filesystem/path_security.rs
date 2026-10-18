@@ -68,7 +68,7 @@ impl ResolvedPath {
 
 /// Reject Win32 aliases whose filesystem meaning differs from a normal path component.
 #[cfg(windows)]
-pub(super) fn validate_windows_path(path: &Path) -> io::Result<()> {
+pub fn validate_windows_path(path: &Path) -> io::Result<()> {
     use std::path::Prefix;
     let invalid = || {
         io::Error::new(

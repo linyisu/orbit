@@ -9,8 +9,9 @@ pub async fn branch(workspace: &str) -> Option<String> {
             Duration::from_secs(2),
             tokio::process::Command::new("git")
                 .env_clear()
+                .envs(orbit_runtime::git::acquisition_environment())
                 .env("GIT_CONFIG_NOSYSTEM", "1")
-                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_GLOBAL", orbit_runtime::git::NULL_DEVICE)
                 .arg("--no-optional-locks")
                 .arg("-C")
                 .arg(workspace)
@@ -43,8 +44,9 @@ mod tests {
         assert_eq!(branch(root.path().to_str().unwrap()).await, None);
         let output = std::process::Command::new("git")
             .env_clear()
+            .envs(orbit_runtime::git::acquisition_environment())
             .env("GIT_CONFIG_NOSYSTEM", "1")
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_GLOBAL", orbit_runtime::git::NULL_DEVICE)
             .args(["init", "-b", "test-branch"])
             .arg(root.path())
             .output()

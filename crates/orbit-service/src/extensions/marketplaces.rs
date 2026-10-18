@@ -300,10 +300,10 @@ impl Store {
             // Marketplace acquisition must not execute a user's Git aliases,
             // credential helpers, proxy configuration or interactive prompts.
             .env_clear()
-            .env("PATH", "/usr/bin:/bin")
+            .envs(orbit_runtime::git::acquisition_environment())
             .env("LANG", "C.UTF-8")
             .env("GIT_CONFIG_NOSYSTEM", "1")
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_GLOBAL", orbit_runtime::git::NULL_DEVICE)
             .env("GIT_TERMINAL_PROMPT", "0")
             .args(["clone", "--depth", "1", "--", url])
             .arg(temporary);
@@ -321,7 +321,7 @@ impl Store {
 
         let revision_output = Command::new("git")
             .env_clear()
-            .env("PATH", "/usr/bin:/bin")
+            .envs(orbit_runtime::git::acquisition_environment())
             .arg("-C")
             .arg(temporary)
             .args(["rev-parse", "--verify", "HEAD"])
@@ -366,9 +366,9 @@ fn verify_git_checkout(market: &Marketplace) -> Result<()> {
     let command = |args: &[&str]| -> Result<std::process::Output> {
         std::process::Command::new("git")
             .env_clear()
-            .env("PATH", "/usr/bin:/bin")
+            .envs(orbit_runtime::git::acquisition_environment())
             .env("GIT_CONFIG_NOSYSTEM", "1")
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_GLOBAL", orbit_runtime::git::NULL_DEVICE)
             .arg("--no-optional-locks")
             .args(["-c", "core.fsmonitor=false"])
             .arg("-C")

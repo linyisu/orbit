@@ -42,19 +42,22 @@ pub(in crate::workspace) async fn acquire(
     let mut command = Command::new("git");
     command
         .env_clear()
-        .env("PATH", "/usr/bin:/bin")
+        .envs(orbit_runtime::git::acquisition_environment())
         .env("LANG", "C.UTF-8")
         .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_GLOBAL", orbit_runtime::git::NULL_DEVICE)
         .env("GIT_TERMINAL_PROMPT", "0")
         .env(
             "GIT_SSH_COMMAND",
-            "ssh -F /dev/null -o BatchMode=yes -o ConnectTimeout=15 -o StrictHostKeyChecking=yes",
+            format!(
+                "ssh -F {} -o BatchMode=yes -o ConnectTimeout=15 -o StrictHostKeyChecking=yes",
+                orbit_runtime::git::NULL_DEVICE
+            ),
         )
         .env("GIT_LFS_SKIP_SMUDGE", "1")
         .args([
             "-c",
-            "core.hooksPath=/dev/null",
+            &format!("core.hooksPath={}", orbit_runtime::git::NULL_DEVICE),
             "-c",
             "protocol.file.allow=never",
             "-c",

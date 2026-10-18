@@ -109,6 +109,9 @@ jobs:
       - name: Test native writes and Git index transactions
         if: ${{ !cancelled() }}
         run: cargo test -p orbit-tools --locked --test native_files
+      - name: Test native extension packages
+        if: ${{ !cancelled() }}
+        run: cargo test -p orbit-service --locked --lib workspace::library::package::native_tests
       - name: Test native credential storage
         if: ${{ !cancelled() }}
         run: cargo test -p orbit-auth --locked --lib store::tests
@@ -137,8 +140,10 @@ jobs:
       - name: Test build and archive contracts
         run: cargo test -p orbit-build -p orbit-xtask --locked
       - name: Build native terminal with embedded service
+        if: ${{ !cancelled() }}
         run: cargo xtask bundle debug
       - name: Verify native deployment and protocol
+        if: ${{ !cancelled() }}
         run: cargo xtask verify-native-bundle target/bundle
       - name: Archive standalone client
         run: cargo xtask archive target/bundle

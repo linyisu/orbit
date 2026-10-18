@@ -19,6 +19,8 @@ fn relative(value: &str) -> Result<&Path> {
                 .all(|part| matches!(part, Component::Normal(_))),
         "扩展资源必须使用包内相对路径"
     );
+    #[cfg(windows)]
+    orbit_runtime::filesystem::path_security::validate_windows_path(path)?;
     Ok(path)
 }
 
@@ -75,14 +77,7 @@ fn collect(
             kind.is_file() && files.len() < MAX_BUNDLE_FILES,
             "扩展资源必须为有界的普通文件集合"
         );
-        let mut options = fs::OpenOptions::new();
-        options.read(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.custom_flags(libc::O_NOFOLLOW);
-        }
-        let input = options.open(entry.path())?;
+        let input = orbit_runtime::filesystem::open_regular_file(&entry.path())?;
         let metadata = input.metadata()?;
         ensure!(
             metadata.is_file() && metadata.len() <= MAX_BUNDLE_BYTES as u64,
@@ -97,12 +92,18 @@ fn collect(
             *bytes <= MAX_BUNDLE_BYTES,
             "扩展资源超过 16 MiB，请缩小包内容"
         );
-        let suffix = entry
-            .path()
+        let path = entry.path();
+        let suffix = path
             .strip_prefix(root)?
-            .to_str()
-            .context("扩展资源路径必须为 UTF-8")?
-            .to_owned();
+            .components()
+            .map(|component| {
+                component
+                    .as_os_str()
+                    .to_str()
+                    .context("扩展资源路径必须为 UTF-8")
+            })
+            .collect::<Result<Vec<_>>>()?
+            .join("/");
         #[cfg(unix)]
         let executable = {
             use std::os::unix::fs::PermissionsExt;
@@ -217,9 +218,7 @@ pub(in crate::workspace) fn materialize(bundles: &[Bundle]) -> Result<crate::ski
         encoded_bytes <= MAX_SESSION_ENCODED_BYTES,
         "会话扩展资源超过容量上限"
     );
-    let assets = tempfile::Builder::new()
-        .prefix("orbit-session-extensions-")
-        .tempdir()?;
+    let assets = orbit_runtime::filesystem::temporary_directory("orbit-session-extensions-")?;
     let mut roots = Vec::new();
     let mut names = HashSet::new();
     for (ix, bundle) in bundles.iter().enumerate() {
@@ -259,4 +258,59 @@ pub(in crate::workspace) fn materialize(bundles: &[Bundle]) -> Result<crate::ski
     let mut skills = crate::skills::Skills::from_roots(roots);
     skills.retain_assets(assets);
     Ok(skills)
+}
+
+#[cfg(test)]
+mod native_tests {
+    use super::*;
+
+    #[test]
+    fn exports_nested_resources_with_portable_paths_and_materializes_them() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("sample-skill");
+        fs::create_dir_all(root.join("resources/nested")).unwrap();
+        fs::write(
+            root.join("SKILL.md"),
+            "---\ndescription: Generated skill\n---\nUse resources.",
+        )
+        .unwrap();
+        fs::write(
+            root.join("resources/nested/example.txt"),
+            b"synthetic resource",
+        )
+        .unwrap();
+        let bundle = export(
+            Extension {
+                key: "skill:sample-skill".into(),
+                name: "sample-skill".into(),
+                kind: orbit_protocol::library::ExtensionKind::Skill,
+            },
+            vec![root],
+        )
+        .unwrap();
+        assert!(
+            bundle
+                .files
+                .iter()
+                .all(|file| !file.path.contains('\\'))
+        );
+        assert!(bundle.files.iter().any(|file| {
+            file.path
+                .ends_with("/resources/nested/example.txt")
+        }));
+        materialize(&[bundle]).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn rejects_windows_device_stream_and_trailing_aliases_in_received_packages() {
+        for path in [
+            "skill/NUL",
+            "skill/file:stream",
+            "skill/trailing.",
+            "skill/trailing ",
+        ] {
+            assert!(relative(path).is_err(), "accepted {path}");
+        }
+    }
 }
