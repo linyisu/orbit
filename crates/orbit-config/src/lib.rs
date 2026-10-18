@@ -2,6 +2,7 @@
 //! Persisted user choices remain separate from provider discovery caches.
 
 pub mod config;
+pub mod directories;
 pub mod models;
 pub mod subagents;
 pub(crate) use models::account_models;

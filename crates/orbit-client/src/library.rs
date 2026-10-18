@@ -67,7 +67,7 @@ impl Library {
             .parent()
             .filter(|directory| directory.is_dir())
             .map(PathBuf::from)
-            .or_else(|| std::env::var_os("HOME").map(PathBuf::from))
+            .or_else(orbit_config::directories::home)
             .context("无法确定本机全局服务的启动目录")?;
         let mut options = ConnectionOptions::local(directory.to_string_lossy().into_owned());
         options.server = self.server.clone();

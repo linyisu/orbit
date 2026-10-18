@@ -24,3 +24,8 @@ cargo test -p orbit-xtask
 ```
 
 [项目总览](../../README.md)
+
+`bundle` 按本机平台收集可执行文件，Windows 保留 `.exe` 后缀。
+`cargo xtask verify-native-bundle target/bundle` 在临时工作区验证原生服务的握手、会话存储和
+关闭，再检查客户端启动；不需要 Docker 或 WSL。Linux 容器兼容性验收仍使用 `verify-bundle`。
+默认归档名包含本机系统与架构。

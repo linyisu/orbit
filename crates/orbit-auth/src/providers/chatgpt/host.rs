@@ -51,7 +51,11 @@ pub(super) async fn identifier(store: &AuthStore) -> Result<String> {
         &hex[16..20],
         &hex[20..]
     );
+    #[cfg(unix)]
     let mut temporary = tempfile::NamedTempFile::new_in(hosts.directory())?;
+    #[cfg(windows)]
+    let mut temporary =
+        orbit_runtime::filesystem::private::temporary_file(hosts.directory(), "host-")?;
     temporary.write_all(value.as_bytes())?;
     temporary.as_file().sync_all()?;
     temporary

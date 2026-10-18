@@ -79,6 +79,10 @@ fn install(source: &Path, destination: &Path) -> Result<()> {
     Ok(())
 }
 
+fn executable_name(name: &str) -> String {
+    format!("{name}{}", std::env::consts::EXE_SUFFIX)
+}
+
 pub async fn build(root: &Path, profile: Profile) -> Result<()> {
     let mut command = cargo(root);
     command.args([
@@ -88,6 +92,32 @@ pub async fn build(root: &Path, profile: Profile) -> Result<()> {
         "-p",
         "orbit-tui",
     ]);
+    #[cfg(windows)]
+    {
+        let output = process::run(Command::new("rustc").arg("-vV")).await?;
+        let version = String::from_utf8(output.stdout)?;
+        let host = version
+            .lines()
+            .find_map(|line| line.strip_prefix("host: "))
+            .context("rustc did not report its native target")?;
+        ensure!(
+            host.ends_with("-pc-windows-msvc"),
+            "Windows bundles require MSVC"
+        );
+        command.args(["--target", host]);
+        let mut flags = std::env::var("CARGO_ENCODED_RUSTFLAGS").unwrap_or_else(|_| {
+            std::env::var("RUSTFLAGS")
+                .unwrap_or_default()
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join("\x1f")
+        });
+        if !flags.is_empty() {
+            flags.push('\x1f');
+        }
+        flags.push_str("-C\x1ftarget-feature=+crt-static");
+        command.env("CARGO_ENCODED_RUSTFLAGS", flags);
+    }
     if matches!(profile, Profile::Release) {
         command.arg("--release");
     }
@@ -119,7 +149,7 @@ pub async fn build(root: &Path, profile: Profile) -> Result<()> {
         }
     }
     for (name, executable) in files {
-        install(&executable, &output.join(name))?;
+        install(&executable, &output.join(executable_name(&name)))?;
     }
     println!("Bundle: {} (workspace server embedded)", output.display());
     Ok(())
@@ -127,7 +157,12 @@ pub async fn build(root: &Path, profile: Profile) -> Result<()> {
 
 pub async fn archive(directory: &Path, output: &Path) -> Result<()> {
     let directory = directory.canonicalize()?;
-    ensure!(directory.join("orbit").is_file(), "missing bundled orbit");
+    ensure!(
+        directory
+            .join(executable_name("orbit"))
+            .is_file(),
+        "missing bundled orbit"
+    );
     if let Some(parent) = output.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -137,7 +172,7 @@ pub async fn archive(directory: &Path, output: &Path) -> Result<()> {
             .arg(output)
             .arg("-C")
             .arg(directory)
-            .arg("orbit"),
+            .arg(executable_name("orbit")),
     )
     .await?;
     println!("Archive: {}", output.display());
@@ -155,7 +190,7 @@ mod tests {
         let source = directory.path().join("terminal");
         fs::create_dir(&bundle).unwrap();
         fs::write(&source, b"synthetic terminal").unwrap();
-        install(&source, &bundle.join("orbit")).unwrap();
+        install(&source, &bundle.join(executable_name("orbit"))).unwrap();
         fs::write(bundle.join("orbit-workspace-server"), b"verification asset").unwrap();
         let output = directory.path().join("release.tar.gz");
         archive(&bundle, &output).await.unwrap();
@@ -169,7 +204,7 @@ mod tests {
             .unwrap(),
         )
         .unwrap();
-        assert_eq!(listing, "orbit");
+        assert_eq!(listing, executable_name("orbit"));
         let extracted = directory.path().join("extracted");
         fs::create_dir(&extracted).unwrap();
         process::run(
@@ -182,14 +217,14 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(
-            fs::read(extracted.join("orbit")).unwrap(),
+            fs::read(extracted.join(executable_name("orbit"))).unwrap(),
             b"synthetic terminal"
         );
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             assert_eq!(
-                fs::metadata(extracted.join("orbit"))
+                fs::metadata(extracted.join(executable_name("orbit")))
                     .unwrap()
                     .permissions()
                     .mode()

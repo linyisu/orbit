@@ -35,3 +35,7 @@ cargo test -p orbit-config
 ```
 
 [项目总览](../../README.md)
+
+[directories.rs](src/directories.rs) 统一客户端与服务的本机用户目录。Windows 使用
+USERPROFILE、APPDATA 和 LOCALAPPDATA，无需设置 Unix HOME；已有 Unix 路径保持兼容，
+显式 XDG 目录覆盖仍可用于隔离配置。

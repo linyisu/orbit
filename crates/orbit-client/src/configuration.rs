@@ -10,8 +10,8 @@ use std::{collections::BTreeMap, path::PathBuf};
 pub fn auth_directory(override_path: Option<PathBuf>) -> Result<PathBuf> {
     orbit_auth::directory(
         override_path,
-        std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from),
-        std::env::var_os("HOME").map(PathBuf::from),
+        orbit_config::directories::config(),
+        orbit_config::directories::home(),
     )
 }
 

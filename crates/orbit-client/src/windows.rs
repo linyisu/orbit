@@ -179,6 +179,7 @@ pub struct LegacyTabs {
     pub active: Option<usize>,
 }
 
+#[cfg(unix)]
 fn private_file(path: &Path) -> Result<File> {
     let mut options = std::fs::OpenOptions::new();
     options
@@ -192,6 +193,13 @@ fn private_file(path: &Path) -> Result<File> {
         options.mode(0o600);
     }
     Ok(options.open(path)?)
+}
+
+#[cfg(windows)]
+fn private_file(path: &Path) -> Result<File> {
+    Ok(orbit_runtime::filesystem::private::open_file(
+        path, true, false,
+    )?)
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -250,14 +258,19 @@ fn save(directory: &Path, registry: &Registry) -> Result<()> {
 }
 
 fn registry_lock(directory: &Path) -> Result<File> {
-    let mut builder = std::fs::DirBuilder::new();
-    builder.recursive(true);
+    #[cfg(windows)]
+    orbit_runtime::filesystem::private::create_directory_all(directory)?;
     #[cfg(unix)]
     {
-        use std::os::unix::fs::DirBuilderExt;
-        builder.mode(0o700);
+        let mut builder = std::fs::DirBuilder::new();
+        builder.recursive(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            builder.mode(0o700);
+        }
+        builder.create(directory)?;
     }
-    builder.create(directory)?;
     let lock = private_file(&directory.join("registry.lock"))?;
     lock.lock()?;
     Ok(lock)

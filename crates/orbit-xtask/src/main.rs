@@ -27,6 +27,8 @@ enum Task {
     },
     /// Verify standalone deployment, protocol and cache reuse in Ubuntu 20.04.
     VerifyBundle { directory: Option<PathBuf> },
+    /// Verify the native client and service without a container.
+    VerifyNativeBundle { directory: Option<PathBuf> },
     #[command(hide = true)]
     ProbeBundle { server: PathBuf },
     /// Archive a prepared bundle, preserving executable permissions.
@@ -84,13 +86,26 @@ async fn main() -> Result<()> {
             };
             remote::verify(&directory).await?;
         }
+        Task::VerifyNativeBundle { directory } => {
+            let directory = match directory {
+                Some(path) => path,
+                None => bundle::target_directory(root())
+                    .await?
+                    .join("bundle"),
+            };
+            remote::verify_native(&directory).await?;
+        }
         Task::ProbeBundle { server } => remote::probe(&server).await?,
         Task::Archive { directory, output } => {
             let target = bundle::target_directory(root()).await?;
             bundle::archive(
                 &directory.unwrap_or_else(|| target.join("bundle")),
                 &output.unwrap_or_else(|| {
-                    target.join(format!("orbit-linux-{}.tar.gz", std::env::consts::ARCH))
+                    target.join(format!(
+                        "orbit-{}-{}.tar.gz",
+                        std::env::consts::OS,
+                        std::env::consts::ARCH
+                    ))
                 }),
             )
             .await?;

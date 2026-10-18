@@ -38,3 +38,6 @@ orbit-config = { workspace = true, features = ["test-support"] }
 
 [target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
 qwen-asr = { workspace = true, optional = true, features = ["blas"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }

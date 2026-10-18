@@ -137,7 +137,7 @@ pub async fn serve(
     #[cfg(unix)]
     fs::set_permissions(&socket, fs::Permissions::from_mode(0o600))?;
     endpoints::publish_aliases(&root, &database, &socket)?;
-    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let home = orbit_config::directories::home();
     let options = crate::WorkspaceOptions {
         model: None,
         initial_directory: directory.clone(),
@@ -145,12 +145,7 @@ pub async fn serve(
         database,
         auth_directory: auth,
         allow_mcp_start: args.allow_mcp_start,
-        config_home: std::env::var_os("XDG_CONFIG_HOME")
-            .map(PathBuf::from)
-            .or_else(|| {
-                home.as_ref()
-                    .map(|home| home.join(".config"))
-            }),
+        config_home: orbit_config::directories::config(),
         home,
         instruction_dir: crate::instructions::default_user_instruction_dir(),
         editor_command: "vi".into(),
@@ -252,8 +247,9 @@ pub fn runtime_directory() -> Result<PathBuf> {
 
 fn expand_home(path: &str) -> Result<PathBuf> {
     if path == "~" || path.starts_with("~/") {
-        let home = std::env::var_os("HOME").context("HOME is unavailable on target")?;
-        return Ok(PathBuf::from(home).join(path.strip_prefix("~/").unwrap_or("")));
+        let home =
+            orbit_config::directories::home().context("user home is unavailable on target")?;
+        return Ok(home.join(path.strip_prefix("~/").unwrap_or("")));
     }
     Ok(path.into())
 }

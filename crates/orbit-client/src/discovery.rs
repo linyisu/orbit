@@ -51,7 +51,7 @@ pub fn snapshot() -> (Vec<Host>, Vec<String>) {
         state.loading = true;
         runtime.spawn(async {
             let hosts = tokio::task::spawn_blocking(|| {
-                let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
+                let Some(home) = orbit_config::directories::home() else {
                     return Vec::new();
                 };
                 hosts(&home.join(".ssh/config"), &home)

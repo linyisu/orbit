@@ -44,11 +44,7 @@ fn main() -> Result<()> {
 #[tokio::main]
 async fn run() -> Result<()> {
     let cli = Cli::parse();
-    let auth = platform::directory(
-        cli.auth_dir,
-        std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from),
-        std::env::var_os("HOME").map(PathBuf::from),
-    )?;
+    let auth = platform::auth_directory(cli.auth_dir)?;
     match cli.command {
         Command::WorkspaceService(args) => {
             workspace::serve(

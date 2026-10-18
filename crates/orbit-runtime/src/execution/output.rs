@@ -407,7 +407,7 @@ mod tests {
                 "-NoProfile",
                 "-NonInteractive",
                 "-Command",
-                "for ($i=0; $i -lt 20000; $i++) { [Console]::Write(\"sample output`n\") }; [Console]::Write('FINAL'); [Console]::Error.Write('stderr intact')",
+                "[Console]::Write((\"sample output`n\" * 20000) + 'FINAL'); [Console]::Error.Write('stderr intact')",
             ],
         );
         let child = tokio::process::Command::new(shell)

@@ -11,7 +11,7 @@ pub mod library;
 mod local_server;
 #[cfg(feature = "test-support")]
 pub mod test_support;
-pub use bootstrap::register_server_bundle;
+pub use bootstrap::{register_remote_server_bundle, register_server_bundle};
 mod command;
 pub mod completion;
 pub mod configuration;
@@ -181,8 +181,8 @@ pub async fn prepare_connection(
             config: std::path::absolute(&config)?,
             auth: orbit_auth::directory(
                 auth_dir.clone(),
-                std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from),
-                std::env::var_os("HOME").map(PathBuf::from),
+                orbit_config::directories::config(),
+                orbit_config::directories::home(),
             )?,
             model: None,
         }),
@@ -194,8 +194,8 @@ pub async fn prepare_connection(
         auth_dir: if args.ssh.is_none() && args.wsl.is_none() {
             Some(orbit_auth::directory(
                 auth_dir,
-                std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from),
-                std::env::var_os("HOME").map(PathBuf::from),
+                orbit_config::directories::config(),
+                orbit_config::directories::home(),
             )?)
         } else {
             auth_dir

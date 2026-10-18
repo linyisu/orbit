@@ -14,12 +14,29 @@ use super::transport::Target;
 const BOOTSTRAP_TIMEOUT: Duration = Duration::from_secs(180);
 
 static SERVER_BUNDLE: std::sync::OnceLock<super::local_server::Bundle> = std::sync::OnceLock::new();
+static REMOTE_SERVER_BUNDLE: std::sync::OnceLock<super::local_server::Bundle> =
+    std::sync::OnceLock::new();
 
 /// Install the executable's portable service asset before opening connections.
 pub fn register_server_bundle(bytes: &'static [u8]) -> Result<()> {
     SERVER_BUNDLE
         .set(super::local_server::Bundle::new(bytes))
         .map_err(|_| anyhow::anyhow!("workspace server bundle already registered"))
+}
+
+/// Register an optional Linux deployment asset separately from the native local service.
+/// An empty asset leaves explicit upload or an already installed remote server available.
+pub fn register_remote_server_bundle(bytes: &'static [u8]) -> Result<()> {
+    if bytes.is_empty() {
+        return Ok(());
+    }
+    ensure!(
+        bytes.starts_with(b"\x7fELF"),
+        "remote workspace server must be a Linux ELF asset"
+    );
+    REMOTE_SERVER_BUNDLE
+        .set(super::local_server::Bundle::new(bytes))
+        .map_err(|_| anyhow::anyhow!("remote workspace server bundle already registered"))
 }
 
 #[derive(Clone, Debug)]
@@ -113,8 +130,13 @@ async fn prepare(
         upload,
         &std::env::current_exe()?,
         architecture,
-        SERVER_BUNDLE
+        REMOTE_SERVER_BUNDLE
             .get()
+            .or_else(|| {
+                SERVER_BUNDLE
+                    .get()
+                    .filter(|bundle| bundle.bytes().starts_with(b"\x7fELF"))
+            })
             .map(|bundle| bundle.bytes())
             .unwrap_or_default(),
     )?;
@@ -238,7 +260,7 @@ fn select_binary(
     }
     ensure!(
         cfg!(all(target_env = "musl", target_feature = "crt-static")),
-        "此构建缺少内置的静态工作区服务，无法自动部署"
+        "此构建缺少目标 Linux 静态服务，请通过 --upload-server 提供，或通过 --server 使用目标已安装的服务"
     );
     Ok(ServerBinary::File(current.to_owned()))
 }

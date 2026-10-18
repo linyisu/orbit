@@ -31,6 +31,9 @@ struct TuiArgs {
 
 fn main() -> Result<()> {
     orbit_client::register_server_bundle(include_bytes!(env!("ORBIT_EMBEDDED_SERVER")))?;
+    orbit_client::register_remote_server_bundle(include_bytes!(env!(
+        "ORBIT_EMBEDDED_REMOTE_SERVER"
+    )))?;
     if orbit_client::interaction::is_askpass() {
         orbit_client::interaction::askpass()?;
         return Ok(());

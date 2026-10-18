@@ -6,9 +6,7 @@ pub(super) fn desktop_state_path(preferences: Option<&Path>) -> Result<PathBuf> 
     if let Some(preferences) = preferences {
         return Ok(preferences.with_extension("tasks.json"));
     }
-    Ok(std::env::var_os("XDG_STATE_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/state")))
+    Ok(orbit_config::directories::state()
         .ok_or_else(|| anyhow::anyhow!("找不到任务保存目录，请指定 --preferences"))?
         .join("orbit/gui-tasks.json"))
 }

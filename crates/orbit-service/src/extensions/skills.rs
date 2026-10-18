@@ -64,11 +64,8 @@ pub struct Skills {
 impl Skills {
     pub fn discover_current_with_plugin_roots(plugin_roots: Vec<PathBuf>) -> Self {
         let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-        let home = env::var_os("HOME").map(PathBuf::from);
-        let config_home = env::var_os("XDG_CONFIG_HOME")
-            .filter(|value| !value.is_empty())
-            .map(PathBuf::from)
-            .or_else(|| home.as_ref().map(|h| h.join(".config")));
+        let home = orbit_config::directories::home();
+        let config_home = orbit_config::directories::config();
 
         Self::discover_with_plugin_roots(&cwd, home, config_home, plugin_roots)
     }

@@ -171,7 +171,7 @@ fn pasted_path(value: &str, directory: &Path, images_only: bool) -> Option<PathB
     {
         url.to_file_path().ok()?
     } else if let Some(rest) = value.strip_prefix("~/") {
-        PathBuf::from(std::env::var_os("HOME")?).join(rest)
+        orbit_config::directories::home()?.join(rest)
     } else {
         PathBuf::from(value)
     };
@@ -256,9 +256,7 @@ pub fn cache_database(preferences: Option<&std::path::Path>) -> Result<PathBuf> 
     if let Some(path) = preferences {
         return Ok(path.with_extension("queue-cache"));
     }
-    Ok(std::env::var_os("XDG_STATE_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/state")))
+    Ok(orbit_config::directories::state()
         .context("找不到附件缓存目录")?
         .join("orbit/gui-queue-cache"))
 }

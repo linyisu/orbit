@@ -323,6 +323,87 @@ async fn in_container(bundle: &Path, container: &str) -> Result<()> {
     Ok(())
 }
 
+/// Verify the packaged native service in an isolated workspace without a shell or container.
+pub async fn verify_native(bundle: &Path) -> Result<()> {
+    let bundle = bundle.canonicalize()?;
+    let suffix = std::env::consts::EXE_SUFFIX;
+    let client = bundle.join(format!("orbit{suffix}"));
+    let server = bundle.join(format!("orbit-workspace-server{suffix}"));
+    embedded_server(&client, &server)?;
+    let directory = tempfile::tempdir()?;
+    let root = directory.path().canonicalize()?;
+    let mut child = Command::new(&server)
+        .current_dir(&root)
+        .arg("workspace-service")
+        .arg("--workspace")
+        .arg(&root)
+        .arg("--config")
+        .arg(root.join("missing.toml"))
+        .arg("--database")
+        .arg(root.join("sessions.db"))
+        .arg("--auth-dir")
+        .arg(root.join("auth"))
+        .env("HOME", &root)
+        .env("USERPROFILE", &root)
+        .env("XDG_CONFIG_HOME", root.join("config"))
+        .env("XDG_CACHE_HOME", root.join("cache"))
+        .env("XDG_RUNTIME_DIR", root.join("runtime"))
+        .env("LOCALAPPDATA", root.join("local"))
+        .env("APPDATA", root.join("roaming"))
+        .kill_on_drop(true)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .spawn()?;
+    tokio::time::timeout(Duration::from_secs(45), async {
+        orbit_protocol::read_preamble(child.stdout.as_mut().unwrap()).await?;
+        ensure!(
+            matches!(
+                request(
+                    &mut child,
+                    Request::Hello {
+                        version: orbit_protocol::VERSION,
+                        workspace: None
+                    }
+                )
+                .await?,
+                Response::Hello {
+                    version: orbit_protocol::VERSION,
+                    ..
+                }
+            ),
+            "native service handshake failed"
+        );
+        ensure!(
+            matches!(
+                request(&mut child, Request::Sessions).await?,
+                Response::Sessions(_)
+            ),
+            "native session storage failed"
+        );
+        ensure!(
+            matches!(request(&mut child, Request::Shutdown).await?, Response::Ok),
+            "native service shutdown failed"
+        );
+        child.stdin.take();
+        ensure!(
+            child.wait().await?.success(),
+            "native service exited unsuccessfully"
+        );
+        Ok::<(), anyhow::Error>(())
+    })
+    .await
+    .context("native bundle verification timed out")??;
+    process::run(
+        Command::new(&client)
+            .arg("--help")
+            .current_dir(&root),
+    )
+    .await?;
+    println!("PASS: native client, embedded service, protocol, session storage and shutdown");
+    Ok(())
+}
+
 pub async fn verify(bundle: &Path) -> Result<()> {
     let bundle = bundle.canonicalize()?;
     ensure!(

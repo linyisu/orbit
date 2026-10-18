@@ -3,3 +3,6 @@ name = "orbit-build"
 version.workspace = true
 edition.workspace = true
 publish = false
+
+[dependencies]
+object = { version = "0.37.3", default-features = false, features = ["read", "std"] }

@@ -29,6 +29,9 @@ fn main() -> anyhow::Result<()> {
         return orbit_client::interaction::askpass();
     }
     orbit_client::register_server_bundle(include_bytes!(env!("ORBIT_EMBEDDED_SERVER")))?;
+    orbit_client::register_remote_server_bundle(include_bytes!(env!(
+        "ORBIT_EMBEDDED_REMOTE_SERVER"
+    )))?;
     let mut options = backend::Options::parse();
     options.resolve_paths()?;
     let runtime = Arc::new(tokio::runtime::Runtime::new()?);

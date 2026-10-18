@@ -511,7 +511,13 @@ mod tests {
         second.configure(&mut command);
         let debug = format!("{command:?}");
         assert!(!debug.contains("second-secret"));
-        assert!(debug.contains("SSH_ASKPASS_REQUIRE") && debug.contains("force"));
+        assert!(
+            command
+                .as_std()
+                .get_envs()
+                .any(|(name, value)| name == "SSH_ASKPASS_REQUIRE"
+                    && value == Some(std::ffi::OsStr::new("force")))
+        );
         assert!(!debug.contains("BatchMode=yes"));
     }
 

@@ -87,3 +87,7 @@ cargo test -p orbit-client
 ```
 
 [项目总览](../../README.md)
+
+本机服务资产按客户端平台选择，Windows 使用 `.exe` 与私有命名管道，macOS 使用原生
+可执行文件与 Unix socket。Linux 静态远端资产独立注册；非 Linux 构建可通过
+`ORBIT_REMOTE_WORKSPACE_SERVER` 内置此资产，否则 SSH/WSL 使用显式上传或已安装服务。
