@@ -77,15 +77,36 @@ pub(super) async fn read(directory: PathBuf, source: Source, offset: u64) -> Res
 mod tests {
     use super::*;
 
+    fn log_directory(root: &std::path::Path) -> tempfile::TempDir {
+        #[cfg(unix)]
+        {
+            tempfile::tempdir_in(root).unwrap()
+        }
+        #[cfg(windows)]
+        {
+            orbit_runtime::filesystem::private::temporary_directory(root, "logs-").unwrap()
+        }
+    }
+
+    fn write_log(path: &std::path::Path, bytes: impl AsRef<[u8]>) {
+        #[cfg(unix)]
+        std::fs::write(path, bytes).unwrap();
+        #[cfg(windows)]
+        {
+            use std::io::Write;
+            let mut file =
+                orbit_runtime::filesystem::private::open_file(path, true, false).unwrap();
+            file.set_len(0).unwrap();
+            file.write_all(bytes.as_ref()).unwrap();
+        }
+    }
+
     #[tokio::test]
     async fn reads_complete_unicode_logs_and_rejects_missing_or_incomplete_capture() {
-        let root = tempfile::tempdir().unwrap();
-        let directory = tempfile::tempdir_in(root.path()).unwrap();
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
-        std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let root = orbit_runtime::filesystem::temporary_directory("output-test-").unwrap();
+        let directory = log_directory(root.path());
         let text = "generated 甲乙\n".repeat(8_000);
-        std::fs::write(directory.path().join("cmd-test.stdout"), &text).unwrap();
+        write_log(&directory.path().join("cmd-test.stdout"), &text);
         let receipt = |truncated| {
             serde_json::json!({
                 "stdout_bytes": text.len(),
@@ -95,7 +116,7 @@ mod tests {
             })
             .to_string()
         };
-        std::fs::write(directory.path().join("cmd-test.json"), receipt(false)).unwrap();
+        write_log(&directory.path().join("cmd-test.json"), receipt(false));
         let source = Source::Command {
             output_id: "cmd-test".into(),
             stream: Stream::Stdout,
@@ -114,7 +135,7 @@ mod tests {
             offset = next;
         }
         assert_eq!(actual, text);
-        std::fs::write(directory.path().join("cmd-test.json"), receipt(true)).unwrap();
+        write_log(&directory.path().join("cmd-test.json"), receipt(true));
         assert!(
             read(directory.path().into(), source.clone(), 0)
                 .await
@@ -131,14 +152,10 @@ mod tests {
     #[tokio::test]
     async fn live_log_cursor_uses_raw_bytes_even_when_decoding_replaces_invalid_text() {
         use std::io::Write;
-        use std::os::unix::fs::PermissionsExt;
-        let root = tempfile::tempdir().unwrap();
-        let directory = tempfile::tempdir_in(root.path()).unwrap();
-        for path in [root.path(), directory.path()] {
-            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
-        }
+        let root = orbit_runtime::filesystem::temporary_directory("output-test-").unwrap();
+        let directory = log_directory(root.path());
         let path = directory.path().join("cmd-live.stderr");
-        std::fs::write(&path, b"first\xff\n").unwrap();
+        write_log(&path, b"first\xff\n");
         let source = Source::Command {
             output_id: "cmd-live".into(),
             stream: Stream::Stderr,

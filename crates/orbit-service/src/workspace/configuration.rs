@@ -59,6 +59,7 @@ impl Installed {
 mod tests {
     use super::*;
     use orbit_client::configuration::Local;
+    #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
 
     #[tokio::test]
@@ -144,6 +145,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(auth.headers["authorization"], "Bearer secret-used");
+        #[cfg(unix)]
         assert_eq!(
             std::fs::metadata(&installed.options.config)
                 .unwrap()
@@ -158,6 +160,7 @@ mod tests {
             .parent()
             .unwrap()
             .to_owned();
+        #[cfg(unix)]
         assert_eq!(
             std::fs::metadata(&root)
                 .unwrap()
@@ -166,6 +169,12 @@ mod tests {
                 & 0o777,
             0o700
         );
+        #[cfg(windows)]
+        {
+            orbit_runtime::filesystem::private::validate_directory(&root).unwrap();
+            orbit_runtime::filesystem::private::open_file(&installed.options.config, false, false)
+                .unwrap();
+        }
         drop(installed);
         assert!(!root.exists());
     }

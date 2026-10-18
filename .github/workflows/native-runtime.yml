@@ -112,6 +112,11 @@ jobs:
       - name: Test native extension packages
         if: ${{ !cancelled() }}
         run: cargo test -p orbit-service --locked --lib workspace::library::package::native_tests
+      - name: Test native transferred configuration and retained output
+        if: ${{ !cancelled() }}
+        run: |
+          cargo test -p orbit-service --locked --lib workspace::configuration::tests
+          cargo test -p orbit-service --locked --lib workspace::tool_output::tests
       - name: Test native credential storage
         if: ${{ !cancelled() }}
         run: cargo test -p orbit-auth --locked --lib store::tests
