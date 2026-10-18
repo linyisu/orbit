@@ -8,7 +8,9 @@ Rust 编写的编码 Agent，提供终端界面和实验性桌面客户端。支
 
 ## 快速开始
 
-目前支持 Linux 客户端。源码构建需要 Rust stable、`musl-tools`、`binutils` 及对应架构的 musl target；以下以 x86-64 为例：
+底层服务与终端客户端提供 Linux、macOS 和 Windows 原生构建，Windows 不依赖 WSL。桌面界面的平台验收单独进行。
+
+Linux 源码构建需要 Rust stable、`musl-tools` 及对应架构的 musl target；以下以 x86-64 为例：
 
 ```sh
 rustup target add x86_64-unknown-linux-musl
@@ -19,7 +21,11 @@ cp config.example.toml config.toml
 
 修改 [配置示例](config.example.toml) 中的连接，或在 TUI 用 `/connect` 登录和管理模型。客户端会记住模型选择，历史会话可用 `orbit --resume SESSION_ID` 恢复。
 
-客户端内置同架构的静态工作区服务，首次构建较慢，使用时无需额外安装服务。桌面客户端的依赖与启动方式见 [GUI README](crates/orbit-gui/README.md)。
+macOS 安装 Rust stable 与 Xcode Command Line Tools；Windows 安装 Rust stable MSVC 工具链与 Visual Studio C++ Build Tools。两者使用 `cargo build --release -p orbit-tui --locked`，Windows 产物为 `target/release/orbit.exe`。
+
+客户端内置同平台、同架构的工作区服务，首次构建较慢，使用时无需额外安装服务。Linux 内置 musl 静态服务，macOS 使用系统库，Windows 服务静态链接 C 运行库。发布包使用 `cargo xtask bundle`，Windows 客户端也静态链接 C 运行库。桌面客户端的依赖与启动方式见 [GUI README](crates/orbit-gui/README.md)。
+
+SSH/WSL 的自动部署目标仍为 Linux。非 Linux 构建可通过 `ORBIT_REMOTE_WORKSPACE_SERVER` 额外内置同架构 Linux 静态服务；未内置时可指定 `--upload-server` 或目标已安装的 `--server`。本机连接始终使用原生服务。
 
 ## 使用
 
@@ -54,7 +60,7 @@ TUI / GUI → client → server → service → agent / tools / store
 | [orbit-tools](crates/orbit-tools/README.md) | Agent 工具实现 |
 | [orbit-store](crates/orbit-store/README.md) | SQLite 持久化 |
 | [orbit-syntax](crates/orbit-syntax/README.md) | 共用语法与语言识别 |
-| [orbit-build](crates/orbit-build/README.md) | 构建并内嵌静态服务 |
+| [orbit-build](crates/orbit-build/README.md) | 构建并内嵌原生服务与 Linux 远端资产 |
 | [orbit-xtask](crates/orbit-xtask/README.md) | 仓库检查与发布工具 |
 
 ## 开发
@@ -66,7 +72,7 @@ cargo clippy --workspace --all-targets --features orbit-gui/test-support --locke
 cargo test --workspace --features orbit-gui/test-support --locked
 ```
 
-测试使用临时数据；部分测试需要本地回环监听，真实网络测试单独标记为 ignored。[CI](.github/workflows/ci.yml) 使用同一组检查，便携打包见 [orbit-xtask](crates/orbit-xtask/README.md)。
+测试使用临时数据；部分测试需要本地回环监听，真实网络测试单独标记为 ignored。[CI](.github/workflows/ci.yml) 使用同一组检查，原生后端验收见 [Native runtime contracts](.github/workflows/native-runtime.yml)，打包与实际启动验收见 [orbit-xtask](crates/orbit-xtask/README.md)。
 
 按职责维护模块和共享接口，注释说明约束与原因。修改后运行相关回归；新增或移动模块时同步 crate README，并检查链接。配置与参数细节以示例、`--help` 和所属模块源码为准。
 
