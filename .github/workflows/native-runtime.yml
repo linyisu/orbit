@@ -7,6 +7,7 @@ on:
     paths:
       - 'crates/orbit-runtime/**'
       - 'crates/orbit-service/**'
+      - 'crates/orbit-tools/**'
       - '.github/scripts/test-native-process.py'
       - '.github/workflows/native-runtime.yml'
       - 'Cargo.toml'
@@ -15,6 +16,7 @@ on:
     paths:
       - 'crates/orbit-runtime/**'
       - 'crates/orbit-service/**'
+      - 'crates/orbit-tools/**'
       - '.github/scripts/test-native-process.py'
       - '.github/workflows/native-runtime.yml'
       - 'Cargo.toml'
@@ -67,3 +69,5 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Test native service identity and handover
         run: cargo test -p orbit-service --locked workspace::server::lifecycle::tests
+      - name: Test atomic writes and permission preservation
+        run: cargo test -p orbit-tools --locked --test write_file

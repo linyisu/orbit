@@ -521,7 +521,7 @@ impl Prepared {
             .map_err(failed)?;
 
         if let Some(before) = &self.before {
-            fchmod(&file, Mode::from_bits_truncate(before.mode & 0o777)).map_err(failed)?;
+            fchmod(&file, Mode::from_bits_truncate((before.mode & 0o777) as _)).map_err(failed)?;
         }
 
         file.sync_all().map_err(failed)?;
