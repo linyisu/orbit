@@ -5,7 +5,7 @@ edition.workspace = true
 
 [features]
 test-support = []
-local-speech = ["dep:whisper-rs", "dep:reqwest"]
+local-speech = ["dep:sherpa-onnx", "dep:reqwest"]
 
 [dependencies]
 similar.workspace = true
@@ -30,7 +30,7 @@ tempfile.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 toml.workspace = true
-whisper-rs = { workspace = true, optional = true }
+sherpa-onnx = { workspace = true, optional = true }
 reqwest = { workspace = true, optional = true }
 
 [dev-dependencies]

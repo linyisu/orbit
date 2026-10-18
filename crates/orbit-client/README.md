@@ -27,13 +27,14 @@ GUI 与 TUI 使用同一路由。全局保存成功不依赖远程会话在线�
 ## 本机语音
 
 `local-speech` 功能通过 [speech.rs](src/speech.rs) 提供本机 CPU 转写。
-使用 [whisper-rs](https://codeberg.org/tazz4843/whisper-rs) 和
-[Whisper 多语言 base 模型](https://huggingface.co/ggerganov/whisper.cpp)：首次准备时
-下载约 141 MiB，校验固定的大小和 SHA-256 后原子保存到
-`$XDG_CACHE_HOME/orbit/speech`，缺省为 `~/.cache/orbit/speech`。
+使用 [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) 和
+[Paraformer 中文、英文流式模型](https://huggingface.co/csukuangfj/sherpa-onnx-streaming-paraformer-bilingual-zh-en)：首次准备时
+下载约 226 MiB，校验固定的大小和 SHA-256 后原子保存到
+`$XDG_CACHE_HOME/orbit/speech/paraformer-zh-en-int8`，缺省根目录为 `~/.cache`。
 损坏、截断或取消的下载不替换缓存；后续使用无需联网。
-音频只保存在有界内存中，按 16 kHz 单声道 PCM 输入，单次最多 120 秒；
-不写入会话、目标工作区或网络请求。取消会中止推理，失败和取消均不返回可提交的文字。
+音频按 16 kHz 单声道 PCM 分块输入，队列最多保留 3.2 秒待处理音频，单次最多 120 秒；
+逐块解码并发布可替换的全文假设，不保留或反复识别整段录音。
+不写入会话、目标工作区或网络请求。取消会中止推理；失败或取消不产生最终成功结果，实时假设不构成完整转写。
 GUI 的录音和草稿插入属于平台适配，模型准备与转写逻辑不进入界面。
 
 ## 入口

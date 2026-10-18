@@ -120,7 +120,7 @@ unicode-linebreak = "0.1.5"
 unicode-segmentation = "1.13.3"
 unicode-width = "0.2.2"
 url = "2.5"
-whisper-rs = { version = "0.16.0", default-features = false }
+sherpa-onnx = "=1.13.8"
 windows-sys = { version = "0.61.2", features = ["Win32_Storage_FileSystem", "Win32_Foundation"] }
 zip = { version = "8.6.0", default-features = false }
 

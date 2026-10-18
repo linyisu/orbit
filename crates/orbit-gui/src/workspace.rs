@@ -1073,7 +1073,7 @@ impl Workspace {
             return;
         }
         self.dictation
-            .update(cx, |dictation, cx| dictation.cancel(cx));
+            .update(cx, |dictation, cx| dictation.commit(cx));
         let text = self.input.read(cx).value();
         let session = self.info.as_ref().unwrap().id.clone();
         let retry = self
