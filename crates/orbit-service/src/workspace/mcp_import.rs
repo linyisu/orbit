@@ -241,17 +241,6 @@ async fn drain(mut reader: impl tokio::io::AsyncRead + Unpin) -> std::io::Result
     }
     Ok(tail)
 }
-struct ProcessGroup(Option<u32>);
-impl Drop for ProcessGroup {
-    fn drop(&mut self) {
-        #[cfg(unix)]
-        if let Some(process) = self.0 {
-            unsafe {
-                libc::kill(-(process as i32), libc::SIGKILL);
-            }
-        }
-    }
-}
 
 /// Run a dependency command with bounded diagnostics and a process-group lifetime.
 /// Cancellation and timeout drop the guard, terminating descendants as well as the direct child.
@@ -272,12 +261,8 @@ async fn run(arguments: &[String], directory: &Path) -> Result<()> {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
-    #[cfg(unix)]
-    command.process_group(0);
-    let mut child = command
-        .spawn()
+    let (mut child, _group) = orbit_runtime::execution::process::ProcessGroup::spawn(&mut command)
         .with_context(|| format!("无法启动 {program}，请在目标机器安装对应运行环境"))?;
-    let _group = ProcessGroup(child.id());
     let stdout = child.stdout.take().unwrap();
     let stderr = child.stderr.take().unwrap();
     let result = tokio::time::timeout(INSTALL_TIMEOUT, async {

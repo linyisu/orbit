@@ -105,3 +105,36 @@ async fn timeout_and_cancellation_stop_descendants_holding_output_pipes() {
         assert_eq!(result.timed_out, !cancel);
     }
 }
+
+#[tokio::test]
+async fn aborting_execution_future_still_terminates_descendants() {
+    let root = tempfile::tempdir().unwrap();
+    let mut environment = ExecutionEnvironment::new(root.path(), root.path()).unwrap();
+    environment.set_var("SHELL", "/bin/sh");
+    let task = tokio::spawn(async move {
+        let request = ExecutionRequest::new(
+            "(printf ready > started; sleep 1; printf escaped > orphan) & wait",
+            Duration::from_secs(30),
+        );
+        execution_backend()
+            .execute(
+                &request,
+                &ExecutionPolicy::default(),
+                &environment,
+                None,
+                CancellationToken::new(),
+            )
+            .await
+    });
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !root.path().join("started").exists() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("descendant must start before aborting the supervisor");
+    task.abort();
+    assert!(task.await.unwrap_err().is_cancelled());
+    tokio::time::sleep(Duration::from_millis(1_200)).await;
+    assert!(!root.path().join("orphan").exists());
+}

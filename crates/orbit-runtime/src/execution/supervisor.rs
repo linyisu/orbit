@@ -1,10 +1,11 @@
+#[cfg(unix)]
 use std::os::unix::process::ExitStatusExt;
 use std::{collections::VecDeque, time::Duration};
 
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio_util::sync::CancellationToken;
 
-use super::process::{CommandResult, MAX_OUTPUT, OutputLog};
+use super::process::{CommandResult, MAX_OUTPUT, OutputLog, ProcessGroup};
 use crate::{
     error::{RuntimeError, failed},
     verification::VerificationEvidence,
@@ -102,7 +103,7 @@ pub(crate) async fn run_child_process(
     workspace_files: usize,
     skipped_entries: usize,
     verification: Option<VerificationEvidence>,
-    process_group: Option<u32>,
+    mut process_group: Option<ProcessGroup>,
 ) -> Result<CommandResult, RuntimeError> {
     let started = std::time::Instant::now();
     let (output_id, stdout_log, stderr_log) = output_log
@@ -137,30 +138,24 @@ pub(crate) async fn run_child_process(
             result = child.wait() => result,
             _ = token.cancelled() => {
                 cancelled = true;
-                if let Some(id) = process_group {
-                    unsafe {
-                        libc::kill(-(id as i32), libc::SIGKILL);
-                    }
+                if let Some(group) = process_group.as_mut() {
+                    group.kill();
                 }
                 child.start_kill()?;
                 child.wait().await
             }
             _ = tokio::time::sleep(timeout) => {
                 timed_out = true;
-                if let Some(id) = process_group {
-                    unsafe {
-                        libc::kill(-(id as i32), libc::SIGKILL);
-                    }
+                if let Some(group) = process_group.as_mut() {
+                    group.kill();
                 }
                 child.start_kill()?;
                 child.wait().await
             }
         }?;
 
-        if let Some(id) = process_group {
-            unsafe {
-                libc::kill(-(id as i32), libc::SIGKILL);
-            }
+        if let Some(group) = process_group.as_mut() {
+            group.kill();
         }
         Ok::<_, std::io::Error>((status, timed_out, cancelled))
     };
@@ -188,8 +183,14 @@ pub(crate) async fn run_child_process(
 
     Ok(CommandResult {
         exit_code: status.code(),
+        #[cfg(unix)]
         signal: status.signal(),
+        #[cfg(windows)]
+        signal: None,
+        #[cfg(unix)]
         core_dumped: status.core_dumped(),
+        #[cfg(windows)]
+        core_dumped: false,
         elapsed_ms: started
             .elapsed()
             .as_millis()
@@ -273,6 +274,7 @@ mod drain_tests {
     use super::*;
     use tokio::io::AsyncWriteExt;
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn signal_termination_retains_output_without_claiming_timeout_or_cancellation() {
         let mut command = tokio::process::Command::new("/bin/sh");
@@ -280,8 +282,7 @@ mod drain_tests {
             .args(["-c", "printf before; kill -TERM $$"])
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
-        let (child, _group) = super::super::process::ProcessGroup::spawn(&mut command).unwrap();
-        let id = child.id();
+        let (child, group) = ProcessGroup::spawn(&mut command).unwrap();
         let result = run_child_process(
             child,
             Duration::from_secs(5),
@@ -291,7 +292,7 @@ mod drain_tests {
             0,
             0,
             None,
-            id,
+            Some(group),
         )
         .await
         .unwrap();

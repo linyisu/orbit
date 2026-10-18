@@ -1,0 +1,54 @@
+name: Native runtime contracts
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, 'codex/native-runtime-*']
+    paths:
+      - 'crates/orbit-runtime/**'
+      - '.github/scripts/test-native-process.py'
+      - '.github/workflows/native-runtime.yml'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+  pull_request:
+    paths:
+      - 'crates/orbit-runtime/**'
+      - '.github/scripts/test-native-process.py'
+      - '.github/workflows/native-runtime.yml'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+
+permissions:
+  contents: read
+
+jobs:
+  process-ownership:
+    name: Process ownership (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-15, windows-2022]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Test production process owner and descendant cleanup
+        run: python .github/scripts/test-native-process.py
+
+  unix-runtime:
+    name: Runtime (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-15]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Test complete Unix runtime
+        run: cargo test -p orbit-runtime --locked

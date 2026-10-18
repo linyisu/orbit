@@ -70,8 +70,6 @@ pub(in crate::workspace) async fn acquire(
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
-    #[cfg(unix)]
-    command.process_group(0);
     // SSH agent authentication is allowed, while prompts and arbitrary ~/.ssh
     // commands/config are not. Existing known_hosts remains authoritative.
     if let Some(home) = home
@@ -109,10 +107,9 @@ pub(in crate::workspace) async fn acquire(
         .arg("--")
         .arg(&git.url)
         .arg(&checkout);
-    let mut child = command
-        .spawn()
-        .context("无法启动 Git，请确认工作区服务器已安装 Git")?;
-    let process = child.id();
+    let (mut child, mut group) =
+        orbit_runtime::execution::process::ProcessGroup::spawn(&mut command)
+            .context("无法启动 Git，请确认工作区服务器已安装 Git")?;
     let mut stderr = child
         .stderr
         .take()
@@ -131,12 +128,7 @@ pub(in crate::workspace) async fn acquire(
     let (status, errors) = match output {
         Ok(Ok(result)) => result,
         failure => {
-            #[cfg(unix)]
-            if let Some(process) = process {
-                unsafe {
-                    libc::kill(-(process as i32), libc::SIGKILL);
-                }
-            }
+            group.kill();
             let _ = child.start_kill();
             let _ = child.wait().await;
             match failure {

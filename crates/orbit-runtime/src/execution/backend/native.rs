@@ -58,7 +58,6 @@ impl ExecutionBackend for NativeBackend {
                 .stdin(Stdio::null())
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
-                .process_group(0)
                 .kill_on_drop(true);
 
             let limits = policy.resources.to_process_limits();
@@ -105,7 +104,6 @@ impl ExecutionBackend for NativeBackend {
                     RuntimeError::Io(error)
                 }
             })?;
-            let process_group = child.id();
             let verification = request
                 .fingerprint
                 .clone()
@@ -125,10 +123,9 @@ impl ExecutionBackend for NativeBackend {
                 request.workspace_files,
                 request.skipped_entries,
                 verification,
-                process_group,
+                Some(guard),
             )
             .await;
-            drop(guard);
             result.map(Into::into)
         })
     }

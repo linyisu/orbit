@@ -64,7 +64,6 @@ async fn discover(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
-        .process_group(0)
         .kill_on_drop(true);
     let (mut child, _group) = ProcessGroup::spawn(&mut command)?;
     let mut stdout = child
