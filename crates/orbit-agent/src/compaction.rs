@@ -79,10 +79,14 @@ impl CompactionRuntime {
         let mut runtime = self.clone();
 
         if runtime.backend.is_none() {
+            runtime.settings.max_output_tokens = runtime
+                .settings
+                .max_output_tokens
+                .min((input / 3).max(256));
             runtime.settings.max_input_tokens = runtime
                 .settings
                 .max_input_tokens
-                .min(input);
+                .min(input.saturating_sub(runtime.settings.max_output_tokens));
         }
 
         runtime
@@ -113,5 +117,20 @@ impl CompactionFailureKind {
             Self::InsufficientReduction => "未释放足够上下文",
             Self::Archive => "历史归档失败",
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shared_model_window_reserves_generation_space_separately_from_handoff_size() {
+        let runtime = CompactionRuntime::default().for_input_window(8_192);
+        assert!(runtime.settings.max_input_tokens + runtime.settings.max_output_tokens <= 8_192);
+        runtime.settings.validate().unwrap();
+        let small = CompactionRuntime::default().for_input_window(4_096);
+        assert!(small.settings.max_input_tokens + small.settings.max_output_tokens <= 4_096);
+        small.settings.validate().unwrap();
     }
 }

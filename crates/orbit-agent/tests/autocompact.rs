@@ -179,7 +179,7 @@ async fn huge_unicode_history_is_chunked_without_oversized_summary_requests() {
 #[tokio::test]
 /// The original context is deliberately much larger than a single summary fragment but still fits
 /// its configured 128k-token input window.
-async fn large_context_uses_bounded_summary_fragments() {
+async fn large_context_uses_configured_summary_capacity() {
     let mut history = long_task();
     history[3] = ChatMessage::tool("old", "evidence ".repeat(42_000));
     let plan = autocompact::plan(&history, &[], 1_000, 128_000).unwrap();
@@ -202,14 +202,11 @@ async fn large_context_uses_bounded_summary_fragments() {
         "large context should use several fragments"
     );
 
-    let first_tokens = estimate_tokens(&requests[0].messages, &[]);
-
-    assert!(first_tokens <= 4_096, "first summary batch should be small");
     assert!(
-        requests[1..]
+        requests
             .iter()
-            .any(|request| estimate_tokens(&request.messages, &[]) > first_tokens),
-        "quick successful requests should permit larger later batches"
+            .any(|request| estimate_tokens(&request.messages, &[]) > 4_096),
+        "use configured capacity instead of starting every task with tiny fragments"
     );
 
     for request in requests {
@@ -279,7 +276,7 @@ async fn invalid_summary_and_cancellation_do_not_return_compacted_context() {
 }
 
 #[tokio::test]
-async fn invalid_local_summary_gets_one_schema_repair_request() {
+async fn commentary_gets_a_bounded_handoff_retry() {
     let history = long_task();
     let plan = autocompact::plan(&history, &[], 1_000, 8_000).unwrap();
     let invalid = ChatCompletion {
@@ -376,7 +373,7 @@ async fn automatic_compaction_reports_retryable_summary_failure_once() {
 }
 
 #[tokio::test]
-async fn transient_summary_failure_below_the_emergency_threshold_uses_the_saved_archive() {
+async fn manual_summary_failure_uses_attributed_archive_evidence() {
     use orbit_agent::{
         compaction::CompactionSettings,
         memory::{CompactionMode, CompactionStrategy},
@@ -390,7 +387,7 @@ async fn transient_summary_failure_below_the_emergency_threshold_uses_the_saved_
         &[],
         1_000,
         limit,
-        CompactionMode::Automatic,
+        CompactionMode::Manual,
         &settings,
     )
     .unwrap();
@@ -537,7 +534,7 @@ async fn invalid_early_summary_preserves_context_and_disabled_mode_skips_compact
 
     for enabled in [false, true] {
         let backend = MockModel::new(if enabled {
-            vec![answer(""), answer(""), answer("Still works")]
+            vec![answer(""), answer(""), answer(""), answer("Still works")]
         } else {
             vec![answer("Still works")]
         });
@@ -560,8 +557,8 @@ async fn invalid_early_summary_preserves_context_and_disabled_mode_skips_compact
         let requests = backend.requests();
 
         if enabled {
-            assert_eq!(requests.len(), 3);
-            assert_eq!(requests[2].messages, history);
+            assert_eq!(requests.len(), 4);
+            assert_eq!(requests[3].messages, history);
             assert_eq!(&result.history[..history.len()], history.as_slice());
         } else {
             assert_eq!(requests.len(), 1);
@@ -615,6 +612,7 @@ async fn failed_summary_is_not_retried_on_every_tool_call() {
     let backend = MockModel::new([
         answer(""),
         answer(""),
+        answer(""),
         ChatCompletion {
             message: call("next"),
             ..answer("")
@@ -647,7 +645,7 @@ async fn failed_summary_is_not_retried_on_every_tool_call() {
         .unwrap();
 
     assert_eq!(result.tool_calls, 1);
-    assert_eq!(backend.requests().len(), 4);
+    assert_eq!(backend.requests().len(), 5);
     assert_eq!(
         backend
             .requests()
@@ -658,7 +656,7 @@ async fn failed_summary_is_not_retried_on_every_tool_call() {
                     if content.starts_with(orbit_agent::context::SUMMARY_PROMPT)
             ))
             .count(),
-        2
+        3
     );
 }
 
@@ -770,7 +768,7 @@ async fn manual_compaction_archives_when_format_repair_still_fails() {
         message: ChatMessage::assistant("A prose summary without structured fields"),
         ..answer("")
     };
-    let backend = MockModel::new([bad.clone(), bad]);
+    let backend = MockModel::new([bad.clone(), bad.clone(), bad]);
     let archive = Archive::default();
     let result = autocompact::execute_configured(
         &backend,
@@ -785,7 +783,7 @@ async fn manual_compaction_archives_when_format_repair_still_fails() {
     .await
     .unwrap();
 
-    assert_eq!(backend.requests().len(), 2);
+    assert_eq!(backend.requests().len(), 3);
     assert_eq!(
         result.record.strategy,
         CompactionStrategy::ArchiveProjection
@@ -894,7 +892,7 @@ async fn manual_compaction_keeps_summarizing_after_two_timeouts() {
 }
 
 #[tokio::test]
-async fn manual_compaction_does_not_report_success_without_a_summary() {
+async fn repeated_timeouts_recover_from_archive_instead_of_blocking_the_session() {
     use orbit_agent::{compaction::CompactionSettings, memory::CompactionMode};
 
     let history = vec![
@@ -939,12 +937,27 @@ async fn manual_compaction_does_not_report_success_without_a_summary() {
     )
     .await;
 
-    assert!(result.is_err());
+    let result = result.unwrap();
+    assert!(result.record.fallback);
+    assert_eq!(
+        result.record.strategy,
+        orbit_agent::memory::CompactionStrategy::ArchiveProjection
+    );
+    assert!(
+        result
+            .record
+            .fallback_reason
+            .as_deref()
+            .unwrap()
+            .contains("timed out")
+    );
+    assert!(result.history.contains(&history[3]));
+    check_budget(&result.history, &[], 1_000, 16_000).unwrap();
     assert_eq!(
         archive.0.lock().unwrap().as_slice(),
         std::slice::from_ref(&history)
     );
-    assert!(backend.requests().len() > 2);
+    assert_eq!(backend.requests().len(), 3);
 }
 
 #[tokio::test]
@@ -1315,4 +1328,338 @@ async fn repeated_compaction_carries_prior_constraints_errors_and_verification_a
         &second.history[0],
         ChatMessage::System { content } if content.contains("Never change")
     ));
+}
+
+#[tokio::test]
+async fn blank_summary_at_a_full_window_recovers_with_original_requirements_and_recent_pairs() {
+    use orbit_agent::memory::{CompactionMode, CompactionStrategy};
+    let mut history = prose_task();
+    history[2] = ChatMessage::assistant("generated reasoning ".repeat(3_000));
+    history.extend([
+        call("recent-read"),
+        ChatMessage::tool("recent-read", "current evidence"),
+    ]);
+    let archive = Archive::default();
+    let backend = MockModel::new([answer(""), answer(""), answer("")]);
+    let settings = orbit_agent::compaction::CompactionSettings::default();
+    let result = autocompact::execute_configured(
+        &backend,
+        autocompact::plan_configured(
+            &history,
+            &[],
+            1_000,
+            8_000,
+            CompactionMode::Automatic,
+            &settings,
+        )
+        .unwrap(),
+        &[],
+        1_000,
+        8_000,
+        CancellationToken::new(),
+        Some(&archive),
+        &settings,
+    )
+    .await
+    .unwrap();
+    assert_eq!(backend.requests().len(), 3);
+    assert!(result.record.fallback);
+    assert_eq!(
+        result.record.strategy,
+        CompactionStrategy::ArchiveProjection
+    );
+    assert!(
+        result
+            .record
+            .summary
+            .constraints
+            .iter()
+            .any(|text| text.contains("keep the API stable"))
+    );
+    assert_eq!(result.history.last(), history.last());
+    assert_eq!(archive.0.lock().unwrap()[0], history);
+    check_budget(&result.history, &[], 1_000, 8_000).unwrap();
+    assert_paired(&result.history);
+}
+
+#[tokio::test]
+async fn large_tool_catalog_does_not_make_successful_history_compaction_look_ineffective() {
+    use orbit_model::types::ToolDefinition;
+    let history = prose_task();
+    let tools = vec![ToolDefinition::function(
+        "GeneratedInspector",
+        "generated schema detail ".repeat(4_000),
+        serde_json::json!({"type":"object"}),
+    )];
+    let before = estimate_tokens(&history, &tools);
+    let backend = MockModel::new((0..20).map(|_| answer("Continue the generated migration.")));
+    let compacted = autocompact::execute_with_archive(
+        &backend,
+        autocompact::plan_manual(&history, &tools, 1_000, 64_000).unwrap(),
+        &tools,
+        1_000,
+        64_000,
+        CancellationToken::new(),
+        Some(&Archive::default()),
+    )
+    .await
+    .unwrap();
+    assert!(
+        compacted.after_tokens > before * 3 / 4,
+        "fixed catalog dominates this request"
+    );
+    assert!(compacted.after_tokens < before);
+    assert!(
+        compacted
+            .history
+            .contains(history.last().unwrap())
+    );
+    for request in backend.requests() {
+        assert!(request.tools.is_empty());
+        assert_eq!(
+            request.reasoning_effort,
+            Some(orbit_model::types::ReasoningEffort::Low)
+        );
+    }
+}
+
+#[tokio::test]
+async fn markdown_summary_is_accepted_on_the_first_attempt() {
+    let backend = MockModel::new([ChatCompletion {
+        message: ChatMessage::assistant(
+            "## Goal\nContinue the parser migration.\n## Constraints\nKeep parse_v3 stable.\n## Remaining\nVerify the scanner.",
+        ),
+        ..answer("")
+    }]);
+    let history = prose_task();
+    let result = autocompact::execute(
+        &backend,
+        autocompact::plan_manual(&history, &[], 1_000, 16_000).unwrap(),
+        &[],
+        1_000,
+        16_000,
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(backend.requests().len(), 1);
+    assert!(!result.record.fallback);
+    assert!(result.summary.contains("parse_v3"));
+}
+
+#[tokio::test]
+async fn file_receipts_are_complete_in_the_audit_but_bounded_in_the_model_handoff() {
+    use orbit_agent::memory::FileActivity;
+    let files = FileActivity {
+        read: (0..2_000)
+            .map(|index| format!("generated/modules/module_{index}.rs"))
+            .collect(),
+        written: ["generated/changed.rs".into()].into(),
+    };
+    let history = prose_task();
+    let backend = MockModel::new((0..20).map(|_| answer("Continue parser work.")));
+    let result = autocompact::execute(
+        &backend,
+        autocompact::plan_manual(&history, &[], 1_000, 8_000)
+            .unwrap()
+            .with_files(&files),
+        &[],
+        1_000,
+        8_000,
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(result.record.files, files);
+    assert!(
+        serde_json::to_string(&result.history)
+            .unwrap()
+            .contains("generated/changed.rs")
+    );
+    check_budget(&result.history, &[], 1_000, 8_000).unwrap();
+}
+
+#[tokio::test]
+async fn summary_context_rejection_shrinks_input_without_repeating_tool_execution() {
+    let mut history = prose_task();
+    history[2] = ChatMessage::assistant("generated evidence ".repeat(5_000));
+    let backend = MockModel::from_results(
+        [
+            Ok(answer("Original requirements captured.")),
+            Err(ModelError::Http {
+                status: 400,
+                request_id: String::new(),
+                body: "generated context rejection".into(),
+                retryable: false,
+                context_limit: true,
+            }),
+        ]
+        .into_iter()
+        .chain((0..40).map(|_| Ok(answer("Keep the generated API stable.")))),
+    );
+    let result = autocompact::execute(
+        &backend,
+        autocompact::plan_manual(&history, &[], 1_000, 16_000).unwrap(),
+        &[],
+        1_000,
+        16_000,
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    let requests = backend.requests();
+    assert!(requests.len() >= 3);
+    assert!(
+        estimate_tokens(&requests[2].messages, &[]) < estimate_tokens(&requests[1].messages, &[])
+    );
+    assert_paired(&result.history);
+}
+
+#[tokio::test]
+async fn crossing_the_hard_limit_during_failure_backoff_still_recovers_and_runs_each_tool_once() {
+    let history = prose_task();
+    let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let observed = calls.clone();
+    let mut tools = ToolRegistry::new();
+    tools.register(ClosureTool::new(
+        "read",
+        "Generated fixture reader",
+        serde_json::json!({"type":"object"}),
+        move |_, _| {
+            observed.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            async { Ok("generated output ".repeat(60)) }
+        },
+    ));
+    let input = estimate_tokens(&history, &tools.definitions());
+    let model = MockModel::new([
+        answer(""),
+        answer(""),
+        answer(""),
+        ChatCompletion {
+            message: call("new-read"),
+            ..answer("")
+        },
+        answer(""),
+        answer(""),
+        answer(""),
+        answer("Finished using the saved evidence."),
+    ]);
+    let agent = Agent::new(
+        model.clone(),
+        tools,
+        AgentConfig {
+            context_tokens: input + 1_000 + 100,
+            ..Default::default()
+        },
+    )
+    .with_context_archive(std::sync::Arc::new(Archive::default()));
+    let mut request = ChatRequest::new(history);
+    request.max_tokens = Some(1_000);
+    let result = agent
+        .run(request, CancellationToken::new())
+        .await
+        .unwrap();
+    assert_eq!(result.tool_calls, 1);
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert_eq!(model.requests().len(), 8);
+    assert!(
+        serde_json::to_string(&result.history)
+            .unwrap()
+            .contains("ReadHistory archive_id=1")
+    );
+    assert_paired(&result.history);
+}
+
+#[tokio::test]
+async fn main_request_recovery_does_not_require_the_fixed_tool_catalog_to_shrink() {
+    let history = prose_task();
+    let mut tools = ToolRegistry::new();
+    tools.register(ClosureTool::new(
+        "GeneratedInspector",
+        "generated catalog detail ".repeat(4_000),
+        serde_json::json!({"type":"object"}),
+        |_, _| async { Ok("unused".into()) },
+    ));
+    let backend = MockModel::from_results([
+        Err(ModelError::Http {
+            status: 400,
+            request_id: String::new(),
+            body: "generated window rejection".into(),
+            retryable: false,
+            context_limit: true,
+        }),
+        Ok(answer("Continue the generated scanner investigation.")),
+        Ok(answer("Finished the generated task.")),
+    ]);
+    let agent = Agent::new(
+        backend.clone(),
+        tools,
+        AgentConfig {
+            context_tokens: 64_000,
+            ..Default::default()
+        },
+    )
+    .with_context_archive(std::sync::Arc::new(Archive::default()));
+    let mut request = ChatRequest::new(history);
+    request.max_tokens = Some(1_000);
+    let result = agent
+        .run(request, CancellationToken::new())
+        .await
+        .unwrap();
+    let requests = backend.requests();
+    assert_eq!(requests.len(), 3);
+    assert_eq!(requests[0].tools, requests[2].tools);
+    assert!(requests[1].tools.is_empty());
+    assert_eq!(result.tool_calls, 0);
+    assert_eq!(result.turns, 1);
+}
+
+#[tokio::test]
+async fn an_old_handoff_larger_than_the_new_summary_window_can_itself_be_chunked() {
+    use orbit_agent::{compaction::CompactionSettings, memory::CompactionMode};
+    let history = vec![
+        ChatMessage::system("Generated stable instructions."),
+        ChatMessage::user(format!(
+            "BEGIN_UNTRUSTED_COMPACTION_RECORD\n{}\nEND_UNTRUSTED_COMPACTION_RECORD",
+            "Keep parse_v3 stable; generated earlier facts. ".repeat(500)
+        )),
+        ChatMessage::user("Continue the migration."),
+        ChatMessage::assistant("generated subsequent investigation ".repeat(2_000)),
+        ChatMessage::user("Finish verification."),
+        ChatMessage::assistant("Recent observations."),
+    ];
+    let settings = CompactionSettings {
+        max_input_tokens: 2_048,
+        max_output_tokens: 4_096,
+        ..Default::default()
+    };
+    let model = MockModel::new(
+        (0..100).map(|_| answer("Keep parse_v3 stable; verification remains pending.")),
+    );
+    let result = autocompact::execute_configured(
+        &model,
+        autocompact::plan_configured(
+            &history,
+            &[],
+            1_000,
+            32_000,
+            CompactionMode::Manual,
+            &settings,
+        )
+        .unwrap(),
+        &[],
+        1_000,
+        32_000,
+        CancellationToken::new(),
+        None,
+        &settings,
+    )
+    .await
+    .unwrap();
+    assert!(!result.record.fallback);
+    assert!(result.summary.contains("parse_v3"));
+    assert!(model.requests().len() > 1);
+    for request in model.requests() {
+        assert!(estimate_tokens(&request.messages, &[]) <= 2_048);
+    }
 }

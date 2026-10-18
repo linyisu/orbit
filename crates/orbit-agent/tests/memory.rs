@@ -278,3 +278,27 @@ async fn manual_compaction_uses_same_structure_and_records_its_boundary() {
     assert_eq!(result.record.pinned_user, None);
     assert_eq!(result.record.summary, summary());
 }
+
+#[test]
+fn markdown_handoffs_preserve_multiline_evidence_without_requiring_json() {
+    let handoff = TaskSummary::parse_model_response(
+        "## Goal\nFinish the generated parser migration.\n\n\
+         ## Constraints\n- Keep parse_v3 unchanged.\n- No dependency additions.\n\n\
+         ## Completed\nUpdated the scanner.\n\n\
+         ## Remaining\nRun the migration checks.\n\n\
+         ## Verification\n```text\ncheck-parser: exit 7\n## Goal\nthis is output, not a heading\n```\n\n\
+         ## Uncertainty\nFull suite not run.",
+    ).unwrap();
+    assert_eq!(handoff.goal, "Finish the generated parser migration.");
+    assert!(handoff.constraints[0].contains("parse_v3"));
+    assert!(handoff.verification[0].contains("## Goal"));
+    assert!(handoff.decisions.is_empty());
+    for invalid in [
+        "",
+        "All work reviewed.",
+        "## Goal\n\n## Remaining\nCheck\n## Uncertainty\nUnknown",
+        "## Goal\nOnly a title",
+    ] {
+        assert!(TaskSummary::parse_model_response(invalid).is_err());
+    }
+}

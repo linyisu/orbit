@@ -163,3 +163,191 @@ async fn compact_retry_restores_the_original_history_after_a_failed_retry() {
         None
     );
 }
+
+#[tokio::test]
+async fn failed_compaction_survives_restart_and_archive_recovery_allows_the_next_reply() {
+    use orbit_agent::{
+        agent::{Agent, AgentConfig},
+        context::compact_with_archive,
+        memory::{CompactionStrategy, FileActivity},
+        model::MockModel,
+    };
+    use orbit_model::types::ChatCompletion;
+    use orbit_store::{store::Store, types::RunCompletion};
+    use tokio_util::sync::CancellationToken;
+
+    let directory = tempfile::tempdir().unwrap();
+    let database = directory.path().join("conversation.db");
+    let original = vec![
+        ChatMessage::system("Keep the generated public API stable."),
+        ChatMessage::user("Finish the scanner migration."),
+        ChatMessage::assistant("generated historical investigation ".repeat(2_000)),
+        ChatMessage::user("Continue with verification."),
+    ];
+    let store = Store::open(&database).await.unwrap();
+    let mut writer = store
+        .create(directory.path().display().to_string(), "mock".into())
+        .await
+        .unwrap();
+    let id = writer.id().to_owned();
+    writer
+        .begin("Finish the scanner migration.".into(), "mock".into())
+        .await
+        .unwrap();
+    writer
+        .finish(
+            &RunCompletion::Completed {
+                history: original.clone(),
+            },
+            vec![],
+        )
+        .await
+        .unwrap();
+    writer
+        .begin("/compact".into(), "mock".into())
+        .await
+        .unwrap();
+    let blank = || ChatCompletion {
+        id: None,
+        model: None,
+        message: ChatMessage::assistant(""),
+        finish_reason: Some("stop".into()),
+        usage: None,
+    };
+    // A failure without durable retrieval cannot publish any lossy substitute.
+    let failed = compact_with_archive(
+        &MockModel::new([blank(), blank(), blank()]),
+        original.clone(),
+        &[],
+        8_192,
+        1_024,
+        CancellationToken::new(),
+        &FileActivity::default(),
+        None,
+    )
+    .await;
+    assert!(failed.is_err());
+    writer
+        .finish(
+            &RunCompletion::Failed,
+            vec![
+                outcome(
+                    Ok(Err(failed
+                        .err()
+                        .expect("summary must fail without an archive"))),
+                    None,
+                )
+                .event(),
+            ],
+        )
+        .await
+        .unwrap();
+    drop(writer);
+    drop(store);
+
+    let reopened = Store::open(&database).await.unwrap();
+    assert_eq!(
+        reopened
+            .load(&id)
+            .await
+            .unwrap()
+            .history,
+        original
+    );
+    let mut writer = reopened.acquire(&id).await.unwrap();
+    writer
+        .begin("/compact".into(), "mock".into())
+        .await
+        .unwrap();
+    let archive = crate::history::SessionArchive::new(reopened.clone(), id.clone());
+    let recovered = compact_with_archive(
+        &MockModel::new([blank(), blank(), blank()]),
+        original.clone(),
+        &[],
+        8_192,
+        1_024,
+        CancellationToken::new(),
+        &FileActivity::default(),
+        Some(&archive),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        recovered.record.strategy,
+        CompactionStrategy::ArchiveProjection
+    );
+    assert!(recovered.record.fallback);
+    let archive_id = recovered.record.archive_id().unwrap();
+    writer
+        .finish(
+            &RunCompletion::Completed {
+                history: recovered.history.clone(),
+            },
+            vec![AgentEvent::CompactionRecorded {
+                record: recovered.record,
+            }],
+        )
+        .await
+        .unwrap();
+    drop(writer);
+    drop(archive);
+    drop(reopened);
+
+    let reopened = Store::open(&database).await.unwrap();
+    let snapshot = reopened.load(&id).await.unwrap();
+    assert_eq!(snapshot.history, recovered.history);
+    assert_eq!(
+        reopened
+            .load_context_archive(&id, archive_id)
+            .await
+            .unwrap(),
+        original
+    );
+    let model = MockModel::new([ChatCompletion {
+        message: ChatMessage::assistant("Continuing from the saved scanner requirements."),
+        ..blank()
+    }]);
+    let mut writer = reopened.acquire(&id).await.unwrap();
+    writer
+        .begin("Continue.".into(), "mock".into())
+        .await
+        .unwrap();
+    let mut history = snapshot.history;
+    history.push(ChatMessage::user("Continue."));
+    let mut request = ChatRequest::new(history);
+    request.max_tokens = Some(1_024);
+    let result = Agent::new(
+        model.clone(),
+        ToolRegistry::new(),
+        AgentConfig {
+            context_tokens: 8_192,
+            ..Default::default()
+        },
+    )
+    .with_execution_journal(writer.execution_journal().unwrap())
+    .run(request, CancellationToken::new())
+    .await
+    .unwrap();
+    assert_eq!(model.requests().len(), 1);
+    assert_eq!(result.tool_calls, 0);
+    writer
+        .finish(
+            &RunCompletion::Completed {
+                history: result.history,
+            },
+            vec![],
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        reopened
+            .load(&id)
+            .await
+            .unwrap()
+            .runs
+            .last()
+            .unwrap()
+            .status,
+        "completed"
+    );
+}

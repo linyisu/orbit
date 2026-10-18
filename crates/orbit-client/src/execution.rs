@@ -560,7 +560,9 @@ impl Execution {
             AgentEvent::Model(StreamEvent::ReasoningDelta(_)) => self.phase = Phase::Thinking,
             AgentEvent::Model(StreamEvent::TextDelta(_)) => self.phase = Phase::Responding,
             AgentEvent::CompactionStarted => self.phase = Phase::Compacting,
-            AgentEvent::ContextCompacted { .. } => self.phase = Phase::Waiting,
+            AgentEvent::ContextCompacted { .. } | AgentEvent::CompactionFailed { .. } => {
+                self.phase = Phase::Waiting
+            }
             AgentEvent::ToolStarted { call } => {
                 self.phase = Phase::Working;
                 self.tools
@@ -609,9 +611,7 @@ impl Execution {
             AgentEvent::WaitingForCommands { .. } | AgentEvent::WaitingForTasks { .. } => {
                 self.phase = Phase::Background
             }
-            AgentEvent::Failed { .. } | AgentEvent::CompactionFailed { .. } => {
-                self.phase = Phase::Failed
-            }
+            AgentEvent::Failed { .. } => self.phase = Phase::Failed,
             AgentEvent::Cancelled => self.phase = Phase::Stopped,
             _ => {}
         }
@@ -1027,6 +1027,26 @@ mod tests {
         })));
         assert!(state.tools().is_empty());
         assert_eq!(state.files().len(), 1);
+    }
+
+    #[test]
+    fn compaction_failure_is_not_a_terminal_run_failure() {
+        let mut state = Execution::default();
+        state.apply(&Update::agent(AgentEvent::CompactionStarted));
+        assert_eq!(state.phase(), Phase::Compacting);
+        state.apply(&Update::agent(AgentEvent::CompactionFailed {
+            kind: None,
+            error: "generated empty summary".into(),
+        }));
+        assert_eq!(state.phase(), Phase::Waiting);
+        state.apply(&Update::agent(AgentEvent::Model(StreamEvent::TextDelta(
+            "continuing the task".into(),
+        ))));
+        assert_eq!(state.phase(), Phase::Responding);
+        state.apply(&Update::agent(AgentEvent::Failed {
+            error: "generated terminal model failure".into(),
+        }));
+        assert_eq!(state.phase(), Phase::Failed);
     }
 
     #[test]

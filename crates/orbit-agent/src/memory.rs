@@ -165,12 +165,76 @@ impl TaskSummary {
         Ok(summary)
     }
 
-    /// Local models sometimes wrap an otherwise valid JSON object in a short
-    /// explanation or a Markdown fence. Accept that wrapper without relaxing
-    /// the required task-state fields or inventing missing facts.
+    /// Decode a model handoff, accepting historical JSON and titled Markdown.
+    /// A goal and at least two other recognized sections distinguish a handoff
+    /// from commentary; absent sections stay empty rather than inventing facts.
     pub fn parse_model_response(text: &str) -> Result<Self, AgentError> {
         if let Ok(summary) = Self::parse(text) {
             return Ok(summary);
+        }
+
+        let mut sections: [Vec<String>; 7] = Default::default();
+        let mut active = None;
+        let mut seen = [false; 7];
+        let mut fenced = false;
+
+        for line in text.lines() {
+            if line.trim_start().starts_with("```") {
+                fenced = !fenced;
+            }
+            if !fenced && let Some(title) = line.trim().strip_prefix("## ") {
+                active = match title
+                    .trim()
+                    .to_ascii_lowercase()
+                    .as_str()
+                {
+                    "goal" => Some(0),
+                    "constraints" => Some(1),
+                    "decisions" => Some(2),
+                    "completed" => Some(3),
+                    "remaining" => Some(4),
+                    "verification" => Some(5),
+                    "uncertainty" => Some(6),
+                    _ => None,
+                };
+                if let Some(index) = active {
+                    seen[index] = true;
+                }
+                continue;
+            }
+            if let Some(index) = active {
+                sections[index].push(line.to_owned());
+            }
+        }
+
+        let [
+            goal,
+            constraints,
+            decisions,
+            completed,
+            remaining,
+            verification,
+            uncertainty,
+        ] = sections.map(|lines| lines.join("\n").trim().to_owned());
+        if !goal.is_empty()
+            && seen
+                .into_iter()
+                .filter(|present| *present)
+                .count()
+                >= 3
+        {
+            let items = |text: String| {
+                if text.is_empty() { vec![] } else { vec![text] }
+            };
+            return Ok(Self {
+                goal,
+                constraints: items(constraints),
+                decisions: items(decisions),
+                completed: items(completed),
+                remaining: items(remaining),
+                verification: items(verification),
+                uncertainty: items(uncertainty),
+            });
         }
 
         // The model output is capped by the caller, and only a small number of
@@ -187,7 +251,8 @@ impl TaskSummary {
         }
 
         Err(AgentError::Compaction(
-            "summary must contain the required structured task fields; original context preserved"
+            "summary contains neither a task handoff nor complete structured fields; original \
+                context preserved"
                 .into(),
         ))
     }
@@ -203,19 +268,11 @@ impl TaskSummary {
             ("验证结果", &self.verification),
             ("不确定事项", &self.uncertainty),
         ] {
-            text.push_str(&format!("\n\n{title}\n"));
-
             if items.is_empty() {
-                text.push_str("未记录");
-            } else {
-                text.push_str(
-                    &items
-                        .iter()
-                        .map(|item| format!("- {item}"))
-                        .collect::<Vec<_>>()
-                        .join("\n"),
-                );
+                continue;
             }
+            text.push_str(&format!("\n\n{title}\n"));
+            text.push_str(&items.join("\n"));
         }
 
         text
@@ -236,7 +293,7 @@ pub enum CompactionStrategy {
     Summary,
     ToolPruning,
     /// The model summary failed; the old prefix is retrievable, but its
-    /// contents have not been summarized or promoted to task state.
+    /// contents are represented by attributable excerpts, not a complete summary.
     ArchiveProjection,
 }
 

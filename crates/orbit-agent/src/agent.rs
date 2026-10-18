@@ -482,12 +482,12 @@ where
             {
                 // No tool has started for this rejected request. Retry this
                 // request once after a verified reduction, not the whole run.
-                recovery_limit = Some(
-                    local_limit
-                        .saturating_sub(output)
-                        .min(estimated_input.saturating_mul(3) / 4)
-                        .saturating_add(output),
-                );
+                recovery_limit = Some(crate::autocompact::recovery_limit(
+                    &history,
+                    &self.tools.definitions(),
+                    output,
+                    local_limit,
+                ));
                 force_compaction = true;
                 turns = turns.saturating_sub(1);
                 continue;
@@ -795,7 +795,8 @@ where
             )?)
         } else if self.config.auto_compact
             && self.archive.is_some()
-            && estimated >= thresholds.compact_after
+            && (estimated >= thresholds.compact_after
+                || estimated.saturating_add(output) > local_limit)
         {
             crate::autocompact::plan_configured(
                 history,

@@ -337,6 +337,10 @@ pub fn outcome(
         Ok(Err(AgentError::Compaction(message))) => {
             RunOutcome::Failed(format!("上下文整理未完成，原上下文已保留。\n\n{message}"))
         }
+        Ok(Err(error @ AgentError::ContextBudget { .. })) => RunOutcome::Failed(format!(
+            "当前输入仍超出模型窗口，会话和已完成的工具回执已保留。可重试 /compact，\
+                或切换到窗口更大的模型后继续；固定指令和工具定义过大时需调整启用范围。\n\n{error}"
+        )),
         Ok(Err(error)) => RunOutcome::Failed(error.to_string()),
         Err(error) => RunOutcome::Failed(format!("后台任务中断：{error}")),
     }
