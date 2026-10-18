@@ -15,6 +15,11 @@ pub enum Action {
         /// The active run sampled by List; None means an idle session.
         run: Option<i64>,
     },
+    Steer {
+        id: i64,
+        expected: String,
+        run: Option<i64>,
+    },
     Remove {
         id: i64,
         expected: String,
@@ -36,8 +41,19 @@ pub enum State {
     Unavailable,
 }
 
+/// Delivery policy is additive metadata; older clients retain the existing queue states.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Delivery {
+    #[default]
+    AtBoundary,
+    NextRun,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Entry {
+    #[serde(default)]
+    pub delivery: Delivery,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub files: Vec<crate::MessageImage>,
     pub id: i64,
@@ -63,6 +79,9 @@ pub enum Snapshot {
     },
     Edited {
         entry: Entry,
+    },
+    Steered {
+        id: i64,
     },
     Removed {
         id: i64,
@@ -101,6 +120,7 @@ mod tests {
         for state in [State::Claimed, State::Finishing, State::Unavailable] {
             assert!(
                 !Entry {
+                    delivery: Delivery::AtBoundary,
                     files: Vec::new(),
                     images: vec![],
                     id: 1,
@@ -113,6 +133,7 @@ mod tests {
         for state in [State::Queued, State::Idle] {
             assert!(
                 Entry {
+                    delivery: Delivery::AtBoundary,
                     files: Vec::new(),
                     images: vec![],
                     id: 1,
@@ -156,6 +177,7 @@ mod tests {
     #[test]
     fn pagination_rejects_nonadvancing_ids_and_cursor_mismatches() {
         let entry = |id| Entry {
+            delivery: Delivery::AtBoundary,
             files: Vec::new(),
             images: vec![],
             id,
@@ -173,6 +195,7 @@ mod tests {
     #[test]
     fn contradictory_mutable_state_and_run_cannot_enable_controls() {
         let entry = |state| Entry {
+            delivery: Delivery::AtBoundary,
             files: Vec::new(),
             images: vec![],
             id: 9,
@@ -184,5 +207,20 @@ mod tests {
         assert!(!valid_entry(&entry(State::Queued), None));
         assert!(!valid_entry(&entry(State::Idle), Some(4)));
         assert!(!valid_entry(&entry(State::Queued), Some(0)));
+    }
+}
+
+#[cfg(test)]
+mod delivery_tests {
+    use super::*;
+
+    #[test]
+    fn legacy_queue_entries_keep_their_original_delivery_and_editability() {
+        let entry: Entry = serde_json::from_value(serde_json::json!({
+            "id": 3, "content": "generated input", "state": "queued"
+        }))
+        .unwrap();
+        assert_eq!(entry.delivery, Delivery::AtBoundary);
+        assert!(entry.editable());
     }
 }

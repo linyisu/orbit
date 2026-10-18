@@ -28,8 +28,7 @@ pub(super) fn preview(
         .id("staged-messages")
         .w_full()
         .min_w_0()
-        .gap_1()
-        .pb_2();
+        .gap_1();
     for row in visible
         .iter()
         .take(if queue.expanded { 0 } else { 3 })
@@ -113,8 +112,22 @@ pub(super) fn preview(
                         } else if row.uncertain || !row.confirmed {
                             "等待确认"
                         } else {
-                            state_label(row.entry.state)
+                            entry_label(&row.entry)
                         }),
+                )
+                .when(
+                    row.entry.state == State::Queued
+                        && row.entry.delivery == orbit_protocol::input_queue::Delivery::NextRun,
+                    |view| {
+                        view.child(
+                            Button::new(("steer-queued", id as u64))
+                                .ghost()
+                                .xsmall()
+                                .label("引导")
+                                .disabled(!mutable || !row.confirmed || row.uncertain)
+                                .on_click(cx.listener(move |queue, _, _, cx| queue.steer(id, cx))),
+                        )
+                    },
                 )
                 .child(
                     Button::new(("edit-queued", id as u64))

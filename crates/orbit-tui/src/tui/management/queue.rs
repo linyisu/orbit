@@ -15,6 +15,7 @@ enum Pending {
     List(Option<i64>),
     Edit,
     Remove,
+    Steer,
 }
 
 #[derive(Debug)]
@@ -33,6 +34,7 @@ enum Hit {
     More,
     Edit,
     Remove,
+    Steer,
     Copy,
     Back,
     Save,
@@ -165,6 +167,28 @@ impl State {
         self.start(Pending::Remove, action)
     }
 
+    fn steer(&mut self) -> Action {
+        let entry = self
+            .editor
+            .as_ref()
+            .map(|editor| &editor.entry)
+            .or_else(|| self.entries.get(self.selected));
+        let Some(entry) = entry.filter(|entry| {
+            entry.state == QueueState::Queued
+                && entry.delivery == orbit_protocol::input_queue::Delivery::NextRun
+        }) else {
+            return Action::None;
+        };
+        self.start(
+            Pending::Steer,
+            QueueAction::Steer {
+                id: entry.id,
+                expected: entry.content.clone(),
+                run: self.run,
+            },
+        )
+    }
+
     fn activate(&mut self, hit: Hit) -> Action {
         if self.pending.is_some() {
             return Action::None;
@@ -180,6 +204,7 @@ impl State {
                 Action::None
             }
             Hit::Save => self.save(),
+            Hit::Steer => self.steer(),
             Hit::Remove => self.remove(),
             Hit::Copy => self
                 .editor
@@ -253,6 +278,7 @@ impl Panel for State {
                     KeyCode::Char('s') => return self.save(),
                     KeyCode::Char('r') => return self.activate(Hit::Refresh),
                     KeyCode::Char('y') => return self.activate(Hit::Copy),
+                    KeyCode::Char('g') => return self.steer(),
                     KeyCode::Char('p') => {
                         if let Some(editor) = &self.editor {
                             return Action::Draft(editor.input.text.clone());
@@ -411,6 +437,23 @@ impl Panel for State {
                 }
                 self.message = Some("已更新待发送消息。".into());
             }
+            (Some(Pending::Steer), Response::InputQueue(Snapshot::Steered { id })) => {
+                if let Some(entry) = self
+                    .entries
+                    .iter_mut()
+                    .find(|entry| entry.id == id)
+                {
+                    entry.delivery = orbit_protocol::input_queue::Delivery::AtBoundary;
+                }
+                if let Some(editor) = self
+                    .editor
+                    .as_mut()
+                    .filter(|editor| editor.entry.id == id)
+                {
+                    editor.entry.delivery = orbit_protocol::input_queue::Delivery::AtBoundary;
+                }
+                self.message = Some("将在合适的输入边界引导当前任务。".into());
+            }
             (Some(Pending::Remove), Response::InputQueue(Snapshot::Removed { id })) => {
                 self.entries
                     .retain(|entry| entry.id != id);
@@ -480,6 +523,19 @@ impl Panel for State {
             ),
             ("保存 Ctrl+S", Hit::Save, !editable),
             (
+                "引导 Ctrl+G",
+                Hit::Steer,
+                !self
+                    .editor
+                    .as_ref()
+                    .map(|editor| &editor.entry)
+                    .or_else(|| self.entries.get(self.selected))
+                    .is_some_and(|entry| {
+                        entry.state == QueueState::Queued
+                            && entry.delivery == orbit_protocol::input_queue::Delivery::NextRun
+                    }),
+            ),
+            (
                 "移除 Alt+Del",
                 Hit::Remove,
                 !self
@@ -548,7 +604,13 @@ impl Panel for State {
             {
                 let rect = Rect::new(self.body.x, self.body.y + row as u16, self.body.width, 1);
                 let state = match entry.state {
-                    QueueState::Queued => "等待",
+                    QueueState::Queued => {
+                        if entry.delivery == orbit_protocol::input_queue::Delivery::NextRun {
+                            "本次结束后发送"
+                        } else {
+                            "等待引导"
+                        }
+                    }
                     QueueState::Claimed => "已接收",
                     QueueState::Finishing => "收尾中",
                     QueueState::Idle => "已暂停",
@@ -603,6 +665,7 @@ mod tests {
         state.initial();
         state.receive(Response::InputQueue(Snapshot::List {
             entries: vec![Entry {
+                delivery: orbit_protocol::input_queue::Delivery::AtBoundary,
                 files: Vec::new(),
                 images: vec![],
                 id: 4,

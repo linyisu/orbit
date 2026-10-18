@@ -84,6 +84,14 @@ pub(super) async fn execute(
                             .into_owned(),
                     };
                 let entry = Entry {
+                    delivery: if live
+                        .as_ref()
+                        .is_none_or(|live| live.deferred_ids.contains(&message.id))
+                    {
+                        orbit_protocol::input_queue::Delivery::NextRun
+                    } else {
+                        orbit_protocol::input_queue::Delivery::AtBoundary
+                    },
                     files: message
                         .attachments
                         .iter()
@@ -124,6 +132,19 @@ pub(super) async fn execute(
             }
             Ok(Snapshot::List { entries, next, run })
         }
+        Action::Steer {
+            id,
+            expected,
+            run: expected_run,
+        } => {
+            ensure!(
+                run == expected_run && run.is_some(),
+                "任务轮次已改变，请刷新队列"
+            );
+            let inbox = inbox.ok_or_else(|| anyhow::anyhow!("当前没有正在运行的任务"))?;
+            inbox.steer(id, &expected).await?;
+            Ok(Snapshot::Steered { id })
+        }
         Action::Edit {
             id,
             expected,
@@ -139,7 +160,7 @@ pub(super) async fn execute(
                 !content.is_empty() && content.len() <= 1_024 * 1_024,
                 "消息需要 1–1048576 字节"
             );
-            let state = if let Some(inbox) = inbox {
+            let (state, delivery) = if let Some(inbox) = inbox {
                 inbox
                     .persist_edit(id, &expected, content.clone(), || async {
                         setup
@@ -149,7 +170,19 @@ pub(super) async fn execute(
                             .map_err(tool_error)
                     })
                     .await?;
-                State::Queued
+                (
+                    State::Queued,
+                    if inbox
+                        .snapshot()
+                        .await
+                        .deferred_ids
+                        .contains(&id)
+                    {
+                        orbit_protocol::input_queue::Delivery::NextRun
+                    } else {
+                        orbit_protocol::input_queue::Delivery::AtBoundary
+                    },
+                )
             } else {
                 // ensure_writer reserves the process-wide writer lease before
                 // touching an idle input; a foreign live service makes it fail.
@@ -157,7 +190,7 @@ pub(super) async fn execute(
                     .session
                     .edit_queued_input(expected_workspace, id, &expected, content.clone())
                     .await?;
-                State::Idle
+                (State::Idle, orbit_protocol::input_queue::Delivery::NextRun)
             };
             let attachments = setup
                 .session
@@ -178,6 +211,7 @@ pub(super) async fn execute(
                 };
             Ok(Snapshot::Edited {
                 entry: Entry {
+                    delivery,
                     id,
                     content,
                     state,

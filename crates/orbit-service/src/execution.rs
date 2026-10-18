@@ -31,6 +31,7 @@ pub struct RunOptions {
     pub model_name: String,
     pub generate_title: bool,
     pub queued_input: bool,
+    pub inbox: Option<orbit_agent::inbox::AgentInbox>,
     pub max_output_tokens: u32,
     pub config: AgentConfig,
     pub calibration: orbit_agent::calibration::TokenCalibration,
@@ -94,16 +95,21 @@ pub async fn start(
     let local_limit = options
         .calibration
         .local_limit(options.config.context_tokens, max_output_tokens as usize);
-    let inbox = orbit_agent::inbox::AgentInbox::default();
-    if !compacting {
-        for message in session
-            .store
-            .pending_agent_messages(session.id())
-            .await?
-        {
-            inbox.push(message).await?;
+    let inbox = if let Some(inbox) = options.inbox {
+        inbox
+    } else {
+        let inbox = orbit_agent::inbox::AgentInbox::default();
+        if !compacting {
+            for message in session
+                .store
+                .pending_agent_messages(session.id())
+                .await?
+            {
+                inbox.push(message).await?;
+            }
         }
-    }
+        inbox
+    };
     let mut agent = Agent::new(backend.clone(), tools.clone(), config)
         .with_state_source(std::sync::Arc::new(
             crate::project_state::ProjectStateSource::new(

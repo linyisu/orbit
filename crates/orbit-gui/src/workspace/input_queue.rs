@@ -20,6 +20,11 @@ enum Operation {
         content: String,
         run: Option<i64>,
     },
+    Steer {
+        id: i64,
+        expected: String,
+        run: Option<i64>,
+    },
     Remove {
         id: i64,
         expected: String,
@@ -31,7 +36,9 @@ impl Operation {
     fn id(&self) -> Option<i64> {
         match self {
             Self::List { .. } => None,
-            Self::Restore { id, .. } | Self::Remove { id, .. } => Some(*id),
+            Self::Restore { id, .. } | Self::Remove { id, .. } | Self::Steer { id, .. } => {
+                Some(*id)
+            }
         }
     }
 
@@ -41,6 +48,11 @@ impl Operation {
             Self::Restore {
                 id, expected, run, ..
             } => Action::Remove {
+                id: *id,
+                expected: expected.clone(),
+                run: *run,
+            },
+            Self::Steer { id, expected, run } => Action::Steer {
                 id: *id,
                 expected: expected.clone(),
                 run: *run,
@@ -510,6 +522,12 @@ impl InputQueue {
                 self.sync_list(window, cx);
             }
             (
+                Operation::Steer { id, .. },
+                Ok(Response::InputQueue(Snapshot::Steered { id: received })),
+            ) if *id == received => {
+                self.load(None, cx);
+            }
+            (
                 Operation::Restore {
                     id,
                     content,
@@ -717,7 +735,7 @@ impl InputQueue {
                     .collect::<String>()
                     .into(),
                 state: if row.confirmed {
-                    state_label(row.entry.state)
+                    entry_label(&row.entry)
                 } else {
                     "等待加载最新状态"
                 },
@@ -764,6 +782,34 @@ impl InputQueue {
             run: self.run,
         };
         self.start(operation, cx);
+    }
+
+    fn steer(&mut self, id: i64, cx: &mut Context<Self>) {
+        if !self.requests.ready() {
+            return;
+        }
+        let Some(row) = self
+            .rows
+            .iter()
+            .find(|row| row.entry.id == id)
+        else {
+            return;
+        };
+        if !row.confirmed
+            || (row.entry.state != State::Queued
+                || row.entry.delivery != orbit_protocol::input_queue::Delivery::NextRun)
+            || row.uncertain
+        {
+            return;
+        }
+        self.start(
+            Operation::Steer {
+                id,
+                expected: row.entry.content.clone(),
+                run: self.run,
+            },
+            cx,
+        );
     }
 
     fn remove(&mut self, id: i64, cx: &mut Context<Self>) {
@@ -839,7 +885,7 @@ impl InputQueue {
         let state = if row.uncertain || !row.confirmed || self.requests.needs_refresh {
             "等待刷新"
         } else {
-            state_label(row.entry.state)
+            entry_label(&row.entry)
         };
         v_flex()
             .id("input-queue-editor")
@@ -931,9 +977,19 @@ fn restored_text(withdrawn: &str, current: &str) -> String {
     }
 }
 
+fn entry_label(entry: &Entry) -> &'static str {
+    if entry.state == State::Queued
+        && entry.delivery == orbit_protocol::input_queue::Delivery::NextRun
+    {
+        "本次结束后发送"
+    } else {
+        state_label(entry.state)
+    }
+}
+
 fn state_label(state: State) -> &'static str {
     match state {
-        State::Queued => "等待读取",
+        State::Queued => "等待合适时机引导",
         State::Claimed => "Agent 已读取",
         State::Finishing => "任务正在结束",
         State::Idle => "等待下次任务",

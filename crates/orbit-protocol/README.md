@@ -25,3 +25,5 @@ cargo test -p orbit-protocol
 ```
 
 [项目总览](../../README.md)
+
+`QueueInput` 暂存文本及附件到下一轮，队列项通过附加 `delivery` 字段区分下一轮发送与当前轮次引导，既有状态和旧请求语义保留；`InputQueue::Steer` 按消息原文和运行编号校验后提升为引导输入。旧 `Steer` 请求保持原有即时引导语义。

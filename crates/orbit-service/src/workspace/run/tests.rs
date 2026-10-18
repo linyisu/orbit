@@ -78,9 +78,17 @@ async fn resumed_pending_files_restore_only_their_read_grants() {
             .authorize_read(&path)
             .is_err()
     );
-    let Started { execution, .. } = start(&mut resumed, None, Vec::new(), Vec::new(), false, None)
-        .await
-        .unwrap();
+    let Started { execution, .. } = start(
+        &mut resumed,
+        None,
+        Vec::new(),
+        Vec::new(),
+        false,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
     let readable = resumed
         .resources
         .workspace
@@ -173,6 +181,7 @@ async fn next_model_request_includes_history_recovered_during_finalization() {
         Vec::new(),
         Vec::new(),
         false,
+        None,
         None,
     )
     .await

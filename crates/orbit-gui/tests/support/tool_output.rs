@@ -257,3 +257,98 @@ pub(super) fn retained_page(request: &Value) -> Value {
         }
     })
 }
+
+pub(super) fn specialized_history(workspace: &str) -> Vec<Value> {
+    let image_path = std::path::Path::new(workspace).join("generated-checker.png");
+    let image = image::RgbImage::from_fn(96, 64, |x, y| {
+        image::Rgb(if (x / 16 + y / 16) % 2 == 0 {
+            [60, 160, 190]
+        } else {
+            [220, 180, 70]
+        })
+    });
+    image.save(image_path).unwrap();
+    let source = (97..=156)
+        .map(|line| {
+            format!(
+                "{line}:     let generated_{line} = \"{}\";\n",
+                "word ".repeat(12)
+            )
+        })
+        .collect::<String>();
+    let mut history = vec![json!({"Started": {"prompt": "Inspect generated tool views"}})];
+    for (id, name, args, output) in [
+        (
+            "source",
+            "ReadFile",
+            json!({"path": "generated.rs", "start_line": 97}),
+            json!({"start_line": 97, "content": source}),
+        ),
+        (
+            "tasks",
+            "ListTasks",
+            json!({}),
+            json!({
+                "tasks": [{
+                    "id": 2,
+                    "title": "Generated review",
+                    "details": "Check generated content",
+                    "status": "in_progress"
+                }]
+            }),
+        ),
+        (
+            "evidence",
+            "CheckEvidence",
+            json!({}),
+            json!({"baseline_available": true, "command_count": 0, "commands": [], "changes": []}),
+        ),
+        (
+            "image",
+            "ReadImage",
+            json!({"path": "generated-checker.png"}),
+            json!({"path": "generated-checker.png", "loaded": true}),
+        ),
+    ] {
+        let call = json!({"id": id, "function": {"name": name, "arguments": args.to_string()}});
+        history.extend([
+            json!({"Agent": {"ToolStarted": {"call": call}}}),
+            json!({
+                "Agent": {
+                    "ToolFinished": {
+                        "call": call,
+                        "content": output.to_string(),
+                        "changes": []
+                    }
+                }
+            }),
+        ]);
+    }
+    let call = json!({
+        "id": "invalid-input",
+        "function": {
+            "name": "ReadFile",
+            "arguments": json!({"path": "generated.rs", "start_line": 0}).to_string()
+        }
+    });
+    history.extend([
+        json!({"Agent": {"ToolStarted": {"call": call}}}),
+        json!({
+            "Agent": {
+                "ToolFailed": {
+                    "call": call,
+                    "error": json!({
+                        "error": {
+                            "code": "invalid_arguments",
+                            "message": "start_line must be greater than zero",
+                            "recovery": "correct_arguments",
+                            "retryable": false,
+                            "message_truncated": false
+                        }
+                    }).to_string()
+                }
+            }
+        }),
+    ]);
+    history
+}

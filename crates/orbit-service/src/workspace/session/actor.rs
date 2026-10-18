@@ -874,6 +874,7 @@ impl Actor {
                 self.profile().await;
             }
             Command::Steer {
+                delivery,
                 message,
                 images,
                 files,
@@ -885,6 +886,19 @@ impl Actor {
                         && message.len() <= 1_024 * 1_024,
                     "invalid session input"
                 );
+                if self.running.is_none() && delivery == orbit_agent::inbox::Delivery::NextRun {
+                    Box::pin(self.command(Command::Start {
+                        request_id: orbit_protocol::request_id(),
+                        prompt: message,
+                        images,
+                        files,
+                        compact: false,
+                        model: None,
+                    }))
+                    .await?;
+                    let _ = accepted.send(None);
+                    return Ok(());
+                }
                 let run = self
                     .running
                     .as_ref()
@@ -907,27 +921,30 @@ impl Actor {
                 );
                 super::super::run::grant_files(&self.setup.resources.workspace, &attachments)?;
                 run.inbox
-                    .persist_and_push(|| async {
-                        let id = self
-                            .setup
-                            .session
-                            .store
-                            .queue_session_input_with_attachments(
-                                self.setup.session.id(),
-                                message.clone(),
-                                attachments.clone(),
-                            )
-                            .await
-                            .map_err(|error| {
-                                orbit_agent::tool::ToolError::ExecutionFailed(error.to_string())
-                            })?;
-                        let _ = accepted.send(id);
-                        Ok(InboxMessage {
-                            attachments,
-                            id,
-                            content: message,
-                        })
-                    })
+                    .persist_input(
+                        || async {
+                            let id = self
+                                .setup
+                                .session
+                                .store
+                                .queue_session_input_with_attachments(
+                                    self.setup.session.id(),
+                                    message.clone(),
+                                    attachments.clone(),
+                                )
+                                .await
+                                .map_err(|error| {
+                                    orbit_agent::tool::ToolError::ExecutionFailed(error.to_string())
+                                })?;
+                            let _ = accepted.send(Some(id));
+                            Ok(InboxMessage {
+                                attachments,
+                                id,
+                                content: message,
+                            })
+                        },
+                        delivery,
+                    )
                     .await?;
             }
             Command::Cancel => {
@@ -1055,6 +1072,7 @@ impl Actor {
                     files,
                     compact,
                     model.as_deref(),
+                    None,
                 )
                 .await;
                 let started = match started {
@@ -1208,8 +1226,8 @@ impl Actor {
         });
     }
 
-    /// Continue only durable, unclaimed input after an explicit stop, with a fresh token.
-    async fn continue_queued(&mut self) -> Result<()> {
+    /// Continue durable, unclaimed input with its delivery policy and a fresh token.
+    async fn continue_queued(&mut self, previous: AgentInbox) -> Result<()> {
         if self
             .setup
             .session
@@ -1220,9 +1238,17 @@ impl Actor {
         {
             return Ok(());
         }
-        let started =
-            super::super::run::start(&mut self.setup, None, Vec::new(), Vec::new(), false, None)
-                .await?;
+        let inbox = previous.take_for_next_run().await?;
+        let started = super::super::run::start(
+            &mut self.setup,
+            None,
+            Vec::new(),
+            Vec::new(),
+            false,
+            None,
+            Some(inbox),
+        )
+        .await?;
         self.accepted.clear();
         self.activate_run(
             started,
@@ -1256,7 +1282,7 @@ impl Actor {
             *workspace = self.setup.resources.workspace.clone();
         }
         self.questions.update(&self.setup);
-        let continue_queued = continue_queued && saved.is_ok();
+        let continue_queued = (continue_queued || status == "completed") && saved.is_ok();
         let status = if saved.is_ok() { status } else { "failed" };
         let mut view = self.view.lock().await;
         if let Some(error) = error.or_else(|| {
@@ -1283,7 +1309,7 @@ impl Actor {
         view.busy = false;
         view.approvals.clear();
         drop(view);
-        if continue_queued && let Err(error) = self.continue_queued().await {
+        if continue_queued && let Err(error) = self.continue_queued(run.inbox).await {
             self.view
                 .lock()
                 .await

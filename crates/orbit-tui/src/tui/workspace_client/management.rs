@@ -242,6 +242,7 @@ mod tests {
             .unwrap()
             .send(Ok(Response::InputQueue(Snapshot::List {
                 entries: vec![Entry {
+                    delivery: orbit_protocol::input_queue::Delivery::AtBoundary,
                     files: Vec::new(),
                     images: vec![],
                     id: 3,
@@ -363,6 +364,7 @@ mod tests {
             .send(Ok(Response::InputQueue(Snapshot::List {
                 entries: (1..40)
                     .map(|id| Entry {
+                        delivery: orbit_protocol::input_queue::Delivery::AtBoundary,
                         files: Vec::new(),
                         images: vec![],
                         id,

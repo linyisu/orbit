@@ -104,10 +104,11 @@ pub enum Command {
         effort: Option<String>,
     },
     Steer {
+        delivery: orbit_agent::inbox::Delivery,
         images: Vec<orbit_protocol::ImageUpload>,
         files: Vec<orbit_protocol::FileUpload>,
         message: String,
-        accepted: oneshot::Sender<i64>,
+        accepted: oneshot::Sender<Option<i64>>,
     },
     Undo {
         path: Option<String>,

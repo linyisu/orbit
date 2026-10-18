@@ -597,3 +597,151 @@ async fn model_failure_keeps_queued_input_without_automatically_retrying() {
             .is_err()
     );
 }
+
+#[tokio::test]
+async fn deferred_followups_start_separate_runs_in_order_after_each_complete_reply() {
+    use tokio::io::AsyncWriteExt;
+    async fn finish(socket: &mut tokio::net::TcpStream, text: &str) {
+        let chunk =
+            serde_json::json!({"choices": [{"delta": {"content": text}, "finish_reason": "stop"}]})
+                .to_string();
+        let body = format!("data: {chunk}\n\ndata: [DONE]\n\n");
+        socket
+            .write_all(
+                format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\
+                Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+    }
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .unwrap();
+    let fixture = Fixture::new(&format!("http://{}/v1", listener.local_addr().unwrap())).await;
+    let session = fixture.handle.info.id.clone();
+    fixture
+        .request(Request::Start {
+            session: session.clone(),
+            request_id: "deferred-sequence".into(),
+            prompt: "Initial generated task".into(),
+            images: vec![],
+            compact: false,
+            model: None,
+        })
+        .await
+        .unwrap();
+    let (mut initial, _) = streaming_request(&listener).await;
+    let mut ids = Vec::new();
+    for message in ["First generated followup", "Second generated followup"] {
+        let Response::InputQueued { message_id } = fixture
+            .request(Request::QueueInput {
+                session: session.clone(),
+                message: message.into(),
+                images: vec![],
+                files: vec![],
+            })
+            .await
+            .unwrap()
+        else {
+            panic!("queue receipt expected")
+        };
+        ids.push(message_id);
+    }
+    let queue = || Request::InputQueue {
+        session: session.clone(),
+        expected_workspace: fixture.handle.info.workspace.clone(),
+        action: Action::List { after: None },
+    };
+    let Response::InputQueue(Snapshot::List { entries, .. }) =
+        fixture.request(queue()).await.unwrap()
+    else {
+        panic!("queue snapshot expected")
+    };
+    assert_eq!(entries.len(), 2);
+    assert!(
+        entries
+            .iter()
+            .all(|entry| entry.state == State::Queued
+                && entry.delivery == orbit_protocol::input_queue::Delivery::NextRun)
+    );
+    finish(&mut initial, "Initial reply finished").await;
+    let (mut first, request) = streaming_request(&listener).await;
+    let messages = request["messages"].as_array().unwrap();
+    assert!(
+        messages
+            .iter()
+            .any(|message| message["content"] == "First generated followup")
+    );
+    assert!(
+        !messages
+            .iter()
+            .any(|message| message["content"] == "Second generated followup")
+    );
+    let Response::InputQueue(Snapshot::List { entries, .. }) =
+        fixture.request(queue()).await.unwrap()
+    else {
+        panic!("queue snapshot expected")
+    };
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].id, ids[1]);
+    assert_eq!(
+        entries[0].delivery,
+        orbit_protocol::input_queue::Delivery::NextRun
+    );
+    finish(&mut first, "First followup finished").await;
+    let (mut second, request) = streaming_request(&listener).await;
+    assert!(
+        request["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|message| message["content"] == "Second generated followup")
+    );
+    finish(&mut second, "Second followup finished").await;
+    fixture.wait(|page| !page.busy).await;
+    assert!(matches!(
+        fixture
+            .request(Request::QueueInput {
+                session: session.clone(),
+                message: "Followup after completion".into(),
+                images: vec![],
+                files: vec![],
+            })
+            .await
+            .unwrap(),
+        Response::Ok
+    ));
+    let (mut idle_followup, _) = streaming_request(&listener).await;
+    finish(&mut idle_followup, "Idle followup finished").await;
+    fixture.wait(|page| !page.busy).await;
+    let snapshot = fixture
+        .handle
+        .store
+        .load(&session)
+        .await
+        .unwrap();
+    assert_eq!(snapshot.runs.len(), 4);
+    assert!(
+        snapshot
+            .runs
+            .iter()
+            .all(|run| run.status == "completed")
+    );
+    for text in ["First generated followup", "Second generated followup"] {
+        assert_eq!(
+            snapshot
+                .history
+                .iter()
+                .filter(|message| matches!(
+                    message,
+                    orbit_model::types::ChatMessage::User { content, .. } if content == text
+                ))
+                .count(),
+            1
+        );
+    }
+}

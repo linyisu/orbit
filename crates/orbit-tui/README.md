@@ -48,3 +48,5 @@ cargo run --release -p orbit-tui --locked
 ```sh
 cargo test -p orbit-tui --locked
 ```
+
+运行中普通补充输入默认留到本次结束后逐条发送；在 `/queue` 中使用“引导 Ctrl+G”才进入当前任务的输入边界。

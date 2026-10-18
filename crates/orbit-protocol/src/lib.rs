@@ -22,7 +22,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 /// Current request and event schema version advertised during the handshake.
-pub const VERSION: u32 = 28;
+pub const VERSION: u32 = 29;
 /// Oldest peer schema accepted by this implementation.
 pub const MIN_COMPATIBLE_VERSION: u32 = 15;
 
@@ -211,6 +211,15 @@ pub enum Request {
         session: String,
         model: String,
         effort: Option<String>,
+    },
+    /// Persists a follow-up for a fresh run after the current reply finishes.
+    QueueInput {
+        session: String,
+        message: String,
+        #[serde(default)]
+        images: Vec<ImageUpload>,
+        #[serde(default)]
+        files: Vec<FileUpload>,
     },
     SteerImages {
         session: String,

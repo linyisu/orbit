@@ -611,7 +611,7 @@ async fn concurrent_tabs_keep_drafts_events_models_and_requests_separate() {
 }
 
 #[test]
-fn approval_keeps_composer_editable_and_enter_sends_steering() {
+fn approval_keeps_composer_editable_and_enter_queues_a_followup() {
     let (mut tab, mut requests) = tab("local");
     tab.apply(page(vec![], vec![approval(7)]));
     tab.busy = true;
@@ -644,10 +644,19 @@ fn approval_keeps_composer_editable_and_enter_sends_steering() {
         KeyModifiers::NONE,
     )))
     .unwrap();
+    let call = requests.try_recv().unwrap();
     assert!(matches!(
-        requests.try_recv().unwrap().request,
-        Request::Steer { message, .. } if message == "use ReadDocument"
+        call.request,
+        Request::QueueInput { message, images, files, .. }
+            if message == "use ReadDocument" && images.is_empty() && files.is_empty()
     ));
+    call.reply
+        .unwrap()
+        .send(Ok(Response::Ok))
+        .unwrap();
+    assert!(tab.poll_submissions());
+    assert_eq!(tab.state.pending_input.count(), 0);
+    assert!(tab.state.input.text.is_empty());
     assert!(requests.try_recv().is_err());
     assert_eq!(tab.approval_id, Some(7));
 }
@@ -1026,7 +1035,7 @@ fn rejected_steering_restores_the_draft_without_overwriting_new_input() {
         .unwrap()
         .reply
         .unwrap()
-        .send(Ok(Response::Error("session is idle".into())))
+        .send(Ok(Response::Ok))
         .unwrap();
     assert!(tab.poll_submissions());
     assert_eq!(tab.state.pending_input.count(), 0);

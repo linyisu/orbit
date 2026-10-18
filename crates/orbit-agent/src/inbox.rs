@@ -1,4 +1,8 @@
-use std::{collections::VecDeque, future::Future, sync::Arc};
+use std::{
+    collections::{BTreeSet, VecDeque},
+    future::Future,
+    sync::Arc,
+};
 
 use tokio::sync::{Mutex, Notify};
 
@@ -15,11 +19,23 @@ pub struct InboxMessage {
 pub struct InboxSnapshot {
     pub messages: Vec<InboxMessage>,
     pub closed: bool,
+    pub deferred_ids: BTreeSet<i64>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Delivery {
+    AtBoundary,
+    NextRun,
+}
+
+struct PendingInput {
+    message: InboxMessage,
+    delivery: Delivery,
 }
 
 #[derive(Default)]
 struct State {
-    messages: VecDeque<InboxMessage>,
+    messages: VecDeque<PendingInput>,
     closed: bool,
 }
 
@@ -42,8 +58,32 @@ impl AgentInbox {
         F: FnOnce() -> Fut,
         Fut: Future<Output = Result<InboxMessage, ToolError>>,
     {
+        self.persist_input(persist, Delivery::AtBoundary)
+            .await
+    }
+
+    /// Persists input for a fresh run; it remains editable but does not wake the current Agent.
+    pub async fn persist_deferred<F, Fut>(&self, persist: F) -> Result<(), ToolError>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = Result<InboxMessage, ToolError>>,
+    {
+        self.persist_input(persist, Delivery::NextRun)
+            .await
+    }
+
+    /// Reserves finalization while persisting input with its intended delivery boundary.
+    pub async fn persist_input<F, Fut>(
+        &self,
+        persist: F,
+        delivery: Delivery,
+    ) -> Result<(), ToolError>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = Result<InboxMessage, ToolError>>,
+    {
         let mut state = self.state.lock().await;
-        if state.closed {
+        if state.closed && delivery == Delivery::AtBoundary {
             return Err(ToolError::ExecutionFailed(
                 "Agent is finishing; wait for its result before continuing it".into(),
             ));
@@ -55,28 +95,83 @@ impl AgentInbox {
             ));
         }
 
+        let message = persist().await?;
         state
             .messages
-            .push_back(persist().await?);
+            .push_back(PendingInput { message, delivery });
         drop(state);
         self.changed.notify_waiters();
         Ok(())
     }
 
     pub(crate) async fn drain(&self) -> Vec<InboxMessage> {
-        self.state
-            .lock()
-            .await
-            .messages
-            .drain(..)
+        let mut state = self.state.lock().await;
+        let messages = std::mem::take(&mut state.messages);
+        let (deferred, ready): (VecDeque<_>, VecDeque<_>) = messages
+            .into_iter()
+            .partition(|input| input.delivery == Delivery::NextRun);
+        state.messages = deferred;
+        ready
+            .into_iter()
+            .map(|input| input.message)
             .collect()
+    }
+
+    /// Transfers unclaimed input after the previous Agent has closed its inbox.
+    /// Existing steering inputs stay together; otherwise only the first deferred input is enabled.
+    /// Persistence remains owned by the caller, so a failed restart can recover the same messages.
+    pub async fn take_for_next_run(&self) -> Result<Self, ToolError> {
+        let mut state = self.state.lock().await;
+        if !state.closed {
+            return Err(ToolError::ExecutionFailed("Agent is still running".into()));
+        }
+        let mut messages = std::mem::take(&mut state.messages);
+        if !messages
+            .iter()
+            .any(|input| input.delivery == Delivery::AtBoundary)
+            && let Some(first) = messages.front_mut()
+        {
+            first.delivery = Delivery::AtBoundary;
+        }
+        Ok(Self {
+            state: Arc::new(Mutex::new(State {
+                messages,
+                closed: false,
+            })),
+            changed: Arc::new(Notify::new()),
+        })
+    }
+
+    /// Allows a queued instruction to enter the next safe Agent input boundary.
+    pub async fn steer(&self, id: i64, expected: &str) -> Result<(), ToolError> {
+        let mut state = self.state.lock().await;
+        let index = editable_index(&state, id, expected)?;
+        if state.messages[index].delivery != Delivery::NextRun {
+            return Err(ToolError::ExecutionFailed(
+                "输入已处于引导队列，请刷新状态".into(),
+            ));
+        }
+        state.messages[index].delivery = Delivery::AtBoundary;
+        drop(state);
+        self.changed.notify_waiters();
+        Ok(())
     }
 
     pub async fn snapshot(&self) -> InboxSnapshot {
         let state = self.state.lock().await;
         InboxSnapshot {
-            messages: state.messages.iter().cloned().collect(),
+            messages: state
+                .messages
+                .iter()
+                .map(|input| input.message.clone())
+                .collect(),
             closed: state.closed,
+            deferred_ids: state
+                .messages
+                .iter()
+                .filter(|input| input.delivery == Delivery::NextRun)
+                .map(|input| input.message.id)
+                .collect(),
         }
     }
 
@@ -97,7 +192,7 @@ impl AgentInbox {
         let mut state = self.state.lock().await;
         let index = editable_index(&state, id, expected)?;
         persist().await?;
-        state.messages[index].content = content;
+        state.messages[index].message.content = content;
         Ok(())
     }
 
@@ -122,7 +217,11 @@ impl AgentInbox {
 
     pub(crate) async fn close_if_empty(&self) -> bool {
         let mut state = self.state.lock().await;
-        if !state.messages.is_empty() {
+        if state
+            .messages
+            .iter()
+            .any(|message| message.delivery == Delivery::AtBoundary)
+        {
             return false;
         }
         state.closed = true;
@@ -138,13 +237,13 @@ impl AgentInbox {
             let notified = self.changed.notified();
             tokio::pin!(notified);
             notified.as_mut().enable();
-            if !self
-                .state
-                .lock()
-                .await
+            let state = self.state.lock().await;
+            let has_ready = state
                 .messages
-                .is_empty()
-            {
+                .iter()
+                .any(|message| message.delivery == Delivery::AtBoundary);
+            drop(state);
+            if has_ready {
                 return;
             }
             notified.await;
@@ -161,11 +260,11 @@ fn editable_index(state: &State, id: i64, expected: &str) -> Result<usize, ToolE
     let index = state
         .messages
         .iter()
-        .position(|input| input.id == id)
+        .position(|input| input.message.id == id)
         .ok_or_else(|| {
             ToolError::ExecutionFailed("输入已被 Agent 领取或已撤销，无法再修改；请刷新队列".into())
         })?;
-    if state.messages[index].content != expected {
+    if state.messages[index].message.content != expected {
         return Err(ToolError::ExecutionFailed(
             "输入内容已改变，请刷新后重新编辑".into(),
         ));
@@ -477,5 +576,121 @@ mod tests {
             received,
             [(2, "edited".into()), (3, "last".into()), (4, String::new())]
         );
+    }
+}
+
+#[cfg(test)]
+mod deferred_tests {
+    use super::*;
+
+    fn message(id: i64, content: &str) -> InboxMessage {
+        InboxMessage {
+            id,
+            content: content.into(),
+            attachments: vec![],
+        }
+    }
+
+    #[tokio::test]
+    async fn queued_input_is_not_consumed_until_explicitly_steered() {
+        let inbox = AgentInbox::default();
+        inbox
+            .persist_deferred(|| async { Ok(message(7, "follow up")) })
+            .await
+            .unwrap();
+        assert!(inbox.drain().await.is_empty());
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(1), inbox.ready())
+                .await
+                .is_err()
+        );
+        inbox
+            .persist_edit(7, "follow up", "revised".into(), || async { Ok(()) })
+            .await
+            .unwrap();
+        assert!(
+            inbox
+                .snapshot()
+                .await
+                .deferred_ids
+                .contains(&7)
+        );
+        assert!(
+            inbox
+                .steer(7, "follow up")
+                .await
+                .is_err()
+        );
+        inbox.steer(7, "revised").await.unwrap();
+        inbox.ready().await;
+        let delivered = inbox.drain().await;
+        assert_eq!(
+            (delivered[0].id, delivered[0].content.as_str()),
+            (7, "revised")
+        );
+        assert!(inbox.drain().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn deferred_messages_do_not_block_completion_and_survive_the_closing_boundary() {
+        let inbox = AgentInbox::default();
+        inbox
+            .persist_deferred(|| async { Ok(message(1, "next run")) })
+            .await
+            .unwrap();
+        assert!(inbox.close_if_empty().await);
+        inbox
+            .persist_deferred(|| async { Ok(message(2, "late follow up")) })
+            .await
+            .unwrap();
+        assert_eq!(inbox.snapshot().await.messages.len(), 2);
+        assert!(
+            inbox
+                .push(message(3, "too late to steer"))
+                .await
+                .is_err()
+        );
+        assert!(
+            inbox
+                .steer(1, "next run")
+                .await
+                .is_err()
+        );
+        assert!(inbox.drain().await.is_empty());
+    }
+    #[tokio::test]
+    async fn restarting_preserves_steering_batches_but_releases_only_one_deferred_message() {
+        for delivery in [Delivery::AtBoundary, Delivery::NextRun] {
+            let inbox = AgentInbox::default();
+            for id in [1, 2] {
+                inbox
+                    .persist_input(|| async { Ok(message(id, "generated")) }, delivery)
+                    .await
+                    .unwrap();
+            }
+            assert!(inbox.take_for_next_run().await.is_err());
+            inbox.close().await;
+            let next = inbox.take_for_next_run().await.unwrap();
+            assert!(
+                inbox
+                    .snapshot()
+                    .await
+                    .messages
+                    .is_empty()
+            );
+            let ready = next.drain().await;
+            assert_eq!(
+                ready.len(),
+                if delivery == Delivery::AtBoundary {
+                    2
+                } else {
+                    1
+                }
+            );
+            if delivery == Delivery::NextRun {
+                assert_eq!(ready[0].id, 1);
+                assert_eq!(next.snapshot().await.deferred_ids, [2].into());
+            }
+        }
     }
 }

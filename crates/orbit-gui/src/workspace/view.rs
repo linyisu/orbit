@@ -99,40 +99,48 @@ impl Workspace {
             .child(
                 v_flex()
                     .w_full()
-                    .p_3()
-                    .gap_2()
-                    .bg(cx.theme().group_box)
-                    .border_1()
-                    .border_color(cx.theme().border)
-                    .when(
-                        self.input
-                            .read(cx)
-                            .focus_handle(cx)
-                            .is_focused(window),
-                        |view| view.border_color(cx.theme().ring),
-                    )
-                    .rounded(cx.theme().radius_lg)
-                    .when(!self.paths.is_empty(), |view| {
-                        view.child(
-                            h_flex().gap_2().flex_wrap().children(
-                                self.paths
-                                    .iter()
-                                    .map(|path| self.composer_attachment(path, cx)),
-                            ),
-                        )
-                    })
+                    .when_some(self.input_queue.clone(), |view, queue| view.child(queue))
                     .child(
-                        Textarea::new(&self.input)
-                            .on_paste(move |item, window, cx| {
-                                paste_owner
-                                    .update(cx, |view, cx| view.paste_attachments(item, window, cx))
-                                    .unwrap_or(false)
+                        v_flex()
+                            .w_full()
+                            .p_3()
+                            .gap_2()
+                            .bg(cx.theme().group_box)
+                            .border_1()
+                            .border_color(cx.theme().border)
+                            .when(
+                                self.input
+                                    .read(cx)
+                                    .focus_handle(cx)
+                                    .is_focused(window),
+                                |view| view.border_color(cx.theme().ring),
+                            )
+                            .rounded(cx.theme().radius_lg)
+                            .when(!self.paths.is_empty(), |view| {
+                                view.child(
+                                    h_flex().gap_2().flex_wrap().children(
+                                        self.paths
+                                            .iter()
+                                            .map(|path| self.composer_attachment(path, cx)),
+                                    ),
+                                )
                             })
-                            .appearance(false)
-                            .bordered(false)
-                            .aria_label("消息输入框"),
-                    )
-                    .child(self.composer_toolbar(cx)),
+                            .child(
+                                Textarea::new(&self.input)
+                                    .content_padding(Edges::default())
+                                    .on_paste(move |item, window, cx| {
+                                        paste_owner
+                                            .update(cx, |view, cx| {
+                                                view.paste_attachments(item, window, cx)
+                                            })
+                                            .unwrap_or(false)
+                                    })
+                                    .appearance(false)
+                                    .bordered(false)
+                                    .aria_label("消息输入框"),
+                            )
+                            .child(self.composer_toolbar(cx)),
+                    ),
             )
             .child(
                 h_flex()
@@ -595,7 +603,11 @@ impl Workspace {
                         crate::keymap::tooltip("停止", "stop_task", cx)
                     } else {
                         crate::keymap::tooltip(
-                            if self.busy { "补充指令" } else { "发送" },
+                            if self.busy {
+                                "本次结束后发送"
+                            } else {
+                                "发送"
+                            },
                             "composer_send",
                             cx,
                         )
@@ -855,16 +867,6 @@ impl Render for Workspace {
                                 .px(rems(CONTENT_GUTTER_REM))
                                 .pt_2()
                                 .pb_3()
-                                .when_some(self.input_queue.clone(), |view, queue| {
-                                    view.child(
-                                        div()
-                                            .w_full()
-                                            .when(Preferences::comfortable_width(cx), |view| {
-                                                view.max_w(rems(CONTENT_WIDTH_REM))
-                                            })
-                                            .child(queue),
-                                    )
-                                })
                                 .child(
                                     div()
                                         .w_full()

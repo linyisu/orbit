@@ -1,3 +1,4 @@
+use orbit_protocol::input_queue::Delivery;
 use tokio::sync::oneshot;
 
 use super::*;
@@ -16,7 +17,12 @@ pub(super) enum Draft {
 pub(super) struct Submission {
     response: oneshot::Receiver<Result<Response>>,
     draft: Draft,
-    pending_input: Option<u64>,
+    pending_input: Option<InputReceipt>,
+}
+
+struct InputReceipt {
+    ticket: u64,
+    delivery: Delivery,
 }
 
 impl Submission {
@@ -63,16 +69,24 @@ impl Tab {
     }
 
     pub(super) fn submit_with_receipt(&mut self, request: Request, draft: Draft) {
-        let steering = matches!(&request, Request::Steer { .. });
+        let delivery = match &request {
+            Request::Steer { .. } => Some(Delivery::AtBoundary),
+            Request::QueueInput { .. } => Some(Delivery::NextRun),
+            _ => None,
+        };
         match self.request(request) {
             Ok(response) => {
-                let pending_input = if steering && let Draft::Composer(text) = &draft {
+                let pending_input = if let Some(delivery) = delivery
+                    && let Draft::Composer(text) = &draft
+                {
                     self.state.selection.clear();
-                    Some(
-                        self.state
+                    Some(InputReceipt {
+                        ticket: self
+                            .state
                             .pending_input
                             .sending(text.clone()),
-                    )
+                        delivery,
+                    })
                 } else {
                     None
                 };
@@ -236,14 +250,19 @@ impl Tab {
                 }
                 continue;
             }
-            if let Some(ticket) = submission.pending_input {
+            if let Some(receipt) = submission.pending_input {
                 if let Ok(Response::InputQueued { message_id }) = &result {
                     self.state
                         .pending_input
-                        .queued(ticket, *message_id);
+                        .queued(receipt.ticket, *message_id);
                     continue;
                 }
-                self.state.pending_input.reject(ticket);
+                self.state
+                    .pending_input
+                    .reject(receipt.ticket);
+                if receipt.delivery == Delivery::NextRun && matches!(result, Ok(Response::Ok)) {
+                    continue;
+                }
                 let error = match result {
                     Ok(Response::Error(error)) => anyhow::anyhow!(error),
                     Err(error) => error,
@@ -302,8 +321,10 @@ impl Tab {
         self.independent_requests.abort_all();
         let pending = std::mem::take(&mut self.submissions);
         for submission in pending {
-            if let Some(ticket) = submission.pending_input {
-                self.state.pending_input.reject(ticket);
+            if let Some(receipt) = submission.pending_input {
+                self.state
+                    .pending_input
+                    .reject(receipt.ticket);
             }
             self.rejected(
                 submission.draft,

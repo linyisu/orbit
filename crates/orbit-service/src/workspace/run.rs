@@ -13,6 +13,7 @@ pub(super) async fn start(
     files: Vec<orbit_protocol::FileUpload>,
     compact: bool,
     model: Option<&str>,
+    inbox: Option<orbit_agent::inbox::AgentInbox>,
 ) -> Result<Started> {
     if let Some(name) = model
         && name != setup.resources.model_name
@@ -111,6 +112,7 @@ pub(super) async fn start(
             model_name: resources.model_name.clone(),
             generate_title: !compact && !queued_input,
             queued_input,
+            inbox,
             max_output_tokens: resources.budget.max_output_tokens,
             config: orbit_agent::agent::AgentConfig {
                 context_tokens: resources.budget.context_tokens,

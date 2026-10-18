@@ -551,3 +551,99 @@ async fn idle_inputs_keep_ids_and_order_and_pagination_accounts_for_json_escapin
         "edited idle"
     );
 }
+
+#[tokio::test]
+async fn promoting_deferred_input_preserves_persistence_and_checks_run_and_content() {
+    let root = tempfile::tempdir().unwrap();
+    let mut setup = setup(root.path()).await;
+    let workspace = setup
+        .session
+        .snapshot
+        .session
+        .workspace
+        .clone();
+    setup
+        .session
+        .begin("initial".into(), "test::test".into())
+        .await
+        .unwrap();
+    let run = setup.session.active_run_id();
+    let inbox = AgentInbox::default();
+    let id = setup
+        .session
+        .store
+        .queue_session_input(setup.session.id(), "generated followup".into())
+        .await
+        .unwrap();
+    inbox
+        .persist_deferred(|| async {
+            Ok(InboxMessage {
+                id,
+                content: "generated followup".into(),
+                attachments: vec![],
+            })
+        })
+        .await
+        .unwrap();
+    let list = execute(
+        &mut setup,
+        Some(inbox.clone()),
+        &workspace,
+        Action::List { after: None },
+    )
+    .await
+    .unwrap();
+    let Snapshot::List { entries, .. } = list else {
+        panic!("list expected")
+    };
+    assert_eq!(
+        entries[0].delivery,
+        orbit_protocol::input_queue::Delivery::NextRun
+    );
+    for (expected, sampled_run) in [("stale", run), ("generated followup", None)] {
+        assert!(
+            execute(
+                &mut setup,
+                Some(inbox.clone()),
+                &workspace,
+                Action::Steer {
+                    id,
+                    expected: expected.into(),
+                    run: sampled_run
+                }
+            )
+            .await
+            .is_err()
+        );
+    }
+    let result = execute(
+        &mut setup,
+        Some(inbox.clone()),
+        &workspace,
+        Action::Steer {
+            id,
+            expected: "generated followup".into(),
+            run,
+        },
+    )
+    .await
+    .unwrap();
+    assert!(matches!(result, Snapshot::Steered { id: received } if received == id));
+    assert!(
+        inbox
+            .snapshot()
+            .await
+            .deferred_ids
+            .is_empty()
+    );
+    assert_eq!(
+        setup
+            .session
+            .store
+            .pending_agent_messages(setup.session.id())
+            .await
+            .unwrap()[0]
+            .id,
+        id
+    );
+}

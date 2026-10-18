@@ -121,7 +121,10 @@ fn main() -> anyhow::Result<()> {
         input.read_exact(&mut bytes)?;
         let mut request: Value = serde_json::from_slice(&bytes)?;
         let mut uploaded_files = Vec::new();
-        if request["method"] == "submit_attachments" {
+        if matches!(
+            request["method"].as_str(),
+            Some("submit_attachments" | "queue_input")
+        ) {
             for (index, file) in request["files"]
                 .as_array()
                 .into_iter()
@@ -143,11 +146,13 @@ fn main() -> anyhow::Result<()> {
                     path: path.to_string_lossy().into_owned(),
                 });
             }
-            if request["steer"] == true {
-                request["method"] = json!("steer_images");
-                request["message"] = request["prompt"].clone();
-            } else {
-                request["method"] = json!("start");
+            if request["method"] != "queue_input" {
+                if request["steer"] == true {
+                    request["method"] = json!("steer_images");
+                    request["message"] = request["prompt"].clone();
+                } else {
+                    request["method"] = json!("start");
+                }
             }
         }
         if request["method"] == "hello"
@@ -657,6 +662,12 @@ fn main() -> anyhow::Result<()> {
                 }
                 if session == "message-attachments" {
                     history.insert(session.clone(), message_attachments::seed(&workspace)?);
+                }
+                if session == "tool-details" {
+                    history.insert(
+                        session.clone(),
+                        tool_output::specialized_history(&workspace),
+                    );
                 }
                 if session == "tool-history" {
                     history.insert(session.clone(), tool_history());
@@ -1328,7 +1339,7 @@ fn main() -> anyhow::Result<()> {
             "subagents" => child_agents.execute(&workspace, &request),
             "read_subagent" => child_agents.read(&workspace, &request),
             "send_subagent" => child_agents.send_legacy(&workspace, &request),
-            "steer" | "steer_images" => {
+            "steer" | "steer_images" | "queue_input" => {
                 let mut queued_images = Vec::new();
                 for (index, upload) in request["images"]
                     .as_array()
@@ -1360,6 +1371,11 @@ fn main() -> anyhow::Result<()> {
                             .unwrap_or_default(),
                         queued_images,
                         uploaded_files.clone(),
+                        if request["method"] == "queue_input" {
+                            orbit_protocol::input_queue::Delivery::NextRun
+                        } else {
+                            orbit_protocol::input_queue::Delivery::AtBoundary
+                        },
                     )?
                 } else {
                     history

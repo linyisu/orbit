@@ -17,6 +17,7 @@ pub(super) fn enqueue(
     content: &str,
     images: Vec<orbit_protocol::MessageImage>,
     files: Vec<orbit_protocol::MessageImage>,
+    delivery: orbit_protocol::input_queue::Delivery,
 ) -> anyhow::Result<i64> {
     let path = Path::new(workspace).join(".fixture-input-queue.json");
     let mut queue: Queue = match std::fs::read(&path) {
@@ -34,6 +35,7 @@ pub(super) fn enqueue(
         .last()
         .map_or(1, |entry| entry.id + 1);
     queue.entries.push(Entry {
+        delivery,
         files,
         images,
         id,
@@ -79,6 +81,7 @@ fn execute_inner(workspace: &str, request: &Value) -> anyhow::Result<Snapshot> {
                 .exists()
             {
                 (1..=35).map(|index| Entry {
+ delivery: orbit_protocol::input_queue::Delivery::AtBoundary,
 files: Vec::new(),
                     images: vec![],
                     id: index * 7,
@@ -124,6 +127,21 @@ files: Vec::new(),
                 next,
                 run: queue.run,
             }
+        }
+        Action::Steer { id, expected, run } => {
+            anyhow::ensure!(run == queue.run, "当前运行已变化");
+            let entry = queue
+                .entries
+                .iter_mut()
+                .find(|entry| entry.id == id)
+                .ok_or_else(|| anyhow::anyhow!("消息已移除"))?;
+            anyhow::ensure!(
+                entry.content == expected
+                    && entry.delivery == orbit_protocol::input_queue::Delivery::NextRun,
+                "消息已变化"
+            );
+            entry.delivery = orbit_protocol::input_queue::Delivery::AtBoundary;
+            Snapshot::Steered { id }
         }
         Action::Edit {
             id,

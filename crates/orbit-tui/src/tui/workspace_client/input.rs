@@ -433,9 +433,11 @@ impl Tab {
             tui::Action::Steer(prompt) => {
                 let prompt = prompt.trim().to_owned();
                 self.submit_with_receipt(
-                    Request::Steer {
+                    Request::QueueInput {
                         session: self.id.clone().unwrap_or_default(),
                         message: prompt.clone(),
+                        images: Vec::new(),
+                        files: Vec::new(),
                     },
                     submissions::Draft::Composer(prompt),
                 );

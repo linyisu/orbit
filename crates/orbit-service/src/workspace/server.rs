@@ -717,6 +717,7 @@ impl Service {
                     let (accepted, receipt) = tokio::sync::oneshot::channel();
                     handle
                         .command(session::Command::Steer {
+                            delivery: orbit_agent::inbox::Delivery::AtBoundary,
                             message: prompt,
                             images,
                             files,
@@ -724,7 +725,9 @@ impl Service {
                         })
                         .await?;
                     Ok(Response::InputQueued {
-                        message_id: receipt.await?,
+                        message_id: receipt
+                            .await?
+                            .context("missing steering receipt")?,
                     })
                 } else {
                     handle
@@ -878,6 +881,28 @@ impl Service {
                     .await?;
                 Ok(Response::Ok)
             }
+            Request::QueueInput {
+                session,
+                message,
+                images,
+                files,
+            } => {
+                let (accepted, receipt) = tokio::sync::oneshot::channel();
+                self.session(&session)
+                    .await?
+                    .command(session::Command::Steer {
+                        delivery: orbit_agent::inbox::Delivery::NextRun,
+                        message,
+                        images,
+                        files,
+                        accepted,
+                    })
+                    .await?;
+                Ok(match receipt.await? {
+                    Some(message_id) => Response::InputQueued { message_id },
+                    None => Response::Ok,
+                })
+            }
             Request::SteerImages {
                 session,
                 message,
@@ -887,6 +912,7 @@ impl Service {
                 self.session(&session)
                     .await?
                     .command(session::Command::Steer {
+                        delivery: orbit_agent::inbox::Delivery::AtBoundary,
                         message,
                         images,
                         files: Vec::new(),
@@ -894,7 +920,9 @@ impl Service {
                     })
                     .await?;
                 Ok(Response::InputQueued {
-                    message_id: receipt.await?,
+                    message_id: receipt
+                        .await?
+                        .context("missing steering receipt")?,
                 })
             }
             Request::Steer { session, message } => {
@@ -902,6 +930,7 @@ impl Service {
                 self.session(&session)
                     .await?
                     .command(session::Command::Steer {
+                        delivery: orbit_agent::inbox::Delivery::AtBoundary,
                         message,
                         images: vec![],
                         files: Vec::new(),
@@ -909,7 +938,9 @@ impl Service {
                     })
                     .await?;
                 Ok(Response::InputQueued {
-                    message_id: receipt.await?,
+                    message_id: receipt
+                        .await?
+                        .context("missing steering receipt")?,
                 })
             }
             Request::EnableUserInput { session } => {

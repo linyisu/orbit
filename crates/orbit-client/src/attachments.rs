@@ -219,27 +219,21 @@ pub async fn send(
     })
     .await
     .context("读取附件失败")??;
-    let request = if !files.is_empty() {
+    let request = if steer {
+        Request::QueueInput {
+            session,
+            message: prompt,
+            images,
+            files,
+        }
+    } else if !files.is_empty() {
         Request::SubmitAttachments {
             session,
             request_id: id,
             prompt,
             images,
             files,
-            steer,
-        }
-    } else if steer {
-        if images.is_empty() {
-            Request::Steer {
-                session,
-                message: prompt,
-            }
-        } else {
-            Request::SteerImages {
-                session,
-                message: prompt,
-                images,
-            }
+            steer: false,
         }
     } else {
         Request::Start {

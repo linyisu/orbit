@@ -94,6 +94,7 @@ mod tests {
     fn queue() -> Response {
         Response::InputQueue(Snapshot::Edited {
             entry: Entry {
+                delivery: orbit_protocol::input_queue::Delivery::AtBoundary,
                 id: 1,
                 content: "synthetic queued message".into(),
                 images: Vec::new(),
