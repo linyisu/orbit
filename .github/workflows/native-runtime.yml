@@ -43,18 +43,18 @@ jobs:
       - name: Test production process owner and descendant cleanup
         run: python .github/scripts/test-native-process.py
 
-  unix-runtime:
+  runtime:
     name: Runtime (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-15]
+        os: [ubuntu-latest, macos-15, windows-2022]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Test complete Unix runtime
+      - name: Test complete native runtime
         run: cargo test -p orbit-runtime --locked
 
   macos-service:

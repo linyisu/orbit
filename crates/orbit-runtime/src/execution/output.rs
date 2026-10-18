@@ -139,8 +139,13 @@ pub struct OutputLog {
 
 impl OutputLog {
     pub async fn create(directory: &Path) -> Result<Self, RuntimeError> {
+        #[cfg(unix)]
         use std::os::unix::fs::DirBuilderExt;
 
+        #[cfg(windows)]
+        crate::filesystem::private::create_directory_all(directory).map_err(failed)?;
+
+        #[cfg(unix)]
         std::fs::DirBuilder::new()
             .recursive(true)
             .mode(0o700)
@@ -218,6 +223,12 @@ impl OutputLog {
     }
 }
 
+#[cfg(windows)]
+fn create_output_file(path: &Path) -> Result<std::fs::File, RuntimeError> {
+    crate::filesystem::private::open_file(path, true, true).map_err(Into::into)
+}
+
+#[cfg(unix)]
 fn create_output_file(path: &Path) -> Result<std::fs::File, RuntimeError> {
     use std::os::unix::fs::OpenOptionsExt;
 
@@ -340,12 +351,26 @@ mod tests {
         )
         .await
         .unwrap();
-        let child = tokio::process::Command::new("/bin/sh")
-            .args([
+        #[cfg(unix)]
+        let (shell, args) = (
+            "/bin/sh",
+            vec![
                 "-c",
-                "i=0; while [ $i -lt 20000 ]; do printf 'sample output\\n'; i=$((i+1)); \
-                done; printf 'FINAL'; printf 'stderr intact' >&2",
-            ])
+                "i=0; while [ $i -lt 20000 ]; do printf 'sample output\\n'; i=$((i+1)); done; printf 'FINAL'; printf 'stderr intact' >&2",
+            ],
+        );
+        #[cfg(windows)]
+        let (shell, args) = (
+            "powershell.exe",
+            vec![
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "for ($i=0; $i -lt 20000; $i++) { [Console]::Write(\"sample output`n\") }; [Console]::Write('FINAL'); [Console]::Error.Write('stderr intact')",
+            ],
+        );
+        let child = tokio::process::Command::new(shell)
+            .args(args)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .spawn()

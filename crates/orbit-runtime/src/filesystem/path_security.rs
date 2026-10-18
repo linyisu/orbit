@@ -16,6 +16,8 @@ impl ResolvedPath {
     /// Resolve existing links; append missing components to the nearest canonical ancestor.
     pub fn resolve(requested: impl AsRef<Path>, base: Option<&Path>) -> io::Result<Self> {
         let requested_ref = requested.as_ref();
+        #[cfg(windows)]
+        validate_windows_path(requested_ref)?;
 
         let absolute_requested = if requested_ref.is_absolute() {
             normalize_lexical(requested_ref)
@@ -62,6 +64,80 @@ impl ResolvedPath {
         self.canonical
             .starts_with(parent_canonical)
     }
+}
+
+/// Reject Win32 aliases whose filesystem meaning differs from a normal path component.
+#[cfg(windows)]
+pub(super) fn validate_windows_path(path: &Path) -> io::Result<()> {
+    use std::path::Prefix;
+    let invalid = || {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "ambiguous Windows filesystem path",
+        )
+    };
+    if path.has_root() && !path.is_absolute() {
+        return Err(invalid());
+    }
+    for component in path.components() {
+        match component {
+            Component::Prefix(prefix) => {
+                if !path.is_absolute()
+                    || !matches!(
+                        prefix.kind(),
+                        Prefix::Disk(_)
+                            | Prefix::VerbatimDisk(_)
+                            | Prefix::UNC(_, _)
+                            | Prefix::VerbatimUNC(_, _)
+                    )
+                {
+                    return Err(invalid());
+                }
+            }
+            Component::Normal(name) => {
+                let name = name.to_string_lossy();
+                if name.ends_with(['.', ' '])
+                    || name
+                        .chars()
+                        .any(|c| c < ' ' || matches!(c, ':' | '<' | '>' | '"' | '|' | '?' | '*'))
+                {
+                    return Err(invalid());
+                }
+                let stem = name
+                    .split('.')
+                    .next()
+                    .unwrap_or_default()
+                    .trim_end()
+                    .to_ascii_uppercase();
+                if matches!(
+                    stem.as_str(),
+                    "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$"
+                ) || ["COM", "LPT"].iter().any(|prefix| {
+                    stem.strip_prefix(prefix)
+                        .is_some_and(|suffix| {
+                            matches!(
+                                suffix,
+                                "1" | "2"
+                                    | "3"
+                                    | "4"
+                                    | "5"
+                                    | "6"
+                                    | "7"
+                                    | "8"
+                                    | "9"
+                                    | "¹"
+                                    | "²"
+                                    | "³"
+                            )
+                        })
+                }) {
+                    return Err(invalid());
+                }
+            }
+            _ => (),
+        }
+    }
+    Ok(())
 }
 
 /// Canonicalize the existing prefix and append the missing suffix.
@@ -179,7 +255,10 @@ mod tests {
         let link_dir = tmp.path().join("symlink_dir");
 
         std::fs::create_dir(&real_dir).unwrap();
+        #[cfg(unix)]
         std::os::unix::fs::symlink(&real_dir, &link_dir).unwrap();
+        #[cfg(windows)]
+        std::os::windows::fs::symlink_dir(&real_dir, &link_dir).unwrap();
 
         let file_in_link = link_dir.join("data.txt");
         std::fs::write(&file_in_link, "data").unwrap();

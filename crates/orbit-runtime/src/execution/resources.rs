@@ -8,8 +8,12 @@ pub const UNLIMITED: u64 = 0;
 pub const DEFAULT_MAX_MEMORY_BYTES: u64 = UNLIMITED;
 /// Default output-file size budget; unlimited unless the host configures it.
 pub const DEFAULT_MAX_FILE_SIZE_BYTES: u64 = UNLIMITED;
-/// Default per-process file-descriptor ceiling.
+/// Default per-process file-descriptor ceiling on platforms with rlimits.
+#[cfg(unix)]
 pub const DEFAULT_MAX_OPEN_FILES: u64 = 1_024;
+/// Windows has no equivalent per-process file-descriptor ceiling.
+#[cfg(windows)]
+pub const DEFAULT_MAX_OPEN_FILES: u64 = UNLIMITED;
 
 /// OS process limits. Zero disables the corresponding limit.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -21,6 +25,26 @@ pub struct ProcessLimits {
 }
 
 impl ProcessLimits {
+    /// Reject limits that the native host cannot enforce before starting a process.
+    pub fn validate_native(&self) -> std::io::Result<()> {
+        self.validate()
+            .map_err(|message| std::io::Error::new(std::io::ErrorKind::InvalidInput, message))?;
+        #[cfg(windows)]
+        for (name, value) in [
+            ("max_memory_bytes", self.max_memory_bytes),
+            ("max_file_size_bytes", self.max_file_size_bytes),
+            ("max_open_files", self.max_open_files),
+        ] {
+            if value != UNLIMITED && value != u64::MAX {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::Unsupported,
+                    format!("Windows cannot enforce the configured POSIX limit {name}"),
+                ));
+            }
+        }
+        Ok(())
+    }
+
     pub fn validate(&self) -> Result<(), &'static str> {
         if self.max_memory_bytes != UNLIMITED
             && self.max_memory_bytes != u64::MAX
@@ -109,6 +133,47 @@ impl From<ProcessLimits> for ResourceLimits {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_default_limits_are_supported() {
+        ProcessLimits::default()
+            .validate_native()
+            .unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn native_windows_rejects_each_unsupported_finite_limit() {
+        for limits in [
+            ProcessLimits {
+                max_memory_bytes: 16 * MIB as u64,
+                ..Default::default()
+            },
+            ProcessLimits {
+                max_file_size_bytes: 1_024,
+                ..Default::default()
+            },
+            ProcessLimits {
+                max_open_files: 16,
+                ..Default::default()
+            },
+        ] {
+            assert_eq!(
+                limits
+                    .validate_native()
+                    .unwrap_err()
+                    .kind(),
+                std::io::ErrorKind::Unsupported
+            );
+        }
+        ProcessLimits {
+            max_memory_bytes: u64::MAX,
+            max_file_size_bytes: u64::MAX,
+            max_open_files: u64::MAX,
+        }
+        .validate_native()
+        .unwrap();
+    }
 
     #[test]
     fn process_limits_validation() {

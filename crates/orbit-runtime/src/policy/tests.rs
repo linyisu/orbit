@@ -347,7 +347,10 @@ fn symlink_pointing_outside_workspace_is_evaluated_against_target() {
     std::fs::write(&outside_secret, "PRIVATE KEY").unwrap();
 
     let link_inside_ws = tmp_ws.path().join("stolen_key");
+    #[cfg(unix)]
     std::os::unix::fs::symlink(&outside_secret, &link_inside_ws).unwrap();
+    #[cfg(windows)]
+    std::os::windows::fs::symlink_file(&outside_secret, &link_inside_ws).unwrap();
 
     let workspace = ResolvedPath::resolve(tmp_ws.path(), None).unwrap();
     let engine = PolicyEngine::new(workspace);

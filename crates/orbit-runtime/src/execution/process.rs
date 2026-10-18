@@ -23,6 +23,7 @@ pub use windows::ProcessGroup;
 mod tests;
 
 /// Find a system program in trusted locations without consulting inherited PATH.
+#[cfg(unix)]
 pub fn system_executable(name: &str) -> Option<PathBuf> {
     use std::os::unix::fs::PermissionsExt;
 
@@ -36,6 +37,25 @@ pub fn system_executable(name: &str) -> Option<PathBuf> {
                     metadata.is_file() && metadata.permissions().mode() & 0o022 == 0
                 })
         })
+}
+
+/// Find a program in the Windows system directory reported by the operating system.
+#[cfg(windows)]
+pub fn system_executable(name: &str) -> Option<PathBuf> {
+    use std::os::windows::ffi::OsStringExt;
+    use windows_sys::Win32::System::SystemInformation::GetSystemDirectoryW;
+    if Path::new(name).components().count() != 1 || name.contains(['/', '\\', ':']) {
+        return None;
+    }
+    let mut buffer = vec![0u16; 32_768];
+    // SAFETY: the writable buffer contains the supplied number of UTF-16 elements.
+    let length = unsafe { GetSystemDirectoryW(buffer.as_mut_ptr(), buffer.len() as u32) };
+    if length == 0 || length as usize >= buffer.len() {
+        return None;
+    }
+    let directory = PathBuf::from(std::ffi::OsString::from_wide(&buffer[..length as usize]));
+    let path = directory.join(name);
+    path.is_file().then_some(path)
 }
 
 #[derive(Debug, Serialize)]

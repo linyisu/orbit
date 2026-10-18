@@ -1,4 +1,3 @@
-use std::os::unix::fs::MetadataExt;
 use std::{
     fs::File,
     io,
@@ -6,7 +5,7 @@ use std::{
     sync::Arc,
 };
 
-use rustix::fs::{Mode, OFlags, openat};
+use super::access;
 use thiserror::Error;
 
 use crate::{
@@ -34,31 +33,30 @@ fn open_canonical_parent_stepwise(canonical_parent: &Path) -> Result<File, Works
         return Err(WorkspaceError::InvalidPath);
     }
 
-    let mut current = File::open("/")?;
-
-    for component in canonical_parent.components() {
+    let mut components = canonical_parent.components();
+    let mut prefix = PathBuf::new();
+    for component in components.by_ref() {
         match component {
-            Component::RootDir => {}
-            Component::Normal(name) => {
-                let next_fd = openat(
-                    &current,
-                    name,
-                    OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-                    Mode::empty(),
-                )
-                .map_err(|e| {
-                    if io::Error::from(e).kind() == io::ErrorKind::NotADirectory {
-                        WorkspaceError::NotDirectory
-                    } else {
-                        WorkspaceError::Io(e.into())
-                    }
-                })?;
-
-                current = File::from(next_fd);
+            Component::Prefix(_) => prefix.push(component.as_os_str()),
+            Component::RootDir => {
+                prefix.push(component.as_os_str());
+                break;
             }
-
             _ => return Err(WorkspaceError::InvalidPath),
         }
+    }
+    let mut current = access::open_root(&prefix)?;
+    for component in components {
+        let Component::Normal(name) = component else {
+            return Err(WorkspaceError::InvalidPath);
+        };
+        current = access::open_directory(&current, Path::new(name)).map_err(|error| {
+            if error.kind() == io::ErrorKind::NotADirectory {
+                WorkspaceError::NotDirectory
+            } else {
+                WorkspaceError::Io(error)
+            }
+        })?;
     }
 
     Ok(current)
@@ -74,7 +72,7 @@ pub struct Workspace {
 impl Workspace {
     pub fn new(root: impl AsRef<Path>) -> Result<Self, WorkspaceError> {
         let path = root.as_ref().canonicalize()?;
-        let root = File::open(&path)?;
+        let root = open_canonical_parent_stepwise(&path)?;
 
         if !root.metadata()?.is_dir() {
             return Err(WorkspaceError::NotDirectory);
@@ -123,6 +121,8 @@ impl Workspace {
     }
 
     pub fn checked_relative(&self, path: &Path) -> Result<PathBuf, WorkspaceError> {
+        #[cfg(windows)]
+        super::path_security::validate_windows_path(path)?;
         let mut parts = Vec::new();
 
         for component in path.components() {
@@ -153,7 +153,6 @@ impl Workspace {
 
     fn resolve_parent(&self, path: &Path) -> Result<(File, std::ffi::OsString), WorkspaceError> {
         use std::collections::VecDeque;
-        use std::os::unix::ffi::OsStringExt;
         let relative = self.checked_relative(path)?;
         let mut pending: VecDeque<std::ffi::OsString> = relative
             .iter()
@@ -178,8 +177,8 @@ impl Workspace {
             let candidate = resolved.join(&name);
             self.checked_relative(&candidate)?;
             let directory = stack.last().unwrap();
-            match rustix::fs::readlinkat(directory, &name, Vec::new()) {
-                Ok(target) => {
+            match access::read_link(directory, Path::new(&name))? {
+                Some(target) => {
                     links += 1;
                     if links > 32 {
                         return Err(WorkspaceError::Io(io::Error::other(
@@ -187,8 +186,11 @@ impl Workspace {
                         )));
                     }
 
-                    let target = PathBuf::from(std::ffi::OsString::from_vec(target.into_bytes()));
                     let target = if target.is_absolute() {
+                        #[cfg(windows)]
+                        let target = ResolvedPath::resolve(&target, None)?
+                            .canonical()
+                            .to_path_buf();
                         let relative_target = target
                             .strip_prefix(&self.path)
                             .map_err(|_| WorkspaceError::InvalidPath)?
@@ -213,25 +215,15 @@ impl Workspace {
                     pending = components;
                 }
 
-                Err(rustix::io::Errno::INVAL | rustix::io::Errno::NOENT) => {
+                None => {
                     if pending.is_empty() {
                         return Ok((directory.try_clone()?, name));
                     }
-                    let next = File::from(
-                        openat(
-                            directory,
-                            &name,
-                            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC | OFlags::NOFOLLOW,
-                            Mode::empty(),
-                        )
-                        .map_err(io::Error::from)?,
-                    );
+                    let next = access::open_directory(directory, Path::new(&name))?;
 
                     stack.push(next);
                     resolved.push(name);
                 }
-
-                Err(error) => return Err(WorkspaceError::Io(error.into())),
             }
         }
 
@@ -247,21 +239,13 @@ impl Workspace {
         } else {
             let (parent, name) = self.resolve_parent(path)?;
 
-            File::from(
-                openat(
-                    &parent,
-                    name,
-                    OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-                    Mode::empty(),
-                )
-                .map_err(|e| {
-                    if io::Error::from(e).kind() == io::ErrorKind::NotADirectory {
-                        WorkspaceError::NotDirectory
-                    } else {
-                        WorkspaceError::Io(e.into())
-                    }
-                })?,
-            )
+            access::open_directory(&parent, Path::new(&name)).map_err(|error| {
+                if error.kind() == io::ErrorKind::NotADirectory {
+                    WorkspaceError::NotDirectory
+                } else {
+                    WorkspaceError::Io(error)
+                }
+            })?
         };
 
         Ok(directory)
@@ -407,27 +391,7 @@ impl Workspace {
     pub fn read_directory_entries(
         directory: &File,
     ) -> Result<Vec<std::ffi::OsString>, WorkspaceError> {
-        use std::os::unix::ffi::OsStrExt;
-
-        let entries = rustix::fs::Dir::read_from(directory).map_err(io::Error::from)?;
-        let mut names = Vec::new();
-
-        for entry in entries {
-            let entry = entry.map_err(io::Error::from)?;
-            let name = std::ffi::OsStr::from_bytes(entry.file_name().to_bytes());
-
-            if name != "." && name != ".." {
-                names.push(name.to_owned());
-            }
-
-            if names.len() > 10_000 {
-                return Err(io::Error::other("directory exceeds 10000 entries").into());
-            }
-        }
-
-        names.sort();
-
-        Ok(names)
+        access::entries(directory).map_err(Into::into)
     }
 
     pub fn directory_entries(
@@ -440,15 +404,7 @@ impl Workspace {
 
     pub fn open_read(&self, path: &Path) -> Result<File, WorkspaceError> {
         let (parent, name) = self.resolve_parent(path)?;
-        let file = File::from(
-            openat(
-                &parent,
-                &name,
-                OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW | OFlags::NONBLOCK,
-                Mode::empty(),
-            )
-            .map_err(io::Error::from)?,
-        );
+        let file = access::open_read(&parent, Path::new(&name))?;
         let metadata = file.metadata()?;
         if !metadata.is_file() {
             return Err(WorkspaceError::NotFile);
@@ -506,23 +462,17 @@ impl Workspace {
                     return Err(WorkspaceError::NotDirectory);
                 }
 
-                let fd = openat(
-                    &parent_file,
-                    file_name,
-                    OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW | OFlags::NONBLOCK,
-                    Mode::empty(),
-                )
-                .map_err(io::Error::from)?;
-                let file = File::from(fd);
+                let file = access::open_read(&parent_file, Path::new(file_name))?;
                 let metadata = file.metadata()?;
 
                 if !metadata.is_file() {
                     return Err(WorkspaceError::NotFile);
                 }
 
-                let canon_meta = canonical.metadata()?;
+                let canonical_parent = open_canonical_parent_stepwise(parent_path)?;
+                let canonical_file = access::open_read(&canonical_parent, Path::new(file_name))?;
 
-                if metadata.dev() != canon_meta.dev() || metadata.ino() != canon_meta.ino() {
+                if !access::same_file(&file, &canonical_file)? {
                     return Err(WorkspaceError::Io(io::Error::other(
                         "file inode changed during open",
                     )));
@@ -543,6 +493,67 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_aliases_cannot_bypass_workspace_authorization() {
+        let root = tempdir().unwrap();
+        let workspace = Workspace::new(root.path()).unwrap();
+        workspace
+            .policy()
+            .approval_policy()
+            .set_mode(crate::policy::ApprovalMode::Yolo);
+        for path in [
+            "record:secret",
+            "NUL",
+            "con.txt",
+            "LPT1",
+            "folder.\\record",
+            "record ",
+            "C:relative",
+        ] {
+            assert!(
+                workspace
+                    .authorize_read(Path::new(path))
+                    .is_err(),
+                "{path}"
+            );
+            assert!(
+                workspace
+                    .authorize_write_parent(Path::new(path))
+                    .is_err(),
+                "{path}"
+            );
+        }
+    }
+
+    #[test]
+    fn relative_links_stay_inside_the_workspace() {
+        let root = tempdir().unwrap();
+        std::fs::create_dir(root.path().join("inside")).unwrap();
+        std::fs::write(root.path().join("inside/data"), "synthetic").unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink("inside", root.path().join("link")).unwrap();
+        #[cfg(windows)]
+        std::os::windows::fs::symlink_dir("inside", root.path().join("link")).unwrap();
+        let workspace = Workspace::new(root.path()).unwrap();
+        assert!(
+            workspace
+                .open_read(Path::new("link/data"))
+                .is_ok()
+        );
+        let outside = tempdir().unwrap();
+        std::fs::write(outside.path().join("data"), "external").unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(outside.path(), root.path().join("outside")).unwrap();
+        #[cfg(windows)]
+        std::os::windows::fs::symlink_dir(outside.path(), root.path().join("outside")).unwrap();
+        assert!(
+            workspace
+                .authorize_read(Path::new("outside/data"))
+                .is_err()
+        );
+    }
 
     #[test]
     fn yolo_reads_and_writes_external_paths_without_recording_grants() {

@@ -2,9 +2,12 @@
 //! open shared leases bridge imports and commits without racing collection.
 use anyhow::{Context, Result, ensure};
 use sha2::{Digest, Sha256};
+#[cfg(unix)]
+use std::fs::OpenOptions;
+#[cfg(unix)]
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::{
-    fs::{File, OpenOptions},
+    fs::File,
     io::{Read, Write},
     path::{Path, PathBuf},
     sync::Arc,
@@ -43,22 +46,27 @@ impl AssetDirectory {
     }
 
     pub fn lock(&self) -> Result<AssetDirectoryLock> {
-        match std::fs::DirBuilder::new()
-            .mode(0o700)
-            .create(&self.root)
+        #[cfg(windows)]
+        crate::filesystem::private::create_directory(&self.root)?;
+        #[cfg(unix)]
         {
-            Ok(()) => (),
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => (),
-            Err(error) => return Err(error.into()),
+            match std::fs::DirBuilder::new()
+                .mode(0o700)
+                .create(&self.root)
+            {
+                Ok(()) => (),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => (),
+                Err(error) => return Err(error.into()),
+            }
+            let metadata = self.root.symlink_metadata()?;
+            ensure!(
+                metadata.is_dir()
+                    && !metadata.file_type().is_symlink()
+                    && metadata.uid() == unsafe { libc::geteuid() },
+                "invalid attachment asset directory"
+            );
+            std::fs::set_permissions(&self.root, std::fs::Permissions::from_mode(0o700))?;
         }
-        let metadata = self.root.symlink_metadata()?;
-        ensure!(
-            metadata.is_dir()
-                && !metadata.file_type().is_symlink()
-                && metadata.uid() == unsafe { libc::geteuid() },
-            "invalid attachment asset directory"
-        );
-        std::fs::set_permissions(&self.root, std::fs::Permissions::from_mode(0o700))?;
         let file = open_private(&self.root.join(".lock"), true)?;
         let started = std::time::Instant::now();
         loop {
@@ -115,7 +123,10 @@ impl AssetDirectory {
             temporary.write_all(bytes)?;
             temporary.as_file().sync_all()?;
             temporary.persist(&path)?;
+            #[cfg(unix)]
             File::open(&self.root)?.sync_all()?;
+            #[cfg(windows)]
+            crate::filesystem::private::sync_directory(&self.root)?;
         }
         let file = open_private(&path, false)?;
         file.lock_shared()?;
@@ -172,9 +183,7 @@ impl AssetDirectoryLock {
             let metadata = entry.path().symlink_metadata()?;
             if metadata.is_file()
                 && !metadata.file_type().is_symlink()
-                && metadata.nlink() == 1
-                && metadata.uid() == unsafe { libc::geteuid() }
-                && metadata.permissions().mode() & 0o077 == 0
+                && is_owned_asset(&entry.path(), &metadata, true)?
             {
                 std::fs::remove_file(entry.path())?;
             }
@@ -197,8 +206,7 @@ impl AssetDirectoryLock {
             if is_asset_name(&name)
                 && metadata.is_file()
                 && !metadata.file_type().is_symlink()
-                && metadata.nlink() == 1
-                && metadata.uid() == unsafe { libc::geteuid() }
+                && is_owned_asset(&entry.path(), &metadata, false)?
             {
                 files.push((name, metadata.len()));
             }
@@ -246,6 +254,24 @@ pub fn is_asset_name(name: &str) -> bool {
         })
 }
 
+#[cfg(windows)]
+fn open_private(path: &Path, create: bool) -> Result<File> {
+    crate::filesystem::private::open_file(path, create, false).map_err(Into::into)
+}
+
+#[cfg(windows)]
+fn is_owned_asset(path: &Path, _metadata: &std::fs::Metadata, _private: bool) -> Result<bool> {
+    Ok(crate::filesystem::private::open_file(path, false, false).is_ok())
+}
+
+#[cfg(unix)]
+fn is_owned_asset(_path: &Path, metadata: &std::fs::Metadata, private: bool) -> Result<bool> {
+    Ok(metadata.nlink() == 1
+        && metadata.uid() == unsafe { libc::geteuid() }
+        && (!private || metadata.permissions().mode() & 0o077 == 0))
+}
+
+#[cfg(unix)]
 fn open_private(path: &Path, create: bool) -> Result<File> {
     let file = OpenOptions::new()
         .read(true)
@@ -312,7 +338,10 @@ mod tests {
 
     #[test]
     fn collection_never_follows_foreign_symlinks_or_hard_links() {
+        #[cfg(unix)]
         use std::os::unix::fs::symlink;
+        #[cfg(windows)]
+        use std::os::windows::fs::symlink_file as symlink;
         let root = tempfile::tempdir().unwrap();
         let assets = AssetDirectory::for_database(&root.path().join("orbit.db"));
         let lock = assets.lock().unwrap();

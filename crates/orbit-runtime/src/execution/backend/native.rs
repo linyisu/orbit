@@ -38,14 +38,10 @@ impl ExecutionBackend for NativeBackend {
                 return Err(RuntimeError::Cancelled);
             }
 
-            let shell = env
-                .env_vars
-                .get("SHELL")
-                .map(String::as_str)
-                .unwrap_or("/bin/sh");
-            let mut command = Command::new(shell);
+            let shell = shell(&env.env_vars)?;
+            let mut command = Command::new(&shell);
+            command.args(shell_arguments(&shell, &request.command));
             command
-                .args(["-c", &request.command])
                 .current_dir(&env.cwd)
                 .env_clear()
                 .envs(&env.env_vars)
@@ -61,7 +57,9 @@ impl ExecutionBackend for NativeBackend {
                 .kill_on_drop(true);
 
             let limits = policy.resources.to_process_limits();
+            limits.validate_native()?;
             // Only async-signal-safe system calls may run between fork and exec.
+            #[cfg(unix)]
             unsafe {
                 command.pre_exec(move || {
                     for (resource, value) in [
@@ -92,12 +90,12 @@ impl ExecutionBackend for NativeBackend {
 
             let (child, guard) = ProcessGroup::spawn(&mut command).map_err(|error| {
                 if error.kind() == std::io::ErrorKind::NotFound
-                    && std::path::Path::new(shell).is_absolute()
-                    && std::fs::metadata(shell)
+                    && std::path::Path::new(&shell).is_absolute()
+                    && std::fs::metadata(&shell)
                         .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
                 {
                     RuntimeError::DependencyUnavailable {
-                        program: shell.into(),
+                        program: shell,
                         message: error.to_string(),
                     }
                 } else {
@@ -129,4 +127,59 @@ impl ExecutionBackend for NativeBackend {
             result.map(Into::into)
         })
     }
+}
+
+fn shell(environment: &std::collections::BTreeMap<String, String>) -> std::io::Result<String> {
+    #[cfg(unix)]
+    {
+        Ok(environment
+            .get("SHELL")
+            .cloned()
+            .unwrap_or_else(|| "/bin/sh".into()))
+    }
+    #[cfg(windows)]
+    {
+        for key in ["SHELL", "ComSpec"] {
+            if let Some((_, value)) = environment
+                .iter()
+                .find(|(name, value)| name.eq_ignore_ascii_case(key) && !value.is_empty())
+            {
+                return Ok(value.clone());
+            }
+        }
+        super::super::process::system_executable("cmd.exe")
+            .map(|path| path.to_string_lossy().into_owned())
+            .ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "Windows command interpreter is unavailable",
+                )
+            })
+    }
+}
+
+fn shell_arguments<'a>(shell: &str, command: &'a str) -> Vec<&'a str> {
+    #[cfg(windows)]
+    {
+        let name = std::path::Path::new(shell)
+            .file_stem()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_ascii_lowercase();
+        if name == "cmd" {
+            return vec!["/D", "/S", "/C", command];
+        }
+        if matches!(name.as_str(), "powershell" | "pwsh") {
+            return vec![
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                command,
+            ];
+        }
+    }
+    #[cfg(unix)]
+    let _ = shell;
+    vec!["-c", command]
 }

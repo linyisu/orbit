@@ -135,8 +135,13 @@ impl WorkspaceScan {
 
             match workspace.open_read(&path) {
                 Ok(mut file) => {
+                    #[cfg(unix)]
                     use std::os::unix::fs::PermissionsExt;
 
+                    #[cfg(windows)]
+                    let executable = false;
+
+                    #[cfg(unix)]
                     let executable = file
                         .metadata()
                         .map_err(failed)?

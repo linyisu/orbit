@@ -1,11 +1,15 @@
 //! Scoped stdout/stderr storage. Persistent sessions retain bounded logs across runs;
 //! temporary callers release them when the run and outstanding I/O leases end.
+#[cfg(unix)]
+use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::{
-    fs::{File, OpenOptions},
-    os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt},
+    fs::File,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
+
+#[cfg(unix)]
+use std::fs::OpenOptions;
 
 use super::OutputLog;
 use crate::error::{RuntimeError, failed};
@@ -69,12 +73,18 @@ impl CommandOutputs {
         })))
     }
 
-    /// Native command execution is Unix-only. Include the effective user so separate OS accounts
-    /// never share the maintenance directory.
+    /// Use a per-user directory and validate its ownership before accepting output leases.
     pub fn root() -> PathBuf {
-        std::env::temp_dir().join(format!("orbit-command-output-{}", unsafe {
-            libc::geteuid()
-        }))
+        #[cfg(unix)]
+        {
+            std::env::temp_dir().join(format!("orbit-command-output-{}", unsafe {
+                libc::geteuid()
+            }))
+        }
+        #[cfg(windows)]
+        {
+            std::env::temp_dir().join("orbit-command-output")
+        }
     }
 
     pub fn begin_run(&self) -> Result<OutputRun, RuntimeError> {
@@ -251,6 +261,9 @@ impl Drop for OutputRun {
 }
 
 fn create_directory(root: &Path) -> Result<RunDirectory, RuntimeError> {
+    #[cfg(windows)]
+    crate::filesystem::private::create_directory(root)?;
+    #[cfg(unix)]
     match std::fs::DirBuilder::new()
         .mode(0o700)
         .create(root)
@@ -259,16 +272,7 @@ fn create_directory(root: &Path) -> Result<RunDirectory, RuntimeError> {
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => (),
         Err(error) => return Err(error.into()),
     }
-    let metadata = root.symlink_metadata()?;
-    if !metadata.is_dir()
-        || metadata.file_type().is_symlink()
-        || metadata.uid() != unsafe { libc::geteuid() }
-        || metadata.permissions().mode() & 0o077 != 0
-    {
-        return Err(failed(
-            "command output root must be a private directory owned by this user",
-        ));
-    }
+    validate_private_directory(root)?;
     // Serialize creation against orphan collection in other Orbit processes.
     let maintenance = private_lock(&root.join(".maintenance.lock"), true)?;
     let started = std::time::Instant::now();
@@ -288,10 +292,12 @@ fn create_directory(root: &Path) -> Result<RunDirectory, RuntimeError> {
         }
     }
     prune_orphans(root)?;
-    let directory = tempfile::Builder::new()
-        .prefix("run-")
-        .permissions(std::fs::Permissions::from_mode(0o700))
-        .tempdir_in(root)?;
+    let mut builder = tempfile::Builder::new();
+    builder.prefix("run-");
+    #[cfg(unix)]
+    builder.permissions(std::fs::Permissions::from_mode(0o700));
+    let directory = builder.tempdir_in(root)?;
+    validate_private_directory(directory.path())?;
     let lock = private_lock(&directory.path().join("owner.lock"), true)?;
     lock.lock()?;
     Ok(RunDirectory::Temporary {
@@ -300,6 +306,12 @@ fn create_directory(root: &Path) -> Result<RunDirectory, RuntimeError> {
     })
 }
 
+#[cfg(windows)]
+fn validate_private_directory(path: &Path) -> Result<(), RuntimeError> {
+    crate::filesystem::private::validate_directory(path).map_err(Into::into)
+}
+
+#[cfg(unix)]
 fn validate_private_directory(path: &Path) -> Result<(), RuntimeError> {
     let metadata = path.symlink_metadata()?;
     if !metadata.is_dir()
@@ -327,6 +339,9 @@ fn create_persistent(path: PathBuf) -> Result<RunDirectory, RuntimeError> {
         .parent()
         .ok_or_else(|| failed("missing command output parent"))?;
     for directory in [parent, path.as_path()] {
+        #[cfg(windows)]
+        crate::filesystem::private::create_directory(directory)?;
+        #[cfg(unix)]
         match std::fs::DirBuilder::new()
             .mode(0o700)
             .create(directory)
@@ -340,6 +355,12 @@ fn create_persistent(path: PathBuf) -> Result<RunDirectory, RuntimeError> {
     Ok(RunDirectory::Persistent(path))
 }
 
+#[cfg(windows)]
+fn private_lock(path: &Path, create: bool) -> Result<File, RuntimeError> {
+    crate::filesystem::private::open_file(path, create, false).map_err(Into::into)
+}
+
+#[cfg(unix)]
 fn private_lock(path: &Path, create: bool) -> Result<File, RuntimeError> {
     let file = OpenOptions::new()
         .read(true)
@@ -376,12 +397,27 @@ fn prune_orphans(root: &Path) -> Result<(), RuntimeError> {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
             Err(error) => return Err(error.into()),
         };
-        if !metadata.is_dir()
-            || metadata.file_type().is_symlink()
-            || metadata.uid() != unsafe { libc::geteuid() }
+        if !metadata.is_dir() || metadata.file_type().is_symlink() {
+            continue;
+        }
+        #[cfg(unix)]
+        if metadata.uid() != unsafe { libc::geteuid() }
             || metadata.permissions().mode() & 0o077 != 0
         {
             continue;
+        }
+        #[cfg(windows)]
+        match crate::filesystem::private::validate_directory(&entry.path()) {
+            Ok(()) => (),
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::PermissionDenied
+                ) =>
+            {
+                continue;
+            }
+            Err(error) => return Err(error.into()),
         }
         let Ok(lock) = private_lock(&entry.path().join("owner.lock"), false) else {
             continue;

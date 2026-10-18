@@ -64,6 +64,8 @@ async fn task_end_expires_access_but_keeps_outstanding_io_alive() {
     let path = lease.path().to_owned();
     assert!(path.starts_with(CommandOutputs::root()));
     assert!(path.starts_with(std::env::temp_dir()));
+    validate_private_directory(&path).unwrap();
+    #[cfg(unix)]
     assert_eq!(
         path.metadata()
             .unwrap()
@@ -131,7 +133,10 @@ fn orphan_collection_keeps_live_directories_unknown_files_and_symlinks() {
 
     let external = tempfile::tempdir().unwrap();
     std::fs::write(external.path().join("keep"), b"user file").unwrap();
+    #[cfg(unix)]
     std::os::unix::fs::symlink(external.path(), root.join("run-link")).unwrap();
+    #[cfg(windows)]
+    std::os::windows::fs::symlink_dir(external.path(), root.join("run-link")).unwrap();
     std::fs::create_dir(root.join("run-unknown")).unwrap();
     std::fs::write(root.join("unknown"), b"keep").unwrap();
     let fresh = create_directory(&root).unwrap();
@@ -156,9 +161,13 @@ fn ownership_root_rejects_public_directories_and_symlinks() {
     let temporary = tempfile::tempdir().unwrap();
     let root = temporary.path().join("public");
     std::fs::create_dir(&root).unwrap();
+    #[cfg(unix)]
     std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o755)).unwrap();
     assert!(create_directory(&root).is_err());
     let link = temporary.path().join("link");
+    #[cfg(unix)]
     std::os::unix::fs::symlink(temporary.path(), &link).unwrap();
+    #[cfg(windows)]
+    std::os::windows::fs::symlink_dir(temporary.path(), &link).unwrap();
     assert!(create_directory(&link).is_err());
 }

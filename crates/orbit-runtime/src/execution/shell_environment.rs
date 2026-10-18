@@ -1,11 +1,17 @@
-use std::{collections::BTreeMap, path::Path, process::Stdio, sync::OnceLock, time::Duration};
+use std::{collections::BTreeMap, sync::OnceLock};
+#[cfg(unix)]
+use std::{path::Path, process::Stdio, time::Duration};
 
+#[cfg(unix)]
 use tokio::{io::AsyncReadExt, process::Command};
 
 use super::environment::is_sensitive_key;
+#[cfg(unix)]
 use super::process::ProcessGroup;
 
+#[cfg(any(unix, test))]
 const MARKER: &[u8] = b"\0ORBIT-ENVIRONMENT\0";
+#[cfg(unix)]
 const MAX_BYTES: u64 = 1_024 * 1_024;
 static ENVIRONMENT: OnceLock<BTreeMap<String, String>> = OnceLock::new();
 static INITIALIZED: tokio::sync::OnceCell<()> = tokio::sync::OnceCell::const_new();
@@ -27,25 +33,31 @@ fn inherited() -> BTreeMap<String, String> {
 pub async fn initialize() {
     INITIALIZED
         .get_or_init(|| async {
-            let mut environment = inherited();
-            let shell = environment
-                .get("SHELL")
-                .cloned()
-                .unwrap_or_else(|| "/bin/sh".into());
-            let home = environment
-                .get("HOME")
-                .cloned()
-                .unwrap_or_else(|| "/".into());
-            if let Ok(discovered) =
-                discover(Path::new(&shell), Path::new(&home), &environment).await
-            {
-                environment.extend(discovered);
-            }
+            let environment = inherited();
+            #[cfg(unix)]
+            let environment = {
+                let mut environment = environment;
+                let shell = environment
+                    .get("SHELL")
+                    .cloned()
+                    .unwrap_or_else(|| "/bin/sh".into());
+                let home = environment
+                    .get("HOME")
+                    .cloned()
+                    .unwrap_or_else(|| "/".into());
+                if let Ok(discovered) =
+                    discover(Path::new(&shell), Path::new(&home), &environment).await
+                {
+                    environment.extend(discovered);
+                }
+                environment
+            };
             let _ = ENVIRONMENT.set(environment);
         })
         .await;
 }
 
+#[cfg(unix)]
 async fn discover(
     shell: &Path,
     home: &Path,
@@ -86,6 +98,7 @@ async fn discover(
     })?
 }
 
+#[cfg(any(unix, test))]
 fn parse(bytes: &[u8]) -> std::io::Result<BTreeMap<String, String>> {
     let start = bytes
         .windows(MARKER.len())
