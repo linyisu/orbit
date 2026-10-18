@@ -100,6 +100,12 @@ pub(super) fn present(name: &str, value: &Value) -> Option<String> {
         "CheckEvidence" => {
             let commands = value["commands"].as_array()?;
             let changes = value["changes"].as_array()?;
+            if value["workspace_scan"]["complete"] == false {
+                blocks.push(format!(
+                    "当前文件未完成核对，已有记录仍可查看；不能据此判断文件未变。\n{}",
+                    text(&value["workspace_scan"], "error")
+                ));
+            }
             blocks.push(format!(
                 "{} 项文件变更 · {} 条命令记录",
                 changes.len(),
@@ -109,12 +115,13 @@ pub(super) fn present(name: &str, value: &Value) -> Option<String> {
                 blocks.push("未记录会话基线".into());
             }
             for change in changes {
-                blocks.push(format!(
-                    "{} · {} · {}",
-                    text(change, "path"),
-                    text(change, "change_kind"),
-                    state(text(change, "origin"))
-                ));
+                let kind = text(change, "change_kind");
+                let origin = state(text(change, "origin"));
+                blocks.push(if kind.is_empty() {
+                    format!("{} · {origin}", text(change, "path"))
+                } else {
+                    format!("{} · {kind} · {origin}", text(change, "path"))
+                });
             }
             for command in commands {
                 blocks.push(format!(
@@ -209,7 +216,7 @@ fn state(value: &str) -> &str {
         "failed" => "失败",
         "input_unchanged" => "输入未变化",
         "stale" => "验证后已有变更",
-        "unknown" => "未记录输入版本",
+        "unknown" => "当前状态未确认",
         "content_matches_orbit_receipt" => "与工具变更一致",
         "content_modified_after_orbit" => "工具变更后再次修改",
         "external_change" => "外部变更",

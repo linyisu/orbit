@@ -18,7 +18,7 @@ pub struct WorkspaceScanLimits {
 }
 
 fn default_max_scan_mib() -> usize {
-    64
+    512
 }
 
 fn default_max_scan_entries() -> usize {
@@ -28,8 +28,8 @@ fn default_max_scan_entries() -> usize {
 impl Default for WorkspaceScanLimits {
     fn default() -> Self {
         Self {
-            max_scan_mib: 64,
-            max_scan_entries: 10_000,
+            max_scan_mib: default_max_scan_mib(),
+            max_scan_entries: default_max_scan_entries(),
         }
     }
 }
@@ -134,7 +134,7 @@ impl WorkspaceScan {
             let path = relative.join(name);
 
             match workspace.open_read(&path) {
-                Ok(file) => {
+                Ok(mut file) => {
                     use std::os::unix::fs::PermissionsExt;
 
                     let executable = file
@@ -145,30 +145,46 @@ impl WorkspaceScan {
                         & 0o111
                         != 0;
                     let available = (self.limits.max_scan_mib * MIB).saturating_sub(self.bytes);
-                    let mut content = Vec::new();
-                    file.take(available as u64 + 1)
-                        .read_to_end(&mut content)
-                        .map_err(failed)?;
-
-                    if content.len() > available {
+                    if file.metadata().map_err(failed)?.len() > available as u64 {
                         return Err(failed(format!(
-                            "workspace scan exceeds {} MiB; no command was started",
+                            "workspace scan exceeds {} MiB",
                             self.limits.max_scan_mib
                         )));
                     }
-
-                    self.bytes += content.len();
+                    let mut reader = file.by_ref().take(available as u64 + 1);
+                    let mut digest = Sha256::new();
+                    let mut buffer = vec![0; 64 * 1_024];
+                    let mut length = 0;
+                    loop {
+                        if token.is_cancelled() {
+                            return Err(RuntimeError::Cancelled);
+                        }
+                        let count = reader
+                            .read(&mut buffer)
+                            .map_err(failed)?;
+                        if count == 0 {
+                            break;
+                        }
+                        length += count;
+                        if length > available {
+                            return Err(failed(format!(
+                                "workspace scan exceeds {} MiB",
+                                self.limits.max_scan_mib
+                            )));
+                        }
+                        digest.update(&buffer[..count]);
+                    }
+                    self.bytes += length;
                     self.fingerprint.files.insert(
                         path.to_str()
-                            .ok_or_else(|| {
-                                failed(
-                                    "workspace scan paths must be valid UTF-8; no command was \
-                                started",
-                                )
-                            })?
+                            .ok_or_else(|| failed("workspace scan paths must be valid UTF-8"))?
                             .to_owned(),
                         FileFingerprint {
-                            sha256: content_hash(&content),
+                            sha256: digest
+                                .finalize()
+                                .iter()
+                                .map(|byte| format!("{byte:02x}"))
+                                .collect(),
                             executable,
                         },
                     );
@@ -183,12 +199,7 @@ impl WorkspaceScan {
                     {
                         self.fingerprint.directories.push(
                             path.to_str()
-                                .ok_or_else(|| {
-                                    failed(
-                                        "workspace scan paths must be valid UTF-8; no command was \
-                                    started",
-                                    )
-                                })?
+                                .ok_or_else(|| failed("workspace scan paths must be valid UTF-8"))?
                                 .to_owned(),
                         );
 
@@ -248,4 +259,42 @@ pub async fn scan_workspace_summary(
     })
     .await
     .map_err(failed)?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{Seek, SeekFrom, Write};
+
+    #[tokio::test]
+    async fn default_scan_accepts_large_assets_and_hashes_their_tail_without_buffering_them() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut asset = std::fs::File::create(directory.path().join("generated.bin")).unwrap();
+        asset.set_len(65 * MIB as u64).unwrap();
+        let workspace = Workspace::new(directory.path()).unwrap();
+        let before = fingerprint(workspace.clone(), CancellationToken::new())
+            .await
+            .unwrap();
+        asset.seek(SeekFrom::End(-1)).unwrap();
+        asset.write_all(&[1]).unwrap();
+        let after = fingerprint(workspace.clone(), CancellationToken::new())
+            .await
+            .unwrap();
+        assert_ne!(before.files["generated.bin"], after.files["generated.bin"]);
+        let small = WorkspaceScanLimits {
+            max_scan_mib: 1,
+            ..Default::default()
+        };
+        assert!(
+            fingerprint_configured(workspace.clone(), CancellationToken::new(), small)
+                .await
+                .is_err()
+        );
+        let cancelled = CancellationToken::new();
+        cancelled.cancel();
+        assert!(matches!(
+            fingerprint(workspace, cancelled).await,
+            Err(RuntimeError::Cancelled)
+        ));
+    }
 }

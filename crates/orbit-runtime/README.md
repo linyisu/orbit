@@ -9,6 +9,10 @@
 - [policy.rs](src/policy.rs)、[capability.rs](src/capability.rs)：文件访问策略与外部授权。
 - [git/](src/git/)、[verification.rs](src/verification.rs)：Git 分类与执行证据。
 
+工作区指纹默认累计扫描 512 MiB、10000 项，文件内容按 64 KiB 块计算摘要，
+不把整个文件装入内存；`max_scan_mib` 和 `max_scan_entries` 可配置。
+扫描预算不构成命令执行前提，指纹不可用时命令仍可执行并报告证据缺失。
+
 命令使用目标用户的真实目录、HOME 和工具链，按操作系统用户权限运行。`workspace_access`、`network` 用于审批，不是进程隔离。
 文件工具没有内置路径黑名单；YOLO 允许直接访问系统用户可访问的路径，其他模式保留工作区与外部授权边界。
 审批模式通过共享策略实时生效，切出 YOLO 不会遗留由该模式产生的文件授权。

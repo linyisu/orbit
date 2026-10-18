@@ -76,6 +76,8 @@ Git 操作统一使用 `Exec`；内部 Git 检查仍为审阅和执行证据服�
   不把命令运行期间观察到的文件自动归为本会话所有。执行权限仅在前后文件均存在时比较。
   变更路径关联其上级清单中的验证候选，与 `ProjectOverview` 复用规则；候选不是已执行检查，
   不构成完整测试依赖图。清单读取或候选输出超预算时明确标记，工具不会执行这些命令。
+  工作区扫描超预算或不可读取时，仍返回已有命令与写入记录；`workspace_scan.complete=false`
+  及 `changes_incomplete=true` 表示无法核对当前文件，命令输入状态为 `unknown`，不判为未变或删除。
 - `SearchMemory.category` 支持按约束、决定、事实和偏好筛选；中文相邻双字匹配改善词法召回，
   不等同于语义检索。`search_truncated` 表示候选未全部排序，可缩小查询或分类。
 - `ReadDocument` 保留 Markdown 与 PDF 分页；CSV/Excel/ODS 可通过 `sheet/start_row/max_rows`

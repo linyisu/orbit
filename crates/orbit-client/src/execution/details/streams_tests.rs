@@ -273,12 +273,25 @@ fn state_and_command_views_keep_user_content_and_drop_transport_metadata() {
             }),
             "0 项文件变更",
         ),
+        (
+            "CheckEvidence",
+            serde_json::json!({
+                "commands": [{"command": "generated-check", "input_state": "unknown", "exit_code": 0}],
+                "changes": [{"path": "generated.rs", "change_kind": null, "origin": "unknown"}],
+                "command_count": 1,
+                "workspace_scan": {"complete": false, "error": "generated scan budget exhausted"}
+            }),
+            "当前文件未完成核对",
+        ),
     ] {
         let view = content(
             &tool(name, serde_json::json!({}), Some(output)),
             Stream::Result,
         );
         assert!(view.contains(expected), "{view}");
+        if name == "CheckEvidence" && expected == "当前文件未完成核对" {
+            assert!(view.contains("generated.rs · 当前状态未确认"), "{view}");
+        }
         assert!(
             !view.contains("private-") && !view.contains("source_kind"),
             "{view}"

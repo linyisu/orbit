@@ -62,6 +62,7 @@ api_key = "replace-with-openai-key"
 [command]
 # 命令直接使用目标用户环境，在会话真实工作目录执行。
 network = "allow" # 允许声明联网；仅用于审批，不限制原生进程网络
+max_scan_mib = 512 # 工作区指纹累计扫描预算；超限只使当前文件核对不可用，不阻止命令
 read_file_scan_bytes = 67108864 # 每次文件读取最多扫描 64 MiB；0 表示不限扫描量
 
 [permissions]

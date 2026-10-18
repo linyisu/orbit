@@ -31,7 +31,10 @@ pub fn register(
             matches the recorded input or post-command output fingerprint; it does not verify \
             mutable system tools, caches, or external state. Also classifies per-path changes \
             against the session baseline and Orbit receipts. Old sessions without evidence remain \
-            unknown. Does not execute commands or change files.",
+            unknown. If workspace scanning is unavailable or exceeds its budget, returns existing \
+            records with unknown current input state and workspace_scan.complete=false; do not \
+            retry the same scan or claim the files are unchanged. Does not execute commands or \
+            change files.",
         json!({
             "type": "object",
             "properties": {},
@@ -67,24 +70,36 @@ pub async fn report(
     token: CancellationToken,
     limits: orbit_tools::run_command::CommandLimits,
 ) -> Result<Value> {
-    let current = fingerprint_configured(workspace.clone(), token.clone(), limits.into()).await?;
+    let (current, scan_error) =
+        match fingerprint_configured(workspace.clone(), token.clone(), limits.into()).await {
+            Ok(current) => (Some(current), None),
+            Err(orbit_runtime::error::RuntimeError::Cancelled) => {
+                return Err(orbit_runtime::error::RuntimeError::Cancelled.into());
+            }
+            Err(error) => (None, Some(error.to_string())),
+        };
     let (baseline, changes, commands) = tokio::try_join!(
         store.workspace_baseline(id),
         store.workspace_changes(id),
         store.verification_records(id)
     )?;
 
-    let mut result = compare(&current, baseline.as_ref(), &changes, &commands);
+    let mut result = compare(current.as_ref(), baseline.as_ref(), &changes, &commands);
     let candidates = orbit_tools::project_overview::ProjectOverview::new(workspace)
         .verification_candidates(
-            changed_paths(&current, baseline.as_ref(), &changes)
+            changed_paths(current.as_ref(), baseline.as_ref(), &changes)
                 .into_iter()
                 .collect(),
             token,
         )
         .await?;
     result["verification_candidates"] = json!(candidates.candidates);
-    result["verification_candidates_incomplete"] = json!(candidates.incomplete);
+    result["verification_candidates_incomplete"] =
+        json!(candidates.incomplete || current.is_none());
+    result["workspace_scan"] = json!({
+        "complete": current.is_some(),
+        "error": scan_error,
+    });
 
     while orbit_agent::context::estimate_tokens(
         &[orbit_model::types::ChatMessage::tool(
@@ -125,7 +140,7 @@ pub async fn report(
 }
 
 fn changed_paths(
-    current: &WorkspaceFingerprint,
+    current: Option<&WorkspaceFingerprint>,
     baseline: Option<&WorkspaceFingerprint>,
     changes: &[WorkspaceChange],
 ) -> std::collections::BTreeSet<String> {
@@ -135,7 +150,7 @@ fn changed_paths(
             .iter()
             .map(|change| change.change.path.clone()),
     );
-    if let Some(baseline) = baseline {
+    if let (Some(baseline), Some(current)) = (baseline, current) {
         paths.extend(
             baseline
                 .files
@@ -149,7 +164,7 @@ fn changed_paths(
 }
 
 fn compare(
-    current: &WorkspaceFingerprint,
+    current: Option<&WorkspaceFingerprint>,
     baseline: Option<&WorkspaceFingerprint>,
     changes: &[WorkspaceChange],
     commands: &[VerificationRecord],
@@ -159,9 +174,8 @@ fn compare(
         .rev()
         .take(20)
         .map(|record| {
-            let input_state = match &record.evidence {
-                None => "unknown",
-                Some(e) => {
+            let input_state = match (current, &record.evidence) {
+                (Some(current), Some(e)) => {
                     let matches_output = e
                         .output
                         .as_ref()
@@ -174,6 +188,7 @@ fn compare(
                         "stale"
                     }
                 }
+                _ => "unknown",
             };
 
             let snapshot_id = record.evidence.as_ref().map(|e| {
@@ -225,8 +240,7 @@ fn compare(
                 .rev()
                 .find(|c| c.change.path == path);
             let current_hash = current
-                .files
-                .get(&path)
+                .and_then(|current| current.files.get(&path))
                 .map(|f| f.sha256.clone());
             let baseline_hash = baseline
                 .and_then(|b| b.files.get(&path))
@@ -248,7 +262,9 @@ fn compare(
                 }
             });
 
-            let origin = if last.is_some() && current_hash == last_expected {
+            let origin = if current.is_none() {
+                "unknown"
+            } else if last.is_some() && current_hash == last_expected {
                 "content_matches_orbit_receipt"
             } else if last.is_some() {
                 "content_modified_after_orbit"
@@ -256,18 +272,24 @@ fn compare(
                 "unattributed_change"
             };
 
-            let changed_from_baseline =
-                baseline.map(|b| b.files.get(&path) != current.files.get(&path));
-            let executable_changed = baseline.and_then(|b| {
-                Some(b.files.get(&path)?.executable != current.files.get(&path)?.executable)
-            });
-            let change_kind =
-                baseline.map(|b| match (b.files.get(&path), current.files.get(&path)) {
-                    (None, Some(_)) => "created",
-                    (Some(_), None) => "deleted",
-                    (Some(before), Some(after)) if before == after => "unchanged",
-                    _ => "modified",
+            let changed_from_baseline = baseline
+                .zip(current)
+                .map(|(b, current)| b.files.get(&path) != current.files.get(&path));
+            let executable_changed = baseline
+                .zip(current)
+                .and_then(|(b, current)| {
+                    Some(b.files.get(&path)?.executable != current.files.get(&path)?.executable)
                 });
+            let change_kind = baseline
+                .zip(current)
+                .map(
+                    |(b, current)| match (b.files.get(&path), current.files.get(&path)) {
+                        (None, Some(_)) => "created",
+                        (Some(_), None) => "deleted",
+                        (Some(before), Some(after)) if before == after => "unchanged",
+                        _ => "modified",
+                    },
+                );
             let external_before_first_orbit_write = baseline
                 .and(first)
                 .map(|_| baseline_hash != first_before);
@@ -289,7 +311,8 @@ fn compare(
         .collect();
 
     json!({
-        "snapshot_id": current.digest,
+        "snapshot_id": current.map(|current| &current.digest),
+        "changes_incomplete": current.is_none(),
         "baseline_available": baseline.is_some(),
         "command_count": commands.len(),
         "commands": records,
@@ -329,7 +352,7 @@ pub async fn summary(session: &crate::session::SessionState) -> String {
                 .count();
 
             format!(
-                "输入版本  最近 {} 条命令：输入未变 {} · 已过期 {} · 未记录 {}",
+                "输入版本  最近 {} 条命令：输入未变 {} · 已过期 {} · 未确认 {}",
                 entries.len(),
                 unchanged,
                 stale,
@@ -359,6 +382,10 @@ pub async fn changes_text(session: &crate::session::SessionState) -> String {
             use std::fmt::Write;
 
             let mut text = String::from("\n当前文件核对\n");
+
+            if value["workspace_scan"]["complete"] == false {
+                text.push_str("当前文件扫描未完成；以下仅为已记录的路径，不能确认当前内容。\n");
+            }
 
             if value["baseline_available"] != true {
                 text.push_str("旧会话未保存开始时的文件基线。\n");
@@ -472,6 +499,54 @@ mod tests {
         assert_eq!(result["changes"][0]["origin"], "unattributed_change");
     }
 
+    #[tokio::test]
+    async fn scan_budget_exhaustion_keeps_evidence_available_but_never_confirms_current_files() {
+        let directory = tempfile::tempdir().unwrap();
+        let project = directory.path().join("project");
+        std::fs::create_dir(&project).unwrap();
+        let large = std::fs::File::create(project.join("generated.bin")).unwrap();
+        large
+            .set_len(2 * 1_024 * 1_024)
+            .unwrap();
+        let workspace = Workspace::new(&project).unwrap();
+        let store = Store::open(directory.path().join("sessions.db"))
+            .await
+            .unwrap();
+        let writer = store
+            .create(project.display().to_string(), "fixture".into())
+            .await
+            .unwrap();
+        let limits = orbit_tools::run_command::CommandLimits {
+            max_scan_mib: 1,
+            ..Default::default()
+        };
+        let result = report(
+            &store,
+            writer.id(),
+            workspace.clone(),
+            CancellationToken::new(),
+            limits.clone(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result["workspace_scan"]["complete"], false);
+        assert!(
+            result["workspace_scan"]["error"]
+                .as_str()
+                .unwrap()
+                .contains("1 MiB")
+        );
+        assert_eq!(result["changes_incomplete"], true);
+        assert!(result["snapshot_id"].is_null());
+        let cancelled = CancellationToken::new();
+        cancelled.cancel();
+        assert!(
+            report(&store, writer.id(), workspace, cancelled, limits)
+                .await
+                .is_err()
+        );
+    }
+
     #[test]
     fn file_presence_and_execute_bit_changes_are_distinct_from_attribution() {
         let baseline = input("base");
@@ -483,12 +558,12 @@ mod tests {
                 executable: false,
             },
         );
-        let result = compare(&created, Some(&baseline), &[], &[]);
+        let result = compare(Some(&created), Some(&baseline), &[], &[]);
         assert_eq!(result["changes"][0]["change_kind"], "created");
         assert_eq!(result["changes"][0]["origin"], "unattributed_change");
         assert!(result["changes"][0]["executable_changed"].is_null());
         let deleted = WorkspaceFingerprint::default();
-        let result = compare(&deleted, Some(&baseline), &[], &[]);
+        let result = compare(Some(&deleted), Some(&baseline), &[], &[]);
         assert_eq!(result["changes"][0]["change_kind"], "deleted");
         assert!(result["changes"][0]["executable_changed"].is_null());
         let mut executable = baseline.clone();
@@ -497,7 +572,7 @@ mod tests {
             .get_mut("a.rs")
             .unwrap()
             .executable = true;
-        let result = compare(&executable, Some(&baseline), &[], &[]);
+        let result = compare(Some(&executable), Some(&baseline), &[], &[]);
         assert_eq!(result["changes"][0]["change_kind"], "modified");
         assert_eq!(result["changes"][0]["executable_changed"], true);
     }
@@ -551,13 +626,23 @@ mod tests {
             }),
         };
         let same = compare(
-            &verified,
+            Some(&verified),
             Some(&baseline),
             std::slice::from_ref(&change),
             std::slice::from_ref(&command),
         );
 
         assert_eq!(same["commands"][0]["input_state"], "input_unchanged");
+        let unavailable = compare(
+            None,
+            Some(&baseline),
+            std::slice::from_ref(&change),
+            std::slice::from_ref(&command),
+        );
+        assert_eq!(unavailable["commands"][0]["input_state"], "unknown");
+        assert_eq!(unavailable["changes"][0]["origin"], "unknown");
+        assert!(unavailable["changes"][0]["change_kind"].is_null());
+        assert!(unavailable["changes"][0]["changed_from_baseline"].is_null());
 
         let mut modified_ws = verified.clone();
         modified_ws.digest = "modified_digest".into();
@@ -579,7 +664,7 @@ mod tests {
             }),
         };
         let compared = compare(
-            &modified_ws,
+            Some(&modified_ws),
             Some(&baseline),
             &[],
             std::slice::from_ref(&command_with_output),
@@ -593,7 +678,7 @@ mod tests {
         );
 
         let changed = compare(
-            &current,
+            Some(&current),
             Some(&baseline),
             &[change],
             std::slice::from_ref(&command),
@@ -608,7 +693,7 @@ mod tests {
         command.evidence = None;
 
         assert_eq!(
-            compare(&current, None, &[], &[command])["commands"][0]["input_state"],
+            compare(Some(&current), None, &[], &[command])["commands"][0]["input_state"],
             "unknown"
         );
     }
