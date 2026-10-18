@@ -240,6 +240,9 @@ async fn retire_version(
     mut version: u32,
 ) -> Result<bool> {
     let owner = verify_owner(stream)?;
+    // macOS may no longer expose the peer address after a released daemon
+    // closes a rejected handshake. Retain it while the connection is live.
+    let address = stream.peer_addr()?;
     let mut retried = false;
     let hello = loop {
         protocol::write(
@@ -270,7 +273,6 @@ async fn retire_version(
         {
             // Released daemons close a mismatched Hello. Reconnect using the
             // announced version only for Hello/Shutdown, never for sessions.
-            let address = stream.peer_addr()?;
             let socket = address
                 .as_pathname()
                 .context("后台服务没有可重连的地址")?;
