@@ -31,9 +31,9 @@ Windows 实现使用私有 Job Object：进程以挂起状态启动，加入禁�
 可用时发送，调用方仍须保留强制终止期限。监督器直接持有所有权，取消等待 future 也会清理。
 
 原生跨平台适配尚未完成：Windows 文件句柄与私有目录权限、资源限制，以及上层服务通信
-仍需适配。Windows 进程实现通过独立模块的跨目标编译检查，尚未通过 Windows 原生运行验收；
-不能据此认定整个 runtime 或服务已支持 Windows。macOS runtime 已通过跨目标编译检查，
-完整服务仍需在配备 Apple SDK 的原生环境构建及验收。
+仍需适配。[原生 CI](../../.github/workflows/native-runtime.yml) 在三个系统执行生产进程模块及其子进程
+回收测试，并在 Linux/macOS 执行完整 runtime 测试。进程模块的独立测试不会编译尚未移植的
+Windows 文件模块，不能据此认定整个 runtime 或服务已支持 Windows。完整服务仍需原生验收。
 
 ## 验证
 

@@ -93,19 +93,22 @@ impl RetainedOutput {
 }
 
 fn output_budget(directory: &Path) -> Result<Arc<OutputBudget>, RuntimeError> {
+    let directory = directory
+        .canonicalize()
+        .map_err(failed)?;
     let mut budgets = OUTPUT_BUDGETS
         .get_or_init(Default::default)
         .lock()
         .expect("output budgets lock poisoned");
     budgets.retain(|_, budget| budget.strong_count() != 0);
     if let Some(budget) = budgets
-        .get(directory)
+        .get(&directory)
         .and_then(Weak::upgrade)
     {
         return Ok(budget);
     }
     let mut used = 0u64;
-    for entry in std::fs::read_dir(directory).map_err(failed)? {
+    for entry in std::fs::read_dir(&directory).map_err(failed)? {
         let entry = entry.map_err(failed)?;
         let metadata = std::fs::symlink_metadata(entry.path()).map_err(failed)?;
         if metadata.is_file()
@@ -122,7 +125,7 @@ fn output_budget(directory: &Path) -> Result<Arc<OutputBudget>, RuntimeError> {
         used: AtomicU64::new(used),
         ..Default::default()
     });
-    budgets.insert(directory.into(), Arc::downgrade(&budget));
+    budgets.insert(directory, Arc::downgrade(&budget));
     Ok(budget)
 }
 
@@ -299,6 +302,28 @@ fn prune_output_directory(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn directory_aliases_share_budget_and_live_log_ownership() {
+        let root = tempfile::tempdir().unwrap();
+        let actual = root.path().join("actual");
+        std::fs::create_dir(&actual).unwrap();
+        let alias = root.path().join("alias");
+        std::os::unix::fs::symlink(&actual, &alias).unwrap();
+        let first = OutputLog::create(&actual.join("logs"))
+            .await
+            .unwrap();
+        let second = OutputLog::create(&alias.join("logs"))
+            .await
+            .unwrap();
+        let budget = output_budget(&alias.join("logs")).unwrap();
+        assert!(Arc::ptr_eq(&budget, &first.lease.budget));
+        assert!(Arc::ptr_eq(&budget, &second.lease.budget));
+        let active = budget.active.lock().unwrap();
+        assert!(active.contains(first.id()));
+        assert!(active.contains(second.id()));
+    }
 
     #[tokio::test]
     async fn failed_log_writes_preserve_exit_status_and_drain_large_output() {
