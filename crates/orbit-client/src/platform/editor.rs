@@ -111,7 +111,7 @@ mod tests {
 
         assert_eq!(result, "original 中文\nchanged");
 
-        let unchanged = Editor::new("/bin/true ; touch injected".into())
+        let unchanged = Editor::new("/bin/sh -c 'exit 0' ; touch injected".into())
             .edit("draft", directory.path())
             .await
             .unwrap();
@@ -123,7 +123,7 @@ mod tests {
                 .exists()
         );
         assert!(
-            Editor::new("/bin/false".into())
+            Editor::new("/bin/sh -c 'exit 1'".into())
                 .edit("draft", directory.path())
                 .await
                 .is_err()
