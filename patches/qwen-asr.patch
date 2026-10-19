@@ -853,7 +853,15 @@
          }
 --- a/src/kernels/mod.rs
 +++ b/src/kernels/mod.rs
-@@ -15,18 +15,26 @@
+@@ -6,6 +6,7 @@
+ #[cfg(target_arch = "aarch64")]
+ pub mod neon;
+ 
++#[cfg(unix)]
+ const SUPERPAGE_SIZE: usize = 2 * 1024 * 1024;
+ 
+ /// Allocate a zeroed Vec backed by superpage-aligned memory.
+@@ -15,18 +16,26 @@
  /// failure. Shared by the decoder INT8/f32 weight prepack and the encoder
  /// f32 weight prepack.
  pub fn superpage_vec<T: Copy>(n: usize) -> Vec<T> {

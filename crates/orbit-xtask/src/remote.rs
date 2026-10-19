@@ -326,8 +326,12 @@ async fn in_container(bundle: &Path, container: &str) -> Result<()> {
 /// Verify the packaged native service in an isolated workspace without a shell or container.
 pub async fn verify_native(bundle: &Path) -> Result<()> {
     let bundle = bundle.canonicalize()?;
+    let client = bundle.join(format!("orbit{}", std::env::consts::EXE_SUFFIX));
+    verify_native_executable(&bundle, &client).await
+}
+
+async fn verify_native_executable(bundle: &Path, client: &Path) -> Result<()> {
     let suffix = std::env::consts::EXE_SUFFIX;
-    let client = bundle.join(format!("orbit{suffix}"));
     let server = bundle.join(format!("orbit-workspace-server{suffix}"));
     embedded_server(&client, &server)?;
     let directory = tempfile::tempdir()?;
@@ -401,6 +405,52 @@ pub async fn verify_native(bundle: &Path) -> Result<()> {
     )
     .await?;
     println!("PASS: native client, embedded service, protocol, session storage and shutdown");
+    Ok(())
+}
+
+/// Exercise the packaged desktop executable with an isolated real window and native service.
+pub async fn verify_gui(bundle: &Path) -> Result<()> {
+    let bundle = bundle.canonicalize()?;
+    let client = crate::bundle::gui_executable(&bundle);
+    verify_native_executable(&bundle, &client).await?;
+    let directory = tempfile::tempdir()?;
+    let root = directory.path().canonicalize()?;
+    let report = root.join("window.json");
+    let mut command = Command::new(&client);
+    command
+        .current_dir(&root)
+        .arg("--smoke-test")
+        .arg(&report)
+        .arg("--config")
+        .arg(root.join("missing.toml"))
+        .env("USERPROFILE", &root)
+        .env("XDG_CONFIG_HOME", root.join("config"))
+        .env("XDG_CACHE_HOME", root.join("cache"))
+        .env("XDG_STATE_HOME", root.join("state"))
+        .env("LOCALAPPDATA", root.join("local"))
+        .env("APPDATA", root.join("roaming"));
+    if cfg!(windows) {
+        command
+            .env_remove("HOME")
+            .env_remove("XDG_CONFIG_HOME");
+    } else {
+        command.env("HOME", &root);
+    }
+    process::run(&mut command).await?;
+    let receipt: Value = serde_json::from_slice(&fs::read(&report)?)?;
+    ensure!(
+        receipt["frames"]
+            .as_u64()
+            .is_some_and(|frames| frames >= 3)
+            && receipt["width"]
+                .as_f64()
+                .is_some_and(|width| width >= 800.)
+            && receipt["height"]
+                .as_f64()
+                .is_some_and(|height| height >= 560.),
+        "desktop did not complete native window rendering: {receipt}"
+    );
+    println!("PASS: isolated native desktop window rendered and exited normally: {receipt}");
     Ok(())
 }
 

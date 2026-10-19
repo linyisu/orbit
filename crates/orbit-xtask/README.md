@@ -29,3 +29,9 @@ cargo test -p orbit-xtask
 `cargo xtask verify-native-bundle target/bundle` 在临时工作区验证原生服务的握手、会话存储和
 关闭，再检查客户端启动；不需要 Docker 或 WSL。Linux 容器兼容性验收仍使用 `verify-bundle`。
 默认归档名包含本机系统与架构。
+
+桌面客户端使用 `cargo xtask bundle-gui`（可加 `debug`）构建到 `target/bundle-gui`，
+macOS 生成 `.app` 并本地签名，Windows 保留 `.exe` 图标资源，Linux 附带桌面启动项。
+`cargo xtask verify-gui-bundle` 先验证内嵌服务，再在独立用户目录打开真实窗口、等待渲染并关闭；
+Linux 需由 Xvfb 提供显示环境。`cargo xtask archive-gui` 只归档桌面启动资产，排除验收用的独立服务。
+详细平台依赖、签名边界及安装说明见 [GUI README](../orbit-gui/README.md#桌面发布包)。

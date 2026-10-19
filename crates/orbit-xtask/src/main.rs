@@ -39,6 +39,8 @@ enum Task {
     VerifyBundle { directory: Option<PathBuf> },
     /// Verify the native client and service without a container.
     VerifyNativeBundle { directory: Option<PathBuf> },
+    /// Verify native desktop window rendering and the embedded service in isolated storage.
+    VerifyGuiBundle { directory: Option<PathBuf> },
     #[command(hide = true)]
     ProbeBundle { server: PathBuf },
     /// Archive a prepared bundle, preserving executable permissions.
@@ -119,6 +121,15 @@ async fn main() -> Result<()> {
                     .join("bundle"),
             };
             remote::verify_native(&directory).await?;
+        }
+        Task::VerifyGuiBundle { directory } => {
+            let directory = match directory {
+                Some(path) => path,
+                None => bundle::target_directory(root())
+                    .await?
+                    .join("bundle-gui"),
+            };
+            remote::verify_gui(&directory).await?;
         }
         Task::ProbeBundle { server } => remote::probe(&server).await?,
         Task::Archive { directory, output } => {

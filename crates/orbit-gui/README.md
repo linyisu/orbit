@@ -12,7 +12,31 @@ sudo apt install build-essential clang pkg-config libfontconfig-dev libwayland-d
 cargo run -p orbit-gui --locked -- --config config.toml
 ```
 
-支持 `--workspace`、`--model`、`--resume`、`--ssh` 与 `--wsl`，其他参数见 `--help`。GUI 内嵌静态服务，暂未加入便携打包。
+macOS 使用 Rust stable 与 Xcode 工具链；Windows 使用 Rust stable MSVC 与 Visual Studio C++ Build Tools。
+两者均可运行 `cargo run -p orbit-gui --locked`，本机服务原生执行，不需要 WSL。
+
+支持 `--workspace`、`--model`、`--resume`、`--ssh` 与 `--wsl`，其他参数见 `--help`。
+GUI 内嵌同平台服务；Linux 使用 musl 静态服务，macOS 使用系统库，Windows 服务静态链接 C 运行库。
+
+## 桌面发布包
+
+```sh
+cargo xtask bundle-gui
+cargo xtask verify-gui-bundle
+cargo xtask archive-gui
+```
+
+产物位于 `target/bundle-gui`。macOS 为带图标、应用身份和麦克风用途声明的 `Orbit.app`，
+构建时进行本地临时签名；Windows 为带图标的 `orbit-gui.exe`，发布包静态链接 C 运行库；
+Linux 为 `orbit-gui`、`orbit.desktop` 和 `orbit.svg`，系统仍需提供对应桌面与音频库。
+Linux 安装时将程序放入 PATH，启动项放入用户 applications 目录，图标放入对应 icons 目录。
+默认归档名包含桌面标记、系统与架构；归档不包含单独的服务，客户端自身已内嵌该资产。
+商店分发、开发者证书签名和 Apple 公证需另行配置发布凭据，本地临时签名不等于公证。
+
+`verify-gui-bundle` 在临时用户目录检查内嵌服务、原生协议、会话存储、真实窗口渲染和正常退出。
+Linux 验收需在独立 Xvfb 中运行；原生 macOS/Windows 使用 GitHub Actions 的隔离 runner。
+Windows 窗口验收不设置 HOME 或 XDG 配置变量，同时覆盖原生设置路径。
+CI 见 [Native desktop contracts](../../.github/workflows/native-desktop.yml)。
 
 ## 使用
 

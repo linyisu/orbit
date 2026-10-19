@@ -448,6 +448,69 @@ mod tests {
     use super::*;
 
     #[test]
+    #[ignore]
+    fn isolated_native_preferences() {
+        let Some(root) = std::env::var_os("ORBIT_GUI_DIRECTORY_TEST_ROOT").map(PathBuf::from)
+        else {
+            return;
+        };
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let mut preferences = Preferences::load(None, &runtime).unwrap();
+        preferences.values.font_size = Some(18);
+        preferences.publish();
+        runtime.block_on(async {
+            tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                preferences.save_updates.changed(),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        });
+        assert!(matches!(
+            *preferences.save_updates.borrow(),
+            crate::keymap::SaveStatus::Saved(1)
+        ));
+        let directory = if cfg!(windows) {
+            root.join("roaming")
+        } else {
+            root.join("home/.config")
+        };
+        let values: Values =
+            serde_json::from_slice(&std::fs::read(directory.join("orbit/gui.json")).unwrap())
+                .unwrap();
+        assert_eq!(values.font_size, Some(18));
+    }
+
+    #[test]
+    fn preferences_use_native_directories_without_unix_environment_on_windows() {
+        let root = tempfile::tempdir().unwrap();
+        let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+        command
+            .args([
+                "--ignored",
+                "--exact",
+                "preferences::tests::isolated_native_preferences",
+            ])
+            .env("ORBIT_GUI_DIRECTORY_TEST_ROOT", root.path())
+            .env_remove("XDG_CONFIG_HOME")
+            .env("APPDATA", root.path().join("roaming"))
+            .env("USERPROFILE", root.path().join("home"));
+        if cfg!(windows) {
+            command.env_remove("HOME");
+        } else {
+            command.env("HOME", root.path().join("home"));
+        }
+        let output = command.output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
     fn mcp_grants_are_opt_in_config_scoped_and_survive_preferences_reload() {
         let old: Values = serde_json::from_str("{}").unwrap();
         assert!(old.mcp_start_configs.is_empty());

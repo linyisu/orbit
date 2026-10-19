@@ -35,6 +35,7 @@ fn main() -> anyhow::Result<()> {
     )))?;
     let mut options = backend::Options::parse();
     options.resolve_paths()?;
+    let smoke_test = options.smoke_test.take();
     let runtime = Arc::new(tokio::runtime::Runtime::new()?);
     let preferences = preferences::Preferences::load(options.preferences.as_deref(), &runtime)?;
     let (loaded, _writer) = workbench::storage::Storage::load(&options)?;
@@ -44,6 +45,7 @@ fn main() -> anyhow::Result<()> {
             runtime.handle().clone(),
         )?))
         .run(move |cx| {
+            cx.set_app_identity("com.orbit.desktop", "Orbit");
             gpui_kit::init(cx);
             image_preview::init(cx);
             let mode = preferences.mode(cx.window_appearance());
@@ -60,6 +62,7 @@ fn main() -> anyhow::Result<()> {
                 WindowOptions {
                     window_bounds: Some(WindowBounds::Windowed(bounds)),
                     window_min_size: Some(size(px(800.), px(560.))),
+                    app_id: Some("orbit".into()),
                     ..gpui_kit::component::TitleBar::window_options()
                 },
                 cx,
@@ -71,6 +74,8 @@ fn main() -> anyhow::Result<()> {
             if let Err(error) = result {
                 eprintln!("无法打开 Orbit：{error:#}");
                 cx.quit();
+            } else if let (Ok((handle, _)), Some(report)) = (result, smoke_test) {
+                let _ = handle.update(cx, |_, window, _| smoke_frame(report, 0, window));
             }
             cx.on_window_closed(|cx, _| {
                 if cx.windows().is_empty() {
@@ -81,4 +86,37 @@ fn main() -> anyhow::Result<()> {
             cx.activate(true);
         });
     Ok(())
+}
+
+/// Observe actual platform frames; ordinary launches never install this bounded CI observer.
+fn smoke_frame(report: std::path::PathBuf, frame: u8, window: &Window) {
+    window.on_next_frame(move |window, cx| {
+        if frame < 2 {
+            smoke_frame(report, frame + 1, window);
+            return;
+        }
+        let bounds = window.bounds();
+        let receipt = serde_json::json!({
+            "frames": frame + 1,
+            "width": f32::from(bounds.size.width),
+            "height": f32::from(bounds.size.height),
+            "platform": std::env::consts::OS,
+        });
+        let task = cx
+            .background_executor()
+            .spawn(async move {
+                std::fs::write(report, serde_json::to_vec(&receipt)?)?;
+                Ok::<_, anyhow::Error>(())
+            });
+        cx.spawn(async move |cx| {
+            if let Err(error) = task.await {
+                eprintln!("窗口验收记录失败：{error:#}");
+            }
+            cx.background_executor()
+                .timer(std::time::Duration::from_secs(3))
+                .await;
+            let _ = cx.update(|cx| cx.quit());
+        })
+        .detach();
+    });
 }

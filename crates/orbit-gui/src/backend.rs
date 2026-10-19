@@ -42,6 +42,10 @@ pub(crate) struct Options {
     /// GUI preferences file; separate from agent configuration and credentials.
     #[arg(long)]
     pub(crate) preferences: Option<PathBuf>,
+    /// Write a readiness receipt after real window rendering and exit; used by native CI.
+    #[arg(long, hide = true)]
+    #[serde(skip)]
+    pub(crate) smoke_test: Option<PathBuf>,
     #[arg(long, conflicts_with = "wsl")]
     pub(crate) ssh: Option<String>,
     #[arg(long, requires = "ssh")]

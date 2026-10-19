@@ -196,6 +196,13 @@ pub async fn build_gui(root: &Path, profile: Profile) -> Result<()> {
         .join("bundle-gui");
     fs::create_dir_all(&output)?;
     install_gui(root, &output, &files["orbit-gui"])?;
+    #[cfg(target_os = "macos")]
+    process::run(
+        Command::new("codesign")
+            .args(["--force", "--sign", "-"])
+            .arg(output.join("Orbit.app")),
+    )
+    .await?;
     install(
         &files["orbit-workspace-server"],
         &output.join(executable_name("orbit-workspace-server")),
@@ -278,6 +285,66 @@ pub async fn archive_gui(directory: &Path, output: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn desktop_archive_preserves_native_launch_assets_and_excludes_service_fixture() {
+        let directory = tempfile::tempdir().unwrap();
+        let bundle = directory.path().join("desktop");
+        let source = directory
+            .path()
+            .join("synthetic-client");
+        fs::create_dir(&bundle).unwrap();
+        fs::write(&source, b"generated desktop executable").unwrap();
+        install_gui(crate::root(), &bundle, &source).unwrap();
+        fs::write(
+            bundle.join(executable_name("orbit-workspace-server")),
+            b"fixture",
+        )
+        .unwrap();
+        let output = directory.path().join("desktop.tar.gz");
+        archive_gui(&bundle, &output)
+            .await
+            .unwrap();
+        let extracted = directory.path().join("unpacked");
+        fs::create_dir(&extracted).unwrap();
+        process::run(
+            Command::new("tar")
+                .arg("-xzf")
+                .arg(output)
+                .arg("-C")
+                .arg(&extracted),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            fs::read(gui_executable(&extracted)).unwrap(),
+            b"generated desktop executable"
+        );
+        assert!(
+            !extracted
+                .join(executable_name("orbit-workspace-server"))
+                .exists()
+        );
+        if cfg!(target_os = "macos") {
+            let contents = extracted.join("Orbit.app/Contents");
+            let plist = fs::read_to_string(contents.join("Info.plist")).unwrap();
+            assert!(plist.contains("NSMicrophoneUsageDescription"));
+            assert!(plist.contains(env!("CARGO_PKG_VERSION")));
+            assert!(!plist.contains("ORBIT_PACKAGE_VERSION"));
+            assert!(
+                contents
+                    .join("Resources/orbit.icns")
+                    .is_file()
+            );
+        } else if cfg!(target_os = "linux") {
+            assert!(
+                fs::read_to_string(extracted.join("orbit.desktop"))
+                    .unwrap()
+                    .contains("Exec=orbit-gui")
+            );
+            assert!(extracted.join("orbit.svg").is_file());
+        }
+    }
 
     #[tokio::test]
     async fn archive_contains_only_the_terminal_and_preserves_executable_permissions() {

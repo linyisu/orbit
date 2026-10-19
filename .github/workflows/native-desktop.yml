@@ -62,11 +62,19 @@ jobs:
           cache-targets: 'false'
       - name: Build native desktop package
         run: cargo xtask bundle-gui debug
+      - name: Verify native window and embedded service
+        if: runner.os != 'Linux'
+        run: cargo xtask verify-gui-bundle
+      - name: Verify isolated Linux window and embedded service
+        if: runner.os == 'Linux'
+        run: xvfb-run -a -s '-screen 0 1280x900x24' cargo xtask verify-gui-bundle
       - name: Test local speech and native model access
         run: |
           cargo test -p orbit-client --features local-speech --locked speech::
       - name: Test desktop preferences
         run: cargo test -p orbit-gui --locked --bin orbit-gui preferences::tests
+      - name: Test native desktop archive contracts
+        run: cargo test -p orbit-xtask --locked bundle::tests::desktop_archive
       - name: Archive desktop application
         run: cargo xtask archive-gui
       - uses: actions/upload-artifact@v4

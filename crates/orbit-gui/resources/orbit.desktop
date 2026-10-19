@@ -6,4 +6,4 @@ Exec=orbit-gui
 Icon=orbit
 Terminal=false
 Categories=Development;
-StartupWMClass=orbit-gui
+StartupWMClass=orbit

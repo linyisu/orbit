@@ -6,6 +6,7 @@ pub mod generic;
 #[cfg(target_arch = "aarch64")]
 pub mod neon;
 
+#[cfg(unix)]
 const SUPERPAGE_SIZE: usize = 2 * 1024 * 1024;
 
 /// Allocate a zeroed Vec backed by superpage-aligned memory.
