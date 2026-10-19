@@ -63,8 +63,12 @@ jobs:
       - name: Build native desktop package
         run: cargo xtask bundle-gui debug
       - name: Verify native window and embedded service
-        if: runner.os != 'Linux'
+        if: runner.os == 'macOS'
         run: cargo xtask verify-gui-bundle
+      - name: Verify Windows window and embedded service
+        if: runner.os == 'Windows'
+        timeout-minutes: 10
+        run: .\target\debug\orbit-xtask.exe verify-gui-bundle
       - name: Verify isolated Linux window and embedded service
         if: runner.os == 'Linux'
         run: xvfb-run -a -s '-screen 0 1280x900x24' cargo xtask verify-gui-bundle
