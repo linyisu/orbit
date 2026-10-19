@@ -25,6 +25,16 @@ enum Task {
         #[arg(value_enum, default_value_t = Profile::Release)]
         profile: Profile,
     },
+    /// Build the desktop client and its native application package.
+    BundleGui {
+        #[arg(value_enum, default_value_t = Profile::Release)]
+        profile: Profile,
+    },
+    /// Archive the native desktop application with its launch assets.
+    ArchiveGui {
+        directory: Option<PathBuf>,
+        output: Option<PathBuf>,
+    },
     /// Verify standalone deployment, protocol and cache reuse in Ubuntu 20.04.
     VerifyBundle { directory: Option<PathBuf> },
     /// Verify the native client and service without a container.
@@ -77,6 +87,21 @@ async fn main() -> Result<()> {
             println!("Workspace architecture checks passed.");
         }
         Task::Bundle { profile } => bundle::build(root(), profile).await?,
+        Task::BundleGui { profile } => bundle::build_gui(root(), profile).await?,
+        Task::ArchiveGui { directory, output } => {
+            let target = bundle::target_directory(root()).await?;
+            bundle::archive_gui(
+                &directory.unwrap_or_else(|| target.join("bundle-gui")),
+                &output.unwrap_or_else(|| {
+                    target.join(format!(
+                        "orbit-desktop-{}-{}.tar.gz",
+                        std::env::consts::OS,
+                        std::env::consts::ARCH
+                    ))
+                }),
+            )
+            .await?;
+        }
         Task::VerifyBundle { directory } => {
             let directory = match directory {
                 Some(path) => path,

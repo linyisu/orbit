@@ -2,6 +2,95 @@ use std::sync::mpsc;
 
 use super::*;
 
+#[test]
+fn native_model_mapping_supports_unicode_paths_and_positional_reads() {
+    use qwen_asr::safetensors::SafetensorsFile;
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory
+        .path()
+        .join("合成模型.safetensors");
+    let mut header = serde_json::json!({
+        "sample": { "dtype": "F32", "shape": [2], "data_offsets": [0, 8] }
+    })
+    .to_string();
+    while header.len() % 8 != 0 {
+        header.push(' ');
+    }
+    let data = [1.25_f32, -2.5_f32]
+        .into_iter()
+        .flat_map(f32::to_le_bytes)
+        .collect::<Vec<_>>();
+    let mut bytes = (header.len() as u64)
+        .to_le_bytes()
+        .to_vec();
+    bytes.extend_from_slice(header.as_bytes());
+    bytes.extend_from_slice(&data);
+    std::fs::write(&path, &bytes).unwrap();
+    {
+        let model = SafetensorsFile::open(path.to_str().unwrap()).unwrap();
+        let tensor = model.find("sample").unwrap();
+        assert_eq!(model.get_f32(tensor).unwrap(), [1.25, -2.5]);
+        let mut last = [0; 4];
+        assert!(model.read_tensor_bytes(tensor, 4, &mut last));
+        assert_eq!(last, (-2.5_f32).to_le_bytes());
+    }
+    bytes.truncate(bytes.len() - 4);
+    std::fs::write(&path, bytes).unwrap();
+    assert!(SafetensorsFile::open(path.to_str().unwrap()).is_none());
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn native_quantized_sidecar_roundtrips_without_posix_file_apis() {
+    use qwen_asr::int8_sidecar::{SidecarLayout, SidecarMmap, write_sidecar};
+    let directory = tempfile::tempdir().unwrap();
+    let config = qwen_asr::config::QwenConfig {
+        dec_layers: 1,
+        dec_hidden: 4,
+        dec_intermediate: 8,
+        dec_heads: 1,
+        dec_kv_heads: 1,
+        dec_head_dim: 4,
+        vocab_size: 8,
+        ..Default::default()
+    };
+    let layout = SidecarLayout::compute(&config);
+    let buffers: Vec<_> = layout
+        .lens
+        .iter()
+        .map(|len| vec![0; *len as usize])
+        .collect();
+    let slices: Vec<_> = buffers
+        .iter()
+        .map(Vec::as_slice)
+        .collect();
+    let path = directory.path().join("合成.sidecar");
+    assert!(write_sidecar(
+        path.to_str().unwrap(),
+        directory.path().to_str().unwrap(),
+        &config,
+        &layout,
+        &slices
+    ));
+    {
+        let mapped = SidecarMmap::open_valid(
+            path.to_str().unwrap(),
+            directory.path().to_str().unwrap(),
+            &config,
+            &layout,
+        )
+        .unwrap();
+        assert_eq!(mapped.i8_buf(0).len(), buffers[0].len());
+        assert!(
+            mapped
+                .i8_buf(0)
+                .iter()
+                .all(|&value| value == 0)
+        );
+    }
+    std::fs::remove_file(path).unwrap();
+}
+
 #[tokio::test]
 #[ignore = "requires verified Qwen weights and independent continuous speech longer than two minutes"]
 async fn local_model_keeps_recording_with_native_callback_cadence_beyond_two_minutes() {

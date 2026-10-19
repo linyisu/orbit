@@ -1,4 +1,5 @@
 //! GPUI Kit desktop shell; workspace services remain behind orbit-client.
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
 mod accounts;
 mod appearance;

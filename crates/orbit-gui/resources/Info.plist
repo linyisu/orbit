@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleExecutable</key><string>orbit-gui</string>
+    <key>CFBundleIdentifier</key><string>com.orbit.desktop</string>
+    <key>CFBundleName</key><string>Orbit</string>
+    <key>CFBundleDisplayName</key><string>Orbit</string>
+    <key>CFBundlePackageType</key><string>APPL</string>
+    <key>CFBundleShortVersionString</key><string>ORBIT_PACKAGE_VERSION</string>
+    <key>CFBundleVersion</key><string>ORBIT_PACKAGE_VERSION</string>
+    <key>CFBundleIconFile</key><string>orbit.icns</string>
+    <key>LSMinimumSystemVersion</key><string>12.0</string>
+    <key>NSHighResolutionCapable</key><true/>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Orbit 使用麦克风在本机将语音转换为输入文字，音频不会上传。</string>
+</dict>
+</plist>

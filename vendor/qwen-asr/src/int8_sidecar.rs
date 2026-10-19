@@ -205,7 +205,7 @@ fn model_identity(model_dir: &str) -> (u64, u64) {
 /// `WeightBuf::Mapped` handed out borrows from `base`.
 pub struct SidecarMmap {
     base: *mut u8,
-    size: usize,
+    _mapping: memmap2::Mmap,
     offsets: Vec<u64>,
     lens: Vec<u64>,
 }
@@ -214,14 +214,6 @@ pub struct SidecarMmap {
 // `Decoder` is already `unsafe impl Send + Sync` for its BF16 mmap pointers.
 unsafe impl Send for SidecarMmap {}
 unsafe impl Sync for SidecarMmap {}
-
-impl Drop for SidecarMmap {
-    fn drop(&mut self) {
-        unsafe {
-            libc::munmap(self.base as *mut _, self.size);
-        }
-    }
-}
 
 impl SidecarMmap {
     /// mmap and validate an existing sidecar. Returns `None` (caller rebuilds)
@@ -233,40 +225,21 @@ impl SidecarMmap {
         cfg: &QwenConfig,
         layout: &SidecarLayout,
     ) -> Option<SidecarMmap> {
-        use libc::*;
-        use std::ffi::CString;
-
-        let c_path = CString::new(path).ok()?;
-        let fd = unsafe { open(c_path.as_ptr(), O_RDONLY) };
-        if fd < 0 {
-            return None;
-        }
-        let mut st = unsafe { std::mem::zeroed::<stat>() };
-        if unsafe { fstat(fd, &mut st) } < 0 {
-            unsafe { close(fd) };
-            return None;
-        }
-        let size = st.st_size as usize;
+        let file = std::fs::File::open(path).ok()?;
+        let size = usize::try_from(file.metadata().ok()?.len()).ok()?;
         if (size as u64) < layout.total_size {
-            unsafe { close(fd) };
             return None;
         }
-        let base = unsafe { mmap(std::ptr::null_mut(), size, PROT_READ, MAP_PRIVATE, fd, 0) };
-        unsafe { close(fd) };
-        if base == libc::MAP_FAILED {
-            return None;
-        }
-        let base = base as *mut u8;
-
-        let ok = validate_header(base, size, model_dir, cfg, layout);
-        if !ok {
-            unsafe { munmap(base as *mut _, size) };
+        // SAFETY: the immutable sidecar mapping stays owned until all borrowed weights are dropped.
+        let mapping = unsafe { memmap2::MmapOptions::new().map(&file).ok()? };
+        let base = mapping.as_ptr() as *mut u8;
+        if !validate_header(base, size, model_dir, cfg, layout) {
             return None;
         }
 
         Some(SidecarMmap {
             base,
-            size,
+            _mapping: mapping,
             offsets: layout.offsets.clone(),
             lens: layout.lens.clone(),
         })
@@ -361,14 +334,13 @@ pub fn write_sidecar(
     layout: &SidecarLayout,
     bufs: &[&[u8]],
 ) -> bool {
-    use std::io::Write;
-    use std::os::unix::fs::FileExt;
+    use std::io::{Seek, SeekFrom, Write};
 
     if bufs.len() != layout.lens.len() {
         return false;
     }
     let tmp = format!("{}.tmp.{}", path, std::process::id());
-    let file = match std::fs::File::create(&tmp) {
+    let mut file = match std::fs::File::create(&tmp) {
         Ok(f) => f,
         Err(_) => return false,
     };
@@ -404,7 +376,7 @@ pub fn write_sidecar(
         header[b..b + 8].copy_from_slice(&off.to_le_bytes());
         header[b + 8..b + 16].copy_from_slice(&len.to_le_bytes());
     }
-    if file.write_all_at(&header, 0).is_err() {
+    if file.write_all(&header).is_err() {
         let _ = std::fs::remove_file(&tmp);
         return false;
     }
@@ -415,7 +387,7 @@ pub fn write_sidecar(
             let _ = std::fs::remove_file(&tmp);
             return false;
         }
-        if file.write_all_at(chunk, layout.offsets[k]).is_err() {
+        if file.seek(SeekFrom::Start(layout.offsets[k])).is_err() || file.write_all(chunk).is_err() {
             let _ = std::fs::remove_file(&tmp);
             return false;
         }

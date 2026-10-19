@@ -15,18 +15,26 @@ const SUPERPAGE_SIZE: usize = 2 * 1024 * 1024;
 /// failure. Shared by the decoder INT8/f32 weight prepack and the encoder
 /// f32 weight prepack.
 pub fn superpage_vec<T: Copy>(n: usize) -> Vec<T> {
-    let size = n.checked_mul(std::mem::size_of::<T>()).unwrap_or(0);
-    if size < SUPERPAGE_SIZE {
-        return vec![unsafe { std::mem::zeroed() }; n];
+    #[cfg(windows)]
+    {
+        // Windows Vec storage must use Rust's allocator, not an aligned CRT allocation.
+        vec![unsafe { std::mem::zeroed() }; n]
     }
-    let mut ptr = std::ptr::null_mut();
-    let rc = unsafe { libc::posix_memalign(&mut ptr, SUPERPAGE_SIZE, size) };
-    if rc != 0 || ptr.is_null() {
-        return vec![unsafe { std::mem::zeroed() }; n];
-    }
-    unsafe {
-        std::ptr::write_bytes(ptr, 0, size);
-        Vec::from_raw_parts(ptr as *mut T, n, n)
+    #[cfg(unix)]
+    {
+        let size = n.checked_mul(std::mem::size_of::<T>()).unwrap_or(0);
+        if size < SUPERPAGE_SIZE {
+            return vec![unsafe { std::mem::zeroed() }; n];
+        }
+        let mut ptr = std::ptr::null_mut();
+        let rc = unsafe { libc::posix_memalign(&mut ptr, SUPERPAGE_SIZE, size) };
+        if rc != 0 || ptr.is_null() {
+            return vec![unsafe { std::mem::zeroed() }; n];
+        }
+        unsafe {
+            std::ptr::write_bytes(ptr, 0, size);
+            Vec::from_raw_parts(ptr as *mut T, n, n)
+        }
     }
 }
 

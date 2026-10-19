@@ -52,3 +52,4 @@ gpui-shell = { git = "https://github.com/linyisu/gpui-kit", rev = "5f9de8a41cc27
 
 [build-dependencies]
 orbit-build.workspace = true
+embed-resource = "3"

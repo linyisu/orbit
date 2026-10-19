@@ -110,6 +110,9 @@ path = "tests/verify.rs"
 [dependencies.libc]
 version = "0.2"
 
+[dependencies.memmap2]
+version = "0.9"
+
 [target.'cfg(target_os = "linux")'.dependencies.openblas-src]
 version = "=0.10.16"
 optional = true

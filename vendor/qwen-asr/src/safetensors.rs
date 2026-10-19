@@ -1,7 +1,7 @@
 //! Safetensors mmap reader with multi-shard support.
 
 use std::collections::HashMap;
-use std::os::unix::io::RawFd;
+use std::fs::File;
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -58,9 +58,9 @@ impl TensorMeta {
 }
 
 pub struct SafetensorsFile {
-    fd: RawFd,
+    file: File,
+    _mapping: memmap2::Mmap,
     data: *mut u8,
-    file_size: usize,
     header_size: usize,
     pub tensors: Vec<TensorMeta>,
     tensor_map: HashMap<String, usize>,
@@ -71,53 +71,14 @@ unsafe impl Sync for SafetensorsFile {}
 
 impl SafetensorsFile {
     pub fn open(path: &str) -> Option<Self> {
-        use libc::*;
-        use std::ffi::CString;
-
-        let c_path = CString::new(path).ok()?;
-        let fd = unsafe { open(c_path.as_ptr(), O_RDONLY) };
-        if fd < 0 {
-            return None;
-        }
-
-        let mut stat_buf = unsafe { std::mem::zeroed::<stat>() };
-        if unsafe { fstat(fd, &mut stat_buf) } < 0 {
-            unsafe {
-                close(fd);
-            }
-            return None;
-        }
-
-        let file_size = stat_buf.st_size as usize;
+        let file = File::open(path).ok()?;
+        let file_size = usize::try_from(file.metadata().ok()?.len()).ok()?;
         if file_size < 8 {
-            unsafe {
-                close(fd);
-            }
             return None;
         }
-
-        let data = unsafe {
-            mmap(
-                std::ptr::null_mut(),
-                file_size,
-                PROT_READ,
-                MAP_PRIVATE,
-                fd,
-                0,
-            )
-        };
-        // The fd is retained (closed in Drop) so encoder weights can be read
-        // out of the file via `pread` without ever faulting their pages through
-        // the mapping — that keeps the ~0.7 GB of encoder BF16 nonresident.
-        let raw_fd = fd;
-
-        if data == libc::MAP_FAILED {
-            unsafe {
-                close(fd);
-            }
-            return None;
-        }
-        let data = data as *mut u8;
+        // SAFETY: verified model assets remain immutable while the model owns this mapping.
+        let mapping = unsafe { memmap2::MmapOptions::new().map(&file).ok()? };
+        let data = mapping.as_ptr() as *mut u8;
 
         // Read header size (first 8 bytes, little-endian u64). Parse the header
         // BEFORE prefaulting so encoder tensor byte ranges are known and can be
@@ -129,36 +90,17 @@ impl SafetensorsFile {
         };
 
         if header_size > file_size - 8 {
-            unsafe {
-                munmap(data as *mut _, file_size);
-                close(fd);
-            }
             return None;
         }
 
-        // Parse JSON header
-        let header_json = unsafe {
-            let slice = std::slice::from_raw_parts(data.add(8), header_size);
-            match std::str::from_utf8(slice).ok() {
-                Some(s) => s,
-                None => {
-                    munmap(data as *mut _, file_size);
-                    close(fd);
-                    return None;
-                }
-            }
-        };
-
-        let tensors = match parse_header(header_json) {
-            Some(t) => t,
-            None => {
-                unsafe {
-                    munmap(data as *mut _, file_size);
-                    close(fd);
-                }
+        let header_json = std::str::from_utf8(&mapping[8..8 + header_size]).ok()?;
+        let tensors = parse_header(header_json)?;
+        for tensor in &tensors {
+            let end = tensor.data_offset.checked_add(tensor.data_size)?;
+            if end > file_size - 8 - header_size {
                 return None;
             }
-        };
+        }
         let mut tensor_map = HashMap::new();
         for (i, t) in tensors.iter().enumerate() {
             tensor_map.insert(t.name.clone(), i);
@@ -173,9 +115,9 @@ impl SafetensorsFile {
         prefault_with_skip(data as *const u8, file_size, &skip);
 
         Some(SafetensorsFile {
-            fd: raw_fd,
+            file,
+            _mapping: mapping,
             data,
-            file_size,
             header_size,
             tensors,
             tensor_map,
@@ -191,18 +133,22 @@ impl SafetensorsFile {
         let base = 8 + self.header_size + tensor.data_offset + byte_off;
         let mut done = 0usize;
         while done < dst.len() {
-            let r = unsafe {
-                libc::pread(
-                    self.fd,
-                    dst[done..].as_mut_ptr() as *mut libc::c_void,
-                    dst.len() - done,
-                    (base + done) as libc::off_t,
-                )
+            #[cfg(unix)]
+            let result = {
+                use std::os::unix::fs::FileExt;
+                self.file.read_at(&mut dst[done..], (base + done) as u64)
             };
-            if r <= 0 {
-                return false;
+            #[cfg(windows)]
+            let result = {
+                use std::os::windows::fs::FileExt;
+                self.file.seek_read(&mut dst[done..], (base + done) as u64)
+            };
+            match result {
+                Ok(0) => return false,
+                Ok(count) => done += count,
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(_) => return false,
             }
-            done += r as usize;
         }
         true
     }
@@ -252,6 +198,7 @@ impl SafetensorsFile {
     }
 }
 
+#[cfg(unix)]
 fn page_size() -> usize {
     let ps = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
     if ps > 0 {
@@ -259,6 +206,12 @@ fn page_size() -> usize {
     } else {
         16 * 1024
     }
+}
+
+#[cfg(windows)]
+fn page_size() -> usize {
+    // All supported Windows native targets use 4 KiB mapping pages.
+    4 * 1024
 }
 
 /// Mark the *interior* pages of every pread-loaded tensor as skip=true, so they
@@ -298,32 +251,36 @@ fn prefault_with_skip(data: *const u8, file_size: usize, skip: &[bool]) {
     }
 
     // WILLNEED on contiguous non-skipped runs only.
-    let base_addr = data as usize;
-    let mut run_start: Option<usize> = None;
-    for (page, &skip_page) in skip.iter().enumerate() {
-        match (run_start, !skip_page) {
-            (None, true) => run_start = Some(page),
-            (Some(s), false) => {
-                let off = s * ps;
-                let end = (page * ps).min(file_size);
-                unsafe {
-                    libc::madvise((base_addr + off) as *mut _, end - off, libc::MADV_WILLNEED);
+    #[cfg(unix)]
+    {
+        let base_addr = data as usize;
+        let mut run_start: Option<usize> = None;
+        for (page, &skip_page) in skip.iter().enumerate() {
+            match (run_start, !skip_page) {
+                (None, true) => run_start = Some(page),
+                (Some(s), false) => {
+                    let off = s * ps;
+                    let end = (page * ps).min(file_size);
+                    unsafe {
+                        libc::madvise((base_addr + off) as *mut _, end - off, libc::MADV_WILLNEED);
+                    }
+                    run_start = None;
                 }
-                run_start = None;
+                _ => {}
             }
-            _ => {}
         }
-    }
-    // Close a run that extends to the end of the file.
-    if let Some(s) = run_start {
-        let off = s * ps;
-        unsafe {
-            libc::madvise(
-                (base_addr + off) as *mut _,
-                file_size - off,
-                libc::MADV_WILLNEED,
-            );
+        // Close a run that extends to the end of the file.
+        if let Some(s) = run_start {
+            let off = s * ps;
+            unsafe {
+                libc::madvise(
+                    (base_addr + off) as *mut _,
+                    file_size - off,
+                    libc::MADV_WILLNEED,
+                );
+            }
         }
+
     }
 
     let n_threads = std::thread::available_parallelism()
@@ -355,21 +312,6 @@ fn prefault_with_skip(data: *const u8, file_size: usize, skip: &[bool]) {
     });
 
     std::hint::black_box(checksum.load(Ordering::Relaxed));
-}
-
-impl Drop for SafetensorsFile {
-    fn drop(&mut self) {
-        if !self.data.is_null() {
-            unsafe {
-                libc::munmap(self.data as *mut _, self.file_size);
-            }
-        }
-        if self.fd >= 0 {
-            unsafe {
-                libc::close(self.fd);
-            }
-        }
-    }
 }
 
 pub struct MultiSafetensors {

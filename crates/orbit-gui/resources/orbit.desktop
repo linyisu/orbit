@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Orbit
+Comment=Orbit coding workspace
+Exec=orbit-gui
+Icon=orbit
+Terminal=false
+Categories=Development;
+StartupWMClass=orbit-gui

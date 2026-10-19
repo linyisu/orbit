@@ -7343,6 +7343,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "clap",
+ "embed-resource",
  "gpui-kit",
  "gpui-shell",
  "image",
@@ -8654,6 +8655,7 @@ name = "qwen-asr"
 version = "0.11.0"
 dependencies = [
  "libc",
+ "memmap2",
  "openblas-src",
 ]
 

@@ -15,4 +15,9 @@
 额外安装 BLAS；macOS 仍使用系统 Accelerate。线程上限及可移植 CPU 内核由根 Cargo 配置控制。
 原始包其余源码和测试保留上游格式，完整差异见 patches/qwen-asr.patch。
 
+Windows 原生接入使用 memmap2 持有只读权重及量化缓存映射，位置读取分别使用
+Unix FileExt::read_at 和 Windows FileExt::seek_read；缓存写入使用标准库偏移与写入。
+Windows 权重缓冲使用 Rust Vec 分配器，避免把 CRT 对齐分配交给不匹配的释放接口。
+Unix 的预取及大页对齐路径保留，文件映射在所有平台按所有权释放。
+
 包内 Cargo.lock 不参与构建；所有产品依赖由 workspace 根 Cargo.lock 固定。

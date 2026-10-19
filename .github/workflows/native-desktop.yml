@@ -1,0 +1,74 @@
+name: Native desktop contracts
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, native-runtime-foundation]
+    paths:
+      - 'crates/orbit-gui/**'
+      - 'crates/orbit-client/**'
+      - 'crates/orbit-build/**'
+      - 'crates/orbit-xtask/**'
+      - 'vendor/qwen-asr/**'
+      - 'vendor/gpui-pre-wgpu/**'
+      - '.github/workflows/native-desktop.yml'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+  pull_request:
+    paths:
+      - 'crates/orbit-gui/**'
+      - 'crates/orbit-client/**'
+      - 'crates/orbit-build/**'
+      - 'crates/orbit-xtask/**'
+      - 'vendor/qwen-asr/**'
+      - 'vendor/gpui-pre-wgpu/**'
+      - '.github/workflows/native-desktop.yml'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+
+permissions:
+  contents: read
+
+jobs:
+  desktop:
+    name: Desktop (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, macos-15, windows-2022]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    env:
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+      CARGO_INCREMENTAL: '0'
+      CARGO_BUILD_JOBS: '2'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Linux desktop dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools build-essential clang pkg-config \
+            libfontconfig-dev libwayland-dev libxkbcommon-x11-dev libx11-xcb-dev \
+            libssl-dev libzstd-dev libasound2-dev libvulkan-dev xvfb \
+            mesa-vulkan-drivers fonts-noto-cjk fonts-noto-color-emoji
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install portable Linux service target
+        if: runner.os == 'Linux'
+        run: rustup target add x86_64-unknown-linux-musl
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-targets: 'false'
+      - name: Build native desktop package
+        run: cargo xtask bundle-gui debug
+      - name: Test local speech and native model access
+        run: cargo test -p orbit-client --features local-speech --locked speech::
+      - name: Test desktop preferences
+        run: cargo test -p orbit-gui --locked --bin orbit-gui preferences::tests
+      - name: Archive desktop application
+        run: cargo xtask archive-gui
+      - uses: actions/upload-artifact@v4
+        with:
+          name: orbit-desktop-${{ runner.os }}-${{ runner.arch }}
+          path: target/orbit-desktop-*.tar.gz

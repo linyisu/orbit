@@ -68,11 +68,7 @@ impl Preferences {
     ) -> anyhow::Result<Self> {
         let path = match path {
             Some(path) => path.to_path_buf(),
-            None => std::env::var_os("XDG_CONFIG_HOME")
-                .map(PathBuf::from)
-                .or_else(|| {
-                    std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config"))
-                })
+            None => orbit_config::directories::config()
                 .ok_or_else(|| anyhow::anyhow!("找不到设置目录，请指定 --preferences"))?
                 .join("orbit/gui.json"),
         };

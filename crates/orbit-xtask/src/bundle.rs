@@ -34,7 +34,7 @@ pub async fn target_directory(root: &Path) -> Result<PathBuf> {
     ))
 }
 
-fn artifacts(output: &[u8]) -> Result<BTreeMap<String, PathBuf>> {
+fn artifacts(output: &[u8], client: &str) -> Result<BTreeMap<String, PathBuf>> {
     let mut files = BTreeMap::new();
     for line in output
         .split(|byte| *byte == b'\n')
@@ -46,7 +46,7 @@ fn artifacts(output: &[u8]) -> Result<BTreeMap<String, PathBuf>> {
                 message["target"]["name"].as_str(),
                 message["executable"].as_str(),
             )
-            && name == "orbit"
+            && name == client
         {
             files.insert(name.to_owned(), executable.into());
         }
@@ -63,8 +63,8 @@ fn artifacts(output: &[u8]) -> Result<BTreeMap<String, PathBuf>> {
         }
     }
     ensure!(
-        files.contains_key("orbit") && files.contains_key("orbit-workspace-server"),
-        "Cargo did not report the terminal client and its embedded server"
+        files.contains_key(client) && files.contains_key("orbit-workspace-server"),
+        "Cargo did not report the requested client and its embedded server"
     );
     Ok(files)
 }
@@ -83,14 +83,19 @@ fn executable_name(name: &str) -> String {
     format!("{name}{}", std::env::consts::EXE_SUFFIX)
 }
 
-pub async fn build(root: &Path, profile: Profile) -> Result<()> {
+async fn build_client(
+    root: &Path,
+    profile: Profile,
+    package: &str,
+    executable: &str,
+) -> Result<BTreeMap<String, PathBuf>> {
     let mut command = cargo(root);
     command.args([
         "build",
         "--locked",
         "--message-format=json-render-diagnostics",
         "-p",
-        "orbit-tui",
+        package,
     ]);
     #[cfg(windows)]
     {
@@ -132,7 +137,11 @@ pub async fn build(root: &Path, profile: Profile) -> Result<()> {
         "client build failed: {}",
         output.status
     );
-    let files = artifacts(&output.stdout)?;
+    artifacts(&output.stdout, executable)
+}
+
+pub async fn build(root: &Path, profile: Profile) -> Result<()> {
+    let files = build_client(root, profile, "orbit-tui", "orbit").await?;
     let output = target_directory(root)
         .await?
         .join("bundle");
@@ -176,6 +185,93 @@ pub async fn archive(directory: &Path, output: &Path) -> Result<()> {
     )
     .await?;
     println!("Archive: {}", output.display());
+    Ok(())
+}
+
+/// Install the desktop executable with native launch metadata; the service remains embedded.
+pub async fn build_gui(root: &Path, profile: Profile) -> Result<()> {
+    let files = build_client(root, profile, "orbit-gui", "orbit-gui").await?;
+    let output = target_directory(root)
+        .await?
+        .join("bundle-gui");
+    fs::create_dir_all(&output)?;
+    install_gui(root, &output, &files["orbit-gui"])?;
+    install(
+        &files["orbit-workspace-server"],
+        &output.join(executable_name("orbit-workspace-server")),
+    )?;
+    println!("Desktop bundle: {}", output.display());
+    Ok(())
+}
+
+pub fn gui_executable(directory: &Path) -> PathBuf {
+    if cfg!(target_os = "macos") {
+        directory.join("Orbit.app/Contents/MacOS/orbit-gui")
+    } else {
+        directory.join(executable_name("orbit-gui"))
+    }
+}
+
+fn install_gui(root: &Path, output: &Path, executable: &Path) -> Result<()> {
+    let resources = root.join("crates/orbit-gui/resources");
+    let destination = gui_executable(output);
+    fs::create_dir_all(
+        destination
+            .parent()
+            .context("desktop executable directory")?,
+    )?;
+    install(executable, &destination)?;
+    if cfg!(target_os = "macos") {
+        let contents = output.join("Orbit.app/Contents");
+        fs::create_dir_all(contents.join("Resources"))?;
+        fs::copy(
+            resources.join("orbit.icns"),
+            contents.join("Resources/orbit.icns"),
+        )?;
+        fs::write(
+            contents.join("Info.plist"),
+            fs::read_to_string(resources.join("Info.plist"))?
+                .replace("ORBIT_PACKAGE_VERSION", env!("CARGO_PKG_VERSION")),
+        )?;
+    } else if cfg!(target_os = "linux") {
+        fs::copy(
+            resources.join("orbit.desktop"),
+            output.join("orbit.desktop"),
+        )?;
+        fs::copy(
+            root.join("assets/branding/orbit.svg"),
+            output.join("orbit.svg"),
+        )?;
+    }
+    Ok(())
+}
+
+/// Archive only desktop launch assets; the extracted service is a verification fixture.
+pub async fn archive_gui(directory: &Path, output: &Path) -> Result<()> {
+    let directory = directory.canonicalize()?;
+    ensure!(
+        gui_executable(&directory).is_file(),
+        "missing desktop executable"
+    );
+    if let Some(parent) = output.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let mut command = Command::new("tar");
+    command
+        .arg("-czf")
+        .arg(output)
+        .arg("-C")
+        .arg(directory);
+    if cfg!(target_os = "macos") {
+        command.arg("Orbit.app");
+    } else {
+        command.arg(executable_name("orbit-gui"));
+        if cfg!(target_os = "linux") {
+            command.args(["orbit.desktop", "orbit.svg"]);
+        }
+    }
+    process::run(&mut command).await?;
+    println!("Desktop archive: {}", output.display());
     Ok(())
 }
 
@@ -262,7 +358,7 @@ mod tests {
         ]
         .map(|message| message.to_string())
         .join("\n");
-        let files = artifacts(messages.as_bytes()).unwrap();
+        let files = artifacts(messages.as_bytes(), "orbit").unwrap();
         assert_eq!(
             files["orbit"],
             Path::new("/custom-target/triple/release/orbit")
@@ -271,6 +367,6 @@ mod tests {
             files["orbit-workspace-server"],
             Path::new("/static-target/orbit-workspace-server")
         );
-        assert!(artifacts(b"{\"reason\":\"build-finished\",\"success\":true}").is_err());
+        assert!(artifacts(b"{\"reason\":\"build-finished\",\"success\":true}", "orbit").is_err());
     }
 }

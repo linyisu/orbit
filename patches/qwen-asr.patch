@@ -18,10 +18,13 @@
      "rlib",
  ]
  path = "src/lib.rs"
-@@ -111,3 +109,9 @@
+@@ -111,3 +109,12 @@
  
  [dependencies.libc]
  version = "0.2"
++
++[dependencies.memmap2]
++version = "0.9"
 +
 +[target.'cfg(target_os = "linux")'.dependencies.openblas-src]
 +version = "=0.10.16"
@@ -460,3 +463,432 @@
 +        assert_eq!(state.hypothesis(), "");
 +    }
 +}
+--- a/src/safetensors.rs
++++ b/src/safetensors.rs
+@@ -1,7 +1,7 @@
+ //! Safetensors mmap reader with multi-shard support.
+ 
+ use std::collections::HashMap;
+-use std::os::unix::io::RawFd;
++use std::fs::File;
+ use std::path::Path;
+ use std::sync::atomic::{AtomicUsize, Ordering};
+ 
+@@ -58,9 +58,9 @@
+ }
+ 
+ pub struct SafetensorsFile {
+-    fd: RawFd,
++    file: File,
++    _mapping: memmap2::Mmap,
+     data: *mut u8,
+-    file_size: usize,
+     header_size: usize,
+     pub tensors: Vec<TensorMeta>,
+     tensor_map: HashMap<String, usize>,
+@@ -71,53 +71,14 @@
+ 
+ impl SafetensorsFile {
+     pub fn open(path: &str) -> Option<Self> {
+-        use libc::*;
+-        use std::ffi::CString;
+-
+-        let c_path = CString::new(path).ok()?;
+-        let fd = unsafe { open(c_path.as_ptr(), O_RDONLY) };
+-        if fd < 0 {
++        let file = File::open(path).ok()?;
++        let file_size = usize::try_from(file.metadata().ok()?.len()).ok()?;
++        if file_size < 8 {
+             return None;
+         }
+-
+-        let mut stat_buf = unsafe { std::mem::zeroed::<stat>() };
+-        if unsafe { fstat(fd, &mut stat_buf) } < 0 {
+-            unsafe {
+-                close(fd);
+-            }
+-            return None;
+-        }
+-
+-        let file_size = stat_buf.st_size as usize;
+-        if file_size < 8 {
+-            unsafe {
+-                close(fd);
+-            }
+-            return None;
+-        }
+-
+-        let data = unsafe {
+-            mmap(
+-                std::ptr::null_mut(),
+-                file_size,
+-                PROT_READ,
+-                MAP_PRIVATE,
+-                fd,
+-                0,
+-            )
+-        };
+-        // The fd is retained (closed in Drop) so encoder weights can be read
+-        // out of the file via `pread` without ever faulting their pages through
+-        // the mapping — that keeps the ~0.7 GB of encoder BF16 nonresident.
+-        let raw_fd = fd;
+-
+-        if data == libc::MAP_FAILED {
+-            unsafe {
+-                close(fd);
+-            }
+-            return None;
+-        }
+-        let data = data as *mut u8;
++        // SAFETY: verified model assets remain immutable while the model owns this mapping.
++        let mapping = unsafe { memmap2::MmapOptions::new().map(&file).ok()? };
++        let data = mapping.as_ptr() as *mut u8;
+ 
+         // Read header size (first 8 bytes, little-endian u64). Parse the header
+         // BEFORE prefaulting so encoder tensor byte ranges are known and can be
+@@ -129,36 +90,17 @@
+         };
+ 
+         if header_size > file_size - 8 {
+-            unsafe {
+-                munmap(data as *mut _, file_size);
+-                close(fd);
+-            }
+             return None;
+         }
+ 
+-        // Parse JSON header
+-        let header_json = unsafe {
+-            let slice = std::slice::from_raw_parts(data.add(8), header_size);
+-            match std::str::from_utf8(slice).ok() {
+-                Some(s) => s,
+-                None => {
+-                    munmap(data as *mut _, file_size);
+-                    close(fd);
+-                    return None;
+-                }
+-            }
+-        };
+-
+-        let tensors = match parse_header(header_json) {
+-            Some(t) => t,
+-            None => {
+-                unsafe {
+-                    munmap(data as *mut _, file_size);
+-                    close(fd);
+-                }
++        let header_json = std::str::from_utf8(&mapping[8..8 + header_size]).ok()?;
++        let tensors = parse_header(header_json)?;
++        for tensor in &tensors {
++            let end = tensor.data_offset.checked_add(tensor.data_size)?;
++            if end > file_size - 8 - header_size {
+                 return None;
+             }
+-        };
++        }
+         let mut tensor_map = HashMap::new();
+         for (i, t) in tensors.iter().enumerate() {
+             tensor_map.insert(t.name.clone(), i);
+@@ -173,9 +115,9 @@
+         prefault_with_skip(data as *const u8, file_size, &skip);
+ 
+         Some(SafetensorsFile {
+-            fd: raw_fd,
++            file,
++            _mapping: mapping,
+             data,
+-            file_size,
+             header_size,
+             tensors,
+             tensor_map,
+@@ -191,18 +133,22 @@
+         let base = 8 + self.header_size + tensor.data_offset + byte_off;
+         let mut done = 0usize;
+         while done < dst.len() {
+-            let r = unsafe {
+-                libc::pread(
+-                    self.fd,
+-                    dst[done..].as_mut_ptr() as *mut libc::c_void,
+-                    dst.len() - done,
+-                    (base + done) as libc::off_t,
+-                )
++            #[cfg(unix)]
++            let result = {
++                use std::os::unix::fs::FileExt;
++                self.file.read_at(&mut dst[done..], (base + done) as u64)
+             };
+-            if r <= 0 {
+-                return false;
+-            }
+-            done += r as usize;
++            #[cfg(windows)]
++            let result = {
++                use std::os::windows::fs::FileExt;
++                self.file.seek_read(&mut dst[done..], (base + done) as u64)
++            };
++            match result {
++                Ok(0) => return false,
++                Ok(count) => done += count,
++                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
++                Err(_) => return false,
++            }
+         }
+         true
+     }
+@@ -252,6 +198,7 @@
+     }
+ }
+ 
++#[cfg(unix)]
+ fn page_size() -> usize {
+     let ps = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
+     if ps > 0 {
+@@ -259,6 +206,12 @@
+     } else {
+         16 * 1024
+     }
++}
++
++#[cfg(windows)]
++fn page_size() -> usize {
++    // All supported Windows native targets use 4 KiB mapping pages.
++    4 * 1024
+ }
+ 
+ /// Mark the *interior* pages of every pread-loaded tensor as skip=true, so they
+@@ -298,32 +251,36 @@
+     }
+ 
+     // WILLNEED on contiguous non-skipped runs only.
+-    let base_addr = data as usize;
+-    let mut run_start: Option<usize> = None;
+-    for (page, &skip_page) in skip.iter().enumerate() {
+-        match (run_start, !skip_page) {
+-            (None, true) => run_start = Some(page),
+-            (Some(s), false) => {
+-                let off = s * ps;
+-                let end = (page * ps).min(file_size);
+-                unsafe {
+-                    libc::madvise((base_addr + off) as *mut _, end - off, libc::MADV_WILLNEED);
+-                }
+-                run_start = None;
+-            }
+-            _ => {}
+-        }
+-    }
+-    // Close a run that extends to the end of the file.
+-    if let Some(s) = run_start {
+-        let off = s * ps;
+-        unsafe {
+-            libc::madvise(
+-                (base_addr + off) as *mut _,
+-                file_size - off,
+-                libc::MADV_WILLNEED,
+-            );
+-        }
++    #[cfg(unix)]
++    {
++        let base_addr = data as usize;
++        let mut run_start: Option<usize> = None;
++        for (page, &skip_page) in skip.iter().enumerate() {
++            match (run_start, !skip_page) {
++                (None, true) => run_start = Some(page),
++                (Some(s), false) => {
++                    let off = s * ps;
++                    let end = (page * ps).min(file_size);
++                    unsafe {
++                        libc::madvise((base_addr + off) as *mut _, end - off, libc::MADV_WILLNEED);
++                    }
++                    run_start = None;
++                }
++                _ => {}
++            }
++        }
++        // Close a run that extends to the end of the file.
++        if let Some(s) = run_start {
++            let off = s * ps;
++            unsafe {
++                libc::madvise(
++                    (base_addr + off) as *mut _,
++                    file_size - off,
++                    libc::MADV_WILLNEED,
++                );
++            }
++        }
++
+     }
+ 
+     let n_threads = std::thread::available_parallelism()
+@@ -355,21 +312,6 @@
+     });
+ 
+     std::hint::black_box(checksum.load(Ordering::Relaxed));
+-}
+-
+-impl Drop for SafetensorsFile {
+-    fn drop(&mut self) {
+-        if !self.data.is_null() {
+-            unsafe {
+-                libc::munmap(self.data as *mut _, self.file_size);
+-            }
+-        }
+-        if self.fd >= 0 {
+-            unsafe {
+-                libc::close(self.fd);
+-            }
+-        }
+-    }
+ }
+ 
+ pub struct MultiSafetensors {
+--- a/src/int8_sidecar.rs
++++ b/src/int8_sidecar.rs
+@@ -205,7 +205,7 @@
+ /// `WeightBuf::Mapped` handed out borrows from `base`.
+ pub struct SidecarMmap {
+     base: *mut u8,
+-    size: usize,
++    _mapping: memmap2::Mmap,
+     offsets: Vec<u64>,
+     lens: Vec<u64>,
+ }
+@@ -214,14 +214,6 @@
+ // `Decoder` is already `unsafe impl Send + Sync` for its BF16 mmap pointers.
+ unsafe impl Send for SidecarMmap {}
+ unsafe impl Sync for SidecarMmap {}
+-
+-impl Drop for SidecarMmap {
+-    fn drop(&mut self) {
+-        unsafe {
+-            libc::munmap(self.base as *mut _, self.size);
+-        }
+-    }
+-}
+ 
+ impl SidecarMmap {
+     /// mmap and validate an existing sidecar. Returns `None` (caller rebuilds)
+@@ -233,40 +225,21 @@
+         cfg: &QwenConfig,
+         layout: &SidecarLayout,
+     ) -> Option<SidecarMmap> {
+-        use libc::*;
+-        use std::ffi::CString;
+-
+-        let c_path = CString::new(path).ok()?;
+-        let fd = unsafe { open(c_path.as_ptr(), O_RDONLY) };
+-        if fd < 0 {
++        let file = std::fs::File::open(path).ok()?;
++        let size = usize::try_from(file.metadata().ok()?.len()).ok()?;
++        if (size as u64) < layout.total_size {
+             return None;
+         }
+-        let mut st = unsafe { std::mem::zeroed::<stat>() };
+-        if unsafe { fstat(fd, &mut st) } < 0 {
+-            unsafe { close(fd) };
+-            return None;
+-        }
+-        let size = st.st_size as usize;
+-        if (size as u64) < layout.total_size {
+-            unsafe { close(fd) };
+-            return None;
+-        }
+-        let base = unsafe { mmap(std::ptr::null_mut(), size, PROT_READ, MAP_PRIVATE, fd, 0) };
+-        unsafe { close(fd) };
+-        if base == libc::MAP_FAILED {
+-            return None;
+-        }
+-        let base = base as *mut u8;
+-
+-        let ok = validate_header(base, size, model_dir, cfg, layout);
+-        if !ok {
+-            unsafe { munmap(base as *mut _, size) };
++        // SAFETY: the immutable sidecar mapping stays owned until all borrowed weights are dropped.
++        let mapping = unsafe { memmap2::MmapOptions::new().map(&file).ok()? };
++        let base = mapping.as_ptr() as *mut u8;
++        if !validate_header(base, size, model_dir, cfg, layout) {
+             return None;
+         }
+ 
+         Some(SidecarMmap {
+             base,
+-            size,
++            _mapping: mapping,
+             offsets: layout.offsets.clone(),
+             lens: layout.lens.clone(),
+         })
+@@ -361,14 +334,13 @@
+     layout: &SidecarLayout,
+     bufs: &[&[u8]],
+ ) -> bool {
+-    use std::io::Write;
+-    use std::os::unix::fs::FileExt;
++    use std::io::{Seek, SeekFrom, Write};
+ 
+     if bufs.len() != layout.lens.len() {
+         return false;
+     }
+     let tmp = format!("{}.tmp.{}", path, std::process::id());
+-    let file = match std::fs::File::create(&tmp) {
++    let mut file = match std::fs::File::create(&tmp) {
+         Ok(f) => f,
+         Err(_) => return false,
+     };
+@@ -404,7 +376,7 @@
+         header[b..b + 8].copy_from_slice(&off.to_le_bytes());
+         header[b + 8..b + 16].copy_from_slice(&len.to_le_bytes());
+     }
+-    if file.write_all_at(&header, 0).is_err() {
++    if file.write_all(&header).is_err() {
+         let _ = std::fs::remove_file(&tmp);
+         return false;
+     }
+@@ -415,7 +387,7 @@
+             let _ = std::fs::remove_file(&tmp);
+             return false;
+         }
+-        if file.write_all_at(chunk, layout.offsets[k]).is_err() {
++        if file.seek(SeekFrom::Start(layout.offsets[k])).is_err() || file.write_all(chunk).is_err() {
+             let _ = std::fs::remove_file(&tmp);
+             return false;
+         }
+--- a/src/kernels/mod.rs
++++ b/src/kernels/mod.rs
+@@ -15,18 +15,26 @@
+ /// failure. Shared by the decoder INT8/f32 weight prepack and the encoder
+ /// f32 weight prepack.
+ pub fn superpage_vec<T: Copy>(n: usize) -> Vec<T> {
+-    let size = n.checked_mul(std::mem::size_of::<T>()).unwrap_or(0);
+-    if size < SUPERPAGE_SIZE {
+-        return vec![unsafe { std::mem::zeroed() }; n];
+-    }
+-    let mut ptr = std::ptr::null_mut();
+-    let rc = unsafe { libc::posix_memalign(&mut ptr, SUPERPAGE_SIZE, size) };
+-    if rc != 0 || ptr.is_null() {
+-        return vec![unsafe { std::mem::zeroed() }; n];
+-    }
+-    unsafe {
+-        std::ptr::write_bytes(ptr, 0, size);
+-        Vec::from_raw_parts(ptr as *mut T, n, n)
++    #[cfg(windows)]
++    {
++        // Windows Vec storage must use Rust's allocator, not an aligned CRT allocation.
++        vec![unsafe { std::mem::zeroed() }; n]
++    }
++    #[cfg(unix)]
++    {
++        let size = n.checked_mul(std::mem::size_of::<T>()).unwrap_or(0);
++        if size < SUPERPAGE_SIZE {
++            return vec![unsafe { std::mem::zeroed() }; n];
++        }
++        let mut ptr = std::ptr::null_mut();
++        let rc = unsafe { libc::posix_memalign(&mut ptr, SUPERPAGE_SIZE, size) };
++        if rc != 0 || ptr.is_null() {
++            return vec![unsafe { std::mem::zeroed() }; n];
++        }
++        unsafe {
++            std::ptr::write_bytes(ptr, 0, size);
++            Vec::from_raw_parts(ptr as *mut T, n, n)
++        }
+     }
+ }
+ 
