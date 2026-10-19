@@ -36,6 +36,7 @@ jobs:
         os: >-
           ${{ fromJSON(
             github.event_name == 'push' && github.ref == 'refs/heads/native-runtime-foundation'
+            && !contains(github.event.head_commit.message, '[native-full]')
             && '["windows-2022","windows-2025"]'
             || '["ubuntu-22.04","ubuntu-26.04","macos-15","macos-26","windows-2022","windows-2025"]'
           ) }}
@@ -88,7 +89,11 @@ jobs:
         if: ${{ !cancelled() && runner.os != 'Windows' }}
         run: cargo test -p orbit-gui --locked --bin orbit-gui preferences::tests
       - name: Test Windows speech and preferences with packaged runtime flags
-        if: ${{ !cancelled() && runner.os == 'Windows' && (github.event_name != 'push' || github.ref != 'refs/heads/native-runtime-foundation') }}
+        if: >-
+          ${{ !cancelled() && runner.os == 'Windows' && (
+            github.event_name != 'push' || github.ref != 'refs/heads/native-runtime-foundation'
+            || contains(github.event.head_commit.message, '[native-full]')
+          ) }}
         run: |
           $nativeTarget = (rustc -vV | Select-String '^host: ').Line.Substring(6)
           $env:CARGO_ENCODED_RUSTFLAGS = "-C$([char]31)target-feature=+crt-static"
@@ -97,7 +102,11 @@ jobs:
           cargo test -p orbit-gui --locked --target "$nativeTarget" --bin orbit-gui preferences::tests
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Test native desktop archive contracts
-        if: ${{ !cancelled() && (github.event_name != 'push' || github.ref != 'refs/heads/native-runtime-foundation') }}
+        if: >-
+          ${{ !cancelled() && (
+            github.event_name != 'push' || github.ref != 'refs/heads/native-runtime-foundation'
+            || contains(github.event.head_commit.message, '[native-full]')
+          ) }}
         run: cargo test -p orbit-xtask --locked bundle::tests::desktop_archive
       - name: Archive desktop application
         if: ${{ !cancelled() }}

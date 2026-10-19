@@ -49,7 +49,9 @@ concurrency:
 
 jobs:
   repair-regressions:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/native-runtime-foundation'
+    if: >-
+      github.event_name == 'push' && github.ref == 'refs/heads/native-runtime-foundation'
+      && !contains(github.event.head_commit.message, '[native-full]')
     name: Repair regressions (${{ matrix.os }})
     strategy:
       fail-fast: false
@@ -79,7 +81,9 @@ jobs:
         run: cargo test -p orbit-service --lib --locked workspace::server::lifecycle::tests::bridge_handles_stop_inheriting_without_losing_access
 
   process-ownership:
-    if: github.event_name != 'push' || github.ref != 'refs/heads/native-runtime-foundation'
+    if: >-
+      github.event_name != 'push' || github.ref != 'refs/heads/native-runtime-foundation'
+      || contains(github.event.head_commit.message, '[native-full]')
     name: Process ownership (${{ matrix.os }})
     strategy:
       fail-fast: false
@@ -96,7 +100,9 @@ jobs:
         run: cargo clippy -p orbit-runtime --all-targets --locked -- -D warnings
 
   runtime:
-    if: github.event_name != 'push' || github.ref != 'refs/heads/native-runtime-foundation'
+    if: >-
+      github.event_name != 'push' || github.ref != 'refs/heads/native-runtime-foundation'
+      || contains(github.event.head_commit.message, '[native-full]')
     name: Runtime (${{ matrix.os }})
     strategy:
       fail-fast: false
@@ -111,7 +117,9 @@ jobs:
         run: cargo test -p orbit-runtime --locked
 
   macos-service:
-    if: github.event_name != 'push' || github.ref != 'refs/heads/native-runtime-foundation'
+    if: >-
+      github.event_name != 'push' || github.ref != 'refs/heads/native-runtime-foundation'
+      || contains(github.event.head_commit.message, '[native-full]')
     name: macOS service lifecycle
     runs-on: macos-15
     timeout-minutes: 45
@@ -131,7 +139,9 @@ jobs:
         run: cargo test -p orbit-tools --locked --test native_files
 
   windows-backend:
-    if: github.event_name != 'push' || github.ref != 'refs/heads/native-runtime-foundation'
+    if: >-
+      github.event_name != 'push' || github.ref != 'refs/heads/native-runtime-foundation'
+      || contains(github.event.head_commit.message, '[native-full]')
     name: Windows native backend
     runs-on: windows-2022
     timeout-minutes: 45
@@ -174,7 +184,9 @@ jobs:
         run: cargo test -p orbit-client --locked --lib interaction::tests
 
   native-bundle:
-    if: github.event_name != 'push' || github.ref != 'refs/heads/native-runtime-foundation'
+    if: >-
+      github.event_name != 'push' || github.ref != 'refs/heads/native-runtime-foundation'
+      || contains(github.event.head_commit.message, '[native-full]')
     name: Native bundle (${{ matrix.os }})
     strategy:
       fail-fast: false

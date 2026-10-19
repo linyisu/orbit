@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: ["main"]
+    branches: ["main", "native-runtime-foundation"]
   pull_request:
     branches: ["main"]
 
@@ -15,6 +15,7 @@ env:
 
 jobs:
   ci:
+    if: github.ref == 'refs/heads/main' || github.event_name == 'pull_request' || contains(github.event.head_commit.message, '[native-full]')
     name: CI Check & Test
     runs-on: ubuntu-latest
     steps:
@@ -67,6 +68,7 @@ jobs:
           du -sh target/* 2>/dev/null || true
 
   linux-bundle:
+    if: github.ref == 'refs/heads/main' || github.event_name == 'pull_request' || contains(github.event.head_commit.message, '[native-full]')
     name: Portable Linux bundle
     runs-on: ubuntu-22.04
     steps:
