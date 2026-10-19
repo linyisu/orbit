@@ -1206,11 +1206,16 @@ fn history_pages_drain_without_live_poll_delays_and_keep_cursor_order() {
 fn replacement_directory_links_before_resume_and_preserves_ownership_checks() {
     for (mode, explicit, succeeds, should_link) in [
         ("moved", true, true, true),
-        ("moved", false, false, false),
+        ("moved", false, true, false),
         ("reject", true, false, true),
         ("linked", true, true, false),
     ] {
         let directory = tempfile::tempdir().unwrap();
+        let expected_workspace = if mode == "moved" && !explicit {
+            "/missing/original".to_owned()
+        } else {
+            directory.path().display().to_string()
+        };
         std::fs::write(
             directory
                 .path()
@@ -1262,13 +1267,16 @@ fn replacement_directory_links_before_resume_and_preserves_ownership_checks() {
                                 sessions
                                     .iter()
                                     .filter(|s| s.project_id == "fixture")
-                                    .all(|s| s.workspace == directory.path().to_string_lossy())
+                                    .all(|s| s.workspace == expected_workspace)
                             );
                         }
                         Event::Response(Response::Opened(info)) => {
                             assert!(succeeds);
                             assert_eq!(info.id, "demo");
-                            assert_eq!(info.workspace, directory.path().to_string_lossy());
+                            assert_eq!(info.workspace, expected_workspace);
+                            if !explicit {
+                                assert_eq!(info.phase, orbit_protocol::SessionPhase::Browsing);
+                            }
                             break;
                         }
                         Event::Disconnected(error) => {
@@ -1302,15 +1310,20 @@ fn replacement_directory_links_before_resume_and_preserves_ownership_checks() {
         let link = requests
             .iter()
             .position(|r| r["method"] == "admin");
-        let open = requests
+        let browse = requests
             .iter()
-            .position(|r| r["method"] == "open");
+            .position(|r| r["method"] == "browse");
+        assert!(
+            requests
+                .iter()
+                .all(|request| request["method"] != "open" && request["method"] != "prepare")
+        );
         assert_eq!(link.is_some(), should_link);
         if should_link && succeeds {
-            assert!(link.unwrap() < open.unwrap());
+            assert!(link.unwrap() < browse.unwrap());
         }
         if mode == "reject" {
-            assert!(open.is_none());
+            assert!(browse.is_none());
         }
     }
 }

@@ -231,7 +231,12 @@ fn main() -> anyhow::Result<()> {
                 "id": session,
                 "persisted": session == "demo",
                 "title": title(session),
-                "workspace": workspace,
+                "phase": if relocation.is_some() && !linked { "browsing" } else { "ready" },
+                "workspace": if relocation.is_some() && !linked {
+                    "/missing/original"
+                } else {
+                    workspace.as_str()
+                },
                 "model": model,
                 "models": if session == "models" {
                     vec![
@@ -564,7 +569,7 @@ fn main() -> anyhow::Result<()> {
                     })
                 }
             }
-            "open" | "browse" if relocation.is_some() && !linked => {
+            "open" if relocation.is_some() && !linked => {
                 json!({
                     "type": "error",
                     "value": "session belongs to workspace /missing/original"

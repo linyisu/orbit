@@ -271,10 +271,15 @@ fn review_undo_uses_an_independent_handshake_and_keeps_the_main_connection_avail
     assert_eq!(
         requests
             .iter()
-            .filter(|request| request["method"] == "open")
+            .filter(|request| request["method"] == "browse")
             .count(),
         1,
         "the independent peer must address the existing session without opening another one"
+    );
+    assert!(
+        requests
+            .iter()
+            .all(|request| request["method"] != "open")
     );
     let undo = requests
         .iter()
