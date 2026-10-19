@@ -43,6 +43,9 @@ cargo xtask installer-gui target/bundle-gui target/orbit-gui-debug-windows-x64-s
 cargo xtask verify-gui-installer target/orbit-gui-debug-windows-x64-setup.exe
 ```
 
+可用 `NSISDIR` 指定官方便携包的根目录；未指定时查找系统安装目录或 PATH。
+CI 直接下载官方 ZIP 并验证固定 SHA-256，不依赖 Chocolatey 软件源。
+
 第二条命令必须在没有 GPUI Windows 源码的独立 Windows 主机执行。验收会安装到临时目录，
 验证实际安装程序的服务连接、窗口渲染和退出，最后卸载。CI 使用全新 runner，不检出仓库或恢复 Cargo 缓存。
 安装包按用户安装到本地应用目录，提供开始菜单入口和系统卸载入口，不修改会话数据。

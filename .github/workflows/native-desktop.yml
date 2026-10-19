@@ -143,7 +143,17 @@ jobs:
         run: cargo xtask archive-gui
       - name: Install Windows packaging tool
         if: runner.os == 'Windows'
-        run: choco upgrade nsis --version=3.13.0 --yes --no-progress
+        run: |
+          New-Item -ItemType Directory -Force target/installer-tools | Out-Null
+          curl.exe --fail --location --retry 4 --retry-all-errors --connect-timeout 20 --max-time 120 'https://downloads.sourceforge.net/project/nsis/NSIS%203/3.13/nsis-3.13.zip' --output target/installer-tools/nsis-3.13.zip
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $expected = 'ba63dffc4410ee89193e1cb5a41989991bd77c61068da17e3156d136b7b0b3d8'
+          $actual = (Get-FileHash target/installer-tools/nsis-3.13.zip -Algorithm SHA256).Hash
+          if ($actual -ne $expected) { throw 'NSIS archive SHA-256 mismatch' }
+          Expand-Archive target/installer-tools/nsis-3.13.zip target/installer-tools -Force
+          $nsis = Join-Path $env:GITHUB_WORKSPACE 'target/installer-tools/nsis-3.13'
+          "NSISDIR=$nsis" >> $env:GITHUB_ENV
+          $nsis >> $env:GITHUB_PATH
       - name: Build Windows Debug installer
         if: runner.os == 'Windows'
         run: .\target\debug\orbit-xtask.exe installer-gui target/bundle-gui target/orbit-gui-debug-windows-x64-setup.exe

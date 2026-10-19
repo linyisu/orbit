@@ -23,10 +23,14 @@ pub async fn build(root: &Path, bundle: &Path, output: &Path) -> Result<()> {
     if let Some(parent) = output.parent() {
         fs::create_dir_all(parent)?;
     }
-    let compiler = std::env::var_os("ProgramFiles(x86)")
-        .map(|path| Path::new(&path).join("NSIS/makensis.exe"))
-        .filter(|path| path.is_file())
-        .unwrap_or_else(|| "makensis".into());
+    let compiler = std::env::var_os("NSISDIR")
+        .map(|path| Path::new(&path).join("makensis.exe"))
+        .unwrap_or_else(|| {
+            std::env::var_os("ProgramFiles(x86)")
+                .map(|path| Path::new(&path).join("NSIS/makensis.exe"))
+                .filter(|path| path.is_file())
+                .unwrap_or_else(|| "makensis".into())
+        });
     process::run(
         Command::new(compiler)
             .current_dir(root)
