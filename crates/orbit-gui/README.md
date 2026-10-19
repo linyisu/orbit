@@ -38,6 +38,9 @@ Linux 安装时将程序放入 PATH，启动项放入用户 applications 目录�
 Linux 验收需在独立 Xvfb 中运行；原生 macOS/Windows 使用 GitHub Actions 的隔离 runner。
 Windows 窗口验收不设置 HOME 或 XDG 配置变量，同时覆盖原生设置路径。
 CI 见 [Native desktop contracts](../../.github/workflows/native-desktop.yml)。
+矩阵同时覆盖 Ubuntu 22.04／26.04、macOS 15／26、Windows Server 2022／2025，编译器使用 Rust stable。
+Ubuntu 22.04 的构建用于保留较早 glibc 兼容基线，新系统另做实际启动验收。
+Windows 回归使用与发布包一致的显式 MSVC target 和静态 C 运行库，不要求安装 Unix shell。
 
 ## 使用
 

@@ -39,7 +39,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-22.04, macos-15, windows-2022]
+        os: [ubuntu-22.04, ubuntu-26.04, macos-15, macos-26, windows-2022, windows-2025]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     env:
@@ -63,7 +63,8 @@ jobs:
         run: rustup target add x86_64-unknown-linux-musl
       - uses: Swatinem/rust-cache@v2
         with:
-          cache-targets: ${{ runner.os == 'Windows' }}
+          key: ${{ matrix.os }}
+          cache-targets: 'true'
           cache-on-failure: 'true'
       - name: Build native desktop package
         run: cargo xtask bundle-gui debug
@@ -74,12 +75,21 @@ jobs:
         if: runner.os == 'Linux'
         run: xvfb-run -a -s '-screen 0 1280x900x24' cargo xtask verify-gui-bundle
       - name: Test local speech and native model access
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && runner.os != 'Windows' }}
         run: |
           cargo test -p orbit-client --features local-speech --locked speech::
       - name: Test desktop preferences
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && runner.os != 'Windows' }}
         run: cargo test -p orbit-gui --locked --bin orbit-gui preferences::tests
+      - name: Test Windows speech and preferences with packaged runtime flags
+        if: ${{ !cancelled() && runner.os == 'Windows' }}
+        run: |
+          $nativeTarget = (rustc -vV | Select-String '^host: ').Line.Substring(6)
+          $env:CARGO_ENCODED_RUSTFLAGS = "-C$([char]31)target-feature=+crt-static"
+          cargo test -p orbit-client --features local-speech --locked --target "$nativeTarget" speech::
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test -p orbit-gui --locked --target "$nativeTarget" --bin orbit-gui preferences::tests
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Test native desktop archive contracts
         if: ${{ !cancelled() }}
         run: cargo test -p orbit-xtask --locked bundle::tests::desktop_archive
@@ -89,7 +99,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: ${{ !cancelled() }}
         with:
-          name: orbit-desktop-${{ runner.os }}-${{ runner.arch }}
+          name: orbit-desktop-${{ matrix.os }}-${{ runner.arch }}
           path: |
             target/orbit-desktop-*.tar.gz
             target/orbit-desktop-*.zip
