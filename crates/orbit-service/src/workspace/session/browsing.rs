@@ -12,15 +12,33 @@ pub(in crate::workspace) struct Browsing {
     pub mode: orbit_protocol::Mode,
     pub mode_revision: u64,
     pub plan_mode: Option<orbit_protocol::plan::WorkMode>,
+    pub configuration: Result<Option<std::sync::Arc<super::super::configuration::Installed>>, ()>,
 }
 
 impl Browsing {
-    pub(in crate::workspace) fn configuration(
-        options: &crate::WorkspaceOptions,
-    ) -> Result<crate::config::FileConfig> {
+    pub fn options<'a>(
+        &'a self,
+        fallback: &'a crate::WorkspaceOptions,
+    ) -> Result<&'a crate::WorkspaceOptions> {
+        let installed = self
+            .configuration
+            .as_ref()
+            .map_err(|()| anyhow::anyhow!("远程配置尚未就绪，请修正配置后重试；历史仍可查看"))?;
+        Ok(installed
+            .as_ref()
+            .map_or(fallback, |installed| &installed.options))
+    }
+
+    pub fn config(&self, fallback: &crate::WorkspaceOptions) -> Result<crate::config::FileConfig> {
+        let options = self.options(fallback)?;
         let content = match std::fs::read_to_string(&options.config) {
             Ok(content) => content,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => "[providers]\n".into(),
+            Err(error)
+                if error.kind() == std::io::ErrorKind::NotFound
+                    && matches!(self.configuration, Ok(None)) =>
+            {
+                "[providers]\n".into()
+            }
             Err(error) => return Err(error.into()),
         };
         crate::config::FileConfig::parse(&content, &options.auth_directory)

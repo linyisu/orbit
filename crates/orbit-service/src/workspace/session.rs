@@ -16,7 +16,7 @@ const COMMAND_CAPACITY: usize = 16;
 
 pub struct Handle {
     pub(super) questions: super::questions::Questions,
-    _configuration: Option<super::configuration::Installed>,
+    _configuration: Option<Arc<super::configuration::Installed>>,
     pub info: SessionInfo,
     pub(super) clients: std::sync::atomic::AtomicUsize,
     pub policy: orbit_protocol::SessionPolicy,
@@ -340,7 +340,7 @@ impl Handle {
 
     pub async fn spawn(
         setup: crate::PreparedWorkspace,
-        configuration: Option<super::configuration::Installed>,
+        configuration: Option<Arc<super::configuration::Installed>>,
     ) -> Result<Self> {
         for diagnostic in &setup.resources.diagnostics {
             eprintln!("{diagnostic}");

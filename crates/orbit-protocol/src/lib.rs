@@ -22,9 +22,9 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 /// Current request and event schema version advertised during the handshake.
-pub const VERSION: u32 = 29;
+pub const VERSION: u32 = 30;
 /// Peers advertising this feature support browsing independently of model preparation.
-pub const MODEL_INDEPENDENT_SESSIONS: &str = "model_independent_sessions";
+pub const MODEL_INDEPENDENT_SESSIONS: &str = "model_independent_sessions_with_policy";
 /// Oldest peer schema accepted by this implementation.
 pub const MIN_COMPATIBLE_VERSION: u32 = 15;
 
@@ -96,6 +96,9 @@ pub enum Request {
     /// Open local history without loading model configuration or starting tools.
     Browse {
         resume: Option<String>,
+        /// Remote policy snapshot, or an explicit capture failure. Failure permits history only.
+        #[serde(default)]
+        configuration: Option<Result<Configuration, ()>>,
     },
     /// Prepare execution for a previously browsed session. Failure keeps history open.
     Prepare {
@@ -565,6 +568,32 @@ impl EncodedFrame {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unavailable_browsing_policy_is_distinct_from_target_defaults_on_the_wire() {
+        let request = super::Request::Browse {
+            resume: None,
+            configuration: Some(Err(())),
+        };
+        let encoded = serde_json::to_vec(&request).unwrap();
+        let decoded: super::Request = serde_json::from_slice(&encoded).unwrap();
+        assert!(matches!(
+            decoded,
+            super::Request::Browse {
+                configuration: Some(Err(())),
+                ..
+            }
+        ));
+        let legacy: super::Request =
+            serde_json::from_str(r#"{"method":"browse","resume":null}"#).unwrap();
+        assert!(matches!(
+            legacy,
+            super::Request::Browse {
+                configuration: None,
+                ..
+            }
+        ));
+    }
 
     #[test]
     fn settings_workspace_guards_are_optional_for_legacy_clients() {

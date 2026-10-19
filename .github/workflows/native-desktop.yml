@@ -25,7 +25,7 @@ permissions:
   actions: read
 
 concurrency:
-  group: native-desktop-${{ github.ref }}${{ contains(github.event.head_commit.message, '[installer-only]') && '-installer' || contains(github.event.head_commit.message, '[native-stack]') && '-stack' || '' }}
+  group: native-desktop-${{ github.ref }}${{ contains(github.event.head_commit.message, '[installer-only]') && '-installer' || '' }}
   cancel-in-progress: true
 
 jobs:

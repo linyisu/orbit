@@ -167,10 +167,12 @@ impl DataSource<'_> {
     /// Relative databases belong to their workspace; home-relative stores span projects.
     pub fn matches(&self, other: &Self) -> bool {
         let workspace_scoped = self.database.is_some_and(|path| {
-            path.is_relative()
-                && !path
-                    .to_str()
-                    .is_some_and(|path| path == "~" || path.starts_with("~/"))
+            (match self.target {
+                Target::Local => path.is_relative(),
+                Target::Ssh { .. } | Target::Wsl { .. } => !path.to_string_lossy().starts_with('/'),
+            }) && !path
+                .to_str()
+                .is_some_and(|path| path == "~" || path.starts_with("~/"))
         });
         self.target == other.target
             && self.server == other.server
@@ -706,7 +708,10 @@ pub(crate) mod tests {
                     unattended: true,
                     interactive: None,
                 };
-                let request = || Request::Browse { resume: None };
+                let request = || Request::Browse {
+                    resume: None,
+                    configuration: None,
+                };
                 let request_bytes = std::mem::size_of_val(&client.request(request()));
                 let raw_bytes = std::mem::size_of_val(&client.raw_request(request()));
                 let open_bytes = std::mem::size_of_val(&crate::connect::open_session(
@@ -914,6 +919,11 @@ pub(crate) mod tests {
             workspace: Path::new("/sample/two"),
         };
         assert!(!left.matches(&right));
+        left.database = Some(Path::new("/state/shared.db"));
+        right.database = left.database;
+        assert!(left.matches(&right));
+        left.database = Some(Path::new("state.db"));
+        right.database = left.database;
         left.target = Target::Local;
         right.target = Target::Local;
         assert!(!left.matches(&right));

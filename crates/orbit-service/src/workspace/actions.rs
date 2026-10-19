@@ -55,7 +55,7 @@ pub(super) async fn browse(
     action: SessionAction,
 ) -> Result<super::protocol::Response> {
     use super::protocol::Response;
-    let config = super::session::browsing::Browsing::configuration(options)?;
+    let config = browsing.config(options)?;
     let policy = orbit_protocol::SessionPolicy {
         disabled: config.disabled_capabilities,
         ..Default::default()

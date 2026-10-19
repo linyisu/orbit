@@ -87,7 +87,9 @@ fn file_transport_preserves_raw_text_and_refuses_stale_saves() {
         assert!(
             entries
                 .iter()
-                .any(|entry| entry.path == "src/notes.md" && entry.kind == EntryKind::File)
+                .any(|entry| std::path::Path::new(&entry.path)
+                    == std::path::Path::new("src/notes.md")
+                    && entry.kind == EntryKind::File)
         );
         let Response::File(encoded) = request(
             &backend,

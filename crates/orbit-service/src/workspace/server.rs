@@ -353,7 +353,11 @@ impl Service {
             if let Ok(handle) = self.session(parent).await {
                 handle.authorize_subagent(agent).await?;
             } else {
-                let config = session::browsing::Browsing::configuration(options)?;
+                let browsing = self
+                    .browsing(parent)
+                    .await
+                    .context("conversation is not open")?;
+                let config = browsing.config(options)?;
                 ensure!(
                     !config
                         .disabled_capabilities
@@ -523,7 +527,10 @@ impl Service {
         viewer: u64,
     ) -> Result<Response> {
         match request {
-            Request::Browse { resume } => {
+            Request::Browse {
+                resume,
+                configuration,
+            } => {
                 let _opening = self.opening.lock().await;
                 ensure!(
                     !self.closing.load(Ordering::Acquire),
@@ -569,6 +576,16 @@ impl Service {
                     "YOLO" => orbit_protocol::Mode::Yolo,
                     _ => orbit_protocol::Mode::Auto,
                 };
+                let configuration = match configuration {
+                    Some(Ok(configuration)) => {
+                        super::configuration::Installed::install(configuration, connection_options)
+                            .await
+                            .map(|installed| Some(Arc::new(installed)))
+                            .map_err(|_| ())
+                    }
+                    Some(Err(())) => Err(()),
+                    None => Ok(None),
+                };
                 let browsing = session::browsing::Browsing {
                     session,
                     directory: connection_options
@@ -580,6 +597,7 @@ impl Service {
                     mode,
                     mode_revision: 0,
                     plan_mode: None,
+                    configuration,
                 };
                 let info = browsing.info();
                 self.browsing
@@ -614,9 +632,14 @@ impl Service {
                 let configuration = match configuration {
                     Some(configuration) => Some(
                         super::configuration::Installed::install(configuration, connection_options)
-                            .await?,
+                            .await
+                            .map(Arc::new)?,
                     ),
-                    None => None,
+                    None => browsing
+                        .configuration
+                        .as_ref()
+                        .map_err(|()| anyhow::anyhow!("远程配置尚未就绪，请修正配置后重试"))?
+                        .clone(),
                 };
                 let mut options = configuration
                     .as_ref()
@@ -816,7 +839,7 @@ impl Service {
                 let setup =
                     super::setup::prepare_service_with_policy(&options, resume, policy.clone())
                         .await?;
-                let mut handle = Handle::spawn(setup, configuration).await?;
+                let mut handle = Handle::spawn(setup, configuration.map(Arc::new)).await?;
                 handle.requested_policy = policy;
                 let handle = Arc::new(handle);
                 let info = handle.info.clone();
@@ -874,7 +897,7 @@ impl Service {
                             .is_none_or(|expected| expected == browsing.info().workspace),
                         "项目已切换，请刷新后重试"
                     );
-                    let config = session::browsing::Browsing::configuration(connection_options)?;
+                    let config = browsing.config(connection_options)?;
                     let policy = orbit_protocol::SessionPolicy {
                         disabled: config.disabled_capabilities,
                         ..Default::default()
@@ -945,7 +968,7 @@ impl Service {
                         expected_workspace == browsing.info().workspace,
                         "项目已切换，请刷新后重试"
                     );
-                    let config = session::browsing::Browsing::configuration(connection_options)?;
+                    let config = browsing.config(connection_options)?;
                     let policy = orbit_protocol::SessionPolicy {
                         disabled: config.disabled_capabilities,
                         ..Default::default()
@@ -1283,13 +1306,15 @@ impl Service {
                     .context("conversation is not open")?;
                 let info = browsing.info();
                 let store = browsing.session.store.clone();
+                let retained = browsing.configuration.clone();
                 drop(browsing);
                 let installed = match configuration {
                     Some(configuration) => Some(
                         super::configuration::Installed::install(configuration, connection_options)
-                            .await?,
+                            .await
+                            .map(Arc::new)?,
                     ),
-                    None => None,
+                    None => retained.map_err(|()| anyhow::anyhow!("远程配置尚未就绪"))?,
                 };
                 let options = installed
                     .as_ref()
@@ -1331,9 +1356,14 @@ impl Service {
                                 configuration,
                                 connection_options,
                             )
-                            .await?,
+                            .await
+                            .map(Arc::new)?,
                         ),
-                        None => None,
+                        None => browsing
+                            .configuration
+                            .as_ref()
+                            .map_err(|()| anyhow::anyhow!("远程配置尚未就绪"))?
+                            .clone(),
                     };
                     let options = installed
                         .as_ref()
@@ -1355,6 +1385,7 @@ impl Service {
                     }
                     let mut info = browsing.info();
                     super::profile::catalog(&mut info, &models);
+                    browsing.configuration = Ok(installed);
                     return Ok(Response::Profile(Box::new(info)));
                 }
                 self.session(&session)

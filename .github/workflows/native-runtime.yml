@@ -53,7 +53,6 @@ jobs:
       github.event_name == 'push' && github.ref == 'refs/heads/native-runtime-foundation'
       && !contains(github.event.head_commit.message, '[native-full]')
       && !contains(github.event.head_commit.message, '[installer-only]')
-      && !contains(github.event.head_commit.message, '[native-stack]')
     name: Repair regressions (${{ matrix.os }})
     strategy:
       fail-fast: false

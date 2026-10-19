@@ -59,7 +59,7 @@ pub(super) async fn browsing_access(
             .validate_directory(&browsing.directory)
             .await?;
     }
-    let config = super::session::browsing::Browsing::configuration(options)?;
+    let config = browsing.config(options)?;
     let planning = browsing
         .session
         .store

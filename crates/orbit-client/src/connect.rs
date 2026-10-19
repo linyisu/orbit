@@ -132,8 +132,15 @@ pub async fn open_session(
                 .any(|feature| feature == orbit_protocol::MODEL_INDEPENDENT_SESSIONS)),
         "目标端 Orbit 尚不支持独立读取历史，请更新目标端服务后重试"
     );
+    let configuration = match Box::pin(connection.configuration()).await {
+        Ok(configuration) => configuration.map(Ok),
+        Err(_) => Some(Err(())),
+    };
     let response = client
-        .request(Request::Browse { resume })
+        .request(Request::Browse {
+            resume,
+            configuration,
+        })
         .await?;
     let Response::Opened(mut info) = response else {
         anyhow::bail!("unexpected conversation response");

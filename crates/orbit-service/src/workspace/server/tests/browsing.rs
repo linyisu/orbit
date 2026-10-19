@@ -1,11 +1,154 @@
 use super::*;
 
 #[tokio::test]
+async fn remote_browsing_retains_restrictive_policy_through_execution_preparation() {
+    let fixture = Fixture::new("http://127.0.0.1:1/v1").await;
+    let source = fs::read_to_string(&fixture.service.options.config).unwrap();
+    let configuration = orbit_protocol::Configuration {
+        content: format!("disabled_capabilities = [\"files\"]\n{source}"),
+        credentials: Default::default(),
+    };
+    let Response::Opened(info) = fixture
+        .request(Request::Browse {
+            resume: None,
+            configuration: Some(Ok(configuration)),
+        })
+        .await
+        .unwrap()
+    else {
+        panic!("missing browser")
+    };
+    let read = || Request::ReadFile {
+        session: info.id.clone(),
+        path: "generated.txt".into(),
+        allow_missing: true,
+    };
+    assert!(
+        fixture
+            .request(read())
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("文件功能已禁用")
+    );
+    let installed_path = fixture
+        .service
+        .browsing(&info.id)
+        .await
+        .unwrap()
+        .options(&fixture.service.options)
+        .unwrap()
+        .config
+        .clone();
+    fixture
+        .request(Request::Prepare {
+            session: info.id.clone(),
+            model: Some("test::test".into()),
+            configuration: None,
+        })
+        .await
+        .unwrap();
+    let handle = fixture
+        .service
+        .session(&info.id)
+        .await
+        .unwrap();
+    assert!(
+        handle
+            .policy
+            .disabled(orbit_protocol::Capability::Files)
+    );
+    assert!(installed_path.exists());
+    assert!(
+        fixture
+            .request(Request::Files {
+                session: info.id,
+                expected_workspace: None,
+                action: orbit_protocol::files::Action::List {
+                    path: ".".into(),
+                    offset: 0,
+                    include_hidden: false
+                },
+            })
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn failed_remote_policy_capture_preserves_history_and_rejects_execution_until_repaired() {
+    let fixture = Fixture::new("http://127.0.0.1:1/v1").await;
+    for configuration in [
+        Some(Err(())),
+        Some(Ok(orbit_protocol::Configuration {
+            content: "invalid = [".into(),
+            credentials: Default::default(),
+        })),
+    ] {
+        let Response::Opened(info) = fixture
+            .request(Request::Browse {
+                resume: None,
+                configuration,
+            })
+            .await
+            .unwrap()
+        else {
+            panic!("missing browser")
+        };
+        assert!(matches!(
+            fixture
+                .request(Request::Poll {
+                    session: info.id.clone(),
+                    after: 0
+                })
+                .await
+                .unwrap(),
+            Response::Page(_)
+        ));
+        assert!(
+            fixture
+                .request(Request::ReadFile {
+                    session: info.id.clone(),
+                    path: "generated.txt".into(),
+                    allow_missing: true
+                })
+                .await
+                .is_err()
+        );
+        assert!(
+            fixture
+                .request(Request::Prepare {
+                    session: info.id.clone(),
+                    model: Some("test::test".into()),
+                    configuration: None
+                })
+                .await
+                .is_err()
+        );
+        let source = fs::read_to_string(&fixture.service.options.config).unwrap();
+        fixture
+            .request(Request::Prepare {
+                session: info.id,
+                model: Some("test::test".into()),
+                configuration: Some(orbit_protocol::Configuration {
+                    content: source,
+                    credentials: Default::default(),
+                }),
+            })
+            .await
+            .unwrap();
+    }
+}
+
+#[tokio::test]
 async fn browsing_keeps_session_administration_and_archived_views_consistent() {
     let fixture = Fixture::new("http://127.0.0.1:1/v1").await;
     fs::remove_file(&fixture.service.options.config).unwrap();
     let Response::Opened(info) = fixture
-        .request(Request::Browse { resume: None })
+        .request(Request::Browse {
+            resume: None,
+            configuration: None,
+        })
         .await
         .unwrap()
     else {
@@ -31,6 +174,7 @@ async fn browsing_keeps_session_administration_and_archived_views_consistent() {
         .unwrap();
     let Response::Opened(renamed) = fixture
         .request(Request::Browse {
+            configuration: None,
             resume: Some(info.id.clone()),
         })
         .await
@@ -87,6 +231,7 @@ async fn browsing_keeps_session_administration_and_archived_views_consistent() {
     assert!(
         fixture
             .request(Request::Browse {
+                configuration: None,
                 resume: Some(info.id)
             })
             .await
@@ -98,7 +243,10 @@ async fn browsing_keeps_session_administration_and_archived_views_consistent() {
 async fn shutdown_waits_for_browsing_operations_and_rejects_new_sessions() {
     let fixture = Fixture::new("http://127.0.0.1:1/v1").await;
     let Response::Opened(info) = fixture
-        .request(Request::Browse { resume: None })
+        .request(Request::Browse {
+            resume: None,
+            configuration: None,
+        })
         .await
         .unwrap()
     else {
@@ -125,7 +273,10 @@ async fn shutdown_waits_for_browsing_operations_and_rejects_new_sessions() {
     ));
     assert!(
         fixture
-            .request(Request::Browse { resume: None })
+            .request(Request::Browse {
+                resume: None,
+                configuration: None
+            })
             .await
             .is_err()
     );
@@ -147,7 +298,10 @@ async fn session_extensions_and_memory_views_work_before_model_setup() {
     let fixture = Fixture::new("http://127.0.0.1:1/v1").await;
     fs::remove_file(&fixture.service.options.config).unwrap();
     let Response::Opened(info) = fixture
-        .request(Request::Browse { resume: None })
+        .request(Request::Browse {
+            resume: None,
+            configuration: None,
+        })
         .await
         .unwrap()
     else {
@@ -288,7 +442,10 @@ async fn terminal_directory_changes_and_task_reports_do_not_require_a_model() {
     fs::create_dir(&chosen).unwrap();
     fs::write(chosen.join("marker.txt"), "chosen directory").unwrap();
     let Response::Opened(info) = fixture
-        .request(Request::Browse { resume: None })
+        .request(Request::Browse {
+            resume: None,
+            configuration: None,
+        })
         .await
         .unwrap()
     else {
@@ -392,7 +549,10 @@ async fn files_remain_available_before_model_setup_with_the_same_write_and_path_
     fs::write(fixture.external.join("outside.txt"), "private").unwrap();
     fs::remove_file(&fixture.service.options.config).unwrap();
     let Response::Opened(info) = fixture
-        .request(Request::Browse { resume: None })
+        .request(Request::Browse {
+            resume: None,
+            configuration: None,
+        })
         .await
         .unwrap()
     else {
@@ -486,7 +646,10 @@ async fn browsing_survives_missing_and_invalid_models_and_prepares_after_configu
     let source = fs::read_to_string(config).unwrap();
     fs::remove_file(config).unwrap();
     let Response::Opened(info) = fixture
-        .request(Request::Browse { resume: None })
+        .request(Request::Browse {
+            resume: None,
+            configuration: None,
+        })
         .await
         .unwrap()
     else {
@@ -614,6 +777,7 @@ async fn saved_transcript_is_readable_without_model_or_execution_directory_autho
     fs::write(&fixture.service.options.config, "invalid = [").unwrap();
     let Response::Opened(info) = fixture
         .request(Request::Browse {
+            configuration: None,
             resume: Some(id.clone()),
         })
         .await
@@ -621,7 +785,15 @@ async fn saved_transcript_is_readable_without_model_or_execution_directory_autho
     else {
         panic!("missing archived conversation");
     };
-    assert_eq!(info.workspace, fixture.external.display().to_string());
+    assert_eq!(
+        info.workspace,
+        fixture
+            .external
+            .canonicalize()
+            .unwrap()
+            .display()
+            .to_string()
+    );
     let Response::Page(page) = fixture
         .request(Request::Poll {
             session: id.clone(),

@@ -11,7 +11,9 @@ fn checked_path(workspace: &str, path: &str) -> anyhow::Result<PathBuf> {
     anyhow::ensure!(root.is_dir(), "工作区目录不存在");
     let requested = Path::new(path);
     let relative = if requested.is_absolute() {
-        requested.strip_prefix(&root)?
+        requested
+            .strip_prefix(&root)
+            .or_else(|_| requested.strip_prefix(Path::new(workspace)))?
     } else {
         requested
     };
