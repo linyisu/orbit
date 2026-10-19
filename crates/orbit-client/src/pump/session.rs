@@ -168,6 +168,7 @@ pub async fn observe(
     events
         .send(Event::Response(history))
         .await?;
+    let mut agent_watch = catalogue::Watch::default();
     if resume.is_none()
         && options.model.is_none()
         && let Some(local) = &connection.local_configuration
@@ -179,6 +180,16 @@ pub async fn observe(
             loop {
                 match commands.recv().await {
                     Some(Command::RefreshModels) => break,
+                    Some(Command::WatchAgents(scope)) => agent_watch.set(scope),
+                    Some(Command::CloseSubagent) => (),
+                    Some(Command::Request(Request::AllSessions)) => {
+                        let response = client
+                            .request(Request::AllSessions)
+                            .await?;
+                        events
+                            .send(Event::Response(response))
+                            .await?;
+                    }
                     Some(Command::Settings { result, .. }) => {
                         let _ = result.send(Err("请先添加模型连接".into()));
                     }
@@ -207,7 +218,6 @@ pub async fn observe(
     let mut queue_images = std::collections::HashMap::new();
     let mut questions_revision = None;
     let mut subagent: Option<(String, usize)> = None;
-    let mut agent_watch = catalogue::Watch::default();
     let mut page_state = super::PollState::default();
     // A paged transcript is already available: drain it without the live
     // polling delay, while keeping commands ahead of each page request.

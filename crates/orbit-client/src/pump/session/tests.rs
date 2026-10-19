@@ -56,6 +56,25 @@ async fn first_use_waits_for_configuration_and_opens_after_models_are_saved() {
     .unwrap();
     assert!(!config.exists());
     commands
+        .send(Command::WatchAgents(None))
+        .await
+        .unwrap();
+    commands
+        .send(Command::CloseSubagent)
+        .await
+        .unwrap();
+    commands
+        .send(Command::Request(Request::AllSessions))
+        .await
+        .unwrap();
+    assert!(matches!(
+        tokio::time::timeout(Duration::from_secs(5), incoming.recv())
+            .await
+            .unwrap()
+            .unwrap(),
+        Event::Response(Response::Sessions(_))
+    ));
+    commands
         .send(Command::RefreshModels)
         .await
         .unwrap();
