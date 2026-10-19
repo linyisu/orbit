@@ -153,6 +153,7 @@ mod resolution_tests {
         let child = root.path().join("project space");
         std::fs::create_dir(&child).unwrap();
         std::fs::write(root.path().join("file"), "data").unwrap();
+        let child = child.canonicalize().unwrap();
 
         assert_eq!(resolve("project space", root.path(), None).unwrap(), child);
         assert_eq!(

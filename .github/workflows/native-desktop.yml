@@ -37,7 +37,7 @@ jobs:
         os: >-
           ${{ fromJSON(
             contains(github.event.head_commit.message, '[installer-only]')
-            && '["windows-2025"]'
+            && '["macos-26","windows-2025"]'
             ||
             github.event_name == 'push' && github.ref == 'refs/heads/native-runtime-foundation'
             && !contains(github.event.head_commit.message, '[native-full]')
@@ -118,24 +118,28 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test -p orbit-auth usage::tests --target "$nativeTarget" --locked
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Select the latest existing Windows GUI for packaging retries
+      - name: Select the previous commit's desktop for acceptance retries
+        # Use this mode only for acceptance or packaging changes; application code must be identical.
         if: contains(github.event.head_commit.message, '[installer-only]')
         id: previous-gui
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ github.event.before }}
+          ARTIFACT_NAME: orbit-desktop-${{ matrix.os }}-${{ runner.arch }}
         run: |
-          $run = gh api 'repos/${{ github.repository }}/actions/artifacts?name=orbit-desktop-windows-2025-X64&per_page=10' --jq '.artifacts | map(select(.expired == false)) | first | .workflow_run.id'
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          "run=$run" >> $env:GITHUB_OUTPUT
+          run=$(gh api "repos/${{ github.repository }}/actions/artifacts?name=$ARTIFACT_NAME&per_page=30" --jq ".artifacts | map(select(.expired == false and .workflow_run.head_sha == \"$SOURCE_SHA\")) | first | .workflow_run.id")
+          test -n "$run" && test "$run" != null
+          echo "run=$run" >> "$GITHUB_OUTPUT"
       - uses: actions/download-artifact@v8
         if: contains(github.event.head_commit.message, '[installer-only]')
         with:
-          name: orbit-desktop-windows-2025-X64
+          name: orbit-desktop-${{ matrix.os }}-${{ runner.arch }}
           run-id: ${{ steps.previous-gui.outputs.run }}
           github-token: ${{ github.token }}
           path: target/previous-gui
-      - name: Restore the existing GUI and build acceptance tooling
-        if: contains(github.event.head_commit.message, '[installer-only]')
+      - name: Restore the existing Windows GUI and build acceptance tooling
+        if: ${{ runner.os == 'Windows' && contains(github.event.head_commit.message, '[installer-only]') }}
         run: |
           Expand-Archive target/previous-gui/orbit-desktop-windows-x86_64.zip target/bundle-gui -Force
           cargo build -p orbit-xtask --locked
@@ -143,22 +147,39 @@ jobs:
           cargo test -p orbit-xtask --locked installer::tests
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test -p orbit-xtask --locked remote::tests::installed_desktop_requires_a_single_extracted_server
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test -p orbit-client --locked directories::
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Restore the existing macOS GUI and verify directory resolution
+        if: ${{ runner.os == 'macOS' && contains(github.event.head_commit.message, '[installer-only]') }}
+        run: |
+          mkdir -p target/bundle-gui
+          tar -xzf target/previous-gui/orbit-desktop-macos-aarch64.tar.gz -C target/bundle-gui
+          cargo test -p orbit-client --locked directories::
+      - name: Complete the regressions after the corrected directory assertion
+        if: contains(github.event.head_commit.message, '[installer-only]')
+        shell: bash
+        run: |
+          cargo test -p orbit-client invalid_execution_configuration --locked
+          cargo test -p orbit-tui browsing_without_an_execution_budget --locked
+          cargo test -p orbit-model advertised_api_metadata --locked
+          cargo test -p orbit-auth usage::tests --locked
       - name: Verify native window and embedded service
         if: runner.os == 'macOS'
         run: cargo xtask verify-gui-bundle
       - name: Verify Windows window and embedded service
-        if: ${{ runner.os == 'Windows' && !contains(github.event.head_commit.message, '[installer-only]') }}
+        if: runner.os == 'Windows'
         timeout-minutes: 10
         run: .\target\debug\orbit-xtask.exe verify-gui-bundle
       - name: Verify isolated Linux window and embedded service
         if: runner.os == 'Linux'
         run: xvfb-run -a -s '-screen 0 1280x900x24' cargo xtask verify-gui-bundle
       - name: Test local speech and native model access
-        if: ${{ !cancelled() && runner.os != 'Windows' }}
+        if: ${{ !cancelled() && runner.os != 'Windows' && !contains(github.event.head_commit.message, '[installer-only]') }}
         run: |
           cargo test -p orbit-client --features local-speech --locked speech::
       - name: Test desktop preferences
-        if: ${{ !cancelled() && runner.os != 'Windows' }}
+        if: ${{ !cancelled() && runner.os != 'Windows' && !contains(github.event.head_commit.message, '[installer-only]') }}
         run: cargo test -p orbit-gui --locked --bin orbit-gui preferences::tests
       - name: Test Windows speech and preferences with packaged runtime flags
         if: >-
