@@ -418,7 +418,8 @@ mod tests {
             .unwrap();
         let result = super::super::supervisor::run_child_process(
             child,
-            std::time::Duration::from_secs(10),
+            // This retention test must allow cold native PowerShell startup under CI load.
+            std::time::Duration::from_secs(if cfg!(windows) { 30 } else { 10 }),
             tokio_util::sync::CancellationToken::new(),
             Some(log),
             "native",
@@ -429,12 +430,16 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(result.exit_code, Some(0));
+        assert!(
+            !result.timed_out,
+            "output fixture timed out: stderr={:?}",
+            result.stderr
+        );
+        assert_eq!(result.exit_code, Some(0), "stderr={:?}", result.stderr);
         assert_eq!(result.stdout_total_bytes, 280_005);
         assert!(result.stdout.ends_with("FINAL") && result.stdout.len() <= MAX_OUTPUT);
         assert_eq!(result.stderr, "stderr intact");
         assert!(result.retained_output_truncated && result.retained_output_error.is_some());
-        assert!(!result.timed_out);
     }
 
     #[tokio::test]
