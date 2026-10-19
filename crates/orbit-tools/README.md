@@ -112,4 +112,8 @@ GUI 保存后点击“应用到当前会话”重新连接；当前任务保留�
 cargo test -p orbit-tools
 ```
 
+MCP 生命周期测试使用 Cargo 一同构建的 Rust 替身
+[mcp_peer.rs](tests/support/mcp_peer.rs)，覆盖分页、协议故障、取消、重连与后代进程回收，
+不依赖 Python 或 shell 解释器。
+
 [项目总览](../../README.md)

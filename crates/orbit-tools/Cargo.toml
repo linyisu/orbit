@@ -3,6 +3,10 @@ name = "orbit-tools"
 version.workspace = true
 edition.workspace = true
 
+[[example]]
+name = "orbit-mcp-test-peer"
+path = "tests/support/mcp_peer.rs"
+
 [dependencies]
 anydoc.workspace = true
 pdf-inspector.workspace = true
@@ -50,5 +54,6 @@ tree-sitter.workspace = true
 url.workspace = true
 
 [dev-dependencies]
+orbit-build = { workspace = true, features = ["test-support"] }
 zip.workspace = true
 futures-util.workspace = true

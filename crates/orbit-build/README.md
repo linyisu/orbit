@@ -6,6 +6,9 @@
 
 [lib.rs](src/lib.rs) 提供 `embed_workspace_server` 与 `verify_static_server`，由 TUI、GUI 的构建脚本调用。
 
+`test-support` 提供 `build_test_peer`，供 crate 的 Rust 测试离线构建所属的子进程替身，
+并读取 Cargo 的可执行文件收据；不依赖 Python、shell 或猜测的构建产物路径。
+
 默认在独立的 `target/workspace-server/` 缓存中构建同平台服务。Linux 使用同架构 musl 服务，并解析 ELF 校验不依赖动态加载器或共享库；需要 Rust musl target 与 `musl-gcc`，校验本身无需外部命令。
 
 设置 `ORBIT_WORKSPACE_SERVER=/absolute/path/to/orbit-workspace-server` 可复用已有原生服务，文件仍需通过校验。Windows 路径使用 `.exe` 后缀。

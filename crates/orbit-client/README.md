@@ -89,6 +89,9 @@ UTF-8 跨 token 拼接后再展示，暂定尾部整体替换，稳定前缀不�
 cargo test -p orbit-client
 ```
 
+会话控制测试使用 Cargo 一同构建的 Rust 替身
+[session_peer.rs](tests/support/session_peer.rs)，不依赖 Python 或 shell 启动脚本。
+
 [项目总览](../../README.md)
 
 本机服务资产按客户端平台选择，Windows 使用 `.exe` 与私有命名管道，macOS 使用原生

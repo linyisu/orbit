@@ -3,16 +3,7 @@ use super::*;
 #[tokio::test]
 async fn failed_start_reports_the_error_chain_and_stderr() {
     let workspace = tempfile::tempdir().unwrap();
-    let config: McpServerConfig = serde_json::from_value(json!({
-        "command": "/bin/sh",
-        "args": [
-            "-c",
-            "printf 'missing MCP subcommand: use --mcp\\n' >&2; exit 7"
-        ],
-        "enabled": true,
-        "timeout_seconds": 1
-    }))
-    .unwrap();
+    let config = lifecycle::config("startup_error");
     let (approvals, _receiver) = crate::approval::channel();
     let statuses = register(
         &mut ToolRegistry::new(),
@@ -125,55 +116,16 @@ fn rejects_remote_transport_until_credential_boundary_exists() {
     );
 }
 
-#[cfg(unix)]
 #[tokio::test]
 async fn discovers_and_calls_a_stdio_server() {
-    use std::os::unix::fs::PermissionsExt;
-
     for mode in [
         crate::approval::ApprovalMode::Ask,
         crate::approval::ApprovalMode::Auto,
         crate::approval::ApprovalMode::Yolo,
     ] {
         let directory = tempfile::tempdir().unwrap();
-        let script = directory.path().join("server.sh");
-        std::fs::write(
-            &script,
-            r#"#!/bin/sh
-while IFS= read -r line; do
-  case "$line" in
-    *'"method":"initialize"'*)
-      printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"capabilities":{"tools":{}}}}'
-      ;;
-    *'"method":"tools/list"'*)
-      printf '%s\n' '{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"echo","description":"Echo input","inputSchema":{"type":"object"}}]}}'
-      ;;
-    *'"method":"tools/call"'*)
-      printf '%s\n' '{"jsonrpc":"2.0","id":3,"result":{"content":[{"type":"text","text":"ok"}]}}'
-      ;;
-  esac
-done
-"#,
-        )
-        .unwrap();
-        let mut permissions = std::fs::metadata(&script)
-            .unwrap()
-            .permissions();
-        permissions.set_mode(0o700);
-        std::fs::set_permissions(&script, permissions).unwrap();
         let config = McpConfig {
-            servers: BTreeMap::from([(
-                "fixture".into(),
-                McpServerConfig {
-                    transport: "stdio".into(),
-                    command: script.to_string_lossy().into_owned(),
-                    args: Vec::new(),
-                    env: BTreeMap::new(),
-                    timeout_seconds: 2,
-                    tools: Vec::new(),
-                    enabled: true,
-                },
-            )]),
+            servers: BTreeMap::from([("fixture".into(), lifecycle::config("echo"))]),
         };
         let mut registry = ToolRegistry::new();
         let (approvals, mut receiver) = crate::approval::channel();

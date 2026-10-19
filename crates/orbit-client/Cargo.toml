@@ -3,6 +3,10 @@ name = "orbit-client"
 version.workspace = true
 edition.workspace = true
 
+[[example]]
+name = "orbit-client-test-peer"
+path = "tests/support/session_peer.rs"
+
 [features]
 test-support = []
 local-speech = ["dep:qwen-asr", "dep:reqwest"]
@@ -34,6 +38,7 @@ qwen-asr = { workspace = true, optional = true }
 reqwest = { workspace = true, optional = true }
 
 [dev-dependencies]
+orbit-build = { workspace = true, features = ["test-support"] }
 orbit-config = { workspace = true, features = ["test-support"] }
 
 [target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]

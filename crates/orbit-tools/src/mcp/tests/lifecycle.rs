@@ -62,10 +62,14 @@ async fn peer(mode: &str) -> (tempfile::TempDir, StdioClient) {
     (directory, client)
 }
 
-fn config(mode: &str) -> McpServerConfig {
+pub(super) fn config(mode: &str) -> McpServerConfig {
+    static PEER: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+    let peer = PEER.get_or_init(|| {
+        orbit_build::build_test_peer(Path::new(env!("CARGO_MANIFEST_DIR")), "orbit-mcp-test-peer")
+    });
     serde_json::from_value(json!({
-        "command": "/usr/bin/python3",
-        "args": ["-u", "-c", include_str!("server.py"), mode],
+        "command": peer,
+        "args": [mode],
         "timeout_seconds": 1,
         "enabled": true
     }))

@@ -56,4 +56,7 @@ Windows 文件访问使用目录句柄逐级打开，私有输出和附件目录
 cargo test -p orbit-runtime
 ```
 
+原生进程与本机通信验收直接运行本 crate 的 Rust 测试，不生成临时测试工程，
+也不依赖 Python 驱动脚本；三平台使用同一份生产模块和测试代码。
+
 [项目总览](../../README.md)

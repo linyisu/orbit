@@ -5,6 +5,8 @@ Orbit 是 Rust workspace，包含 TUI、GPUI Kit 桌面客户端和工作区服�
 
 ## 开始修改
 
+- 第一方实现、测试替身和验收驱动使用 Rust，不新增 Python 或 shell 实现的测试程序；
+  CI 调用 Cargo 运行责任 crate 的测试，第三方源码和用于解析、展示的语言样本保持原样。
 - 先检查工作区差异，阅读完整的目标函数、调用方和已有测试。
 - 按能力归属修改：客户端负责交互，service 协调任务，agent 驱动模型与工具，
   runtime 管理执行与文件边界，store 持久化，protocol 定义两端契约。

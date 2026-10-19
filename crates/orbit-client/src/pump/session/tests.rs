@@ -1,6 +1,5 @@
 use super::*;
 use orbit_config::test_support::{TestConfig, TestProvider};
-use std::os::unix::fs::PermissionsExt;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 #[tokio::test]
@@ -19,18 +18,10 @@ async fn model_refresh_preserves_controls_and_applies_single_discovery() {
     settings.config.web.proxy = Some(format!("http://{}", blocked_proxy.local_addr().unwrap()));
     drop(blocked_proxy);
     settings.write(&config).unwrap();
-    let peer = root.path().join("peer.py");
-    std::fs::write(&peer, include_str!("peer.py")).unwrap();
-    let launcher = root.path().join("server.sh");
-    std::fs::write(
-        &launcher,
-        format!(
-            "#!/bin/sh\nexec /usr/bin/python3 -u {}\n",
-            shlex::try_quote(peer.to_str().unwrap()).unwrap()
-        ),
-    )
-    .unwrap();
-    std::fs::set_permissions(&launcher, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let launcher = orbit_build::build_test_peer(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")),
+        "orbit-client-test-peer",
+    );
     let local = crate::configuration::Local {
         config: config.clone(),
         auth: root.path().join("auth"),

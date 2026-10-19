@@ -263,6 +263,28 @@ pub fn check(root: &Path) -> Result<Vec<String>> {
             errors.push(format!("{name}: workspace member missing"));
         }
     }
+    for directory in ["crates", ".github/scripts"] {
+        for extension in ["py", "sh", "ps1"] {
+            for source in sources(&root.join(directory), extension)? {
+                errors.push(format!(
+                    "{}: first-party implementation and test drivers must use Rust",
+                    source.strip_prefix(root)?.display()
+                ));
+            }
+        }
+    }
+    let python_ci = Regex::new(
+        r"(?m)^\s*(?:(?:-\s*)?(?:uses:\s*actions/setup-python@|run:\s*python(?:3)?\b)|python(?:3)?\s)",
+    )?;
+    for workflow in sources(&root.join(".github/workflows"), "yml")? {
+        inspect(
+            root,
+            &workflow,
+            &python_ci,
+            "CI must run Rust test drivers through Cargo without Python",
+            &mut errors,
+        )?;
+    }
     let execution =
         Regex::new(r"\b(?:Agent::new|run_with_agent_events|compact_configured|workspace_tools)\b")?;
     for package in ["orbit-tui", "orbit-gui"] {
@@ -548,5 +570,47 @@ mod tests {
                 .iter()
                 .any(|error| error.contains("must use SeaORM"))
         );
+    }
+
+    #[test]
+    fn first_party_tests_and_ci_do_not_require_external_language_drivers() {
+        let directory = workspace();
+        let root = directory.path();
+        for relative in [
+            "crates/orbit-client/src/pump/peer.py",
+            "crates/orbit-tools/tests/peer.sh",
+            ".github/scripts/native.ps1",
+        ] {
+            let path = root.join(relative);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(&path, "synthetic test driver").unwrap();
+            let errors = check(root).unwrap();
+            assert!(
+                errors
+                    .iter()
+                    .any(|error| error.contains("must use Rust"))
+            );
+            fs::remove_file(path).unwrap();
+        }
+        let workflow = root.join(".github/workflows/native.yml");
+        fs::create_dir_all(workflow.parent().unwrap()).unwrap();
+        for source in [
+            "steps:\n  - uses: actions/setup-python@v7\n",
+            "steps:\n  - run: python3 native.py\n",
+            "steps:\n  - run: |\n      python3 native.py\n",
+        ] {
+            fs::write(&workflow, source).unwrap();
+            let errors = check(root).unwrap();
+            assert!(
+                errors
+                    .iter()
+                    .any(|error| error.contains("without Python"))
+            );
+        }
+        fs::remove_file(workflow).unwrap();
+        let vendor = root.join("vendor/upstream/example.py");
+        fs::create_dir_all(vendor.parent().unwrap()).unwrap();
+        fs::write(vendor, "third-party source").unwrap();
+        assert!(check(root).unwrap().is_empty());
     }
 }

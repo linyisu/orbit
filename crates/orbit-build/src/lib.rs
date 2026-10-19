@@ -5,6 +5,11 @@ use std::{
     process::Command,
 };
 
+#[cfg(feature = "test-support")]
+mod test_peer;
+#[cfg(feature = "test-support")]
+pub use test_peer::build_test_peer;
+
 /// Build or locate a native server and expose its verified path to the client's build.
 /// Linux retains the musl deployment asset; macOS and Windows embed their native executable.
 pub fn embed_workspace_server() {

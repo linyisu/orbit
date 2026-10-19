@@ -10,7 +10,7 @@ use base64::Engine;
 use std::{path::PathBuf, sync::Arc, time::Duration};
 use tokio::sync::mpsc;
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod tests;
 
 /// Session opening intent; paths and connection preparation have already been resolved.

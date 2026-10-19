@@ -7279,6 +7279,7 @@ name = "orbit-build"
 version = "0.1.0"
 dependencies = [
  "object 0.37.3",
+ "serde_json",
 ]
 
 [[package]]
@@ -7292,6 +7293,7 @@ dependencies = [
  "libc",
  "orbit-agent",
  "orbit-auth",
+ "orbit-build",
  "orbit-config",
  "orbit-model",
  "orbit-protocol",
@@ -7537,6 +7539,7 @@ dependencies = [
  "image",
  "libc",
  "orbit-agent",
+ "orbit-build",
  "orbit-model",
  "orbit-runtime",
  "pdf-inspector",
