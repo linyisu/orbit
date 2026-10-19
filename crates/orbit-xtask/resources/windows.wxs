@@ -1,0 +1,38 @@
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package Name="Orbit Debug" Manufacturer="Orbit" Version="$(Version)"
+           UpgradeCode="A8D847D8-9CAE-4A77-A95F-D59D0EC62E04" Scope="perUser">
+    <MajorUpgrade AllowSameVersionUpgrades="yes"
+                  DowngradeErrorMessage="A newer Orbit Debug is already installed." />
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+    <Icon Id="OrbitIcon" SourceFile="!(bindpath.assets)/orbit.ico" />
+    <Property Id="ARPPRODUCTICON" Value="OrbitIcon" />
+    <StandardDirectory Id="LocalAppDataFolder">
+      <Directory Id="ProgramsFolder" Name="Programs">
+        <Directory Id="INSTALLFOLDER" Name="Orbit Debug">
+          <Component Id="DesktopExecutable" Guid="*">
+            <File Id="OrbitExecutable" Source="!(bindpath.gui)/orbit-gui.exe" />
+            <RemoveFolder Id="RemoveInstallFolder" On="uninstall" />
+            <RemoveFolder Id="RemoveProgramsFolder" Directory="ProgramsFolder" On="uninstall" />
+            <RegistryValue Root="HKCU" Key="Software\Orbit\DebugInstaller"
+                           Name="Executable" Type="integer" Value="1" KeyPath="yes" />
+          </Component>
+        </Directory>
+      </Directory>
+    </StandardDirectory>
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="OrbitMenu" Name="Orbit Debug">
+        <Component Id="DesktopShortcut" Guid="*">
+          <Shortcut Id="LaunchOrbit" Name="Orbit Debug" Target="[#OrbitExecutable]"
+                    WorkingDirectory="INSTALLFOLDER" Icon="OrbitIcon" />
+          <RemoveFolder Id="RemoveOrbitMenu" On="uninstall" />
+          <RegistryValue Root="HKCU" Key="Software\Orbit\DebugInstaller"
+                         Name="Installed" Type="integer" Value="1" KeyPath="yes" />
+        </Component>
+      </Directory>
+    </StandardDirectory>
+    <Feature Id="Desktop" Title="Orbit Debug" Level="1">
+      <ComponentRef Id="DesktopExecutable" />
+      <ComponentRef Id="DesktopShortcut" />
+    </Feature>
+  </Package>
+</Wix>

@@ -37,8 +37,8 @@ jobs:
           ${{ fromJSON(
             github.event_name == 'push' && github.ref == 'refs/heads/native-runtime-foundation'
             && !contains(github.event.head_commit.message, '[native-full]')
-            && '["windows-2022","windows-2025"]'
-            || '["ubuntu-22.04","ubuntu-26.04","macos-15","macos-26","windows-2022","windows-2025"]'
+            && '["windows-2025"]'
+            || '["ubuntu-26.04","macos-26","windows-2025"]'
           ) }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
@@ -111,6 +111,19 @@ jobs:
       - name: Archive desktop application
         if: ${{ !cancelled() }}
         run: cargo xtask archive-gui
+      - name: Install Windows packaging tool
+        if: runner.os == 'Windows'
+        run: dotnet tool install --global wix --version 7.0.0
+      - name: Build Windows Debug installer
+        if: runner.os == 'Windows'
+        run: .\target\debug\orbit-xtask.exe installer-gui target/bundle-gui target/orbit-gui-debug-windows-x64.msi
+      - uses: actions/upload-artifact@v7
+        if: runner.os == 'Windows'
+        with:
+          name: orbit-windows-installer-acceptance
+          path: |
+            target/debug/orbit-xtask.exe
+            target/bundle-gui/orbit-workspace-server.exe
       - uses: actions/upload-artifact@v7
         if: ${{ !cancelled() }}
         with:
@@ -118,3 +131,24 @@ jobs:
           path: |
             target/orbit-desktop-*.tar.gz
             target/orbit-desktop-*.zip
+            target/orbit-gui-debug-*.msi
+
+  windows-installer:
+    name: Windows clean-machine installer
+    needs: desktop
+    runs-on: windows-2025
+    timeout-minutes: 15
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: orbit-desktop-windows-2025-X64
+          path: package
+      - uses: actions/download-artifact@v8
+        with:
+          name: orbit-windows-installer-acceptance
+          path: acceptance
+      - name: Install, render and uninstall without checkout or Cargo cache
+        run: >-
+          .\acceptance\debug\orbit-xtask.exe verify-gui-installer
+          package/orbit-gui-debug-windows-x64.msi
+          acceptance/bundle-gui/orbit-workspace-server.exe

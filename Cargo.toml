@@ -128,6 +128,10 @@ zip = { version = "8.6.0", default-features = false }
 codegen-units = 1
 lto = "thin"
 
+# Debug shader compilation reads absolute build-machine source paths. Embed shaders for deployment.
+[profile.dev.package.gpui-pre-windows]
+debug-assertions = false
+
 # TUI development runs use the debug binary; keep regex parsing responsive there too.
 [profile.dev.package.syntect]
 opt-level = 3

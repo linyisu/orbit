@@ -327,13 +327,15 @@ async fn in_container(bundle: &Path, container: &str) -> Result<()> {
 pub async fn verify_native(bundle: &Path) -> Result<()> {
     let bundle = bundle.canonicalize()?;
     let client = bundle.join(format!("orbit{}", std::env::consts::EXE_SUFFIX));
-    verify_native_executable(&bundle, &client).await
+    let server = bundle.join(format!(
+        "orbit-workspace-server{}",
+        std::env::consts::EXE_SUFFIX
+    ));
+    verify_native_executable(&server, &client).await
 }
 
-async fn verify_native_executable(bundle: &Path, client: &Path) -> Result<()> {
-    let suffix = std::env::consts::EXE_SUFFIX;
-    let server = bundle.join(format!("orbit-workspace-server{suffix}"));
-    embedded_server(client, &server)?;
+async fn verify_native_executable(server: &Path, client: &Path) -> Result<()> {
+    embedded_server(client, server)?;
     let directory = tempfile::tempdir()?;
     let root = directory.path().canonicalize()?;
     let mut options = orbit_client::ConnectionOptions::local(root.to_string_lossy().into_owned());
@@ -347,7 +349,7 @@ async fn verify_native_executable(bundle: &Path, client: &Path) -> Result<()> {
     )
     .await
     .context("native client service preflight failed")?;
-    let mut child = Command::new(&server)
+    let mut child = Command::new(server)
         .current_dir(&root)
         .arg("workspace-service")
         .arg("--workspace")
@@ -450,11 +452,20 @@ fn desktop_probe(command: &mut Command, root: &Path) {
 
 /// Exercise the packaged desktop executable with an isolated real window and native service.
 pub async fn verify_gui(bundle: &Path) -> Result<()> {
-    const DESKTOP_EXIT_TIMEOUT: Duration = Duration::from_secs(120);
-
     let bundle = bundle.canonicalize()?;
     let client = crate::bundle::gui_executable(&bundle);
-    verify_native_executable(&bundle, &client).await?;
+    let server = bundle.join(format!(
+        "orbit-workspace-server{}",
+        std::env::consts::EXE_SUFFIX
+    ));
+    verify_gui_executable(&client, &server).await
+}
+
+/// Verify either an installed desktop executable or the prepared bundle against its service asset.
+pub async fn verify_gui_executable(client: &Path, server: &Path) -> Result<()> {
+    const DESKTOP_EXIT_TIMEOUT: Duration = Duration::from_secs(120);
+
+    verify_native_executable(server, client).await?;
     let directory = tempfile::tempdir()?;
     let root = directory.path().canonicalize()?;
     #[cfg(unix)]
@@ -480,7 +491,7 @@ pub async fn verify_gui(bundle: &Path) -> Result<()> {
         .to_string(),
     )?;
     let report = root.join("window.json");
-    let mut command = Command::new(&client);
+    let mut command = Command::new(client);
     desktop_probe(&mut command, &root);
     command
         .arg("--smoke-test")
@@ -521,10 +532,6 @@ pub async fn verify_gui(bundle: &Path) -> Result<()> {
                 .is_some_and(|height| height >= 560.),
         "desktop did not complete native window rendering: {receipt}"
     );
-    let server = bundle.join(format!(
-        "orbit-workspace-server{}",
-        std::env::consts::EXE_SUFFIX
-    ));
     let mut command = Command::new(server);
     command.arg("workspace-service");
     desktop_probe(&mut command, &root);

@@ -38,9 +38,12 @@ Linux 安装时将程序放入 PATH，启动项放入用户 applications 目录�
 Linux 验收需在独立 Xvfb 中运行；原生 macOS/Windows 使用 GitHub Actions 的隔离 runner。
 Windows 窗口验收不设置 HOME 或 XDG 配置变量，同时覆盖原生设置路径。
 CI 见 [Native desktop contracts](../../.github/workflows/native-desktop.yml)。
-矩阵同时覆盖 Ubuntu 22.04／26.04、macOS 15／26、Windows Server 2022／2025，编译器使用 Rust stable。
-Ubuntu 22.04 的构建用于保留较早 glibc 兼容基线，新系统另做实际启动验收。
+桌面构建只保留 Ubuntu 26.04、macOS 26、Windows Server 2025，编译器使用 Rust stable。
+Linux 桌面包以该构建系统的 glibc 为基线；内嵌的 Linux musl 服务仍独立验证较早系统兼容性。
 Windows 回归使用与发布包一致的显式 MSVC target 和静态 C 运行库，不要求安装 Unix shell。
+Windows Debug 另提供按用户安装的 MSI，包含开始菜单及卸载入口；安装过程不改写会话数据。
+渲染依赖采用构建期内嵌着色器，避免 Debug 程序依赖编译机的 Cargo 源码路径。
+MSI 在没有源码及 Cargo 缓存的独立 Windows runner 上验证安装、真实窗口和卸载。
 
 ## 使用
 

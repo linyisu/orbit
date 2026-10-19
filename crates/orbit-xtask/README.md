@@ -35,3 +35,16 @@ macOS 生成 `.app` 并本地签名，Windows 保留 `.exe` 图标资源，Linux
 `cargo xtask verify-gui-bundle` 先验证内嵌服务，再在独立用户目录打开真实窗口、等待连接会话与渲染，最后关闭窗口和服务；
 Linux 需由 Xvfb 提供显示环境。`cargo xtask archive-gui` 只归档桌面启动资产，排除验收用的独立服务。
 详细平台依赖、签名边界及安装说明见 [GUI README](../orbit-gui/README.md#桌面发布包)。
+
+Windows 测试安装包由 WiX 7 构建，先执行 `cargo xtask bundle-gui debug`，再执行：
+
+```sh
+cargo xtask installer-gui target/bundle-gui target/orbit-gui-debug-windows-x64.msi
+cargo xtask verify-gui-installer target/orbit-gui-debug-windows-x64.msi target/bundle-gui/orbit-workspace-server.exe
+```
+
+第二条命令必须在没有 GPUI Windows 源码的独立 Windows 主机执行。验收会安装到临时目录，
+验证实际安装程序的服务连接、窗口渲染和退出，最后卸载。CI 使用全新 runner，不检出仓库或恢复 Cargo 缓存。
+MSI 按用户安装到本地应用目录，提供开始菜单入口和系统卸载入口，不修改会话数据。
+Debug 包仅关闭 `gpui-pre-windows` 的调试断言，使其采用上游已有的构建期内嵌着色器路径；
+Orbit 本身保持 Debug，用户机器无需 Cargo 源码、HLSL 编译工具或构建机目录。

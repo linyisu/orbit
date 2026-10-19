@@ -1,6 +1,7 @@
 //! Repository maintenance and release verification; never linked into Orbit clients.
 mod architecture;
 mod bundle;
+mod installer;
 mod process;
 mod remote;
 
@@ -20,6 +21,10 @@ struct Arguments {
 enum Task {
     /// Check workspace dependency and source ownership boundaries.
     Check,
+    /// Package an existing Windows Debug GUI as a per-user MSI.
+    InstallerGui { directory: PathBuf, output: PathBuf },
+    /// Accept an MSI on a fresh Windows host without Cargo dependency sources.
+    VerifyGuiInstaller { installer: PathBuf, server: PathBuf },
     /// Build the terminal client and collect its embedded static server for verification.
     Bundle {
         #[arg(value_enum, default_value_t = Profile::Release)]
@@ -81,6 +86,12 @@ async fn main() -> Result<()> {
         return remote::transport().await;
     }
     match Arguments::parse().command {
+        Task::InstallerGui { directory, output } => {
+            installer::build(root(), &directory, &output).await?
+        }
+        Task::VerifyGuiInstaller { installer, server } => {
+            installer::verify(&installer, &server).await?
+        }
         Task::Check => {
             let errors = architecture::check(root())?;
             if !errors.is_empty() {
