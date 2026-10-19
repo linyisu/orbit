@@ -2,6 +2,41 @@ use super::*;
 use crate::types::{ReasoningAdapter, ReasoningEffort};
 
 #[test]
+fn advertised_api_metadata_survives_discovery_without_pinned_model_names() {
+    let catalog = parse(
+        ApiFormat::OpenaiChatCompletions,
+        &json!({
+            "data": [{
+                "id": "generated-vision-reasoner",
+                "context_window": 262_144,
+                "max_output_tokens": 32_768,
+                "input_modalities": ["text", "image"],
+                "effort": {
+                    "supported_levels": ["low", "high", "future-level"],
+                    "default_level": "high"
+                }
+            }, {
+                "id": "generated-text-only",
+                "input_modalities": ["text"]
+            }]
+        }),
+    )
+    .unwrap();
+    let model = &catalog.models[0];
+    assert_eq!(model.context_tokens, Some(262_144));
+    assert_eq!(model.max_output_tokens, Some(32_768));
+    assert_eq!(model.supports_vision, Some(true));
+    let reasoning = model.reasoning.as_ref().unwrap();
+    assert_eq!(
+        reasoning.efforts,
+        [ReasoningEffort::Low, ReasoningEffort::High]
+    );
+    assert_eq!(reasoning.default, ReasoningEffort::High);
+    assert_eq!(catalog.models[1].supports_vision, Some(false));
+    assert!(catalog.models[1].reasoning.is_none());
+}
+
+#[test]
 fn partial_observations_preserve_known_models_but_complete_empty_catalogs_clear_them() {
     let previous = vec![
         ModelProfile::new("generated-first"),

@@ -1,6 +1,7 @@
 //! Authenticated catalog retrieval with bounded pagination and no bundled model allowlist.
 mod api_key;
 pub use api_key::verify as verify_api_key;
+pub use api_key::verify_catalog as verify_api_key_catalog;
 
 use std::time::Duration;
 

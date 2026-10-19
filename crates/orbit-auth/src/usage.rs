@@ -47,7 +47,12 @@ impl UsageProvider {
             CredentialKind::AntigravityOAuth => {
                 Some((Self::Antigravity, AuthTarget::GoogleCodeAssist))
             }
-            CredentialKind::ApiKey if base.as_str() == crate::DEEPSEEK_BASE => {
+            CredentialKind::ApiKey
+                if matches!(
+                    base.as_str(),
+                    "https://api.deepseek.com/" | crate::DEEPSEEK_BASE
+                ) =>
+            {
                 Some((Self::Deepseek, AuthTarget::Openai))
             }
             CredentialKind::ApiKey if base.as_str() == crate::ZHIPU_CODING_BASE => {
@@ -95,6 +100,7 @@ mod tests {
         for base in [
             "https://api.deepseek.com.evil/v1",
             "https://api.deepseek.com/proxy/v1",
+            "https://api.deepseek.com:8443/v1",
             "http://api.deepseek.com/v1",
             "https://example.com/v1",
         ] {
@@ -109,6 +115,11 @@ mod tests {
             .unwrap();
         assert_eq!(auth.provider, UsageProvider::Deepseek);
         assert_eq!(auth.auth.headers["authorization"], "Bearer secret");
+        let root = usage_api_key("https://api.deepseek.com", "secret")
+            .unwrap()
+            .unwrap();
+        assert_eq!(root.provider, auth.provider);
+        assert_eq!(root.auth.headers, auth.auth.headers);
     }
 
     #[tokio::test]

@@ -5,6 +5,19 @@ use serde_json::json;
 
 /// Discover before probing plan inference so the probe never pins a model ID in source.
 pub async fn verify(provider: ApiKeyProvider, key: &str) -> Result<Vec<String>, ModelError> {
+    Ok(verify_catalog(provider, key)
+        .await?
+        .models
+        .into_iter()
+        .map(|model| model.id)
+        .collect())
+}
+
+/// Preserve live capability metadata when verifying an official API connection.
+pub async fn verify_catalog(
+    provider: ApiKeyProvider,
+    key: &str,
+) -> Result<crate::catalog::ModelCatalog, ModelError> {
     verify_at(provider, key, provider.base_url()).await
 }
 
@@ -12,15 +25,18 @@ async fn verify_at(
     provider: ApiKeyProvider,
     key: &str,
     base: &str,
-) -> Result<Vec<String>, ModelError> {
+) -> Result<crate::catalog::ModelCatalog, ModelError> {
     const MAX_API_KEY_BYTES: usize = 16 * 1_024;
     let key = key.trim();
     if key.is_empty() || key.len() > MAX_API_KEY_BYTES || key.chars().any(char::is_control) {
         return Err(orbit_auth::AuthError::InvalidToken.into());
     }
-    let ids = super::discover_api_models(base, ApiFormat::OpenaiChatCompletions, key).await?;
+    let payload = super::discover_api_catalog(base, ApiFormat::OpenaiChatCompletions, key).await?;
+    let catalog = crate::catalog::parse(ApiFormat::OpenaiChatCompletions, &payload)
+        .map_err(|error| ModelError::Protocol(error.to_string()))?;
     if provider == ApiKeyProvider::ZhipuCodingPlan {
-        let model = ids
+        let model = catalog
+            .models
             .first()
             .ok_or_else(|| ModelError::Protocol("账号未返回可用于验证套餐的模型".into()))?;
         let response = reqwest::Client::builder()
@@ -30,7 +46,7 @@ async fn verify_at(
             .post(format!("{base}chat/completions"))
             .bearer_auth(key)
             .json(&json!({
-                "model": model,
+                "model": model.id,
                 "messages": [{ "role": "user", "content": "ping" }],
                 "max_tokens": 1, "temperature": 0, "stream": false,
             }))
@@ -43,7 +59,7 @@ async fn verify_at(
             ));
         }
     }
-    Ok(ids)
+    Ok(catalog)
 }
 
 #[cfg(test)]
@@ -116,7 +132,7 @@ mod tests {
             server
         );
 
-        assert_eq!(result.unwrap(), ["generated-server-model"]);
+        assert_eq!(result.unwrap().models[0].id, "generated-server-model");
         assert!(
             requests[1]
                 .0

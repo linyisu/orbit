@@ -23,8 +23,9 @@ pub async fn connect_api_key(
     provider: ApiKeyProvider,
     secret: String,
 ) -> Result<SaveOutcome> {
-    let ids = verify_api_key(provider, &secret).await?;
-    orbit_config::config::connections::save_api_key(config, auth, provider, secret, ids).await
+    let catalog = orbit_model::discovery::verify_api_key_catalog(provider, &secret).await?;
+    orbit_config::config::connections::save_api_catalog(config, auth, provider, secret, catalog)
+        .await
 }
 
 pub struct Connection {

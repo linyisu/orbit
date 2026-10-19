@@ -1,6 +1,105 @@
 use super::*;
 
 #[tokio::test]
+async fn adding_another_official_key_keeps_existing_account_and_catalog() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("config.toml");
+    let auth = root.path().join("auth");
+    for (secret, model) in [
+        ("generated-first-key", "generated-first-model"),
+        ("generated-second-key", "generated-second-model"),
+    ] {
+        save_api_key(
+            &path,
+            &auth,
+            orbit_auth::ApiKeyProvider::Deepseek,
+            secret.into(),
+            vec![model.into()],
+        )
+        .await
+        .unwrap();
+    }
+    let mut config = crate::config::FileConfig::load(&path, &auth).unwrap();
+    crate::models::updater::load_cached(&mut config).await;
+    assert_eq!(config.providers.len(), 2);
+    let models = config.model_options().unwrap();
+    assert_eq!(models.len(), 2);
+    let store = orbit_auth::AuthStore::new(auth).unwrap();
+    let mut seen = Vec::new();
+    for model in models {
+        let credential = model.config.credential.unwrap();
+        let authorization = store
+            .resolve(
+                &credential.name,
+                &url::Url::parse(orbit_auth::DEEPSEEK_BASE).unwrap(),
+                orbit_auth::AuthTarget::Openai,
+            )
+            .await
+            .unwrap();
+        seen.push((
+            model.model,
+            authorization.headers["authorization"]
+                .to_str()
+                .unwrap()
+                .to_owned(),
+        ));
+    }
+    seen.sort();
+    assert_eq!(
+        seen,
+        [
+            (
+                "generated-first-model".into(),
+                "Bearer generated-first-key".into()
+            ),
+            (
+                "generated-second-model".into(),
+                "Bearer generated-second-key".into()
+            )
+        ]
+    );
+}
+
+#[tokio::test]
+async fn verified_api_capabilities_survive_save_and_offline_reload() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("config.toml");
+    let auth = root.path().join("auth");
+    let catalog = orbit_model::catalog::parse(
+        ApiFormat::OpenaiChatCompletions,
+        &serde_json::json!({
+            "data": [{
+                "id": "generated-capable-model",
+                "context_window": 262_144,
+                "max_output_tokens": 32_768,
+                "input_modalities": ["text", "image"],
+                "effort": { "supported_levels": ["low", "high"], "default_level": "high" }
+            }]
+        }),
+    )
+    .unwrap();
+    save_api_catalog(
+        &path,
+        &auth,
+        orbit_auth::ApiKeyProvider::Deepseek,
+        "generated-secret".into(),
+        catalog,
+    )
+    .await
+    .unwrap();
+    let mut config = crate::config::FileConfig::load(&path, &auth).unwrap();
+    crate::models::updater::load_cached(&mut config).await;
+    let models = config.model_options().unwrap();
+    assert_eq!(models.len(), 1);
+    assert_eq!(models[0].context_tokens, 262_144);
+    assert!(models[0].supports_vision);
+    assert_eq!(models[0].reasoning_efforts.len(), 2);
+    let source = std::fs::read_to_string(path).unwrap();
+    assert!(!source.contains("generated-secret"));
+    assert!(!source.contains("generated-capable-model"));
+}
+
+#[tokio::test]
 async fn verified_key_catalog_is_cached_without_becoming_an_explicit_selection() {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("config.toml");

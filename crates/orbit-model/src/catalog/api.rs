@@ -14,6 +14,7 @@ pub(super) fn parse(format: ApiFormat, payload: &Value) -> Result<Vec<ModelProfi
         .context("模型目录缺少 data 数组")?;
     for entry in entries {
         let mut model: ModelProfile = serde_json::from_value(entry.clone())?;
+        advertised_capabilities(&mut model, entry, format)?;
         if format == ApiFormat::AnthropicMessages {
             anthropic_capabilities(&mut model, entry)?;
         }
@@ -29,6 +30,51 @@ pub(super) fn parse(format: ApiFormat, payload: &Value) -> Result<Vec<ModelProfi
     }
 
     Ok(models)
+}
+
+// Decode advertised metadata without inferring capabilities from a model name.
+fn advertised_capabilities(
+    model: &mut ModelProfile,
+    entry: &Value,
+    format: ApiFormat,
+) -> Result<()> {
+    if model.context_tokens.is_none() {
+        model.context_tokens = entry["context_window"]
+            .as_u64()
+            .map(usize::try_from)
+            .transpose()?;
+    }
+    if model.supports_vision.is_none()
+        && let Some(modalities) = entry["input_modalities"].as_array()
+    {
+        model.supports_vision = Some(
+            modalities
+                .iter()
+                .any(|value| value == "image"),
+        );
+    }
+    if model.reasoning.is_none()
+        && let Some(levels) = entry["effort"]["supported_levels"].as_array()
+    {
+        let efforts = levels
+            .iter()
+            .filter_map(Value::as_str)
+            .filter_map(|level| level.parse::<ReasoningEffort>().ok())
+            .collect::<Vec<_>>();
+        let default = entry["effort"]["default_level"]
+            .as_str()
+            .and_then(|level| level.parse::<ReasoningEffort>().ok())
+            .filter(|level| efforts.contains(level));
+        if let Some(default) = default.or_else(|| efforts.first().copied()) {
+            model.reasoning = Some(ReasoningProfile {
+                adapter: format.reasoning_adapter(),
+                efforts,
+                default,
+                extra: toml::Table::new(),
+            });
+        }
+    }
+    Ok(())
 }
 
 // https://platform.claude.com/docs/en/api/models/list

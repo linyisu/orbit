@@ -297,26 +297,53 @@ pub async fn save_api_key(
     secret: String,
     ids: Vec<String>,
 ) -> Result<SaveOutcome> {
-    let models = ids
-        .into_iter()
-        .map(ModelProfile::new)
-        .collect::<Vec<_>>();
     let catalog = orbit_model::catalog::ModelCatalog {
-        models: models.clone(),
+        models: ids
+            .into_iter()
+            .map(ModelProfile::new)
+            .collect(),
         unavailable: Vec::new(),
         coverage: orbit_model::catalog::CatalogCoverage::Complete,
     };
+    save_api_catalog(path, auth_directory, provider, secret, catalog).await
+}
+
+/// Commit a verified key with the full advertised catalog, including model capabilities.
+pub async fn save_api_catalog(
+    path: &std::path::Path,
+    auth_directory: &std::path::Path,
+    provider: orbit_auth::ApiKeyProvider,
+    secret: String,
+    catalog: orbit_model::catalog::ModelCatalog,
+) -> Result<SaveOutcome> {
     catalog.validate(ApiFormat::OpenaiChatCompletions)?;
+    let models = catalog.models;
+    let existing = crate::config::FileConfig::parse(&read_config(path)?, auth_directory)?;
+    let store = orbit_auth::AuthStore::new(auth_directory.to_path_buf())?;
+    let credentials = store.list()?;
+    let mut credential = provider.name().to_owned();
+    let mut suffix = 2;
+    while credentials
+        .iter()
+        .any(|entry| entry.name == credential)
+        || existing
+            .providers
+            .values()
+            .any(|entry| entry.credential.as_deref() == Some(&credential))
+    {
+        credential = format!("{}-{suffix}", provider.name());
+        suffix += 1;
+    }
     let mut spec = ProviderSpec::new(
         ApiFormat::OpenaiChatCompletions,
         provider.base_url(),
         ModelSelection::auto(),
     );
-    spec.credential = Some(provider.name().into());
-    let prepared = prepare_account(path, auth_directory, provider.name(), &spec)?;
+    spec.credential = Some(credential.clone());
+    let prepared = prepare_account(path, auth_directory, &credential, &spec)?;
     let mut config = crate::config::FileConfig::parse(&prepared.updated, auth_directory)?;
     for connection in config.providers.values_mut() {
-        if connection.credential.as_deref() == Some(provider.name())
+        if connection.credential.as_deref() == Some(&credential)
             && connection
                 .spec
                 .base_url
@@ -328,9 +355,10 @@ pub async fn save_api_key(
             connection.set_discovered(models.clone());
         }
     }
+    crate::models::model_metadata::update(&mut config, false, false).await;
     let verified_models = config.model_options()?;
-    orbit_auth::AuthStore::new(auth_directory.to_path_buf())?
-        .commit_api_key(provider.name(), secret, provider.base_url(), || {
+    store
+        .register_api_key(&credential, secret, provider.base_url(), || {
             prepared.commit()
         })
         .await
@@ -339,7 +367,7 @@ pub async fn save_api_key(
         .await
         .diagnostics;
     for (name, connection) in &mut config.providers {
-        if connection.credential.as_deref() == Some(provider.name())
+        if connection.credential.as_deref() == Some(&credential)
             && connection
                 .base_url
                 .trim_end_matches('/')
@@ -358,6 +386,11 @@ pub async fn save_api_key(
             }
         }
     }
+    diagnostics.extend(
+        crate::models::model_metadata::update(&mut config, false, false)
+            .await
+            .error,
+    );
     let models = match config.model_options() {
         Ok(models) => models,
         Err(error) => {

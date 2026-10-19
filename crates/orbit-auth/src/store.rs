@@ -21,6 +21,11 @@ pub struct AuthStore {
     directory: PathBuf,
 }
 
+enum KeyCommit {
+    Register,
+    Replace,
+}
+
 impl AuthStore {
     pub fn new(directory: impl Into<PathBuf>) -> Result<Self> {
         let directory = directory.into();
@@ -68,6 +73,31 @@ impl AuthStore {
         base_url: &str,
         commit: impl FnOnce() -> std::result::Result<T, E>,
     ) -> std::result::Result<T, crate::CredentialCommitError<E>> {
+        self.commit_key(name, key, base_url, KeyCommit::Replace, commit)
+            .await
+    }
+
+    /// Commit a new key and configuration under the credential lock without replacing an account.
+    /// Failed configuration commits remove the new key; this is not a crash-atomic transaction.
+    pub async fn register_api_key<T, E>(
+        &self,
+        name: &str,
+        key: String,
+        base_url: &str,
+        commit: impl FnOnce() -> std::result::Result<T, E>,
+    ) -> std::result::Result<T, crate::CredentialCommitError<E>> {
+        self.commit_key(name, key, base_url, KeyCommit::Register, commit)
+            .await
+    }
+
+    async fn commit_key<T, E>(
+        &self,
+        name: &str,
+        key: String,
+        base_url: &str,
+        destination: KeyCommit,
+        commit: impl FnOnce() -> std::result::Result<T, E>,
+    ) -> std::result::Result<T, crate::CredentialCommitError<E>> {
         use crate::CredentialCommitError;
         let credential =
             api_key_credential(key, base_url).map_err(CredentialCommitError::Authentication)?;
@@ -76,6 +106,11 @@ impl AuthStore {
             .await
             .map_err(CredentialCommitError::Authentication)?;
         let previous = match self.load(name) {
+            Ok(_) if matches!(destination, KeyCommit::Register) => {
+                return Err(CredentialCommitError::Authentication(
+                    AuthError::Configuration("credential name was claimed by another login"),
+                ));
+            }
             Ok(value) => Some(value),
             Err(AuthError::Missing) => None,
             Err(error) => return Err(CredentialCommitError::Authentication(error)),
@@ -213,7 +248,13 @@ impl AuthStore {
             account: credential
                 .account
                 .clone()
-                .unwrap_or_else(|| name.into()),
+                .unwrap_or_else(|| {
+                    if credential.kind == CredentialKind::ApiKey {
+                        format!("{} API Key", provider.label())
+                    } else {
+                        name.into()
+                    }
+                }),
             auth,
         }))
     }
@@ -432,6 +473,43 @@ pub(crate) fn validate_name(name: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn concurrent_key_registration_commits_only_once_without_replacing_the_winner() {
+        let root = tempfile::tempdir().unwrap();
+        let store = AuthStore::new(root.path().join("auth")).unwrap();
+        let commits = std::sync::atomic::AtomicUsize::new(0);
+        let (left, right) = tokio::join!(
+            store.register_api_key(
+                "generated",
+                "first".into(),
+                "https://service.example/v1",
+                || {
+                    commits.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    Ok::<_, std::io::Error>(())
+                }
+            ),
+            store.register_api_key(
+                "generated",
+                "second".into(),
+                "https://service.example/v1",
+                || {
+                    commits.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    Ok::<_, std::io::Error>(())
+                }
+            ),
+        );
+        assert_ne!(left.is_ok(), right.is_ok());
+        assert_eq!(commits.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(
+            store
+                .load("generated")
+                .unwrap()
+                .access
+                .0,
+            if left.is_ok() { "first" } else { "second" }
+        );
+    }
 
     #[tokio::test]
     async fn new_login_cannot_replace_an_account_created_by_another_process() {
