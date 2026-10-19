@@ -275,16 +275,21 @@ pub(super) async fn verify(
     if let Some(progress) = progress {
         progress.report("检查服务程序能否在目标系统运行");
     }
+    let arguments = if matches!(target, Target::Local) {
+        vec![
+            executable.into(),
+            "workspace-service".into(),
+            "--help".into(),
+        ]
+    } else {
+        vec![
+            "sh".into(),
+            "-c".into(),
+            format!("{} workspace-service --help", quote(executable)),
+        ]
+    };
     let child = target
-        .command(
-            &[
-                "sh".into(),
-                "-c".into(),
-                format!("{} workspace-service --help", quote(executable)),
-            ],
-            unattended,
-            interactive,
-        )?
+        .command(&arguments, unattended, interactive)?
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

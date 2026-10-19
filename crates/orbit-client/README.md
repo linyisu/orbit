@@ -43,7 +43,8 @@ Linux 静态链接 OpenBLAS，macOS 使用 Accelerate；Linux 源码构建需要
 准确率必须以增量路径的实测为准。Linux 上内核池限制为两个工作线程，OpenBLAS 单线程。
 所有本机模型操作在后台串行进入不可重入的原生内核池，等待期间可取消。
 
-缓存位于 `$XDG_CACHE_HOME/orbit/speech`，缺省根目录为 `~/.cache`，独立于项目与 SSH/WSL 目标。
+缓存位于 `$XDG_CACHE_HOME/orbit/speech`，缺省根目录在 Unix 为 `~/.cache`、Windows 为
+`LOCALAPPDATA`，独立于项目与 SSH/WSL 目标；Windows 不要求 HOME 或 XDG 环境变量。
 准备阶段区分缓存校验、累计下载进度和模型加载；取消下载保留固定版本的 `.part` 文件，
 重试使用 HTTP Range 继续，服务端忽略 Range 时安全重新下载。完整文件通过大小和 SHA-256
 校验后原子替换缓存；损坏下载不替换既有文件。跨进程准备使用可取消的缓存锁，已验证缓存离线可用。

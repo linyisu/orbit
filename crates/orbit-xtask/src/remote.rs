@@ -336,6 +336,17 @@ async fn verify_native_executable(bundle: &Path, client: &Path) -> Result<()> {
     embedded_server(client, &server)?;
     let directory = tempfile::tempdir()?;
     let root = directory.path().canonicalize()?;
+    let mut options = orbit_client::ConnectionOptions::local(root.to_string_lossy().into_owned());
+    options.server = Some(server.to_string_lossy().into_owned());
+    orbit_client::prepare_connection(
+        &options,
+        root.join("missing.toml"),
+        Some(root.join("state/sessions.db")),
+        Some(root.join("auth")),
+        None,
+    )
+    .await
+    .context("native client service preflight failed")?;
     let mut child = Command::new(&server)
         .current_dir(&root)
         .arg("workspace-service")

@@ -341,3 +341,45 @@ fn cancellation_wakes_a_native_waiter_while_another_operation_still_owns_the_poo
     );
     worker.join().unwrap();
 }
+#[test]
+#[ignore = "subprocess fixture for isolated native cache environment"]
+fn isolated_native_model_cache() {
+    let Some(root) = std::env::var_os("ORBIT_SPEECH_CACHE_TEST_ROOT").map(std::path::PathBuf::from)
+    else {
+        return;
+    };
+    let expected = if cfg!(windows) {
+        root.join("local/orbit/speech")
+    } else {
+        root.join("home/.cache/orbit/speech")
+    };
+    assert_eq!(super::model_directory().unwrap(), expected);
+}
+
+#[test]
+fn native_model_cache_works_without_unix_environment_on_windows() {
+    let root = tempfile::tempdir().unwrap();
+    let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+    command
+        .args([
+            "--ignored",
+            "--exact",
+            "speech::tests::isolated_native_model_cache",
+        ])
+        .env("ORBIT_SPEECH_CACHE_TEST_ROOT", root.path())
+        .env_remove("XDG_CACHE_HOME")
+        .env("USERPROFILE", root.path().join("home"))
+        .env("LOCALAPPDATA", root.path().join("local"));
+    if cfg!(windows) {
+        command.env_remove("HOME");
+    } else {
+        command.env("HOME", root.path().join("home"));
+    }
+    let output = command.output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}

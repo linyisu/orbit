@@ -75,6 +75,28 @@ fn main() -> anyhow::Result<()> {
                 eprintln!("无法打开 Orbit：{error:#}");
                 cx.quit();
             } else if let (Ok((handle, view)), Some(report)) = (result, smoke_test) {
+                let deadline_report = report.clone();
+                let deadline_view = view.downgrade();
+                cx.spawn(async move |cx| {
+                    cx.background_executor()
+                        .timer(std::time::Duration::from_secs(90))
+                        .await;
+                    let diagnostic = cx.update(|cx| {
+                        deadline_view
+                            .upgrade()
+                            .map(|view| view.read(cx).startup_diagnostic(cx))
+                    });
+                    let receipt = serde_json::json!({
+                        "connected": false,
+                        "diagnostic": diagnostic,
+                    });
+                    let _ = cx
+                        .background_executor()
+                        .spawn(async move { std::fs::write(deadline_report, receipt.to_string()) })
+                        .await;
+                    cx.update(|cx| cx.quit());
+                })
+                .detach();
                 let _ = handle.update(cx, |_, window, _| {
                     smoke_frame(report, 0, view.downgrade(), window)
                 });

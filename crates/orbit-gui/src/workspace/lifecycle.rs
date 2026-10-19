@@ -485,6 +485,10 @@ impl Workspace {
         self.info.is_none() && !self.connected
     }
 
+    pub(crate) fn startup_diagnostic(&self) -> String {
+        format!("{:?}; error={:?}", self.summary(), self.error)
+    }
+
     pub(crate) fn has_draft(&self, cx: &App) -> bool {
         self.pending.is_some()
             || self.picker_pending

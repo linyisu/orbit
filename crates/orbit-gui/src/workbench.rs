@@ -42,6 +42,14 @@ pub(crate) struct Workbench {
 }
 
 impl Workbench {
+    pub(crate) fn startup_diagnostic(&self, cx: &App) -> Vec<String> {
+        self.tasks
+            .iter()
+            .filter(|task| !task.closed)
+            .map(|task| task.view.read(cx).startup_diagnostic())
+            .collect()
+    }
+
     pub(crate) fn ready_for_input(&self, cx: &App) -> bool {
         self.tasks
             .iter()

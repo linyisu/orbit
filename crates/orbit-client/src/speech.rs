@@ -36,8 +36,8 @@ pub fn model_directory() -> Result<PathBuf> {
     let root = std::env::var_os("XDG_CACHE_HOME")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".cache")))
-        .context("无法确定本地语音模型目录，请设置 XDG_CACHE_HOME")?;
+        .or_else(orbit_config::directories::cache)
+        .context("无法确定本地语音模型缓存目录")?;
     ensure!(root.is_absolute(), "XDG_CACHE_HOME 必须是绝对路径");
     Ok(root.join("orbit/speech"))
 }
