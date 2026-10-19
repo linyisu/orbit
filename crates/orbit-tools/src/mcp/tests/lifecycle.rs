@@ -254,7 +254,7 @@ async fn server_errors_do_not_destroy_a_healthy_connection() {
 #[tokio::test]
 async fn broken_frames_and_eof_recover_on_a_fresh_transport() {
     for mode in ["partial", "malformed", "exit"] {
-        let (directory, mut client) = peer(mode).await;
+        let (_directory, mut client) = peer(mode).await;
         assert!(
             client
                 .call_tool("work", json!({}), CancellationToken::new())
@@ -262,7 +262,7 @@ async fn broken_frames_and_eof_recover_on_a_fresh_transport() {
                 .is_err()
         );
         #[cfg(target_os = "linux")]
-        assert_descendant_stopped(directory.path()).await;
+        assert_descendant_stopped(_directory.path()).await;
         let result = client
             .call_tool("work", json!({}), CancellationToken::new())
             .await

@@ -1,4 +1,8 @@
 use super::*;
+#[cfg(unix)]
+use std::os::unix::fs::symlink as symlink_dir;
+#[cfg(windows)]
+use std::os::windows::fs::symlink_dir;
 
 #[test]
 fn auto_trusts_workspace_command_cwd_instead_of_shell_syntax() {
@@ -6,7 +10,7 @@ fn auto_trusts_workspace_command_cwd_instead_of_shell_syntax() {
     let outside = tempfile::tempdir().unwrap();
     let root = workspace.path();
     std::fs::create_dir(root.join("src")).unwrap();
-    std::os::unix::fs::symlink(outside.path(), root.join("external")).unwrap();
+    symlink_dir(outside.path(), root.join("external")).unwrap();
     std::fs::write(root.join("file"), "text").unwrap();
     let mut preview = CommandPreview {
         command: String::new(),

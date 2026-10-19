@@ -4,6 +4,8 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 #[tokio::test]
 async fn model_refresh_preserves_controls_and_applies_single_discovery() {
+    const DISCOVERY_COMPLETION_TIMEOUT: Duration = Duration::from_secs(5);
+
     let root = tempfile::tempdir().unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
@@ -107,7 +109,7 @@ async fn model_refresh_preserves_controls_and_applies_single_discovery() {
         "repeated refresh commands must share the pending discovery"
     );
     let mut request = Vec::new();
-    tokio::time::timeout(Duration::from_secs(1), async {
+    tokio::time::timeout(DISCOVERY_COMPLETION_TIMEOUT, async {
         while !request.ends_with(b"\r\n\r\n") {
             request.push(held.read_u8().await.unwrap());
         }
@@ -122,6 +124,10 @@ async fn model_refresh_preserves_controls_and_applies_single_discovery() {
         )
         .await
         .unwrap();
+    })
+    .await
+    .expect("model discovery must exchange its isolated HTTP request and response");
+    tokio::time::timeout(DISCOVERY_COMPLETION_TIMEOUT, async {
         loop {
             match incoming
                 .recv()

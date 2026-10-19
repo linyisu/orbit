@@ -1128,6 +1128,11 @@ fn bound(mut result: Value, budget: usize) -> Result<String, ToolError> {
     }
 }
 
+#[cfg(all(test, unix))]
+use std::os::unix::fs::symlink as symlink_file;
+#[cfg(all(test, windows))]
+use std::os::windows::fs::symlink_file;
+
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -1344,7 +1349,7 @@ mod tests {
         put(root, "big.rs", &"x".repeat(MAX_FILE_BYTES as usize + 1));
         put(root, "binary.py", "\0def binary(): pass");
         fs::hard_link(root.join("secret.toml"), root.join("pyproject.toml")).unwrap();
-        std::os::unix::fs::symlink(root.join("secret.toml"), root.join("Cargo.toml")).unwrap();
+        symlink_file(root.join("secret.toml"), root.join("Cargo.toml")).unwrap();
         let workspace = Workspace::new(root).unwrap();
 
         for index in 0..100 {
@@ -1575,7 +1580,7 @@ mod task_retrieval_tests {
                         .contains("value: usize"))
         );
         std::fs::remove_file(&implementation).unwrap();
-        std::os::unix::fs::symlink("caller.rs", &implementation).unwrap();
+        symlink_file("caller.rs", &implementation).unwrap();
         let protected: Value = serde_json::from_str(
             &lookup
                 .execute(query(), CancellationToken::new())

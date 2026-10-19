@@ -244,6 +244,10 @@ pub fn channel() -> (ApprovalSender, ApprovalReceiver) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    use std::os::unix::fs::{symlink as symlink_dir, symlink as symlink_file};
+    #[cfg(windows)]
+    use std::os::windows::fs::{symlink_dir, symlink_file};
 
     #[tokio::test]
     async fn live_modes_bypass_the_queue_only_for_automatically_allowed_operations() {
@@ -360,12 +364,8 @@ mod tests {
             root.path()
         ));
 
-        #[cfg(unix)]
-        {
-            std::os::unix::fs::symlink(outside.path(), root.path().join("linked")).unwrap();
-
-            assert!(!workspace_local_file("linked/data.txt", root.path()));
-        }
+        symlink_dir(outside.path(), root.path().join("linked")).unwrap();
+        assert!(!workspace_local_file("linked/data.txt", root.path()));
     }
 
     #[test]
@@ -375,11 +375,11 @@ mod tests {
         std::fs::write(workspace.path().join("inside"), "inside").unwrap();
         std::fs::write(outside.path().join("external"), "outside").unwrap();
         let alias = workspace.path().join("alias");
-        std::os::unix::fs::symlink("inside", &alias).unwrap();
+        symlink_file("inside", &alias).unwrap();
         let initial = file_grant_key("alias", workspace.path()).unwrap();
         assert!(workspace_local_file("alias", workspace.path()));
         std::fs::remove_file(&alias).unwrap();
-        std::os::unix::fs::symlink(outside.path().join("external"), &alias).unwrap();
+        symlink_file(outside.path().join("external"), &alias).unwrap();
         assert!(!workspace_local_file("alias", workspace.path()));
         assert_ne!(file_grant_key("alias", workspace.path()).unwrap(), initial);
     }
