@@ -60,6 +60,9 @@ jobs:
           key: ${{ matrix.os }}
           cache-targets: 'true'
           cache-on-failure: 'true'
+      - name: Rebuild Linux speech libraries from complete sources
+        if: runner.os == 'Linux'
+        run: cargo clean -p openblas-src
       - name: Build native desktop package
         run: cargo xtask bundle-gui debug
       - name: Verify native window and embedded service
