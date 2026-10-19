@@ -50,7 +50,8 @@ pub(super) fn executable(bundle: Option<&Bundle>) -> Result<PathBuf> {
             .context("cannot locate the local server cache")?;
         ensure!(cache.is_absolute(), "server cache must be an absolute path");
         let directory = cache.join("orbit/servers");
-        return install(bundle, &directory);
+        return install(bundle, &directory)
+            .with_context(|| format!("无法准备本机工作区服务缓存 {}", directory.display()));
     }
     let sibling = std::env::current_exe()?
         .parent()

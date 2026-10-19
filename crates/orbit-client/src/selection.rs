@@ -35,7 +35,7 @@ pub fn requested_model(requested: &str, current: &str, models: &[String]) -> Res
 
 impl Local {
     pub async fn model_catalog(&self) -> Result<Vec<ModelOption>> {
-        let mut config = FileConfig::load(&self.config, &self.auth)?;
+        let mut config = FileConfig::parse(&self.read()?, &self.auth)?;
         let _ = orbit_config::models::updater::load_cached(&mut config).await;
         config.model_options()
     }
@@ -55,7 +55,18 @@ impl Local {
     }
 
     pub fn last_model(&self) -> Result<Option<String>> {
-        let content = match std::fs::read(self.selection_path()?) {
+        let path = match self.selection_path() {
+            Ok(path) => path,
+            Err(error)
+                if error
+                    .downcast_ref::<std::io::Error>()
+                    .is_some_and(|error| error.kind() == std::io::ErrorKind::NotFound) =>
+            {
+                return Ok(None);
+            }
+            Err(error) => return Err(error),
+        };
+        let content = match std::fs::read(path) {
             Ok(content) => content,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(error) => return Err(error.into()),
@@ -115,6 +126,34 @@ impl Local {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn missing_configuration_is_first_use_but_invalid_configuration_is_an_error() {
+        let directory = tempfile::tempdir().unwrap();
+        let local = Local {
+            config: directory
+                .path()
+                .join("not-created/config.toml"),
+            auth: directory.path().join("auth"),
+            model: None,
+        };
+        assert_eq!(local.last_model().unwrap(), None);
+        assert_eq!(local.selected_model().await.unwrap(), None);
+        assert!(
+            local
+                .model_catalog()
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(!local.config.exists());
+        std::fs::create_dir(local.config.parent().unwrap()).unwrap();
+        std::fs::write(&local.config, "invalid = [").unwrap();
+        assert!(local.model_catalog().await.is_err());
+        std::fs::remove_file(&local.config).unwrap();
+        std::fs::create_dir(&local.config).unwrap();
+        assert!(local.model_catalog().await.is_err());
+    }
 
     #[test]
     fn model_choices_use_current_connection_and_require_qualified_foreign_names() {

@@ -36,6 +36,9 @@ fn main() -> anyhow::Result<()> {
     let mut options = backend::Options::parse();
     options.resolve_paths()?;
     let smoke_test = options.smoke_test.take();
+    if smoke_test.is_some() {
+        assets::embedded_icon_count()?;
+    }
     let shutdown_report = smoke_test.clone();
     let runtime = Arc::new(tokio::runtime::Runtime::new()?);
     let application_runtime = runtime.clone();
@@ -142,9 +145,13 @@ fn smoke_frame(
     window: &Window,
 ) {
     window.on_next_frame(move |window, cx| {
-        let ready = view
+        let configuration_required = view
             .upgrade()
-            .is_some_and(|view| view.read(cx).ready_for_input(cx));
+            .is_some_and(|view| view.read(cx).configuration_required(cx));
+        let ready = configuration_required
+            || view
+                .upgrade()
+                .is_some_and(|view| view.read(cx).ready_for_input(cx));
         if !ready {
             smoke_frame(report, 0, view, window);
             return;
@@ -160,6 +167,8 @@ fn smoke_frame(
             "height": f32::from(bounds.size.height),
             "platform": std::env::consts::OS,
             "connected": true,
+            "configuration_required": configuration_required,
+            "embedded_icons": assets::embedded_icon_count().unwrap_or_default(),
         });
         let task = cx
             .background_executor()

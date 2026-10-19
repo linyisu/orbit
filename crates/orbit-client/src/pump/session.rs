@@ -80,6 +80,8 @@ pub enum Event {
         result: Result<Vec<orbit_protocol::Completion>, String>,
     },
     Connected,
+    /// The transport is healthy; a new session needs a configured model before it can open.
+    ConfigurationRequired,
     Subagent {
         agent: String,
         page: crate::protocol::Page,
@@ -166,6 +168,30 @@ pub async fn observe(
     events
         .send(Event::Response(history))
         .await?;
+    if resume.is_none()
+        && options.model.is_none()
+        && let Some(local) = &connection.local_configuration
+    {
+        while local.model_catalog().await?.is_empty() {
+            events
+                .send(Event::ConfigurationRequired)
+                .await?;
+            loop {
+                match commands.recv().await {
+                    Some(Command::RefreshModels) => break,
+                    Some(Command::Settings { result, .. }) => {
+                        let _ = result.send(Err("请先添加模型连接".into()));
+                    }
+                    Some(_) => {
+                        events
+                            .send(Event::Error("请先添加模型连接".into()))
+                            .await?
+                    }
+                    None => return Ok(()),
+                }
+            }
+        }
+    }
     let info =
         crate::connect::open_session(&mut client, &connection, resume, options.model).await?;
     let mut session = String::new();

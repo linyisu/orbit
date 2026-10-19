@@ -42,6 +42,17 @@ pub(crate) struct Workbench {
 }
 
 impl Workbench {
+    pub(crate) fn configuration_required(&self, cx: &App) -> bool {
+        self.tasks.iter().any(|task| {
+            !task.closed
+                && task.view.read(cx).key() == self.active
+                && task
+                    .view
+                    .read(cx)
+                    .configuration_required()
+        })
+    }
+
     pub(crate) fn startup_diagnostic(&self, cx: &App) -> Vec<String> {
         self.tasks
             .iter()

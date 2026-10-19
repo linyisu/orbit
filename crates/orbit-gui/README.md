@@ -73,6 +73,10 @@ Windows Debug 另提供按用户安装的 `setup.exe`，包含开始菜单及卸
 
 ## 源码与外观
 
+未显式传入 `--config` 时，优先读取工作目录已有的 `config.toml`，否则使用用户配置目录
+下的 `orbit/config.toml`（Windows 为 `%APPDATA%`）。首次无配置时引导添加模型连接，
+保存账号或连接时才创建配置，不要求把配置写入安装目录。
+
 [workspace/](src/workspace/) 管理会话视图与设置，[conversation/](src/conversation/) 渲染消息，[backend.rs](src/backend.rs) 将窗口事件接入共享客户端。认证、配置校验、会话轮询与附件传输由对应共享 crate 提供，前端只保留交互和视图状态。
 
 [speech.rs](src/speech.rs) 适配 GPUI Kit 的录音、波形和草稿插入；模型下载、校验和本地识别

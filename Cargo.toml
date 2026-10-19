@@ -25,7 +25,7 @@ exclude = ["vendor/ratex-unicode-font", "vendor/gpui-pre-wgpu", "vendor/qwen-asr
 qwen-asr = { path = "vendor/qwen-asr" }
 gpui-pre-wgpu = { path = "vendor/gpui-pre-wgpu" }
 ratex-unicode-font = { path = "vendor/ratex-unicode-font" }
-rquickjs = { git = "https://github.com/linyisu/gpui-kit", rev = "5f9de8a41cc2762866d076057ef2452fdbae1876" }
+rquickjs = { git = "https://github.com/linyisu/gpui-kit", rev = "7b1a4b8b86c71ca036fa941fd6565e6a05b58f8c" }
 
 [workspace.package]
 version = "0.1.0"

@@ -424,8 +424,6 @@ async fn verify_native_executable(server: &Path, client: &Path) -> Result<()> {
 fn desktop_probe(command: &mut Command, root: &Path) {
     command
         .current_dir(root)
-        .arg("--config")
-        .arg(root.join("config.toml"))
         .arg("--workspace")
         .arg(root.join("workspace"))
         .arg("--database")
@@ -441,6 +439,7 @@ fn desktop_probe(command: &mut Command, root: &Path) {
         .env_remove("DBUS_SESSION_BUS_ADDRESS")
         .env("LOCALAPPDATA", root.join("local"))
         .env("APPDATA", root.join("roaming"));
+    command.env_remove("orbit_config");
     if cfg!(windows) {
         command
             .env_remove("HOME")
@@ -463,9 +462,14 @@ pub async fn verify_gui(bundle: &Path) -> Result<()> {
 
 /// Verify either an installed desktop executable or the prepared bundle against its service asset.
 pub async fn verify_gui_executable(client: &Path, server: Option<&Path>) -> Result<()> {
+    verify_gui_startup(client, server, false).await?;
+    verify_gui_startup(client, server, true).await
+}
+
+async fn verify_gui_startup(client: &Path, server: Option<&Path>, first_use: bool) -> Result<()> {
     const DESKTOP_EXIT_TIMEOUT: Duration = Duration::from_secs(120);
 
-    if let Some(server) = server {
+    if let Some(server) = server.filter(|_| !first_use) {
         verify_native_executable(server, client).await?;
     }
     let directory = tempfile::tempdir()?;
@@ -481,24 +485,34 @@ pub async fn verify_gui_executable(client: &Path, server: Option<&Path>) -> Resu
     fs::create_dir(root.join("runtime"))?;
     fs::create_dir(root.join("workspace"))?;
     let config = root.join("config.toml");
-    fs::write(
-        &config,
-        toml::toml! {
-            [providers.native]
-            base_url = "http://127.0.0.1:9/v1"
-            api_key = "test-only"
-            auto_refresh_models = false
-            models = ["native-model"]
-        }
-        .to_string(),
-    )?;
+    if !first_use {
+        fs::write(
+            &config,
+            toml::toml! {
+                [providers.native]
+                base_url = "http://127.0.0.1:9/v1"
+                api_key = "test-only"
+                auto_refresh_models = false
+                models = ["native-model"]
+            }
+            .to_string(),
+        )?;
+    }
     let report = root.join("window.json");
     let mut command = Command::new(client);
     desktop_probe(&mut command, &root);
-    command
-        .arg("--smoke-test")
-        .arg(&report)
-        .args(["--model", "native::native-model"]);
+    command.arg("--smoke-test").arg(&report);
+    if !first_use {
+        command
+            .arg("--config")
+            .arg(&config)
+            .args(["--model", "native::native-model"]);
+    }
+    #[cfg(windows)]
+    if first_use {
+        let system = std::env::var_os("SystemRoot").context("SystemRoot is missing")?;
+        command.env("PATH", PathBuf::from(system).join("System32"));
+    }
     // A detached service must not keep a Windows blocking pipe reader alive at runtime shutdown.
     let log = root.join("window.log");
     let output = fs::File::create(&log)?;
@@ -523,6 +537,10 @@ pub async fn verify_gui_executable(client: &Path, server: Option<&Path>) -> Resu
     let receipt: Value = serde_json::from_slice(&fs::read(&report)?)?;
     ensure!(
         receipt["connected"] == true
+            && receipt["configuration_required"] == first_use
+            && receipt["embedded_icons"]
+                .as_u64()
+                .is_some_and(|count| count > 20)
             && receipt["frames"]
                 .as_u64()
                 .is_some_and(|frames| frames >= 3)
@@ -546,6 +564,7 @@ pub async fn verify_gui_executable(client: &Path, server: Option<&Path>) -> Resu
     let mut command = Command::new(server);
     command.arg("workspace-service");
     desktop_probe(&mut command, &root);
+    command.arg("--config").arg(&config);
     let mut child = command
         .kill_on_drop(true)
         .stdin(Stdio::piped())
@@ -584,7 +603,9 @@ pub async fn verify_gui_executable(client: &Path, server: Option<&Path>) -> Resu
     })
     .await
     .context("desktop service cleanup timed out")??;
-    println!("PASS: isolated native desktop window rendered and exited normally: {receipt}");
+    println!(
+        "PASS: isolated native desktop window (first_use={first_use}) rendered and exited normally: {receipt}"
+    );
     Ok(())
 }
 

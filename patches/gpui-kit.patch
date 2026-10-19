@@ -1,3 +1,42 @@
+diff --git a/crates/assets/Cargo.toml b/crates/assets/Cargo.toml
+index 953538c6..c1a6b32f 100644
+--- a/crates/assets/Cargo.toml
++++ b/crates/assets/Cargo.toml
+@@ -25,7 +25,10 @@ gpui_platform.workspace = true
+ gpui-fast-platform.workspace = true
+ 
+ [target.'cfg(not(target_family = "wasm"))'.dependencies]
+-rust-embed = { version = "8.7.2", features = ["interpolate-folder-path", "include-exclude"] }
++# Native Debug deployments must not depend on the build machine's checkout.
++rust-embed = { version = "8.7.2", features = [
++    "interpolate-folder-path", "include-exclude", "debug-embed",
++] }
+ 
+ [target.'cfg(target_family = "wasm")'.dependencies]
+ reqwest = { workspace = true }
+diff --git a/crates/assets/tests/icons.rs b/crates/assets/tests/icons.rs
+index 1b52f62e..a7369bab 100644
+--- a/crates/assets/tests/icons.rs
++++ b/crates/assets/tests/icons.rs
+@@ -15,6 +15,7 @@ fn every_named_icon_is_available_in_the_asset_source() {
+     assert_eq!(named, bundled);
+     for path in named {
+         let bytes = assets.load(&path).unwrap().unwrap();
++        assert!(matches!(bytes, std::borrow::Cow::Borrowed(_)), "{path}");
+         assert!(
+             std::str::from_utf8(&bytes).unwrap().contains("<svg"),
+             "{path}"
+@@ -70,6 +71,10 @@ fn default_assets_preserve_the_component_bundle_without_all_lucide_icons() {
+     assert!(Assets::get("icons/search.svg").is_some());
+     assert!(Assets::get("icons/accessibility.svg").is_none());
+     for path in actual {
++        assert!(matches!(
++            Assets.load(&path).unwrap(),
++            Some(std::borrow::Cow::Borrowed(_))
++        ));
+         assert_eq!(Assets.load(&path).unwrap(), AllAssets.load(&path).unwrap());
+     }
+     assert!(Assets.load("").unwrap().is_none());
 diff --git a/crates/base/src/input/base/element.rs b/crates/base/src/input/base/element.rs
 index 9915b4fd..3eea993a 100644
 --- a/crates/base/src/input/base/element.rs

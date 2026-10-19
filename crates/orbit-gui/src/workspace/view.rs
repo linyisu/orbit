@@ -747,6 +747,30 @@ impl Render for Workspace {
                     } else if self.info.is_none() && self.error.is_some() {
                         self.connection_failure(cx)
                             .into_any_element()
+                    } else if self.info.is_none() && self.connected {
+                        v_flex()
+                            .size_full()
+                            .items_center()
+                            .justify_center()
+                            .gap_3()
+                            .child(
+                                div()
+                                    .text_xl()
+                                    .child("添加模型连接，开始使用 Orbit"),
+                            )
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .child("工作区已连接。请先在设置中添加账号或模型服务。"),
+                            )
+                            .child(
+                                Button::new("setup-model-connection")
+                                    .label("添加模型连接…")
+                                    .on_click(cx.listener(|view, _, window, cx| {
+                                        view.execute(WorkspaceCommand::Accounts, window, cx)
+                                    })),
+                            )
+                            .into_any_element()
                     } else if empty {
                         v_flex()
                             .size_full()

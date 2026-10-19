@@ -1,7 +1,7 @@
 # 依赖补丁
 
 GPUI Kit 修复已发布到 [fork 补丁分支](https://github.com/linyisu/gpui-kit/tree/orbit-rely)，
-Cargo 固定使用提交 `5f9de8a41cc2762866d076057ef2452fdbae1876`，无需复制框架源码。
+Cargo 固定使用提交 `7b1a4b8b86c71ca036fa941fd6565e6a05b58f8c`，无需复制框架源码。
 
 `gpui-kit.patch` 保存该提交相对上游 `9254c58028cebe8122b989c30e15f9139e0b2569`
 的完整补丁，包含选择、滚动、图片、表格及差异预览修复，沿用 Apache-2.0。
@@ -19,5 +19,8 @@ MessageScroller 提供暂停自动跟随的入口，手动展开内容时保留�
 底层 GPUI 更新为 0.3.9，WGPU 补丁同步此版本并保留符号与 Emoji 字体加载回归。
 
 SpeechWaveform 的可选 `live()` 模式在持续静音或音频中断 320 ms 后回到基线，保留默认历史波形行为。
+
+原生默认图标资源在 Debug 中也使用静态内嵌数据，安装后不读取构建机器的源码目录；
+覆盖侧栏、工具栏与 Windows 窗口按钮。未注册的完整图标目录仍不会被默认打包。
 
 [Qwen 增量补丁](../vendor/qwen-asr/ORBIT_PATCH.md) 固定原生库来源，边界修复见 `qwen-asr.patch`。

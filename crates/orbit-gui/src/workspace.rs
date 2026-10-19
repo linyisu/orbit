@@ -559,6 +559,10 @@ impl Workspace {
                 self.connected = true;
                 self.connection_stage = "正在恢复会话…".into();
             }
+            Event::ConfigurationRequired => {
+                self.opening = false;
+                self.error = None;
+            }
             Event::ConnectionStage(stage) => self.connection_stage = stage.into(),
             Event::ConnectionLogs(logs) => {
                 self.connection_logs

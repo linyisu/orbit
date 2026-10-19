@@ -3,6 +3,94 @@ use orbit_config::test_support::{TestConfig, TestProvider};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 #[tokio::test]
+async fn first_use_waits_for_configuration_and_opens_after_models_are_saved() {
+    let root = tempfile::tempdir().unwrap();
+    let config = root.path().join("config.toml");
+    let launcher = orbit_build::build_test_peer(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")),
+        "orbit-client-test-peer",
+    );
+    let connection = Arc::new(Connection {
+        local_configuration: Some(crate::configuration::Local {
+            config: config.clone(),
+            auth: root.path().join("auth"),
+            model: None,
+        }),
+        target: crate::transport::Target::Local,
+        workspace: root
+            .path()
+            .to_string_lossy()
+            .into_owned(),
+        executable: launcher.to_string_lossy().into_owned(),
+        config: config.clone(),
+        database: None,
+        auth_dir: None,
+        allow_mcp_start: false,
+        unattended: true,
+        interactive: None,
+    });
+    let options = SessionOptions {
+        connection,
+        resume: None,
+        model: None,
+        relink_on_resume: false,
+        recover_draft: false,
+        attachment_cache: root.path().join("attachments"),
+    };
+    let (commands, receiver) = mpsc::channel(8);
+    let (events, mut incoming) = mpsc::channel(16);
+    let (progress, _updates) = crate::interaction::channel();
+    let task = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
+        observe(options, receiver, &events, progress).await
+    }));
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            match incoming.recv().await.unwrap() {
+                Event::ConfigurationRequired => break,
+                Event::Connected | Event::Response(Response::Sessions(_)) => (),
+                _ => panic!("first use must wait without opening a session or reporting a failure"),
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert!(!config.exists());
+    commands
+        .send(Command::RefreshModels)
+        .await
+        .unwrap();
+    assert!(matches!(
+        incoming.recv().await.unwrap(),
+        Event::ConfigurationRequired
+    ));
+    TestConfig::new()
+        .provider(TestProvider::new("slow").models(["declared-model"]))
+        .write(&config)
+        .unwrap();
+    commands
+        .send(Command::RefreshModels)
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            match incoming.recv().await.unwrap() {
+                Event::Response(Response::Opened(_)) => break,
+                Event::Error(error) | Event::Disconnected(error) => panic!("{error}"),
+                _ => (),
+            }
+        }
+    })
+    .await
+    .unwrap();
+    drop(commands);
+    tokio::time::timeout(Duration::from_secs(5), task)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+}
+
+#[tokio::test]
 async fn model_refresh_preserves_controls_and_applies_single_discovery() {
     const DISCOVERY_COMPLETION_TIMEOUT: Duration = Duration::from_secs(5);
 

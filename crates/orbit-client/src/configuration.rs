@@ -6,6 +6,18 @@ use orbit_auth::AuthStore;
 pub use orbit_protocol::Configuration;
 use std::{collections::BTreeMap, path::PathBuf};
 
+/// Prefer an existing working-directory configuration, otherwise use the user's configuration root.
+/// Explicit client arguments bypass this default; missing files are created only when saving setup.
+pub fn default_path() -> PathBuf {
+    let local = PathBuf::from("config.toml");
+    if local.try_exists().unwrap_or(true) {
+        return local;
+    }
+    orbit_config::directories::config()
+        .map(|root| root.join("orbit/config.toml"))
+        .unwrap_or(local)
+}
+
 /// Resolve the local credential directory consistently across every frontend.
 pub fn auth_directory(override_path: Option<PathBuf>) -> Result<PathBuf> {
     orbit_auth::directory(
@@ -23,10 +35,22 @@ pub struct Local {
 }
 
 impl Local {
+    /// Missing configuration denotes first use; other I/O and parse failures remain errors.
+    pub(super) fn read(&self) -> Result<String> {
+        match std::fs::read_to_string(&self.config) {
+            Ok(content) => Ok(content),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                Ok("[providers]\n".into())
+            }
+            Err(error) => {
+                Err(error).with_context(|| format!("无法读取本地配置 {}", self.config.display()))
+            }
+        }
+    }
+
     /// Prepare a connection from declarations and caches without waiting on model discovery.
     pub async fn snapshot(&self) -> Result<Configuration> {
-        let content = std::fs::read_to_string(&self.config)
-            .with_context(|| format!("无法读取本地配置 {}", self.config.display()))?;
+        let content = self.read()?;
         let mut parsed = orbit_config::config::FileConfig::parse(&content, &self.auth)?;
         orbit_config::models::updater::load_cached(&mut parsed).await;
         self.resolved_snapshot(&content, &parsed)
@@ -41,8 +65,7 @@ impl Local {
     }
 
     pub async fn snapshot_with_report(&self, force: bool) -> Result<(Configuration, Vec<String>)> {
-        let content = std::fs::read_to_string(&self.config)
-            .with_context(|| format!("无法读取本地配置 {}", self.config.display()))?;
+        let content = self.read()?;
         let mut parsed = orbit_config::config::FileConfig::parse(&content, &self.auth)?;
         let report = orbit_config::models::updater::refresh(&mut parsed, force).await;
         let notices = if force {

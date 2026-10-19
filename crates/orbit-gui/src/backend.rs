@@ -9,7 +9,7 @@ use tokio::sync::mpsc;
 #[derive(Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, clap::Parser)]
 #[command(name = "orbit-gui", about = "Orbit desktop client")]
 pub(crate) struct Options {
-    #[arg(long, default_value = "config.toml", env = "orbit_config")]
+    #[arg(long, default_value_os_t = orbit_client::configuration::default_path(), env = "orbit_config")]
     pub(crate) config: PathBuf,
     #[arg(long)]
     pub(crate) workspace: Option<PathBuf>,
