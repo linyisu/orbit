@@ -76,13 +76,46 @@ jobs:
       - name: Build native desktop package
         if: ${{ !contains(github.event.head_commit.message, '[installer-only]') }}
         run: cargo xtask bundle-gui debug
-      - name: Verify first-use model setup regressions
-        if: ${{ !contains(github.event.head_commit.message, '[installer-only]') }}
+      - name: Verify shared browsing and provider regressions
+        if: ${{ runner.os != 'Windows' && !contains(github.event.head_commit.message, '[installer-only]') }}
         run: |
           cargo test -p orbit-config discovery_retains_overrides_and_saved_credentials_reload --locked
-          cargo test -p orbit-gui --features test-support --test transport first_use_prompts_for_account_before_service_preparation --locked
+          cargo test -p orbit-gui --features test-support --test transport missing_native_service_is_distinct_from_model_configuration --locked
           cargo test -p orbit-client selection::tests --locked
           cargo test -p orbit-client pump::session::tests --locked
+          cargo test -p orbit-service workspace::server::tests::browsing --locked
+          cargo test -p orbit-config verified_api_capabilities --locked
+          cargo test -p orbit-config adding_another_official_key --locked
+          cargo test -p orbit-client directories:: --locked
+          cargo test -p orbit-client invalid_execution_configuration --locked
+          cargo test -p orbit-tui browsing_without_an_execution_budget --locked
+          cargo test -p orbit-model advertised_api_metadata --locked
+          cargo test -p orbit-auth usage::tests --locked
+      - name: Verify Windows browsing with packaged runtime flags
+        if: ${{ runner.os == 'Windows' && !contains(github.event.head_commit.message, '[installer-only]') }}
+        run: |
+          $nativeTarget = (rustc -vV | Select-String '^host: ').Line.Substring(6)
+          $env:CARGO_ENCODED_RUSTFLAGS = "-C$([char]31)target-feature=+crt-static"
+          cargo test -p orbit-gui --features test-support --test transport --target "$nativeTarget" --locked
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test -p orbit-service workspace::server::tests::browsing --target "$nativeTarget" --locked
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test -p orbit-client pump::session::tests --target "$nativeTarget" --locked
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test -p orbit-config verified_api_capabilities --target "$nativeTarget" --locked
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test -p orbit-config adding_another_official_key --target "$nativeTarget" --locked
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test -p orbit-client directories:: --target "$nativeTarget" --locked
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test -p orbit-client invalid_execution_configuration --target "$nativeTarget" --locked
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test -p orbit-tui browsing_without_an_execution_budget --target "$nativeTarget" --locked
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test -p orbit-model advertised_api_metadata --target "$nativeTarget" --locked
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test -p orbit-auth usage::tests --target "$nativeTarget" --locked
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Select the latest existing Windows GUI for packaging retries
         if: contains(github.event.head_commit.message, '[installer-only]')
         id: previous-gui
@@ -173,7 +206,9 @@ jobs:
         if: runner.os == 'Windows'
         with:
           name: orbit-gui-debug-windows-x64-installer
-          path: target/orbit-gui-debug-windows-x64-setup.exe
+          path: |
+            target/orbit-gui-debug-windows-x64-setup.exe
+            target/orbit-gui-debug-windows-x64-setup.exe.sha256
       - uses: actions/upload-artifact@v7
         if: ${{ !cancelled() }}
         with:
