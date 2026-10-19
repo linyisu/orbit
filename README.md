@@ -75,6 +75,9 @@ cargo test --workspace --features orbit-gui/test-support --locked
 
 测试使用临时数据；部分测试需要本地回环监听，真实网络测试单独标记为 ignored。[CI](.github/workflows/ci.yml) 使用同一组检查，原生后端验收见 [Native runtime contracts](.github/workflows/native-runtime.yml)，打包与实际启动验收见 [orbit-xtask](crates/orbit-xtask/README.md)。
 
+`native-runtime-foundation` 分支的 push 仅运行当前修复涉及的 macOS MCP 取消、Windows
+桥接句柄及桌面退出验收，沿用其他已通过结果；主分支、PR 和手动触发仍运行完整原生矩阵。
+
 按职责维护模块和共享接口，注释说明约束与原因。修改后运行相关回归；新增或移动模块时同步 crate README，并检查链接。配置与参数细节以示例、`--help` 和所属模块源码为准。
 
 仓库维护与编码约定见 [AGENTS.md](AGENTS.md)。
