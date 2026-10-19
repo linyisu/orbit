@@ -181,6 +181,12 @@ impl Backend {
             .try_send(command)
             .map_err(|_| anyhow::anyhow!("连接繁忙或已断开，请稍后重试。"))
     }
+
+    /// Release the local observer and its transports without cancelling persistent server work.
+    pub(crate) async fn shutdown(mut self) {
+        self.task.abort();
+        let _ = (&mut self.task).await;
+    }
 }
 
 impl Drop for Backend {

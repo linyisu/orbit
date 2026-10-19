@@ -316,6 +316,16 @@ impl Workspace {
         });
         let (conversation, image_subscription, tool_subscription) =
             Self::new_conversation(window, cx);
+        let shutdown = cx.on_app_quit(|view, _| {
+            view.reconnect = Task::ready(());
+            view.receive = Task::ready(());
+            let backend = view.backend.take();
+            async move {
+                if let Some(backend) = backend {
+                    backend.shutdown().await;
+                }
+            }
+        });
         let location = options
             .workspace
             .clone()
@@ -351,6 +361,7 @@ impl Workspace {
                 focus_lost,
                 image_subscription,
                 tool_subscription,
+                shutdown,
             ],
             focus: cx.focus_handle(),
             input,
