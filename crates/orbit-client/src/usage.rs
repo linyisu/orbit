@@ -112,7 +112,10 @@ pub async fn fetch(connection: &Connection, session: String) -> Result<Snapshot>
     match connection
         .connect()
         .await?
-        .request(Request::Usage { session })
+        .request(Request::InspectUsage {
+            session,
+            configuration: connection.configuration().await?,
+        })
         .await?
     {
         Response::Usage(snapshot) => Ok(snapshot),
@@ -270,12 +273,21 @@ impl ContextUsage {
 
 /// Input occupancy uses the independently resolved input budget, never total output capacity.
 pub fn context_percent(used: usize, input_budget: usize) -> usize {
-    used.saturating_mul(100) / input_budget.max(1)
+    if input_budget == 0 {
+        return 0;
+    }
+    used.saturating_mul(100) / input_budget
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_unprepared_context_budget_does_not_invent_an_occupancy_percentage() {
+        assert_eq!(context_percent(42_000, 0), 0);
+        assert_eq!(context_percent(42_000, 84_000), 50);
+    }
 
     fn context_profile(model: &str, used: Option<usize>) -> crate::protocol::SessionInfo {
         serde_json::from_value(serde_json::json!({

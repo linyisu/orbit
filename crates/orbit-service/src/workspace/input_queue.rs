@@ -13,18 +13,27 @@ pub(super) async fn execute(
     expected_workspace: &str,
     action: Action,
 ) -> Result<Snapshot> {
+    execute_session(&mut setup.session, inbox, expected_workspace, action).await
+}
+
+pub(super) async fn execute_session(
+    session: &mut crate::session::SessionState,
+    inbox: Option<AgentInbox>,
+    expected_workspace: &str,
+    action: Action,
+) -> Result<Snapshot> {
     ensure!(
-        expected_workspace == setup.session.snapshot.session.workspace,
+        expected_workspace == session.snapshot.session.workspace,
         "工作区已切换，请刷新输入队列"
     );
-    let run = setup.session.active_run_id();
+    let run = session.active_run_id();
     match action {
         Action::List { after } => {
             ensure!(
                 after.is_none_or(|after| after >= 0),
                 "invalid input queue cursor"
             );
-            if !setup.session.is_persisted() {
+            if !session.is_persisted() {
                 return Ok(Snapshot::List {
                     entries: vec![],
                     next: None,
@@ -35,10 +44,9 @@ pub(super) async fn execute(
                 Some(inbox) => Some(inbox.snapshot().await),
                 None => None,
             };
-            let stored = setup
-                .session
+            let stored = session
                 .store
-                .input_queue(setup.session.id())
+                .input_queue(session.id())
                 .await?;
             ensure!(
                 stored.workspace == expected_workspace,
@@ -163,8 +171,7 @@ pub(super) async fn execute(
             let (state, delivery) = if let Some(inbox) = inbox {
                 inbox
                     .persist_edit(id, &expected, content.clone(), || async {
-                        setup
-                            .session
+                        session
                             .edit_queued_input(expected_workspace, id, &expected, content.clone())
                             .await
                             .map_err(tool_error)
@@ -186,16 +193,14 @@ pub(super) async fn execute(
             } else {
                 // ensure_writer reserves the process-wide writer lease before
                 // touching an idle input; a foreign live service makes it fail.
-                setup
-                    .session
+                session
                     .edit_queued_input(expected_workspace, id, &expected, content.clone())
                     .await?;
                 (State::Idle, orbit_protocol::input_queue::Delivery::NextRun)
             };
-            let attachments = setup
-                .session
+            let attachments = session
                 .store
-                .pending_agent_messages(setup.session.id())
+                .pending_agent_messages(session.id())
                 .await?
                 .into_iter()
                 .find(|message| message.id == id)
@@ -240,16 +245,14 @@ pub(super) async fn execute(
             if let Some(inbox) = inbox {
                 inbox
                     .persist_remove(id, &expected, || async {
-                        setup
-                            .session
+                        session
                             .remove_queued_input(expected_workspace, id, &expected)
                             .await
                             .map_err(tool_error)
                     })
                     .await?;
             } else {
-                setup
-                    .session
+                session
                     .remove_queued_input(expected_workspace, id, &expected)
                     .await?;
             }

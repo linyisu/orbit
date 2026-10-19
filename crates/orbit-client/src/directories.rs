@@ -6,6 +6,39 @@ use super::{interaction::Progress, transport::Connection};
 
 const MARKER: &[u8] = b"\0ORBIT-DIRECTORIES\0";
 
+/// Format Windows verbatim paths for display only; never use this value for file access.
+pub fn display_path(path: &str) -> std::borrow::Cow<'_, str> {
+    if let Some(path) = path.strip_prefix(r"\\?\UNC\") {
+        return format!(r"\\{path}").into();
+    }
+    if let Some(path) = path.strip_prefix(r"\\?\")
+        && path.as_bytes().get(1) == Some(&b':')
+        && path.as_bytes().get(2) == Some(&b'\\')
+        && path.as_bytes()[0].is_ascii_alphabetic()
+    {
+        return path.into();
+    }
+    path.into()
+}
+
+#[cfg(test)]
+mod display_tests {
+    #[test]
+    fn verbatim_paths_are_formatted_without_changing_device_or_unix_paths() {
+        for (input, expected) in [
+            (r"\\?\C:\Projects\sample", r"C:\Projects\sample"),
+            (r"\\?\UNC\server\share\sample", r"\\server\share\sample"),
+            (
+                r"\\?\Volume{generated}\sample",
+                r"\\?\Volume{generated}\sample",
+            ),
+            ("/generated/project", "/generated/project"),
+        ] {
+            assert_eq!(super::display_path(input), expected);
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct Listing {
     pub path: String,

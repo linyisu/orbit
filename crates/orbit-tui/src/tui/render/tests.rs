@@ -5,6 +5,19 @@ use crate::tui::app::SessionTab;
 use crate::tui::theme::desaturate_for_thinking;
 
 #[test]
+fn browsing_without_an_execution_budget_shows_unknown_context() {
+    let mut state = UiState::new("generated-model");
+    state.input_context_tokens = 0;
+    state.context_used_tokens = 42_000;
+    assert_eq!(context_percent_label(&state), "—");
+    assert!(
+        footer(&state, 100)
+            .to_string()
+            .contains("上下文 —")
+    );
+}
+
+#[test]
 fn tool_inspectors_switch_calls_without_mutating_the_transcript() {
     use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
     let mut state = UiState::new("fixture");

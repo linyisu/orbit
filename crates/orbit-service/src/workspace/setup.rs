@@ -32,24 +32,34 @@ pub struct PreparedWorkspace {
 impl PreparedWorkspace {
     /// Promote a draft once, before any run/receipt/tool can write child records.
     pub(crate) async fn start_session(&mut self) -> Result<()> {
-        self.session.persist().await?;
-        self.session
-            .store
-            .set_tui_mode(
-                self.session.id(),
-                match self.resources.mode {
-                    orbit_protocol::Mode::Ask => "ask",
-                    orbit_protocol::Mode::Auto => "auto",
-                    orbit_protocol::Mode::Yolo => "YOLO",
-                },
-            )
-            .await?;
-        self.resources
-            .planning
-            .persist()
-            .await?;
-        Ok(())
+        start_session(
+            &mut self.session,
+            self.resources.mode,
+            &self.resources.planning,
+        )
+        .await
     }
+}
+
+pub(super) async fn start_session(
+    session: &mut session::SessionState,
+    mode: orbit_protocol::Mode,
+    planning: &crate::planning::Planning,
+) -> Result<()> {
+    session.persist().await?;
+    session
+        .store
+        .set_tui_mode(
+            session.id(),
+            match mode {
+                orbit_protocol::Mode::Ask => "ask",
+                orbit_protocol::Mode::Auto => "auto",
+                orbit_protocol::Mode::Yolo => "YOLO",
+            },
+        )
+        .await?;
+    planning.persist().await?;
+    Ok(())
 }
 
 pub struct WorkspaceResources {

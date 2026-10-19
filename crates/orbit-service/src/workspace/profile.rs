@@ -4,10 +4,35 @@ use orbit_model::{client::ModelClient, types::ReasoningEffort};
 use super::protocol::SessionInfo;
 use crate::{PreparedWorkspace, WorkspaceResources};
 
+pub(super) fn catalog(info: &mut SessionInfo, models: &[crate::models::ModelOption]) {
+    info.models = models
+        .iter()
+        .map(crate::models::ModelOption::qualified_name)
+        .collect();
+    info.model_catalog = models
+        .iter()
+        .map(|model| orbit_protocol::ModelSummary {
+            provider: model.provider.clone(),
+            model: model.model.clone(),
+            supports_vision: model.supports_vision,
+            reasoning_effort: model
+                .config
+                .reasoning_effort
+                .map(|effort| effort.as_str().into()),
+            reasoning_efforts: model
+                .reasoning_efforts
+                .iter()
+                .map(|effort| effort.as_str().into())
+                .collect(),
+        })
+        .collect();
+}
+
 pub(super) fn describe(setup: &PreparedWorkspace) -> SessionInfo {
     let resources = &setup.resources;
     let budget = &resources.budget;
     SessionInfo {
+        phase: orbit_protocol::SessionPhase::Ready,
         persisted: setup.session.is_persisted(),
         mode: resources.mode,
         mode_revision: resources.mode_revision,

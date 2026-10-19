@@ -8,6 +8,7 @@ use tokio::sync::{Mutex, mpsc, oneshot};
 use super::protocol::{Approval, Mode, PAGE_BYTES, PAGE_EVENTS, Page, SessionInfo, Update};
 
 mod actor;
+pub(super) mod browsing;
 mod progress;
 mod replay;
 
@@ -324,34 +325,7 @@ impl Handle {
 
     pub async fn subagent_page(&self, agent: &str, after: usize) -> Result<Page> {
         self.authorize_subagent(agent).await?;
-        let history = self
-            .store
-            .transcript_index(agent)
-            .await?;
-        let total = history
-            .last()
-            .map_or(0, |run| run.end());
-        ensure!(
-            after <= total,
-            "event cursor no longer exists; reopen the session"
-        );
-        let updates = history_page(&self.store, agent, &history, after).await?;
-        let view = View {
-            updates: Default::default(),
-            published: 0,
-            profile: None,
-            images: Default::default(),
-            busy: history
-                .last()
-                .is_some_and(|run| !run.finished),
-            model: self.store.session(agent).await?.model,
-            approvals: BTreeMap::new(),
-            clock: None,
-            progress: Vec::new(),
-            user_inputs: Vec::new(),
-            planning: Default::default(),
-        };
-        Ok(view.page_state(after, updates, total))
+        archived_page(&self.store, agent, after).await
     }
 
     pub async fn authorize_subagent(&self, agent: &str) -> Result<()> {
@@ -361,15 +335,7 @@ impl Handle {
                 .disabled(orbit_protocol::Capability::Subagents),
             "子 Agent 功能已禁用"
         );
-        ensure!(
-            self.store
-                .subagent_parent(agent)
-                .await?
-                .as_deref()
-                == Some(&self.info.id),
-            "该记录不是当前会话的子代理。"
-        );
-        Ok(())
+        authorize_subagent_record(&self.store, &self.info.id, agent).await
     }
 
     pub async fn spawn(
@@ -401,7 +367,11 @@ impl Handle {
             clock: None,
             progress: Vec::new(),
             user_inputs: Vec::new(),
-            planning: Default::default(),
+            planning: setup
+                .resources
+                .planning
+                .snapshot()
+                .await,
         };
         view.push(Update::Profile(Box::new(info.clone())));
         let view = Arc::new(Mutex::new(view));
@@ -583,7 +553,55 @@ impl Handle {
     }
 }
 
-async fn history_page(
+pub(super) async fn authorize_subagent_record(
+    store: &orbit_store::store::Store,
+    parent: &str,
+    agent: &str,
+) -> Result<()> {
+    ensure!(
+        store
+            .subagent_parent(agent)
+            .await?
+            .as_deref()
+            == Some(parent),
+        "该记录不是当前会话的子代理。"
+    );
+    Ok(())
+}
+
+pub(super) async fn archived_page(
+    store: &orbit_store::store::Store,
+    session: &str,
+    after: usize,
+) -> Result<Page> {
+    let history = store.transcript_index(session).await?;
+    let total = history
+        .last()
+        .map_or(0, |run| run.end());
+    ensure!(
+        after <= total,
+        "event cursor no longer exists; reopen the session"
+    );
+    let updates = history_page(store, session, &history, after).await?;
+    let view = View {
+        updates: Default::default(),
+        published: 0,
+        profile: None,
+        images: Default::default(),
+        busy: history
+            .last()
+            .is_some_and(|run| !run.finished),
+        model: store.session(session).await?.model,
+        approvals: BTreeMap::new(),
+        clock: None,
+        progress: Vec::new(),
+        user_inputs: Vec::new(),
+        planning: Default::default(),
+    };
+    Ok(view.page_state(after, updates, total))
+}
+
+pub(super) async fn history_page(
     store: &orbit_store::store::Store,
     session: &str,
     history: &[orbit_store::transcript::RunIndex],

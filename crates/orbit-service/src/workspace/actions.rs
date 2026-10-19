@@ -9,6 +9,128 @@ use orbit_protocol::{Report, SessionAction};
 
 use crate::PreparedWorkspace;
 
+fn directory(
+    root: &std::path::Path,
+    home: Option<&std::path::Path>,
+    path: String,
+) -> Result<std::path::PathBuf> {
+    let path = if path.starts_with(['\'', '"']) {
+        #[cfg(windows)]
+        {
+            let quote = path.as_bytes()[0];
+            ensure!(
+                path.len() >= 2 && path.as_bytes().last() == Some(&quote),
+                "路径引号未闭合"
+            );
+            path[1..path.len() - 1].to_owned()
+        }
+        #[cfg(not(windows))]
+        {
+            let words = shlex::split(&path).context("路径引号未闭合")?;
+            ensure!(words.len() == 1, "请提供一个目录路径");
+            words.into_iter().next().unwrap()
+        }
+    } else {
+        path
+    };
+    let path = if path == "~" || path.starts_with("~/") {
+        home.context("目标环境没有用户目录")?
+            .join(
+                path.trim_start_matches('~')
+                    .trim_start_matches('/'),
+            )
+    } else {
+        root.join(path)
+    };
+    let directory = path
+        .canonicalize()
+        .context("目标目录不存在")?;
+    ensure!(directory.is_dir(), "目标路径必须是目录");
+    Ok(directory)
+}
+
+pub(super) async fn browse(
+    browsing: &mut super::session::browsing::Browsing,
+    options: &crate::WorkspaceOptions,
+    action: SessionAction,
+) -> Result<super::protocol::Response> {
+    use super::protocol::Response;
+    let config = super::session::browsing::Browsing::configuration(options)?;
+    let policy = orbit_protocol::SessionPolicy {
+        disabled: config.disabled_capabilities,
+        ..Default::default()
+    };
+    let result = match action {
+        SessionAction::ChangeDirectory { path } => {
+            let directory = directory(&browsing.directory, browsing.home.as_deref(), path)?;
+            let approval = orbit_runtime::policy::ApprovalPolicy::default();
+            approval.set_mode(super::setup::approval_mode(browsing.mode));
+            let workspace = crate::runtime::configured_workspace(
+                &directory,
+                Some(config.permissions),
+                config.command.network,
+                approval,
+            )?;
+            browsing
+                .session
+                .move_to(workspace, config.command)
+                .await?;
+            browsing.directory = directory;
+            return Ok(Response::Profile(Box::new(browsing.info())));
+        }
+        SessionAction::Task { task } => project::task_report(
+            super::tasks::execute_session(&mut browsing.session, &policy, task).await?,
+        ),
+        SessionAction::Memory { memory } => {
+            self::memory(&browsing.session, &policy, memory).await?
+        }
+        SessionAction::Rename { title } => {
+            ensure!(
+                orbit_protocol::admin::valid_title(&title),
+                "会话标题应为 1–120 个字符"
+            );
+            browsing
+                .session
+                .rename(title.clone())
+                .await?;
+            return Ok(Response::Profile(Box::new(browsing.info())));
+        }
+        SessionAction::RefreshSkills => {
+            let skills = if policy.disabled(orbit_protocol::Capability::Skills) {
+                Default::default()
+            } else {
+                super::library::session_skills(&browsing.session).await?
+            };
+            report("Skills", skills.render())
+        }
+        SessionAction::Inspect {
+            section: orbit_protocol::Inspection::Context,
+        } => report(
+            "上下文预算",
+            "尚未准备模型请求，执行预算未知；历史会话可以正常查看。".into(),
+        ),
+        _ => anyhow::bail!("该操作需要已准备的执行资源；会话历史和草稿仍保留"),
+    };
+    Ok(Response::Report(result))
+}
+
+async fn memory(
+    session: &crate::session::SessionState,
+    policy: &orbit_protocol::SessionPolicy,
+    action: orbit_protocol::project::MemoryAction,
+) -> Result<Report> {
+    ensure!(
+        !policy.disabled(orbit_protocol::Capability::ProjectState),
+        "记忆功能已禁用"
+    );
+    if let orbit_protocol::project::MemoryAction::Add { content, .. } = &action {
+        ensure!(!content.trim().is_empty(), "记忆内容不能为空。");
+        ensure!(session.is_persisted(), "请先开始会话，再添加会话记忆。");
+    }
+    let result = crate::project_state::actions::memory(session, &mut Vec::new(), action).await?;
+    Ok(project::memory_report(result))
+}
+
 pub(super) async fn execute(
     setup: &mut PreparedWorkspace,
     action: SessionAction,
@@ -17,32 +139,8 @@ pub(super) async fn execute(
     match action {
         SessionAction::ChangeDirectory { path } => {
             ensure!(!running, "请先结束当前响应再移动会话");
-            let path = if path.starts_with(['\'', '"']) {
-                let words = shlex::split(&path).context("路径引号未闭合")?;
-                ensure!(words.len() == 1, "请提供一个目录路径");
-                words.into_iter().next().unwrap()
-            } else {
-                path
-            };
             let root = std::path::Path::new(&setup.session.snapshot.session.workspace);
-            let path = if path == "~" || path.starts_with("~/") {
-                setup
-                    .resources
-                    .options
-                    .home
-                    .as_ref()
-                    .context("目标环境没有 HOME")?
-                    .join(
-                        path.trim_start_matches('~')
-                            .trim_start_matches('/'),
-                    )
-            } else {
-                root.join(path)
-            };
-            let directory = path
-                .canonicalize()
-                .context("目标目录不存在")?;
-            ensure!(directory.is_dir(), "目标路径必须是目录");
+            let directory = directory(root, setup.resources.options.home.as_deref(), path)?;
             let mut options = setup.resources.options.clone();
             options.initial_directory = directory.clone();
             let mut resources = super::setup::prepare_resources(
@@ -114,24 +212,7 @@ pub(super) async fn execute(
             Ok(project::task_report(result))
         }
         SessionAction::Memory { memory } => {
-            ensure!(
-                !setup
-                    .resources
-                    .policy
-                    .disabled(orbit_protocol::Capability::ProjectState),
-                "记忆功能已禁用"
-            );
-            if let orbit_protocol::project::MemoryAction::Add { content, .. } = &memory {
-                ensure!(!content.trim().is_empty(), "记忆内容不能为空。");
-                ensure!(
-                    setup.session.is_persisted(),
-                    "请先开始会话，再添加会话记忆。"
-                );
-            }
-            let mut history = Vec::new();
-            let result =
-                crate::project_state::actions::memory(&setup.session, &mut history, memory).await?;
-            Ok(project::memory_report(result))
+            self::memory(&setup.session, &setup.resources.policy, memory).await
         }
         SessionAction::Inspect { section } => inspection::inspect(setup, section).await,
         SessionAction::Rename { title } => {

@@ -270,12 +270,11 @@ pub(super) async fn session_skills(
     package::materialize(&bundles)
 }
 
-pub(super) async fn applied(setup: &crate::PreparedWorkspace) -> Result<resources::Snapshot> {
+pub(super) async fn applied(session: &crate::session::SessionState) -> Result<resources::Snapshot> {
     Ok(resources::Snapshot::Extensions(
-        setup
-            .session
+        session
             .store
-            .session_extensions(setup.session.id())
+            .session_extensions(session.id())
             .await?
             .into_iter()
             .map(|bundle| bundle.extension)

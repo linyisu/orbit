@@ -36,7 +36,13 @@ impl Workspace {
                 div()
                     .text_lg()
                     .font_weight(FontWeight::MEDIUM)
-                    .child("未能连接工作区"),
+                    .child(
+                        if self.options.ssh.is_some() || self.options.wsl.is_some() {
+                            "无法连接远程主机"
+                        } else {
+                            "无法启动本机服务"
+                        },
+                    ),
             )
             .child(
                 div()

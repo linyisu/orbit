@@ -10,60 +10,59 @@ pub(super) async fn execute(
     setup: &mut PreparedWorkspace,
     action: TaskAction,
 ) -> Result<TaskResult> {
-    ensure!(
-        !setup
-            .resources
-            .policy
-            .disabled(Capability::ProjectState),
-        "任务功能已禁用"
-    );
-    let workspace = &setup.session.snapshot.session.workspace;
+    execute_session(&mut setup.session, &setup.resources.policy, action).await
+}
+
+pub(super) async fn execute_session(
+    session: &mut crate::session::SessionState,
+    policy: &orbit_protocol::SessionPolicy,
+    action: TaskAction,
+) -> Result<TaskResult> {
+    ensure!(!policy.disabled(Capability::ProjectState), "任务功能已禁用");
+    let workspace = &session.snapshot.session.workspace;
     let project = if matches!(action, TaskAction::Add { .. } | TaskAction::Create { .. }) {
         Some(
-            setup
-                .session
+            session
                 .store
                 .resolve_project(workspace)
                 .await?,
         )
     } else {
-        setup
-            .session
+        session
             .store
             .project_at(workspace)
             .await?
     };
-    setup
-        .session
+    session
         .snapshot
         .session_mut()
         .project_id = project
         .map(|p| p.id)
         .unwrap_or_default();
-    crate::project_state::actions::task(&setup.session, &mut Vec::new(), action).await
+    crate::project_state::actions::task(session, &mut Vec::new(), action).await
 }
 
 pub(super) async fn snapshot(
     setup: &mut PreparedWorkspace,
     action: TaskAction,
 ) -> Result<TaskSnapshot> {
-    match execute(setup, action).await? {
+    snapshot_session(&mut setup.session, &setup.resources.policy, action).await
+}
+
+pub(super) async fn snapshot_session(
+    session: &mut crate::session::SessionState,
+    policy: &orbit_protocol::SessionPolicy,
+    action: TaskAction,
+) -> Result<TaskSnapshot> {
+    match execute_session(session, policy, action).await? {
         TaskResult::List(tasks) => Ok(TaskSnapshot {
             tasks,
             changed: None,
         }),
         TaskResult::Added(task) | TaskResult::Updated(task) => {
-            let tasks = setup
-                .session
+            let tasks = session
                 .store
-                .tasks(
-                    &setup
-                        .session
-                        .snapshot
-                        .session
-                        .project_id,
-                    true,
-                )
+                .tasks(&session.snapshot.session.project_id, true)
                 .await?;
             Ok(TaskSnapshot {
                 tasks,

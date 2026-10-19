@@ -32,15 +32,16 @@ fn main() -> Result<()> {
                         "shell": "synthetic-peer",
                         "native_processes": true,
                         "files": true,
-                        "features": [],
+                        "features": [orbit_protocol::MODEL_INDEPENDENT_SESSIONS],
                     },
                 },
             }),
             Some("all_sessions") => json!({"type": "sessions", "value": []}),
-            Some("open") => json!({
+            Some("open" | "browse") => json!({
                 "type": "opened",
                 "value": {
                     "id": "synthetic-session",
+                    "phase": "browsing",
                     "title": "Generated observation",
                     "workspace": ".",
                     "model": "slow::declared-model",

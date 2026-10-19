@@ -9,7 +9,7 @@ pub(super) fn path_label(workspace: &str, home: Option<&Path>) -> String {
         return format!("~/{}", relative.display());
     }
 
-    workspace.to_owned()
+    orbit_client::directories::display_path(workspace).into_owned()
 }
 
 #[cfg(test)]

@@ -159,6 +159,7 @@ pub async fn serve(
         library: Mutex::new(super::library::Library::new(&options)?),
         options,
         sessions: Mutex::new(HashMap::new()),
+        browsing: Mutex::new(HashMap::new()),
         opening: Mutex::new(()),
         last_activity: Mutex::new(tokio::time::Instant::now()),
         stop: tokio_util::sync::CancellationToken::new(),
@@ -275,6 +276,7 @@ struct Service {
     library: Mutex<super::library::Library>,
     options: crate::WorkspaceOptions,
     sessions: Mutex<HashMap<String, Arc<Handle>>>,
+    browsing: Mutex<HashMap<String, Arc<Mutex<session::browsing::Browsing>>>>,
     opening: Mutex<()>,
     last_activity: Mutex<tokio::time::Instant>,
     stop: tokio_util::sync::CancellationToken,
@@ -282,7 +284,38 @@ struct Service {
 }
 
 impl Service {
+    async fn browsing(
+        &self,
+        id: &str,
+    ) -> Option<tokio::sync::OwnedMutexGuard<session::browsing::Browsing>> {
+        let origin = self
+            .browsing
+            .lock()
+            .await
+            .get(id)
+            .cloned()?;
+        let guard = origin.clone().lock_owned().await;
+        // Preparation replaces the registry entry while holding this same session lock.
+        // A request waiting on the old entry must route to the prepared actor instead.
+        let current = self
+            .browsing
+            .lock()
+            .await
+            .get(id)
+            .is_some_and(|entry| Arc::ptr_eq(entry, &origin));
+        current.then_some(guard)
+    }
+
     async fn busy(&self) -> bool {
+        if self
+            .browsing
+            .lock()
+            .await
+            .values()
+            .any(|session| session.try_lock().is_err())
+        {
+            return true;
+        }
         let sessions: Vec<_> = self
             .sessions
             .lock()
@@ -296,6 +329,45 @@ impl Service {
             }
         }
         false
+    }
+
+    async fn conversation(
+        &self,
+        id: &str,
+    ) -> Result<(orbit_store::store::Store, protocol::SessionInfo)> {
+        if let Some(browsing) = self.browsing(id).await {
+            return Ok((browsing.session.store.clone(), browsing.info()));
+        }
+        let handle = self.session(id).await?;
+        Ok((handle.store.clone(), handle.current_info().await))
+    }
+
+    async fn archive_store(
+        &self,
+        parent: &str,
+        agent: Option<&str>,
+        options: &crate::WorkspaceOptions,
+    ) -> Result<orbit_store::store::Store> {
+        let (store, _) = self.conversation(parent).await?;
+        if let Some(agent) = agent {
+            if let Ok(handle) = self.session(parent).await {
+                handle.authorize_subagent(agent).await?;
+            } else {
+                let config = session::browsing::Browsing::configuration(options)?;
+                ensure!(
+                    !config
+                        .disabled_capabilities
+                        .iter()
+                        .any(|capability| matches!(
+                            capability,
+                            orbit_protocol::Capability::All | orbit_protocol::Capability::Subagents
+                        )),
+                    "子 Agent 功能已禁用"
+                );
+                session::authorize_subagent_record(&store, parent, agent).await?;
+            }
+        }
+        Ok(store)
     }
 
     async fn session(&self, id: &str) -> Result<Arc<Handle>> {
@@ -403,6 +475,13 @@ impl Service {
             handle.release_viewer(viewer).await;
         }
         for id in opened {
+            if let Some(mut session) = self.browsing(&id).await {
+                session.clients = session.clients.saturating_sub(1);
+                if session.clients == 0 {
+                    self.browsing.lock().await.remove(&id);
+                }
+                continue;
+            }
             let Some(handle) = sessions.get(&id) else {
                 continue;
             };
@@ -444,6 +523,212 @@ impl Service {
         viewer: u64,
     ) -> Result<Response> {
         match request {
+            Request::Browse { resume } => {
+                let _opening = self.opening.lock().await;
+                ensure!(
+                    !self.closing.load(Ordering::Acquire),
+                    "workspace service is shutting down"
+                );
+                if let Some(id) = &resume
+                    && let Some(handle) = self
+                        .sessions
+                        .lock()
+                        .await
+                        .get(id)
+                        .cloned()
+                {
+                    handle
+                        .clients
+                        .fetch_add(1, Ordering::AcqRel);
+                    return Ok(Response::Opened(handle.current_info().await));
+                }
+                if let Some(id) = &resume
+                    && let Some(mut browsing) = self.browsing(id).await
+                {
+                    browsing.clients += 1;
+                    return Ok(Response::Opened(browsing.info()));
+                }
+                ensure!(
+                    self.sessions.lock().await.len() + self.browsing.lock().await.len()
+                        < MAX_SESSIONS,
+                    "workspace session limit reached; close unused conversations"
+                );
+                let session = crate::session::SessionState::browse(
+                    connection_options.database.clone(),
+                    resume,
+                    &connection_options.initial_directory,
+                )
+                .await?;
+                let mode = match session
+                    .store
+                    .tui_mode(session.id())
+                    .await?
+                    .as_str()
+                {
+                    "ask" => orbit_protocol::Mode::Ask,
+                    "YOLO" => orbit_protocol::Mode::Yolo,
+                    _ => orbit_protocol::Mode::Auto,
+                };
+                let browsing = session::browsing::Browsing {
+                    session,
+                    directory: connection_options
+                        .initial_directory
+                        .clone(),
+                    home: connection_options.home.clone(),
+                    selection: None,
+                    clients: 1,
+                    mode,
+                    mode_revision: 0,
+                    plan_mode: None,
+                };
+                let info = browsing.info();
+                self.browsing
+                    .lock()
+                    .await
+                    .insert(info.id.clone(), Arc::new(Mutex::new(browsing)));
+                Ok(Response::Opened(info))
+            }
+            Request::Prepare {
+                session,
+                model,
+                configuration,
+            } => {
+                let _opening = self.opening.lock().await;
+                ensure!(
+                    !self.closing.load(Ordering::Acquire),
+                    "workspace service is shutting down"
+                );
+                if let Some(handle) = self
+                    .sessions
+                    .lock()
+                    .await
+                    .get(&session)
+                    .cloned()
+                {
+                    return Ok(Response::Profile(Box::new(handle.current_info().await)));
+                }
+                let browsing = self
+                    .browsing(&session)
+                    .await
+                    .context("conversation is not open")?;
+                let configuration = match configuration {
+                    Some(configuration) => Some(
+                        super::configuration::Installed::install(configuration, connection_options)
+                            .await?,
+                    ),
+                    None => None,
+                };
+                let mut options = configuration
+                    .as_ref()
+                    .map_or(connection_options, |installed| &installed.options)
+                    .clone();
+                options.model = browsing
+                    .selection
+                    .as_ref()
+                    .map(|(model, _)| model.clone())
+                    .or(model);
+                options
+                    .initial_directory
+                    .clone_from(&browsing.directory);
+                let mut state = browsing.session.execution_copy();
+                if state.is_persisted() {
+                    state
+                        .validate_directory(&options.initial_directory)
+                        .await?;
+                    state
+                        .store
+                        .refresh_runtime(&mut state.snapshot)
+                        .await?;
+                }
+                let mut resources = super::setup::prepare_resources(
+                    &options,
+                    &options.initial_directory,
+                    &state,
+                    Default::default(),
+                    &[],
+                )
+                .await?;
+                if let Some((model, effort)) = &browsing.selection {
+                    super::profile::apply(
+                        &mut resources,
+                        model,
+                        effort
+                            .as_deref()
+                            .map(str::parse)
+                            .transpose()
+                            .map_err(|()| anyhow::anyhow!("unknown reasoning effort"))?,
+                    )?;
+                } else {
+                    let (saved, effort) = state.saved_model_profile();
+                    if let Some(choice) = resources
+                        .budget
+                        .model_options
+                        .iter()
+                        .find(|choice| choice.qualified_name() == saved)
+                    {
+                        let effort = effort.filter(|effort| {
+                            choice
+                                .reasoning_efforts
+                                .contains(effort)
+                        });
+                        super::profile::apply(&mut resources, saved, effort)?;
+                    }
+                }
+                resources.mode = browsing.mode;
+                resources.mode_revision = browsing.mode_revision;
+                resources
+                    .workspace
+                    .policy()
+                    .approval_policy()
+                    .set_mode(super::setup::approval_mode(browsing.mode));
+                if let Some(mode) = browsing.plan_mode {
+                    resources
+                        .planning
+                        .action(match mode {
+                            orbit_protocol::plan::WorkMode::Plan => {
+                                orbit_protocol::plan::Action::Enter
+                            }
+                            orbit_protocol::plan::WorkMode::Build => {
+                                orbit_protocol::plan::Action::Leave
+                            }
+                        })
+                        .await?;
+                }
+                state
+                    .initialize_audit(
+                        resources.workspace.clone(),
+                        resources.command_limits.clone(),
+                    )
+                    .await?;
+                state
+                    .set_model_profile(
+                        resources.model_name.clone(),
+                        resources
+                            .model
+                            .config()
+                            .reasoning_effort,
+                    )
+                    .await?;
+                let setup = crate::PreparedWorkspace {
+                    session: state,
+                    resources,
+                };
+                let handle = Arc::new(Handle::spawn(setup, configuration).await?);
+                let info = handle.info.clone();
+                handle
+                    .clients
+                    .store(browsing.clients, Ordering::Release);
+                self.sessions
+                    .lock()
+                    .await
+                    .insert(session.clone(), handle);
+                self.browsing
+                    .lock()
+                    .await
+                    .remove(&session);
+                drop(browsing);
+                Ok(Response::Profile(Box::new(info)))
+            }
             Request::Library { action } => Ok(Response::Library(
                 self.library
                     .lock()
@@ -469,10 +754,9 @@ impl Service {
             }
             Request::Complete { session, input } => {
                 ensure!(input.len() <= 4_096, "completion input is too long");
-                let handle = self.session(&session).await?;
-                let info = handle.current_info().await;
+                let (store, info) = self.conversation(&session).await?;
                 let entries = super::completion::complete(
-                    &handle.store,
+                    &store,
                     &info.id,
                     &info.workspace,
                     connection_options.home.as_deref(),
@@ -536,9 +820,18 @@ impl Service {
                 handle.requested_policy = policy;
                 let handle = Arc::new(handle);
                 let info = handle.info.clone();
+                let browsing = self
+                    .browsing
+                    .lock()
+                    .await
+                    .remove(&info.id);
+                let clients = match browsing {
+                    Some(browsing) => browsing.lock().await.clients,
+                    None => 0,
+                };
                 handle
                     .clients
-                    .fetch_add(1, Ordering::AcqRel);
+                    .store(clients + 1, Ordering::Release);
                 self.sessions
                     .lock()
                     .await
@@ -550,42 +843,98 @@ impl Service {
                 session,
                 expected_workspace,
                 action,
-            } => Ok(Response::Resources(
-                self.session(&session)
-                    .await?
-                    .resources(action, expected_workspace)
-                    .await?,
-            )),
+            } => {
+                if let Some(mut browsing) = self.browsing(&session).await {
+                    ensure!(
+                        expected_workspace
+                            .as_deref()
+                            .is_none_or(|expected| expected == browsing.info().workspace),
+                        "项目已切换，请刷新后重试"
+                    );
+                    return Ok(Response::Resources(
+                        super::resources::browse(&mut browsing, connection_options, action).await?,
+                    ));
+                }
+                Ok(Response::Resources(
+                    self.session(&session)
+                        .await?
+                        .resources(action, expected_workspace)
+                        .await?,
+                ))
+            }
             Request::Tasks {
                 session,
                 expected_workspace,
                 action,
-            } => Ok(Response::Tasks(
-                self.session(&session)
-                    .await?
-                    .tasks(action, expected_workspace)
-                    .await?,
-            )),
+            } => {
+                if let Some(mut browsing) = self.browsing(&session).await {
+                    ensure!(
+                        expected_workspace
+                            .as_deref()
+                            .is_none_or(|expected| expected == browsing.info().workspace),
+                        "项目已切换，请刷新后重试"
+                    );
+                    let config = session::browsing::Browsing::configuration(connection_options)?;
+                    let policy = orbit_protocol::SessionPolicy {
+                        disabled: config.disabled_capabilities,
+                        ..Default::default()
+                    };
+                    return Ok(Response::Tasks(
+                        super::tasks::snapshot_session(&mut browsing.session, &policy, action)
+                            .await?,
+                    ));
+                }
+                Ok(Response::Tasks(
+                    self.session(&session)
+                        .await?
+                        .tasks(action, expected_workspace)
+                        .await?,
+                ))
+            }
             Request::Files {
                 session,
                 expected_workspace,
                 action,
-            } => Ok(Response::Files(
-                self.session(&session)
-                    .await?
-                    .files(action, expected_workspace)
-                    .await?,
-            )),
+            } => {
+                if let Some(browsing) = self.browsing(&session).await {
+                    ensure!(
+                        expected_workspace
+                            .as_deref()
+                            .is_none_or(|expected| expected == browsing.info().workspace),
+                        "项目已切换，请刷新后重试"
+                    );
+                    return Ok(Response::Files(
+                        super::files::browse(&browsing, connection_options, action).await?,
+                    ));
+                }
+                Ok(Response::Files(
+                    self.session(&session)
+                        .await?
+                        .files(action, expected_workspace)
+                        .await?,
+                ))
+            }
             Request::Review {
                 session,
                 expected_workspace,
                 action,
-            } => Ok(Response::Review(
-                self.session(&session)
-                    .await?
-                    .review(action, expected_workspace)
-                    .await?,
-            )),
+            } => {
+                if let Some(browsing) = self.browsing(&session).await {
+                    ensure!(
+                        expected_workspace == browsing.info().workspace,
+                        "项目已切换，请刷新后重试"
+                    );
+                    return Ok(Response::Review(
+                        super::review::browse(&browsing, connection_options, action).await?,
+                    ));
+                }
+                Ok(Response::Review(
+                    self.session(&session)
+                        .await?
+                        .review(action, expected_workspace)
+                        .await?,
+                ))
+            }
             Request::Subagents {
                 session,
                 expected_workspace,
@@ -600,12 +949,25 @@ impl Service {
                 session,
                 expected_workspace,
                 action,
-            } => Ok(Response::InputQueue(
-                self.session(&session)
-                    .await?
-                    .input_queue(action, expected_workspace)
-                    .await?,
-            )),
+            } => {
+                if let Some(mut browsing) = self.browsing(&session).await {
+                    return Ok(Response::InputQueue(
+                        super::input_queue::execute_session(
+                            &mut browsing.session,
+                            None,
+                            &expected_workspace,
+                            action,
+                        )
+                        .await?,
+                    ));
+                }
+                Ok(Response::InputQueue(
+                    self.session(&session)
+                        .await?
+                        .input_queue(action, expected_workspace)
+                        .await?,
+                ))
+            }
             Request::Admin { action } => {
                 let _opening = self.opening.lock().await;
                 ensure!(
@@ -652,21 +1014,17 @@ impl Service {
                 ))
             }
             Request::ListSessions { session } => {
-                let handle = self.session(&session).await?;
-                let info = handle.current_info().await;
-                let Some(project) = handle
-                    .store
+                let (store, info) = self.conversation(&session).await?;
+                let Some(project) = store
                     .project_at(&info.workspace)
                     .await?
                 else {
                     return Ok(Response::Sessions(Vec::new()));
                 };
-                let projects = handle
-                    .store
+                let projects = store
                     .equivalent_project_ids(&project.id)
                     .await?;
-                let sessions = handle
-                    .store
+                let sessions = store
                     .list_resumable()
                     .await?
                     .into_iter()
@@ -842,6 +1200,9 @@ impl Service {
                 Ok(Response::Ok)
             }
             Request::SessionAction { session, action } => {
+                if let Some(mut browsing) = self.browsing(&session).await {
+                    return super::actions::browse(&mut browsing, connection_options, action).await;
+                }
                 let directory_change = matches!(
                     action,
                     orbit_protocol::SessionAction::ChangeDirectory { .. }
@@ -865,10 +1226,96 @@ impl Service {
                     super::usage::snapshot(&config, &handle.store, &session, persisted).await,
                 ))
             }
+            Request::InspectUsage {
+                session,
+                configuration,
+            } => {
+                if let Ok(handle) = self.session(&session).await {
+                    let (config, persisted) = handle.usage_context().await?;
+                    return Ok(Response::Usage(
+                        super::usage::snapshot(&config, &handle.store, &session, persisted).await,
+                    ));
+                }
+                let browsing = self
+                    .browsing(&session)
+                    .await
+                    .context("conversation is not open")?;
+                let info = browsing.info();
+                let store = browsing.session.store.clone();
+                drop(browsing);
+                let installed = match configuration {
+                    Some(configuration) => Some(
+                        super::configuration::Installed::install(configuration, connection_options)
+                            .await?,
+                    ),
+                    None => None,
+                };
+                let options = installed
+                    .as_ref()
+                    .map_or(connection_options, |installed| &installed.options);
+                let mut config =
+                    crate::config::FileConfig::load(&options.config, &options.auth_directory)?;
+                orbit_config::models::updater::load_cached(&mut config).await;
+                let model = config
+                    .select_model(&info.model)
+                    .ok()
+                    .or_else(|| {
+                        config
+                            .model_options()
+                            .ok()?
+                            .into_iter()
+                            .next()
+                    });
+                let snapshot = match model {
+                    Some(model) => {
+                        super::usage::snapshot(&model.config, &store, &session, info.persisted)
+                            .await
+                    }
+                    None => orbit_protocol::usage::Snapshot {
+                        session: super::usage::session_usage(&store, &session, info.persisted)
+                            .await,
+                        ..Default::default()
+                    },
+                };
+                Ok(Response::Usage(snapshot))
+            }
             Request::ConfigureModels {
                 session,
                 configuration,
             } => {
+                if let Some(mut browsing) = self.browsing(&session).await {
+                    let installed = match configuration {
+                        Some(configuration) => Some(
+                            super::configuration::Installed::install(
+                                configuration,
+                                connection_options,
+                            )
+                            .await?,
+                        ),
+                        None => None,
+                    };
+                    let options = installed
+                        .as_ref()
+                        .map_or(connection_options, |installed| &installed.options);
+                    let mut config =
+                        crate::config::FileConfig::load(&options.config, &options.auth_directory)?;
+                    orbit_config::models::updater::load_cached(&mut config).await;
+                    let models = config.model_options()?;
+                    if browsing.info().model.is_empty()
+                        && let Some(model) = models.first()
+                    {
+                        browsing.selection = Some((
+                            model.qualified_name(),
+                            model
+                                .config
+                                .reasoning_effort
+                                .map(|effort| effort.as_str().into()),
+                        ));
+                    }
+                    let mut info = browsing.info();
+                    super::profile::catalog(&mut info, &models);
+                    return Ok(Response::Profile(Box::new(info)));
+                }
                 self.session(&session)
                     .await?
                     .command(session::Command::ConfigureModels { configuration })
@@ -876,6 +1323,43 @@ impl Service {
                 Ok(Response::Ok)
             }
             Request::Plan { session, action } => {
+                if let Some(mut browsing) = self.browsing(&session).await {
+                    if action == orbit_protocol::plan::Action::Enable {
+                        return Ok(Response::Ok);
+                    }
+                    ensure!(
+                        matches!(
+                            action,
+                            orbit_protocol::plan::Action::Enter
+                                | orbit_protocol::plan::Action::Leave
+                        ),
+                        "该计划操作需要先准备模型请求"
+                    );
+                    let state = &browsing.session;
+                    if !state.is_persisted() {
+                        browsing.plan_mode = Some(match action {
+                            orbit_protocol::plan::Action::Enter => {
+                                orbit_protocol::plan::WorkMode::Plan
+                            }
+                            orbit_protocol::plan::Action::Leave => {
+                                orbit_protocol::plan::WorkMode::Build
+                            }
+                            _ => bail!("当前会话没有待审阅的计划"),
+                        });
+                        return Ok(Response::Ok);
+                    }
+                    state
+                        .validate_directory(&browsing.directory)
+                        .await?;
+                    let planning = crate::planning::Planning::new(
+                        state.store.clone(),
+                        session,
+                        orbit_runtime::filesystem::Workspace::new(&browsing.directory)?,
+                    )
+                    .await?;
+                    planning.action(action).await?;
+                    return Ok(Response::Ok);
+                }
                 self.session(&session)
                     .await?
                     .command(session::Command::Plan { action })
@@ -883,6 +1367,25 @@ impl Service {
                 Ok(Response::Ok)
             }
             Request::SetMode { session, mode } => {
+                if let Some(mut browsing) = self.browsing(&session).await {
+                    if browsing.session.is_persisted() {
+                        browsing
+                            .session
+                            .store
+                            .set_tui_mode(
+                                &session,
+                                match mode {
+                                    orbit_protocol::Mode::Ask => "ask",
+                                    orbit_protocol::Mode::Auto => "auto",
+                                    orbit_protocol::Mode::Yolo => "YOLO",
+                                },
+                            )
+                            .await?;
+                    }
+                    browsing.mode = mode;
+                    browsing.mode_revision += 1;
+                    return Ok(Response::Profile(Box::new(browsing.info())));
+                }
                 let handle = self.session(&session).await?;
                 handle
                     .command(session::Command::SetMode { mode })
@@ -894,6 +1397,10 @@ impl Service {
                 model,
                 effort,
             } => {
+                if let Some(mut browsing) = self.browsing(&session).await {
+                    browsing.selection = Some((model, effort));
+                    return Ok(Response::Profile(Box::new(browsing.info())));
+                }
                 self.session(&session)
                     .await?
                     .command(session::Command::SetModel { model, effort })
@@ -984,20 +1491,24 @@ impl Service {
                 Ok(Response::Ok)
             }
             Request::UserInputHistory { session, before } => {
-                let handle = self.session(&session).await?;
+                let (store, _) = self.conversation(&session).await?;
                 Ok(Response::UserInputs(
-                    handle
-                        .store
+                    store
                         .user_input_history(&session, before)
                         .await?,
                 ))
             }
-            Request::Poll { session, after } => Ok(Response::Page(
-                self.session(&session)
-                    .await?
-                    .page(viewer, after)
-                    .await?,
-            )),
+            Request::Poll { session, after } => {
+                if let Some(browsing) = self.browsing(&session).await {
+                    return Ok(Response::Page(browsing.page(after).await?));
+                }
+                Ok(Response::Page(
+                    self.session(&session)
+                        .await?
+                        .page(viewer, after)
+                        .await?,
+                ))
+            }
             Request::Undo { session, path } => {
                 self.session(&session)
                     .await?
@@ -1006,6 +1517,9 @@ impl Service {
                 Ok(Response::Ok)
             }
             Request::Cancel { session } => {
+                if self.browsing(&session).await.is_some() {
+                    return Ok(Response::Ok);
+                }
                 self.session(&session)
                     .await?
                     .command(session::Command::Cancel)
@@ -1034,19 +1548,13 @@ impl Service {
                 source,
                 offset,
             } => {
-                let handle = self.session(&session).await?;
-                if let Some(agent) = &agent {
-                    handle.authorize_subagent(agent).await?;
-                }
-                let directory = handle
-                    .store
+                let store = self
+                    .archive_store(&session, agent.as_deref(), connection_options)
+                    .await?;
+                let directory = store
                     .path()
                     .with_extension("command-output")
-                    .join(
-                        agent
-                            .as_deref()
-                            .unwrap_or(&handle.info.id),
-                    );
+                    .join(agent.as_deref().unwrap_or(&session));
                 Ok(Response::ToolOutput(
                     super::tool_output::read(directory, source, offset).await?,
                 ))
@@ -1056,20 +1564,47 @@ impl Service {
                 path,
                 allow_missing,
             } => {
-                let session = self.session(&session).await?;
-                let attachment = session.has_image(&path).await;
+                let (store, attachment, workspace) =
+                    if let Some(browsing) = self.browsing(&session).await {
+                        let store = browsing.session.store.clone();
+                        let attachment = store
+                            .session_has_attachment(&session, &path)
+                            .await?;
+                        let workspace = if attachment {
+                            None
+                        } else {
+                            Some(
+                                super::files::browsing_access(&browsing, connection_options)
+                                    .await?
+                                    .0,
+                            )
+                        };
+                        (store, attachment, workspace)
+                    } else {
+                        let session = self.session(&session).await?;
+                        let attachment = session.has_image(&path).await;
+                        let workspace = if attachment {
+                            None
+                        } else {
+                            Some(
+                                session
+                                    .workspace
+                                    .read()
+                                    .map_err(|_| anyhow::anyhow!("workspace state unavailable"))?
+                                    .clone(),
+                            )
+                        };
+                        (session.store.clone(), attachment, workspace)
+                    };
                 let bytes = tokio::task::spawn_blocking(move || -> Result<Vec<u8>> {
                     if attachment {
-                        return orbit_tools::image_assets::ImageAssets::for_database(
-                            session.store.path(),
-                        )
-                        .read(Path::new(&path));
+                        return orbit_tools::image_assets::ImageAssets::for_database(store.path())
+                            .read(Path::new(&path));
                     }
                     use std::io::Read;
-                    let file = session
-                        .workspace
-                        .read()
-                        .map_err(|_| anyhow::anyhow!("workspace state unavailable"))?
+                    let file = workspace
+                        .as_ref()
+                        .context("workspace state unavailable")?
                         .authorize_read(Path::new(&path))?;
                     let mut bytes = Vec::new();
                     file.take(MAX_FILE_BYTES + 1)
@@ -1106,11 +1641,18 @@ impl Service {
                 agent,
                 after,
             } => {
-                let session = self.session(&session).await?;
+                if let Ok(handle) = self.session(&session).await {
+                    return Ok(Response::Subagent(
+                        handle
+                            .subagent_page(&agent, after)
+                            .await?,
+                    ));
+                }
+                let store = self
+                    .archive_store(&session, Some(&agent), connection_options)
+                    .await?;
                 Ok(Response::Subagent(
-                    session
-                        .subagent_page(&agent, after)
-                        .await?,
+                    session::archived_page(&store, &agent, after).await?,
                 ))
             }
             Request::SendSubagent {
@@ -1171,6 +1713,7 @@ async fn capabilities() -> orbit_protocol::Capabilities {
                 native_processes: true,
                 files: true,
                 features: [
+                    orbit_protocol::MODEL_INDEPENDENT_SESSIONS,
                     "sessions",
                     "events",
                     "approvals",

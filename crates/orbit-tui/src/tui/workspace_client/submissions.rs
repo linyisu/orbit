@@ -210,7 +210,7 @@ impl Tab {
         let mut changed = false;
         let mut index = 0;
         while index < self.submissions.len() {
-            let result = match self.submissions[index]
+            let mut result = match self.submissions[index]
                 .response
                 .try_recv()
             {
@@ -224,6 +224,12 @@ impl Tab {
                 }
             };
             let submission = self.submissions.remove(index);
+            if matches!(submission.draft, Draft::Model(_))
+                && let Ok(Response::Profile(info)) = &result
+            {
+                self.profile(info);
+                result = Ok(Response::Ok);
+            }
             changed = true;
             if let Draft::Management(id) = &submission.draft {
                 let id = id.clone();

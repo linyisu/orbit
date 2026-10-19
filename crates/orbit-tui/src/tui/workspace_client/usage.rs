@@ -26,7 +26,7 @@ impl Tab {
             .clone()
             .zip(self.id.clone())
         else {
-            self.state.usage.error = Some("请先连接工作区".into());
+            self.state.usage.error = Some("请先打开项目或会话".into());
             self.update_usage_dialog();
             return;
         };

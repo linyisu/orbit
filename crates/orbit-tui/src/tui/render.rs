@@ -449,11 +449,15 @@ fn activity_spans(state: &UiState, width: usize) -> Vec<Span<'static>> {
 
 fn footer_layout(state: &UiState, width: usize) -> FooterLayout {
     let available = width.saturating_sub(4);
-    let context = format!(
-        "{}/{}",
-        context_percent_label(state),
-        compact_tokens(input_context_budget(state)),
-    );
+    let context = if state.input_context_tokens == 0 {
+        "上下文 —".to_owned()
+    } else {
+        format!(
+            "{}/{}",
+            context_percent_label(state),
+            compact_tokens(input_context_budget(state)),
+        )
+    };
     let context_details_visible = context.width() + 8 <= available;
     let right = if context_details_visible {
         context
@@ -608,7 +612,7 @@ fn context_percent(state: &UiState) -> usize {
 }
 
 fn context_percent_label(state: &UiState) -> String {
-    if state.resume_loading.is_some() {
+    if state.resume_loading.is_some() || state.input_context_tokens == 0 {
         return "—".into();
     }
 

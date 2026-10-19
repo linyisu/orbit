@@ -52,26 +52,99 @@ pub(super) async fn execute(
             .disabled(Capability::Skills),
         "技能功能已禁用"
     );
+    let changed = matches!(
+        action,
+        Action::ApplyExtension { .. } | Action::RemoveExtension { .. }
+    );
+    let snapshot = session_action(
+        &mut setup.session,
+        action,
+        busy,
+        Some((&setup.resources.planning, setup.resources.mode)),
+    )
+    .await?;
+    if changed {
+        let skills = super::library::session_skills(&setup.session).await?;
+        install_skills(setup, skills);
+    }
+    Ok(snapshot)
+}
+
+pub(super) async fn browse(
+    browsing: &mut super::session::browsing::Browsing,
+    options: &crate::WorkspaceOptions,
+    action: Action,
+) -> Result<Snapshot> {
+    let config = super::session::browsing::Browsing::configuration(options)?;
+    let policy = orbit_protocol::SessionPolicy {
+        disabled: config.disabled_capabilities,
+        ..Default::default()
+    };
+    if matches!(action, Action::Mcp) {
+        ensure!(!policy.disabled(Capability::Mcp), "MCP 工具已禁用");
+        return Ok(Snapshot::Mcp(
+            config
+                .mcp
+                .servers
+                .iter()
+                .map(|(name, server)| McpServer {
+                    name: name.clone(),
+                    connected: false,
+                    detail: if server.enabled {
+                        "尚未启动执行"
+                    } else {
+                        "已禁用"
+                    }
+                    .into(),
+                    tools: Vec::new(),
+                })
+                .collect(),
+        ));
+    }
+    if matches!(action, Action::Memories | Action::Memory(_)) {
+        ensure!(!policy.disabled(Capability::ProjectState), "记忆功能已禁用");
+        if let Action::Memory(memory) = action {
+            super::actions::browse(browsing, options, SessionAction::Memory { memory }).await?;
+        }
+        return Ok(Snapshot::Memories(
+            browsing
+                .session
+                .store
+                .session_memories(browsing.session.id(), false)
+                .await?,
+        ));
+    }
+    ensure!(!policy.disabled(Capability::Skills), "技能功能已禁用");
+    session_action(&mut browsing.session, action, false, None).await
+}
+
+async fn session_action(
+    session: &mut crate::session::SessionState,
+    action: Action,
+    busy: bool,
+    execution: Option<(&crate::planning::Planning, orbit_protocol::Mode)>,
+) -> Result<Snapshot> {
     match action {
-        Action::AppliedExtensions => super::library::applied(setup).await,
+        Action::AppliedExtensions => super::library::applied(session).await,
         Action::ApplyExtension { bundle } => {
             ensure!(!busy, "请等待当前任务结束后应用扩展");
             super::library::package::validate(&bundle)?;
-            let mut bundles = setup
-                .session
+            let mut bundles = session
                 .store
-                .session_extensions(setup.session.id())
+                .session_extensions(session.id())
                 .await?;
             bundles.retain(|current| current.extension.key != bundle.extension.key);
             bundles.push((*bundle).clone());
-            let skills = super::library::package::materialize(&bundles)?;
-            setup.start_session().await?;
-            setup
-                .session
+            super::library::package::materialize(&bundles)?;
+            if let Some((planning, mode)) = execution {
+                super::setup::start_session(session, mode, planning).await?;
+            } else {
+                session.persist().await?;
+            }
+            session
                 .store
-                .apply_extension(setup.session.id(), &bundle)
+                .apply_extension(session.id(), &bundle)
                 .await?;
-            install_skills(setup, skills);
             Ok(Snapshot::Extensions(
                 bundles
                     .into_iter()
@@ -81,19 +154,16 @@ pub(super) async fn execute(
         }
         Action::RemoveExtension { key } => {
             ensure!(!busy, "请等待当前任务结束后移除会话扩展");
-            let mut bundles = setup
-                .session
+            let mut bundles = session
                 .store
-                .session_extensions(setup.session.id())
+                .session_extensions(session.id())
                 .await?;
             bundles.retain(|bundle| bundle.extension.key != key);
-            let skills = super::library::package::materialize(&bundles)?;
-            setup
-                .session
+            super::library::package::materialize(&bundles)?;
+            session
                 .store
-                .remove_extension(setup.session.id(), &key)
+                .remove_extension(session.id(), &key)
                 .await?;
-            install_skills(setup, skills);
             Ok(Snapshot::Extensions(
                 bundles
                     .into_iter()
@@ -101,12 +171,10 @@ pub(super) async fn execute(
                     .collect(),
             ))
         }
-        Action::Skills => Ok(skills(setup)),
+        Action::Skills => Ok(skills(&super::library::session_skills(session).await?)),
         Action::ReadSkill { name } => {
-            let skill = setup
-                .resources
-                .budget
-                .skills
+            let skills = super::library::session_skills(session).await?;
+            let skill = skills
                 .get(&name)
                 .context("会话中未应用此技能")?;
             Ok(Snapshot::Skill {
@@ -130,20 +198,13 @@ fn install_skills(setup: &mut PreparedWorkspace, skills: crate::skills::Skills) 
     setup.resources.budget.skills = skills;
 }
 
-fn skills(setup: &PreparedWorkspace) -> Snapshot {
+fn skills(skills: &crate::skills::Skills) -> Snapshot {
     Snapshot::Skills(
-        setup
-            .resources
-            .budget
-            .skills
+        skills
             .completions()
             .into_iter()
             .filter_map(|(name, _)| {
-                let skill = setup
-                    .resources
-                    .budget
-                    .skills
-                    .get(&name)?;
+                let skill = skills.get(&name)?;
                 Some(Skill {
                     name,
                     title: skill.title.clone(),

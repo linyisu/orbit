@@ -330,6 +330,7 @@ impl Connection {
             }
         });
         let mut client = Client {
+            browsing_sessions: std::collections::HashSet::new(),
             process,
             stdin,
             stdout,
@@ -415,6 +416,7 @@ impl std::error::Error for RequestError {
 }
 
 pub struct Client {
+    browsing_sessions: std::collections::HashSet<String>,
     connection: Option<Arc<Connection>>,
     pub capabilities: Option<orbit_protocol::Capabilities>,
     process: Child,
@@ -438,6 +440,34 @@ impl Client {
         &mut self,
         request: Request,
     ) -> std::result::Result<Response, RequestError> {
+        let execution_session = match &request {
+            Request::Start { session, .. }
+            | Request::SubmitAttachments { session, .. }
+            | Request::Ask { session, .. }
+            | Request::SendSubagent { session, .. }
+            | Request::QueueInput { session, .. }
+            | Request::Steer { session, .. }
+            | Request::SteerImages { session, .. }
+            | Request::Plan {
+                session,
+                action:
+                    orbit_protocol::plan::Action::Approve { .. }
+                    | orbit_protocol::plan::Action::Feedback { .. },
+            } => Some(session.clone()),
+            _ => None,
+        };
+        if let Some(session) = execution_session
+            && self
+                .browsing_sessions
+                .contains(&session)
+            && let Some(connection) = self.connection.clone()
+        {
+            // Reject invalid frames before preparing any execution state.
+            orbit_protocol::EncodedFrame::new(&request).map_err(RequestError::Encoding)?;
+            crate::connect::prepare_session(self, &connection, session)
+                .await
+                .map_err(|error| RequestError::Remote(format!("无法发送请求：{error:#}")))?;
+        }
         if crate::library::routed(&request)
             && let Some(connection) = self.connection.clone()
         {
@@ -465,10 +495,28 @@ impl Client {
         })
         .await;
         match result {
-            Ok(Ok(response)) => {
+            Ok(Ok(mut response)) => {
                 self.failed = false;
                 if let Response::Error(error) = response {
                     return Err(RequestError::Remote(error));
+                }
+                if let Some(connection) = &self.connection
+                    && let Response::Profile(info) = &mut response
+                {
+                    crate::connect::enrich_browsing(info, connection).await;
+                }
+                let info = match &response {
+                    Response::Opened(info) => Some(info),
+                    Response::Profile(info) => Some(info.as_ref()),
+                    _ => None,
+                };
+                if let Some(info) = info {
+                    if info.phase == orbit_protocol::SessionPhase::Browsing {
+                        self.browsing_sessions
+                            .insert(info.id.clone());
+                    } else {
+                        self.browsing_sessions.remove(&info.id);
+                    }
                 }
                 Ok(response)
             }
@@ -535,6 +583,7 @@ pub(crate) mod tests {
             .await
             .unwrap();
         Client {
+            browsing_sessions: std::collections::HashSet::new(),
             connection: None,
             capabilities: None,
             process,
@@ -569,6 +618,62 @@ pub(crate) mod tests {
                 .await
                 .unwrap();
         }
+    }
+
+    #[tokio::test]
+    async fn invalid_execution_configuration_preserves_the_browsing_transport() {
+        let root = tempfile::tempdir().unwrap();
+        let config = root.path().join("generated.toml");
+        std::fs::write(&config, "invalid = [").unwrap();
+        let mut client = fixture_client(vec![
+            Response::Error("generated configuration is invalid".into()),
+            Response::FileMissing,
+        ])
+        .await;
+        client
+            .browsing_sessions
+            .insert("sample".into());
+        client.connection = Some(Arc::new(Connection {
+            local_configuration: Some(crate::configuration::Local {
+                config: config.clone(),
+                auth: root.path().join("auth"),
+                model: None,
+            }),
+            target: Target::Local,
+            workspace: root.path().display().to_string(),
+            executable: "generated-peer".into(),
+            config,
+            database: None,
+            auth_dir: None,
+            allow_mcp_start: false,
+            unattended: true,
+            interactive: None,
+        }));
+        assert!(matches!(
+            client
+                .request(Request::Start {
+                    session: "sample".into(),
+                    request_id: "generated-request".into(),
+                    prompt: "Generated prompt".into(),
+                    images: Vec::new(),
+                    compact: false,
+                    model: None,
+                })
+                .await,
+            Err(RequestError::Remote(_))
+        ));
+        assert!(!client.failed());
+        assert!(matches!(
+            client
+                .request(Request::ReadFile {
+                    session: "sample".into(),
+                    path: "absent.txt".into(),
+                    allow_missing: true,
+                })
+                .await
+                .unwrap(),
+            Response::FileMissing
+        ));
     }
 
     #[tokio::test]

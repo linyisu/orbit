@@ -146,7 +146,7 @@ pub fn workspace_writer(
     ))
 }
 
-fn configured_workspace(
+pub(crate) fn configured_workspace(
     directory: &Path,
     permissions: Option<orbit_runtime::policy::WorkspacePermissions>,
     network: orbit_runtime::capability::NetworkPolicy,

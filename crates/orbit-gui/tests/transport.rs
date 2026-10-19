@@ -34,7 +34,7 @@ use tokio::sync::mpsc;
 const TRANSPORT_TEST_STACK_BYTES: usize = 512 * 1_024;
 
 #[test]
-fn first_use_prompts_for_account_before_service_preparation() {
+fn missing_native_service_is_distinct_from_model_configuration() {
     use clap::Parser;
     let root = tempfile::tempdir().unwrap();
     let runtime = std::sync::Arc::new(tokio::runtime::Runtime::new().unwrap());
@@ -52,12 +52,12 @@ fn first_use_prompts_for_account_before_service_preparation() {
     let (backend, mut events) = Backend::start(options, &runtime);
     runtime.block_on(async {
         tokio::time::timeout(Duration::from_secs(5), async {
-            let mut prompted = false;
             loop {
                 match events.recv().await.unwrap() {
-                    Event::ConfigurationRequired => prompted = true,
+                    Event::ConfigurationRequired => {
+                        panic!("a missing executable is not a model error")
+                    }
                     Event::Disconnected(_) => {
-                        assert!(prompted, "service deployment must not delay account setup");
                         break;
                     }
                     _ => (),

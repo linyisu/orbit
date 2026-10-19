@@ -326,7 +326,7 @@ fn main() -> anyhow::Result<()> {
                             "shell": "sh",
                             "native_processes": true,
                             "files": true,
-                            "features": []
+                            "features": [orbit_protocol::MODEL_INDEPENDENT_SESSIONS]
                         }
                     }
                 })
@@ -564,13 +564,13 @@ fn main() -> anyhow::Result<()> {
                     })
                 }
             }
-            "open" if relocation.is_some() && !linked => {
+            "open" | "browse" if relocation.is_some() && !linked => {
                 json!({
                     "type": "error",
                     "value": "session belongs to workspace /missing/original"
                 })
             }
-            "open" => {
+            "open" | "browse" => {
                 if request["resume"] == "unavailable" {
                     let response = json!({
                         "type": "error",
@@ -861,7 +861,7 @@ fn main() -> anyhow::Result<()> {
                     }
                 })
             }
-            "usage" => {
+            "usage" | "inspect_usage" => {
                 let now = SystemTime::now()
                     .duration_since(UNIX_EPOCH)?
                     .as_secs();

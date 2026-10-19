@@ -902,15 +902,21 @@ impl Workspace {
                 self.execution = Default::default();
                 self.refresh_usage(cx);
                 self.command(Command::Request(Request::AllSessions), cx);
-                self.command(
-                    Command::Request(Request::EnableUserInput {
-                        session: self.info.as_ref().unwrap().id.clone(),
-                    }),
-                    cx,
-                );
-                self.plan_action(orbit_protocol::plan::Action::Enable, cx);
-                self.ensure_input_queue(window, cx);
-                self.refresh_input_queue(true, cx);
+                if self
+                    .info
+                    .as_ref()
+                    .is_some_and(|info| info.phase == orbit_protocol::SessionPhase::Ready)
+                {
+                    self.command(
+                        Command::Request(Request::EnableUserInput {
+                            session: self.info.as_ref().unwrap().id.clone(),
+                        }),
+                        cx,
+                    );
+                    self.plan_action(orbit_protocol::plan::Action::Enable, cx);
+                    self.ensure_input_queue(window, cx);
+                    self.refresh_input_queue(true, cx);
+                }
             }
             Response::Profile(info) => {
                 self.usage = cx.new(crate::usage::Usage::new);

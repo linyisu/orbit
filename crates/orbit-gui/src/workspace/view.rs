@@ -180,15 +180,26 @@ impl Workspace {
                         Button::new("composer-context")
                             .ghost()
                             .xsmall()
-                            .label(format!(
-                                "上下文 {}%",
-                                self.info.as_ref().map_or(0, |info| {
-                                    orbit_client::usage::context_percent(
-                                        self.context_used,
-                                        info.input_context_tokens,
+                            .label(
+                                if self.info.as_ref().is_none_or(|info| {
+                                    info.phase == orbit_protocol::SessionPhase::Browsing
+                                }) {
+                                    "上下文 —".to_owned()
+                                } else {
+                                    format!(
+                                        "上下文 {}%",
+                                        self.info.as_ref().map_or(0, |info| {
+                                            orbit_client::usage::context_percent(
+                                                self.context_used,
+                                                info.input_context_tokens,
+                                            )
+                                        })
                                     )
-                                })
-                            ))
+                                },
+                            )
+                            .disabled(self.info.as_ref().is_none_or(|info| {
+                                info.phase == orbit_protocol::SessionPhase::Browsing
+                            }))
                             .on_click(cx.listener(|view, _, window, cx| {
                                 view.execute(super::actions::WorkspaceCommand::Context, window, cx)
                             })),
@@ -322,7 +333,10 @@ impl Workspace {
                     .icon(IconName::Folder)
                     .label(directory)
                     .max_w(rems(18.))
-                    .tooltip(format!("选择工作目录：{}", self.location))
+                    .tooltip(format!(
+                        "选择工作目录：{}",
+                        orbit_client::directories::display_path(&self.location)
+                    ))
                     .disabled(
                         self.opening
                             || self.choosing_project
@@ -336,20 +350,22 @@ impl Workspace {
                             let owner = directory_owner.clone();
                             let path = path.clone();
                             menu = menu.item(
-                                PopupMenuItem::new(path.clone())
-                                    .checked(path == current_directory)
-                                    .on_click(move |_, window, cx| {
-                                        let _ = owner.update(cx, |view, cx| {
-                                            view.switch_project(
-                                                PathBuf::from(&path),
-                                                None,
-                                                false,
-                                                false,
-                                                window,
-                                                cx,
-                                            );
-                                        });
-                                    }),
+                                PopupMenuItem::new(
+                                    orbit_client::directories::display_path(&path).into_owned(),
+                                )
+                                .checked(path == current_directory)
+                                .on_click(move |_, window, cx| {
+                                    let _ = owner.update(cx, |view, cx| {
+                                        view.switch_project(
+                                            PathBuf::from(&path),
+                                            None,
+                                            false,
+                                            false,
+                                            window,
+                                            cx,
+                                        );
+                                    });
+                                }),
                             );
                         }
                         let owner = directory_owner.clone();
@@ -702,215 +718,211 @@ impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         use super::actions::WorkspaceCommand;
         let empty = !self.opening && self.conversation.read(cx).is_empty();
-        let body =
-            v_flex()
-                .size_full()
-                .min_w_0()
-                .min_h_0()
-                .child(div().flex_1().min_h_0().child(
-                    if self.opening && !self.recovery.is_active() {
-                        v_flex()
-                            .size_full()
-                            .items_center()
-                            .justify_center()
+        let remote = self.options.ssh.is_some() || self.options.wsl.is_some();
+        let body = v_flex()
+            .size_full()
+            .min_w_0()
+            .min_h_0()
+            .child(div().flex_1().min_h_0().child(
+                if self.opening && !self.recovery.is_active() && remote {
+                    v_flex()
+                        .size_full()
+                        .items_center()
+                        .justify_center()
+                        .gap_2()
+                        .child(gpui_kit::component::spinner::Spinner::new())
+                        .child(
+                            div()
+                                .text_sm()
+                                .child(self.connection_stage.clone()),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(self.environment()),
+                        )
+                        .child(
+                            Button::new("show-connection-logs")
+                                .small()
+                                .ghost()
+                                .label("连接日志")
+                                .on_click(cx.listener(|view, _, window, cx| {
+                                    view.open_connection_logs(window, cx)
+                                })),
+                        )
+                        .child(
+                            Button::new("cancel-connection")
+                                .small()
+                                .label("取消连接")
+                                .on_click(cx.listener(|view, _, window, cx| {
+                                    view.cancel_connection(window, cx)
+                                })),
+                        )
+                        .into_any_element()
+                } else if self.info.is_none() && self.error.is_some() {
+                    self.connection_failure(cx)
+                        .into_any_element()
+                } else if self.configuration_required() && empty {
+                    v_flex()
+                        .size_full()
+                        .items_center()
+                        .justify_center()
+                        .gap_3()
+                        .child(div().text_xl().child("开始新任务"))
+                        .child(
+                            div()
+                                .text_sm()
+                                .child("可以浏览已有会话。发送请求前，请添加账号或 API 密钥。"),
+                        )
+                        .child(
+                            Button::new("setup-model-connection")
+                                .label("添加模型连接…")
+                                .on_click(cx.listener(|view, _, window, cx| {
+                                    view.execute(WorkspaceCommand::Accounts, window, cx)
+                                })),
+                        )
+                        .into_any_element()
+                } else if empty {
+                    v_flex()
+                        .size_full()
+                        .items_center()
+                        .justify_center()
+                        .gap_3()
+                        .child(
+                            div()
+                                .text_xl()
+                                .font_weight(FontWeight::MEDIUM)
+                                .child(if self.info.is_some() {
+                                    "开始新任务"
+                                } else {
+                                    "打开项目，开始工作"
+                                }),
+                        )
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(if self.info.is_some() {
+                                    "描述任务，或继续左侧的会话"
+                                } else {
+                                    "选择工作目录，或从左侧继续已有会话"
+                                }),
+                        )
+                        .when(self.info.is_none(), |view| {
+                            view.child(
+                                Button::new("home-open-project")
+                                    .label("打开项目…")
+                                    .disabled(self.choosing_project)
+                                    .on_click(cx.listener(|view, _, window, cx| {
+                                        view.open_project(window, cx)
+                                    })),
+                            )
+                        })
+                        .into_any_element()
+                } else {
+                    self.conversation
+                        .clone()
+                        .into_any_element()
+                },
+            ))
+            .when(
+                !self.approvals.is_empty()
+                    || self
+                        .question_form
+                        .as_ref()
+                        .is_some_and(|form| form.read(cx).hidden())
+                    || self
+                        .planning
+                        .plan
+                        .as_ref()
+                        .is_some_and(|p| p.status == orbit_protocol::plan::Status::Review),
+                |view| {
+                    view.child(
+                        h_flex()
+                            .px(rems(CONTENT_GUTTER_REM))
+                            .py_2()
                             .gap_2()
-                            .child(gpui_kit::component::spinner::Spinner::new())
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .child(self.connection_stage.clone()),
-                            )
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child(self.environment()),
-                            )
-                            .child(
-                                Button::new("show-connection-logs")
+                            .flex_wrap()
+                            .children(self.approvals.iter().map(|approval| {
+                                let approval = approval.clone();
+                                Button::new(("approval", approval.id))
                                     .small()
-                                    .ghost()
-                                    .label("连接日志")
-                                    .on_click(cx.listener(|view, _, window, cx| {
-                                        view.open_connection_logs(window, cx)
-                                    })),
+                                    .label("审批操作…")
+                                    .on_click(cx.listener(move |view, _, window, cx| {
+                                        view.approval(&approval, window, cx)
+                                    }))
+                            }))
+                            .when(
+                                self.question_form
+                                    .as_ref()
+                                    .is_some_and(|form| form.read(cx).hidden()),
+                                |view| {
+                                    view.child(
+                                        Button::new("answer-agent")
+                                            .small()
+                                            .label("回答 Agent…")
+                                            .on_click(cx.listener(|view, _, window, cx| {
+                                                view.questions(window, cx)
+                                            })),
+                                    )
+                                },
                             )
-                            .child(
-                                Button::new("cancel-connection")
-                                    .small()
-                                    .label("取消连接")
-                                    .on_click(cx.listener(|view, _, window, cx| {
-                                        view.cancel_connection(window, cx)
-                                    })),
-                            )
-                            .into_any_element()
-                    } else if self.info.is_none() && self.error.is_some() {
-                        self.connection_failure(cx)
-                            .into_any_element()
-                    } else if self.configuration_required() {
-                        v_flex()
-                            .size_full()
-                            .items_center()
-                            .justify_center()
-                            .gap_3()
-                            .child(
-                                div()
-                                    .text_xl()
-                                    .child("添加模型连接，开始使用 Orbit"),
-                            )
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .child("先添加账号或 API 连接，再选择模型开始任务。"),
-                            )
-                            .child(
-                                Button::new("setup-model-connection")
-                                    .label("添加模型连接…")
-                                    .on_click(cx.listener(|view, _, window, cx| {
-                                        view.execute(WorkspaceCommand::Accounts, window, cx)
-                                    })),
-                            )
-                            .into_any_element()
-                    } else if empty {
-                        v_flex()
-                            .size_full()
-                            .items_center()
-                            .justify_center()
-                            .gap_3()
-                            .child(
-                                div()
-                                    .text_xl()
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .child(if self.info.is_some() {
-                                        "开始新任务"
-                                    } else {
-                                        "打开项目，开始工作"
+                            .when(
+                                self.planning
+                                    .plan
+                                    .as_ref()
+                                    .is_some_and(|p| {
+                                        p.status == orbit_protocol::plan::Status::Review
                                     }),
+                                |view| {
+                                    view.child(
+                                        Button::new("review-plan")
+                                            .small()
+                                            .label("审阅计划…")
+                                            .on_click(cx.listener(|view, _, window, cx| {
+                                                view.show_plan(window, cx)
+                                            })),
+                                    )
+                                },
+                            ),
+                    )
+                },
+            )
+            .when(
+                self.info.is_some() && (!self.opening || self.recovery.is_active()),
+                |view| {
+                    view.child(
+                        v_flex()
+                            .relative()
+                            .w_full()
+                            .flex_shrink_0()
+                            .items_center()
+                            .px(rems(CONTENT_GUTTER_REM))
+                            .pt_2()
+                            .pb_3()
+                            .child(
+                                div()
+                                    .w_full()
+                                    .when(Preferences::comfortable_width(cx), |view| {
+                                        view.max_w(rems(CONTENT_WIDTH_REM))
+                                    })
+                                    .child(self.composer(window, cx)),
                             )
                             .child(
                                 div()
-                                    .text_sm()
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child(if self.info.is_some() {
-                                        "描述任务，或继续左侧的会话"
-                                    } else {
-                                        "选择工作目录，或从左侧继续已有会话"
-                                    }),
-                            )
-                            .when(self.info.is_none(), |view| {
-                                view.child(
-                                    Button::new("home-open-project")
-                                        .label("打开项目…")
-                                        .disabled(self.choosing_project)
-                                        .on_click(cx.listener(|view, _, window, cx| {
-                                            view.open_project(window, cx)
-                                        })),
-                                )
-                            })
-                            .into_any_element()
-                    } else {
-                        self.conversation
-                            .clone()
-                            .into_any_element()
-                    },
-                ))
-                .when(
-                    !self.approvals.is_empty()
-                        || self
-                            .question_form
-                            .as_ref()
-                            .is_some_and(|form| form.read(cx).hidden())
-                        || self
-                            .planning
-                            .plan
-                            .as_ref()
-                            .is_some_and(|p| p.status == orbit_protocol::plan::Status::Review),
-                    |view| {
-                        view.child(
-                            h_flex()
-                                .px(rems(CONTENT_GUTTER_REM))
-                                .py_2()
-                                .gap_2()
-                                .flex_wrap()
-                                .children(self.approvals.iter().map(|approval| {
-                                    let approval = approval.clone();
-                                    Button::new(("approval", approval.id))
-                                        .small()
-                                        .label("审批操作…")
-                                        .on_click(cx.listener(move |view, _, window, cx| {
-                                            view.approval(&approval, window, cx)
-                                        }))
-                                }))
-                                .when(
-                                    self.question_form
-                                        .as_ref()
-                                        .is_some_and(|form| form.read(cx).hidden()),
-                                    |view| {
-                                        view.child(
-                                            Button::new("answer-agent")
-                                                .small()
-                                                .label("回答 Agent…")
-                                                .on_click(cx.listener(|view, _, window, cx| {
-                                                    view.questions(window, cx)
-                                                })),
-                                        )
-                                    },
-                                )
-                                .when(
-                                    self.planning
-                                        .plan
-                                        .as_ref()
-                                        .is_some_and(|p| {
-                                            p.status == orbit_protocol::plan::Status::Review
-                                        }),
-                                    |view| {
-                                        view.child(
-                                            Button::new("review-plan")
-                                                .small()
-                                                .label("审阅计划…")
-                                                .on_click(cx.listener(|view, _, window, cx| {
-                                                    view.show_plan(window, cx)
-                                                })),
-                                        )
-                                    },
-                                ),
-                        )
-                    },
-                )
-                .when(
-                    self.info.is_some() && (!self.opening || self.recovery.is_active()),
-                    |view| {
-                        view.child(
-                            v_flex()
-                                .relative()
-                                .w_full()
-                                .flex_shrink_0()
-                                .items_center()
-                                .px(rems(CONTENT_GUTTER_REM))
-                                .pt_2()
-                                .pb_3()
-                                .child(
-                                    div()
-                                        .w_full()
-                                        .when(Preferences::comfortable_width(cx), |view| {
-                                            view.max_w(rems(CONTENT_WIDTH_REM))
-                                        })
-                                        .child(self.composer(window, cx)),
-                                )
-                                .child(
-                                    div()
-                                        .absolute()
-                                        .right_0()
-                                        .bottom(rems(3.))
-                                        .child(
-                                            self.conversation
-                                                .read(cx)
-                                                .navigation_controls(),
-                                        ),
-                                ),
-                        )
-                    },
-                );
+                                    .absolute()
+                                    .right_0()
+                                    .bottom(rems(3.))
+                                    .child(
+                                        self.conversation
+                                            .read(cx)
+                                            .navigation_controls(),
+                                    ),
+                            ),
+                    )
+                },
+            );
         let accessory = self
             .panel
             .as_ref()

@@ -114,50 +114,143 @@ fn optional(value: &str) -> Option<String> {
     (!value.is_empty()).then(|| value.to_owned())
 }
 
-/// Open a fresh or restored session using the same model fallback and configuration contract.
-/// Saved sessions keep their historical model; local selection is only a fallback.
+/// Open stored history or a draft without preparing a model request.
+/// Cached model choices enrich the view; configuration failures are deferred to execution.
 pub async fn open_session(
     client: &mut Client,
     connection: &Connection,
     resume: Option<String>,
     preferred: Option<String>,
 ) -> Result<SessionInfo> {
-    let local = connection.local_configuration.as_ref();
-    let model = if resume.is_some() {
-        match local {
-            Some(local) => local
+    anyhow::ensure!(
+        client
+            .capabilities
+            .as_ref()
+            .is_none_or(|capabilities| capabilities
+                .features
+                .iter()
+                .any(|feature| feature == orbit_protocol::MODEL_INDEPENDENT_SESSIONS)),
+        "目标端 Orbit 尚不支持独立读取历史，请更新目标端服务后重试"
+    );
+    let response = client
+        .request(Request::Browse { resume })
+        .await?;
+    let Response::Opened(mut info) = response else {
+        anyhow::bail!("unexpected conversation response");
+    };
+    if info.phase == orbit_protocol::SessionPhase::Browsing
+        && let Some(model) = preferred
+    {
+        client
+            .raw_request(Request::SetModel {
+                session: info.id.clone(),
+                model: model.clone(),
+                effort: None,
+            })
+            .await?;
+        info.model = model;
+    }
+    let select_initial =
+        info.phase == orbit_protocol::SessionPhase::Browsing && info.model.is_empty();
+    enrich_browsing(&mut info, connection).await;
+    if select_initial && !info.model.is_empty() {
+        client
+            .raw_request(Request::SetModel {
+                session: info.id.clone(),
+                model: info.model.clone(),
+                effort: info.reasoning_effort.clone(),
+            })
+            .await?;
+    }
+    Ok(info)
+}
+
+pub(crate) async fn enrich_browsing(info: &mut SessionInfo, connection: &Connection) {
+    if info.phase == orbit_protocol::SessionPhase::Browsing
+        && let Some(local) = &connection.local_configuration
+    {
+        // Configuration errors belong to execution. Browsing stored data must remain available.
+        if let Ok(models) = local.model_catalog().await {
+            info.model_catalog = models
+                .iter()
+                .map(|model| orbit_protocol::ModelSummary {
+                    provider: model.provider.clone(),
+                    model: model.model.clone(),
+                    supports_vision: model.supports_vision,
+                    reasoning_effort: model
+                        .config
+                        .reasoning_effort
+                        .map(|effort| effort.as_str().into()),
+                    reasoning_efforts: model
+                        .reasoning_efforts
+                        .iter()
+                        .map(|effort| effort.as_str().into())
+                        .collect(),
+                })
+                .collect();
+            info.models = models
+                .iter()
+                .map(|model| model.qualified_name())
+                .collect();
+        }
+        if info.model.is_empty() {
+            info.model = local
                 .selected_model()
                 .await
                 .unwrap_or_default()
-                .or(preferred),
-            None => preferred,
+                .or_else(|| info.models.first().cloned())
+                .unwrap_or_default();
         }
-    } else if let Some(model) = preferred {
-        Some(model)
-    } else {
-        match local {
-            Some(local) => match local.selected_model().await? {
-                Some(model) => Some(model),
-                None => local
-                    .model_catalog()
-                    .await?
-                    .first()
-                    .map(|model| model.qualified_name()),
-            },
-            None => None,
+        if let Some(model) = info
+            .model_catalog
+            .iter()
+            .find(|model| model.qualified_name() == info.model)
+        {
+            info.supports_vision = model.supports_vision;
+            info.reasoning_efforts
+                .clone_from(&model.reasoning_efforts);
+            info.reasoning_effort = info
+                .reasoning_effort
+                .clone()
+                .or_else(|| model.reasoning_effort.clone());
         }
+    }
+}
+
+/// Resolve execution configuration only when a request is about to start a model run.
+pub(crate) async fn prepare_session(
+    client: &mut Client,
+    connection: &Connection,
+    session: String,
+) -> Result<()> {
+    let local = connection.local_configuration.as_ref();
+    let model = match local {
+        Some(local) => local.selected_model().await?,
+        None => None,
     };
     match client
-        .request(Request::Open {
+        .raw_request(Request::Prepare {
+            session: session.clone(),
             model,
-            policy: Default::default(),
-            resume,
             configuration: connection.configuration().await?,
         })
         .await?
     {
-        Response::Opened(info) => Ok(info),
-        _ => anyhow::bail!("unexpected workspace response"),
+        Response::Profile(_) => {
+            client
+                .raw_request(Request::EnableUserInput {
+                    session: session.clone(),
+                })
+                .await?;
+            client
+                .raw_request(Request::Plan {
+                    session,
+                    action: orbit_protocol::plan::Action::Enable,
+                })
+                .await?;
+            Ok(())
+        }
+        _ => anyhow::bail!("unexpected execution preparation response"),
     }
 }
 
@@ -173,17 +266,19 @@ impl Opened {
         resume: Option<String>,
         progress: super::interaction::Progress,
     ) -> Result<Self> {
-        progress.report("启动工作区服务并等待握手");
+        progress.report("读取会话");
         let mut client = connection
             .connect_progress(Some(&progress))
             .await?;
-        progress.report("已完成握手，正在打开工作区会话");
-        progress.report("应用本地配置并打开工作区会话");
         let local = connection.local_configuration.as_ref();
         let remember = resume.is_none();
         let info = open_session(&mut client, &connection, resume, None).await?;
-        if remember && let Some(local) = local {
-            local.remember_model(&info.model)?;
+        if remember
+            && !info.model.is_empty()
+            && let Some(local) = local
+            && let Err(error) = local.remember_model(&info.model)
+        {
+            progress.log(&format!("无法保存模型偏好：{error:#}"));
         }
         let opened = Self {
             client,

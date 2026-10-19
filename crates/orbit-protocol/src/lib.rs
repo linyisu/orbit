@@ -23,6 +23,8 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 /// Current request and event schema version advertised during the handshake.
 pub const VERSION: u32 = 29;
+/// Peers advertising this feature support browsing independently of model preparation.
+pub const MODEL_INDEPENDENT_SESSIONS: &str = "model_independent_sessions";
 /// Oldest peer schema accepted by this implementation.
 pub const MIN_COMPATIBLE_VERSION: u32 = 15;
 
@@ -68,6 +70,10 @@ pub enum Request {
     Usage {
         session: String,
     },
+    InspectUsage {
+        session: String,
+        configuration: Option<Configuration>,
+    },
     RestoreSessions,
     Complete {
         session: String,
@@ -85,6 +91,16 @@ pub enum Request {
         policy: SessionPolicy,
         resume: Option<String>,
         #[serde(default)]
+        configuration: Option<Configuration>,
+    },
+    /// Open local history without loading model configuration or starting tools.
+    Browse {
+        resume: Option<String>,
+    },
+    /// Prepare execution for a previously browsed session. Failure keeps history open.
+    Prepare {
+        session: String,
+        model: Option<String>,
         configuration: Option<Configuration>,
     },
     Sessions,
@@ -297,6 +313,9 @@ impl Mode {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SessionInfo {
+    /// Browsing profiles have no resolved execution budget; capacity fields are zero.
+    #[serde(default)]
+    pub phase: SessionPhase,
     pub id: String,
     /// False until the in-memory draft has gained durable content.
     #[serde(default)]
@@ -331,6 +350,14 @@ pub struct SessionInfo {
     /// Older services omit this snapshot; clients may fall back to event evidence.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_used_tokens: Option<usize>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionPhase {
+    Browsing,
+    #[default]
+    Ready,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]

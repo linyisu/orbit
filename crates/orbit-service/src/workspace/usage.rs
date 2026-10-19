@@ -28,7 +28,7 @@ pub(super) async fn snapshot(
     }
 }
 
-async fn session_usage(store: &Store, id: &str, persisted: bool) -> Session {
+pub(super) async fn session_usage(store: &Store, id: &str, persisted: bool) -> Session {
     if !persisted {
         return Session::default();
     }

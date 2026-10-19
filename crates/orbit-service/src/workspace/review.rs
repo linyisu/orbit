@@ -7,27 +7,53 @@ use crate::PreparedWorkspace;
 use orbit_protocol::Capability;
 
 pub(super) async fn execute(setup: &PreparedWorkspace, action: Action) -> Result<Snapshot> {
-    ensure!(
-        !setup
-            .resources
-            .policy
-            .disabled(Capability::Files),
-        "文件功能已禁用"
-    );
+    execute_session(
+        &setup.session,
+        &setup.resources.workspace,
+        &setup.resources.policy,
+        action,
+    )
+    .await
+}
+
+pub(super) async fn browse(
+    browsing: &super::session::browsing::Browsing,
+    options: &crate::WorkspaceOptions,
+    action: Action,
+) -> Result<Snapshot> {
+    let (workspace, policy) = super::files::browsing_access(browsing, options).await?;
+    let _lease = if matches!(
+        action,
+        Action::Stage { .. } | Action::Unstage { .. } | Action::Undo { .. }
+    ) && browsing.session.is_persisted()
+    {
+        Some(
+            browsing
+                .session
+                .store
+                .acquire(browsing.session.id())
+                .await?,
+        )
+    } else {
+        None
+    };
+    execute_session(&browsing.session, &workspace, &policy, action).await
+}
+
+async fn execute_session(
+    session: &crate::session::SessionState,
+    workspace: &orbit_runtime::filesystem::Workspace,
+    policy: &orbit_protocol::SessionPolicy,
+    action: Action,
+) -> Result<Snapshot> {
+    ensure!(!policy.disabled(Capability::Files), "文件功能已禁用");
     if matches!(
         action,
         Action::List { kind, .. } | Action::Diff { kind, .. } if kind != Kind::Checkpoint
     ) || matches!(action, Action::Stage { .. } | Action::Unstage { .. })
     {
-        ensure!(
-            !setup
-                .resources
-                .policy
-                .disabled(Capability::Git),
-            "Git 功能已禁用"
-        );
+        ensure!(!policy.disabled(Capability::Git), "Git 功能已禁用");
     }
-    let session = &setup.session;
     match action {
         Action::List {
             kind: Kind::Checkpoint,
@@ -62,7 +88,7 @@ pub(super) async fn execute(setup: &PreparedWorkspace, action: Action) -> Result
             })
         }
         Action::List { kind, offset } => {
-            let workspace = setup.resources.workspace.clone();
+            let workspace = workspace.clone();
             let listing = tokio::task::spawn_blocking(move || {
                 orbit_tools::git_inspect::review_status(&workspace, offset)
             })
@@ -157,7 +183,7 @@ pub(super) async fn execute(setup: &PreparedWorkspace, action: Action) -> Result
             })
         }
         Action::Diff { kind, path } => {
-            let workspace = setup.resources.workspace.clone();
+            let workspace = workspace.clone();
             let target = path.clone();
             let reviewed = tokio::task::spawn_blocking(move || {
                 orbit_tools::git_inspect::review_index_patch(
@@ -184,14 +210,8 @@ pub(super) async fn execute(setup: &PreparedWorkspace, action: Action) -> Result
             })
         }
         action @ (Action::Stage { .. } | Action::Unstage { .. }) => {
-            ensure!(!setup.resources.policy.read_only, "只读会话不能修改暂存区");
-            ensure!(
-                !setup
-                    .resources
-                    .policy
-                    .disabled(Capability::Write),
-                "写入功能已禁用"
-            );
+            ensure!(!policy.read_only, "只读会话不能修改暂存区");
+            ensure!(!policy.disabled(Capability::Write), "写入功能已禁用");
             let staged = matches!(action, Action::Stage { .. });
             let (path, receipt) = match action {
                 Action::Stage { path, receipt } | Action::Unstage { path, receipt } => {
@@ -199,7 +219,7 @@ pub(super) async fn execute(setup: &PreparedWorkspace, action: Action) -> Result
                 }
                 _ => unreachable!(),
             };
-            let workspace = setup.resources.workspace.clone();
+            let workspace = workspace.clone();
             let target = path.clone();
             tokio::task::spawn_blocking(move || {
                 orbit_tools::git_inspect::update_review_index(

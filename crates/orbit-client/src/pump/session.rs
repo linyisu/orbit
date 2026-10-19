@@ -122,12 +122,18 @@ pub async fn observe(
 ) -> Result<()> {
     let queue_cache = options.attachment_cache.clone();
     let connection = options.connection.clone();
-    progress.report("启动工作区服务并等待握手");
+    progress.report(
+        if matches!(connection.target, crate::transport::Target::Local) {
+            "读取本地会话"
+        } else {
+            "正在连接远程主机"
+        },
+    );
     let mut client = connection
         .connect_progress(Some(&progress))
         .await?;
     events.send(Event::Connected).await?;
-    progress.report("读取会话并打开工作区");
+    progress.report("读取项目与会话");
     let mut history = client
         .request(Request::AllSessions)
         .await?;
@@ -169,47 +175,13 @@ pub async fn observe(
         .send(Event::Response(history))
         .await?;
     let mut agent_watch = catalogue::Watch::default();
-    if let Some(local) = &connection.local_configuration {
-        while local
-            .requires_model_setup(resume.as_deref(), options.model.as_deref())
-            .await?
-        {
-            events
-                .send(Event::ConfigurationRequired)
-                .await?;
-            loop {
-                match commands.recv().await {
-                    Some(Command::RefreshModels) => break,
-                    Some(Command::WatchAgents(scope)) => agent_watch.set(scope),
-                    Some(Command::CloseSubagent) => (),
-                    Some(Command::Request(Request::AllSessions)) => {
-                        let response = client
-                            .request(Request::AllSessions)
-                            .await?;
-                        events
-                            .send(Event::Response(response))
-                            .await?;
-                    }
-                    Some(Command::Settings { result, .. }) => {
-                        let _ = result.send(Err("请先添加模型连接".into()));
-                    }
-                    Some(_) => {
-                        events
-                            .send(Event::Error("请先添加模型连接".into()))
-                            .await?
-                    }
-                    None => return Ok(()),
-                }
-            }
-        }
-    }
     let info =
         crate::connect::open_session(&mut client, &connection, resume, options.model).await?;
     let mut session = String::new();
     let mut cursor = 0;
     let opened = Response::Opened(info);
     deliver(opened, &mut session, &mut cursor, events).await?;
-    progress.report("已连接");
+    progress.report("会话已打开");
     let mut interval = tokio::time::interval(Duration::from_millis(80));
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut quota_tasks = tokio::task::JoinSet::new();

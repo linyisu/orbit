@@ -140,7 +140,8 @@ impl Options {
         let workspace = match &self.workspace {
             Some(path) => path.clone(),
             None if self.ssh.is_some() || self.wsl.is_some() => PathBuf::from("~"),
-            None => std::env::current_dir()?,
+            None => orbit_config::directories::home()
+                .ok_or_else(|| anyhow::anyhow!("无法读取用户目录，请选择项目目录"))?,
         };
         let mut connection = ConnectionOptions::local(workspace.to_string_lossy().into_owned());
         connection.server = self.server.clone();
@@ -291,21 +292,6 @@ async fn run_connection(
 ) -> Result<()> {
     let attachment_cache =
         orbit_client::attachments::cache_database(options.preferences.as_deref())?;
-    if options.ssh.is_none() && options.wsl.is_none() {
-        let local = orbit_client::configuration::Local {
-            config: options.config.clone(),
-            auth: orbit_client::configuration::auth_directory(options.auth_dir.clone())?,
-            model: None,
-        };
-        if local
-            .requires_model_setup(options.resume.as_deref(), options.model.as_deref())
-            .await?
-        {
-            events
-                .send(Event::ConfigurationRequired)
-                .await?;
-        }
-    }
     let connection = orbit_client::prepare_connection(
         &options.connection_options()?,
         options.config,

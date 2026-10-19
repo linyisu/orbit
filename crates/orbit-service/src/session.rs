@@ -231,6 +231,64 @@ impl SessionState {
         Self::open_mode(path, resume, model, directory, true).await
     }
 
+    /// Read durable history without acquiring a writer or authorizing filesystem execution.
+    pub(crate) async fn browse(
+        path: PathBuf,
+        resume: Option<String>,
+        directory: &Path,
+    ) -> Result<Self> {
+        let Some(id) = resume else {
+            return Self::open_shared_in(path, None, String::new(), directory).await;
+        };
+        let store = Store::open(path).await?;
+        let snapshot = store.load_runtime(&id).await?;
+        let git_baseline = store.git_baseline(&id).await?;
+        Ok(Self::from_prepared(
+            PreparedResume {
+                store,
+                writer: None,
+                persisted: true,
+                snapshot,
+                git_baseline,
+                title_task: None,
+            },
+            true,
+        ))
+    }
+
+    /// Authorize the execution directory separately from access to stored conversation data.
+    pub(crate) async fn validate_directory(&self, directory: &Path) -> Result<()> {
+        let project = self
+            .store
+            .resolve_project(directory)
+            .await?;
+        let equivalent = self
+            .store
+            .equivalent_project_ids(&project.id)
+            .await?;
+        ensure!(
+            equivalent.contains(&self.snapshot.session.project_id),
+            "会话的项目目录身份已改变，请重新关联项目后执行：{}",
+            self.snapshot.session.workspace
+        );
+        Ok(())
+    }
+
+    /// Retain the browsing source until execution preparation has completed successfully.
+    pub(crate) fn execution_copy(&self) -> Self {
+        Self::from_prepared(
+            PreparedResume {
+                store: self.store.clone(),
+                writer: None,
+                persisted: self.persisted,
+                snapshot: self.snapshot.clone(),
+                git_baseline: self.git_baseline.clone(),
+                title_task: None,
+            },
+            false,
+        )
+    }
+
     async fn open_mode(
         path: PathBuf,
         resume: Option<String>,

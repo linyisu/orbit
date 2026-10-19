@@ -486,7 +486,10 @@ impl Workspace {
     }
 
     pub(crate) fn configuration_required(&self) -> bool {
-        self.backend.is_some() && !self.opening && self.info.is_none() && self.error.is_none()
+        !self.opening
+            && self.info.as_ref().is_some_and(|info| {
+                info.phase == orbit_protocol::SessionPhase::Browsing && info.models.is_empty()
+            })
     }
 
     pub(crate) fn startup_diagnostic(&self) -> String {

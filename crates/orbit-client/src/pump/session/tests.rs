@@ -3,7 +3,7 @@ use orbit_config::test_support::{TestConfig, TestProvider};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 #[tokio::test]
-async fn first_use_waits_for_configuration_and_opens_after_models_are_saved() {
+async fn first_use_opens_without_waiting_for_model_configuration() {
     let root = tempfile::tempdir().unwrap();
     let config = root.path().join("config.toml");
     let launcher = orbit_build::build_test_peer(
@@ -46,9 +46,9 @@ async fn first_use_waits_for_configuration_and_opens_after_models_are_saved() {
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             match incoming.recv().await.unwrap() {
-                Event::ConfigurationRequired => break,
+                Event::Response(Response::Opened(_)) => break,
                 Event::Connected | Event::Response(Response::Sessions(_)) => (),
-                _ => panic!("first use must wait without opening a session or reporting a failure"),
+                _ => panic!("history opening must not require model configuration"),
             }
         }
     })
@@ -67,33 +67,10 @@ async fn first_use_waits_for_configuration_and_opens_after_models_are_saved() {
         .send(Command::Request(Request::AllSessions))
         .await
         .unwrap();
-    assert!(matches!(
-        tokio::time::timeout(Duration::from_secs(5), incoming.recv())
-            .await
-            .unwrap()
-            .unwrap(),
-        Event::Response(Response::Sessions(_))
-    ));
-    commands
-        .send(Command::RefreshModels)
-        .await
-        .unwrap();
-    assert!(matches!(
-        incoming.recv().await.unwrap(),
-        Event::ConfigurationRequired
-    ));
-    TestConfig::new()
-        .provider(TestProvider::new("slow").models(["declared-model"]))
-        .write(&config)
-        .unwrap();
-    commands
-        .send(Command::RefreshModels)
-        .await
-        .unwrap();
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             match incoming.recv().await.unwrap() {
-                Event::Response(Response::Opened(_)) => break,
+                Event::Response(Response::Sessions(_)) => break,
                 Event::Error(error) | Event::Disconnected(error) => panic!("{error}"),
                 _ => (),
             }

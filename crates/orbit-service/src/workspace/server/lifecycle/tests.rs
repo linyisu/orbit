@@ -453,6 +453,7 @@ async fn shared_server_negotiates_released_clients_and_rejects_unknown_versions(
             library: Mutex::new(crate::workspace::library::Library::isolated(&options)),
             options: options.clone(),
             sessions: Mutex::new(HashMap::new()),
+            browsing: Mutex::new(HashMap::new()),
             opening: Mutex::new(()),
             last_activity: Mutex::new(tokio::time::Instant::now()),
             stop: tokio_util::sync::CancellationToken::new(),

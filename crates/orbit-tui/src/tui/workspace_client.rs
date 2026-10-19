@@ -407,13 +407,15 @@ impl Tab {
             session: opened.info.id.clone(),
         });
         self.commands = Some(commands);
-        self.send(Request::Plan {
-            session: opened.info.id.clone(),
-            action: orbit_protocol::plan::Action::Enable,
-        });
-        self.send(Request::EnableUserInput {
-            session: opened.info.id.clone(),
-        });
+        if opened.info.phase == orbit_protocol::SessionPhase::Ready {
+            self.send(Request::Plan {
+                session: opened.info.id.clone(),
+                action: orbit_protocol::plan::Action::Enable,
+            });
+            self.send(Request::EnableUserInput {
+                session: opened.info.id.clone(),
+            });
+        }
         let (responses, incoming) = mpsc::channel(CHANNEL_CAPACITY);
         self.incoming = Some(incoming);
         self.worker = Some(AbortOnDropHandle::new(tokio::spawn(pump::pump(
@@ -895,6 +897,7 @@ impl Tab {
                     self.state.sync_clock(timing);
                 }
             }
+            Response::Profile(info) => self.profile(&info),
             Response::UserInputs(history) => self.state.user_input.receive(history),
             Response::Plugins(catalog) => {
                 self.state.marketplace_dialog =

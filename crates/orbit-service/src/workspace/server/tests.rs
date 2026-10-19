@@ -1,5 +1,6 @@
 #[cfg(test)]
 use orbit_config::test_support::{TestConfig, TestModel, TestProvider};
+mod browsing;
 mod drafts;
 mod input_queue;
 mod permissions;
@@ -100,6 +101,7 @@ impl Fixture {
             library: Mutex::new(super::super::library::Library::isolated(&options)),
             options,
             sessions: Mutex::new([(handle.info.id.clone(), handle.clone())].into()),
+            browsing: Mutex::new(HashMap::new()),
             opening: Mutex::new(()),
             last_activity: Mutex::new(tokio::time::Instant::now()),
             stop: tokio_util::sync::CancellationToken::new(),
@@ -368,6 +370,7 @@ async fn sent_images_are_readable_only_through_the_owning_session() {
                 .map(|handle| (handle.info.id.clone(), handle))
                 .collect(),
         ),
+        browsing: Mutex::new(HashMap::new()),
         opening: Mutex::new(()),
         last_activity: Mutex::new(tokio::time::Instant::now()),
         stop: tokio_util::sync::CancellationToken::new(),
