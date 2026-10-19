@@ -8,7 +8,8 @@ Rust 编写的编码 Agent，提供终端界面和实验性桌面客户端。支
 
 ## 快速开始
 
-底层服务与终端客户端提供 Linux、macOS 和 Windows 原生构建，Windows 不依赖 WSL。桌面界面的平台验收单独进行。
+底层服务、终端与桌面客户端提供 Linux、macOS 和 Windows 原生构建，Windows 不依赖 WSL。
+桌面发布包与实际窗口启动由 [Native desktop](.github/workflows/native-desktop.yml) 分平台验收。
 
 Linux 源码构建需要 Rust stable、`musl-tools` 及对应架构的 musl target；以下以 x86-64 为例：
 

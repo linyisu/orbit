@@ -33,6 +33,19 @@ fn native_model_mapping_supports_unicode_paths_and_positional_reads() {
         let mut last = [0; 4];
         assert!(model.read_tensor_bytes(tensor, 4, &mut last));
         assert_eq!(last, (-2.5_f32).to_le_bytes());
+        std::thread::scope(|scope| {
+            for offset in [0, 4, 0, 4] {
+                let model = &model;
+                let expected = &data[offset..offset + 4];
+                scope.spawn(move || {
+                    for _ in 0..128 {
+                        let mut actual = [0; 4];
+                        assert!(model.read_tensor_bytes(tensor, offset, &mut actual));
+                        assert_eq!(actual, expected);
+                    }
+                });
+            }
+        });
     }
     bytes.truncate(bytes.len() - 4);
     std::fs::write(&path, bytes).unwrap();

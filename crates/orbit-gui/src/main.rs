@@ -74,8 +74,10 @@ fn main() -> anyhow::Result<()> {
             if let Err(error) = result {
                 eprintln!("无法打开 Orbit：{error:#}");
                 cx.quit();
-            } else if let (Ok((handle, _)), Some(report)) = (result, smoke_test) {
-                let _ = handle.update(cx, |_, window, _| smoke_frame(report, 0, window));
+            } else if let (Ok((handle, view)), Some(report)) = (result, smoke_test) {
+                let _ = handle.update(cx, |_, window, _| {
+                    smoke_frame(report, 0, view.downgrade(), window)
+                });
             }
             cx.on_window_closed(|cx, _| {
                 if cx.windows().is_empty() {
@@ -89,10 +91,22 @@ fn main() -> anyhow::Result<()> {
 }
 
 /// Observe actual platform frames; ordinary launches never install this bounded CI observer.
-fn smoke_frame(report: std::path::PathBuf, frame: u8, window: &Window) {
+fn smoke_frame(
+    report: std::path::PathBuf,
+    frame: u8,
+    view: WeakEntity<workbench::Workbench>,
+    window: &Window,
+) {
     window.on_next_frame(move |window, cx| {
+        let ready = view
+            .upgrade()
+            .is_some_and(|view| view.read(cx).ready_for_input(cx));
+        if !ready {
+            smoke_frame(report, 0, view, window);
+            return;
+        }
         if frame < 2 {
-            smoke_frame(report, frame + 1, window);
+            smoke_frame(report, frame + 1, view, window);
             return;
         }
         let bounds = window.bounds();
@@ -101,6 +115,7 @@ fn smoke_frame(report: std::path::PathBuf, frame: u8, window: &Window) {
             "width": f32::from(bounds.size.width),
             "height": f32::from(bounds.size.height),
             "platform": std::env::consts::OS,
+            "connected": true,
         });
         let task = cx
             .background_executor()

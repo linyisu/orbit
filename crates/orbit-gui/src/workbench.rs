@@ -42,6 +42,20 @@ pub(crate) struct Workbench {
 }
 
 impl Workbench {
+    pub(crate) fn ready_for_input(&self, cx: &App) -> bool {
+        self.tasks
+            .iter()
+            .find(|task| !task.closed && task.view.read(cx).key() == self.active)
+            .is_some_and(|task| {
+                let view = task.view.read(cx);
+                let summary = view.summary();
+                !view.connection_unestablished()
+                    && !summary.loading
+                    && !summary.attention
+                    && summary.session.is_some()
+            })
+    }
+
     pub(crate) fn new(
         options: Options,
         runtime: Arc<tokio::runtime::Runtime>,

@@ -32,6 +32,6 @@ cargo test -p orbit-xtask
 
 桌面客户端使用 `cargo xtask bundle-gui`（可加 `debug`）构建到 `target/bundle-gui`，
 macOS 生成 `.app` 并本地签名，Windows 保留 `.exe` 图标资源，Linux 附带桌面启动项。
-`cargo xtask verify-gui-bundle` 先验证内嵌服务，再在独立用户目录打开真实窗口、等待渲染并关闭；
+`cargo xtask verify-gui-bundle` 先验证内嵌服务，再在独立用户目录打开真实窗口、等待连接会话与渲染，最后关闭窗口和服务；
 Linux 需由 Xvfb 提供显示环境。`cargo xtask archive-gui` 只归档桌面启动资产，排除验收用的独立服务。
 详细平台依赖、签名边界及安装说明见 [GUI README](../orbit-gui/README.md#桌面发布包)。

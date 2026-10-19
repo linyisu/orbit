@@ -408,25 +408,24 @@ async fn verify_native_executable(bundle: &Path, client: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Exercise the packaged desktop executable with an isolated real window and native service.
-pub async fn verify_gui(bundle: &Path) -> Result<()> {
-    let bundle = bundle.canonicalize()?;
-    let client = crate::bundle::gui_executable(&bundle);
-    verify_native_executable(&bundle, &client).await?;
-    let directory = tempfile::tempdir()?;
-    let root = directory.path().canonicalize()?;
-    let report = root.join("window.json");
-    let mut command = Command::new(&client);
+fn desktop_probe(command: &mut Command, root: &Path) {
     command
-        .current_dir(&root)
-        .arg("--smoke-test")
-        .arg(&report)
+        .current_dir(root)
         .arg("--config")
-        .arg(root.join("missing.toml"))
-        .env("USERPROFILE", &root)
+        .arg(root.join("config.toml"))
+        .arg("--workspace")
+        .arg(root.join("workspace"))
+        .arg("--database")
+        .arg(root.join("state/sessions.db"))
+        .arg("--auth-dir")
+        .arg(root.join("auth"))
+        .env("USERPROFILE", root)
         .env("XDG_CONFIG_HOME", root.join("config"))
         .env("XDG_CACHE_HOME", root.join("cache"))
         .env("XDG_STATE_HOME", root.join("state"))
+        .env("XDG_RUNTIME_DIR", root.join("runtime"))
+        .env_remove("WAYLAND_DISPLAY")
+        .env_remove("DBUS_SESSION_BUS_ADDRESS")
         .env("LOCALAPPDATA", root.join("local"))
         .env("APPDATA", root.join("roaming"));
     if cfg!(windows) {
@@ -434,14 +433,53 @@ pub async fn verify_gui(bundle: &Path) -> Result<()> {
             .env_remove("HOME")
             .env_remove("XDG_CONFIG_HOME");
     } else {
-        command.env("HOME", &root);
+        command.env("HOME", root);
     }
+}
+
+/// Exercise the packaged desktop executable with an isolated real window and native service.
+pub async fn verify_gui(bundle: &Path) -> Result<()> {
+    let bundle = bundle.canonicalize()?;
+    let client = crate::bundle::gui_executable(&bundle);
+    verify_native_executable(&bundle, &client).await?;
+    let directory = tempfile::tempdir()?;
+    let root = directory.path().canonicalize()?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        fs::DirBuilder::new()
+            .mode(0o700)
+            .create(root.join("runtime"))?;
+    }
+    #[cfg(windows)]
+    fs::create_dir(root.join("runtime"))?;
+    fs::create_dir(root.join("workspace"))?;
+    let config = root.join("config.toml");
+    fs::write(
+        &config,
+        toml::toml! {
+            [providers.native]
+            base_url = "http://127.0.0.1:9/v1"
+            api_key = "test-only"
+            auto_refresh_models = false
+            models = ["native-model"]
+        }
+        .to_string(),
+    )?;
+    let report = root.join("window.json");
+    let mut command = Command::new(&client);
+    desktop_probe(&mut command, &root);
+    command
+        .arg("--smoke-test")
+        .arg(&report)
+        .args(["--model", "native::native-model"]);
     process::run(&mut command).await?;
     let receipt: Value = serde_json::from_slice(&fs::read(&report)?)?;
     ensure!(
-        receipt["frames"]
-            .as_u64()
-            .is_some_and(|frames| frames >= 3)
+        receipt["connected"] == true
+            && receipt["frames"]
+                .as_u64()
+                .is_some_and(|frames| frames >= 3)
             && receipt["width"]
                 .as_f64()
                 .is_some_and(|width| width >= 800.)
@@ -450,6 +488,51 @@ pub async fn verify_gui(bundle: &Path) -> Result<()> {
                 .is_some_and(|height| height >= 560.),
         "desktop did not complete native window rendering: {receipt}"
     );
+    let server = bundle.join(format!(
+        "orbit-workspace-server{}",
+        std::env::consts::EXE_SUFFIX
+    ));
+    let mut command = Command::new(server);
+    command.arg("workspace-service");
+    desktop_probe(&mut command, &root);
+    let mut child = command
+        .kill_on_drop(true)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .spawn()?;
+    tokio::time::timeout(Duration::from_secs(45), async {
+        orbit_protocol::read_preamble(child.stdout.as_mut().unwrap()).await?;
+        ensure!(
+            matches!(
+                request(
+                    &mut child,
+                    Request::Hello {
+                        version: orbit_protocol::VERSION,
+                        workspace: None
+                    }
+                )
+                .await?,
+                Response::Hello {
+                    version: orbit_protocol::VERSION,
+                    ..
+                }
+            ),
+            "desktop cleanup handshake failed"
+        );
+        ensure!(
+            matches!(request(&mut child, Request::Shutdown).await?, Response::Ok),
+            "desktop service cleanup failed"
+        );
+        child.stdin.take();
+        ensure!(
+            child.wait().await?.success(),
+            "desktop service cleanup exited unsuccessfully"
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .context("desktop service cleanup timed out")??;
     println!("PASS: isolated native desktop window rendered and exited normally: {receipt}");
     Ok(())
 }

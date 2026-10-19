@@ -1,11 +1,11 @@
 //! Verified speech assets with resumable downloads and a cancellable cross-process cache lock.
-use std::{fs::File, path::Path, time::Duration};
+use std::{fs::File, io::SeekFrom, path::Path, time::Duration};
 
 use anyhow::{Context, Result, bail, ensure};
 use reqwest::{StatusCode, header};
 use sha2::{Digest, Sha256};
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
+    io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt},
     sync::watch,
 };
 
@@ -169,9 +169,12 @@ async fn download(
     }
     let mut file = tokio::fs::OpenOptions::new()
         .create(true)
-        .append(true)
+        .truncate(false)
+        .write(true)
         .open(&pending)
         .await?;
+    // Windows append-only handles cannot truncate a rejected range download.
+    file.seek(SeekFrom::End(0)).await?;
     let result = transfer(client, &mut file, asset, cancel, progress, completed, total).await;
     // Tokio file writes can remain in flight after write_all. Complete them before releasing
     // the cache lock so a cancelled attempt cannot race the next resume operation.
@@ -237,6 +240,7 @@ async fn transfer(
             );
             if received != 0 {
                 file.set_len(0).await?;
+                file.seek(SeekFrom::Start(0)).await?;
                 received = 0;
             }
             asset.bytes - 1
