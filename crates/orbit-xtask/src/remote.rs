@@ -458,14 +458,16 @@ pub async fn verify_gui(bundle: &Path) -> Result<()> {
         "orbit-workspace-server{}",
         std::env::consts::EXE_SUFFIX
     ));
-    verify_gui_executable(&client, &server).await
+    verify_gui_executable(&client, Some(&server)).await
 }
 
 /// Verify either an installed desktop executable or the prepared bundle against its service asset.
-pub async fn verify_gui_executable(client: &Path, server: &Path) -> Result<()> {
+pub async fn verify_gui_executable(client: &Path, server: Option<&Path>) -> Result<()> {
     const DESKTOP_EXIT_TIMEOUT: Duration = Duration::from_secs(120);
 
-    verify_native_executable(server, client).await?;
+    if let Some(server) = server {
+        verify_native_executable(server, client).await?;
+    }
     let directory = tempfile::tempdir()?;
     let root = directory.path().canonicalize()?;
     #[cfg(unix)]
@@ -532,6 +534,15 @@ pub async fn verify_gui_executable(client: &Path, server: &Path) -> Result<()> {
                 .is_some_and(|height| height >= 560.),
         "desktop did not complete native window rendering: {receipt}"
     );
+    let cached_server;
+    let server = match server {
+        Some(server) => server,
+        None => {
+            cached_server = desktop_cached_server(&root)?;
+            verify_native_executable(&cached_server, client).await?;
+            &cached_server
+        }
+    };
     let mut command = Command::new(server);
     command.arg("workspace-service");
     desktop_probe(&mut command, &root);
@@ -575,6 +586,31 @@ pub async fn verify_gui_executable(client: &Path, server: &Path) -> Result<()> {
     .context("desktop service cleanup timed out")??;
     println!("PASS: isolated native desktop window rendered and exited normally: {receipt}");
     Ok(())
+}
+
+fn desktop_cached_server(root: &Path) -> Result<PathBuf> {
+    let cache = root
+        .join(if cfg!(windows) { "local" } else { "cache" })
+        .join("orbit/servers");
+    let mut servers = Vec::new();
+    for entry in fs::read_dir(cache)? {
+        let entry = entry?;
+        if entry.file_type()?.is_file()
+            && entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with("orbit-server-")
+            && entry.path().extension()
+                == Path::new(&format!("server{}", std::env::consts::EXE_SUFFIX)).extension()
+        {
+            servers.push(entry.path());
+        }
+    }
+    ensure!(
+        servers.len() == 1,
+        "desktop must extract exactly one native server"
+    );
+    Ok(servers.remove(0))
 }
 
 pub async fn verify(bundle: &Path) -> Result<()> {
@@ -645,6 +681,33 @@ mod tests {
         assert!(embedded_server(&client, &server).is_err());
         fs::write(&server, b"").unwrap();
         assert!(embedded_server(&client, &server).is_err());
+    }
+
+    #[test]
+    fn installed_desktop_requires_a_single_extracted_server() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let cache = root
+            .join(if cfg!(windows) { "local" } else { "cache" })
+            .join("orbit/servers");
+        fs::create_dir_all(&cache).unwrap();
+        assert!(desktop_cached_server(root).is_err());
+        let server = cache.join(format!(
+            "orbit-server-first{}",
+            std::env::consts::EXE_SUFFIX
+        ));
+        fs::write(&server, "synthetic server").unwrap();
+        fs::write(cache.join(".server-incomplete"), "partial download").unwrap();
+        assert_eq!(desktop_cached_server(root).unwrap(), server);
+        fs::write(
+            cache.join(format!(
+                "orbit-server-second{}",
+                std::env::consts::EXE_SUFFIX
+            )),
+            "other server",
+        )
+        .unwrap();
+        assert!(desktop_cached_server(root).is_err());
     }
 
     #[test]

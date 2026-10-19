@@ -22,6 +22,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: native-desktop-${{ github.ref }}
@@ -35,6 +36,9 @@ jobs:
       matrix:
         os: >-
           ${{ fromJSON(
+            contains(github.event.head_commit.message, '[installer-only]')
+            && '["windows-2025"]'
+            ||
             github.event_name == 'push' && github.ref == 'refs/heads/native-runtime-foundation'
             && !contains(github.event.head_commit.message, '[native-full]')
             && '["windows-2025"]'
@@ -70,12 +74,38 @@ jobs:
         if: runner.os == 'Linux'
         run: cargo clean -p openblas-src
       - name: Build native desktop package
+        if: ${{ !contains(github.event.head_commit.message, '[installer-only]') }}
         run: cargo xtask bundle-gui debug
+      - name: Select the latest existing Windows GUI for packaging retries
+        if: contains(github.event.head_commit.message, '[installer-only]')
+        id: previous-gui
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $run = gh api 'repos/${{ github.repository }}/actions/artifacts?name=orbit-desktop-windows-2025-X64&per_page=10' --jq '.artifacts | map(select(.expired == false)) | first | .workflow_run.id'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "run=$run" >> $env:GITHUB_OUTPUT
+      - uses: actions/download-artifact@v8
+        if: contains(github.event.head_commit.message, '[installer-only]')
+        with:
+          name: orbit-desktop-windows-2025-X64
+          run-id: ${{ steps.previous-gui.outputs.run }}
+          github-token: ${{ github.token }}
+          path: target/previous-gui
+      - name: Restore the existing GUI and build acceptance tooling
+        if: contains(github.event.head_commit.message, '[installer-only]')
+        run: |
+          Expand-Archive target/previous-gui/orbit-desktop-windows-x86_64.zip target/bundle-gui -Force
+          cargo build -p orbit-xtask --locked
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test -p orbit-xtask --locked installer::tests
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test -p orbit-xtask --locked remote::tests::installed_desktop_requires_a_single_extracted_server
       - name: Verify native window and embedded service
         if: runner.os == 'macOS'
         run: cargo xtask verify-gui-bundle
       - name: Verify Windows window and embedded service
-        if: runner.os == 'Windows'
+        if: ${{ runner.os == 'Windows' && !contains(github.event.head_commit.message, '[installer-only]') }}
         timeout-minutes: 10
         run: .\target\debug\orbit-xtask.exe verify-gui-bundle
       - name: Verify isolated Linux window and embedded service
@@ -113,17 +143,20 @@ jobs:
         run: cargo xtask archive-gui
       - name: Install Windows packaging tool
         if: runner.os == 'Windows'
-        run: dotnet tool install --global wix --version 7.0.0
+        run: choco upgrade nsis --version=3.13.0 --yes --no-progress
       - name: Build Windows Debug installer
         if: runner.os == 'Windows'
-        run: .\target\debug\orbit-xtask.exe installer-gui target/bundle-gui target/orbit-gui-debug-windows-x64.msi
+        run: .\target\debug\orbit-xtask.exe installer-gui target/bundle-gui target/orbit-gui-debug-windows-x64-setup.exe
       - uses: actions/upload-artifact@v7
         if: runner.os == 'Windows'
         with:
           name: orbit-windows-installer-acceptance
-          path: |
-            target/debug/orbit-xtask.exe
-            target/bundle-gui/orbit-workspace-server.exe
+          path: target/debug/orbit-xtask.exe
+      - uses: actions/upload-artifact@v7
+        if: runner.os == 'Windows'
+        with:
+          name: orbit-gui-debug-windows-x64-installer
+          path: target/orbit-gui-debug-windows-x64-setup.exe
       - uses: actions/upload-artifact@v7
         if: ${{ !cancelled() }}
         with:
@@ -131,7 +164,6 @@ jobs:
           path: |
             target/orbit-desktop-*.tar.gz
             target/orbit-desktop-*.zip
-            target/orbit-gui-debug-*.msi
 
   windows-installer:
     name: Windows clean-machine installer
@@ -141,7 +173,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@v8
         with:
-          name: orbit-desktop-windows-2025-X64
+          name: orbit-gui-debug-windows-x64-installer
           path: package
       - uses: actions/download-artifact@v8
         with:
@@ -149,6 +181,5 @@ jobs:
           path: acceptance
       - name: Install, render and uninstall without checkout or Cargo cache
         run: >-
-          .\acceptance\debug\orbit-xtask.exe verify-gui-installer
-          package/orbit-gui-debug-windows-x64.msi
-          acceptance/bundle-gui/orbit-workspace-server.exe
+          .\acceptance\orbit-xtask.exe verify-gui-installer
+          package/orbit-gui-debug-windows-x64-setup.exe

@@ -21,10 +21,10 @@ struct Arguments {
 enum Task {
     /// Check workspace dependency and source ownership boundaries.
     Check,
-    /// Package an existing Windows Debug GUI as a per-user MSI.
+    /// Package an existing Windows Debug GUI as a per-user installer.
     InstallerGui { directory: PathBuf, output: PathBuf },
-    /// Accept an MSI on a fresh Windows host without Cargo dependency sources.
-    VerifyGuiInstaller { installer: PathBuf, server: PathBuf },
+    /// Accept an installer on a fresh Windows host without Cargo dependency sources.
+    VerifyGuiInstaller { installer: PathBuf },
     /// Build the terminal client and collect its embedded static server for verification.
     Bundle {
         #[arg(value_enum, default_value_t = Profile::Release)]
@@ -89,9 +89,7 @@ async fn main() -> Result<()> {
         Task::InstallerGui { directory, output } => {
             installer::build(root(), &directory, &output).await?
         }
-        Task::VerifyGuiInstaller { installer, server } => {
-            installer::verify(&installer, &server).await?
-        }
+        Task::VerifyGuiInstaller { installer } => installer::verify(&installer).await?,
         Task::Check => {
             let errors = architecture::check(root())?;
             if !errors.is_empty() {

@@ -1,16 +1,21 @@
 //! Windows per-user desktop packaging and installed-program acceptance.
 
-use std::{fs, path::Path};
+use std::{fs, path::Path, time::Duration};
 
 use anyhow::{Context, Result, ensure};
 use tokio::process::Command;
 
 use crate::{process, remote};
 
-/// Package the existing Debug GUI with WiX; no compilation or user-data migration is performed.
+/// Package the existing x64 Debug GUI with NSIS, without rebuilding the application.
 pub async fn build(root: &Path, bundle: &Path, output: &Path) -> Result<()> {
-    ensure!(cfg!(windows), "MSI packaging requires native Windows");
-    let bundle = bundle.canonicalize()?;
+    ensure!(cfg!(windows), "installer packaging requires native Windows");
+    ensure!(
+        std::env::consts::ARCH == "x86_64",
+        "this installer requires an x64 payload"
+    );
+    let bundle = std::path::absolute(bundle)?;
+    let output = std::path::absolute(output)?;
     ensure!(
         bundle.join("orbit-gui.exe").is_file(),
         "missing desktop payload"
@@ -18,65 +23,70 @@ pub async fn build(root: &Path, bundle: &Path, output: &Path) -> Result<()> {
     if let Some(parent) = output.parent() {
         fs::create_dir_all(parent)?;
     }
+    let compiler = std::env::var_os("ProgramFiles(x86)")
+        .map(|path| Path::new(&path).join("NSIS/makensis.exe"))
+        .filter(|path| path.is_file())
+        .unwrap_or_else(|| "makensis".into());
     process::run(
-        Command::new("wix")
-            .args(["build", "-arch", "x64", "-pdbtype", "none", "-d"])
-            .arg(format!("Version={}", env!("CARGO_PKG_VERSION")))
-            .arg("-b")
-            .arg(format!("gui={}", bundle.display()))
-            .arg("-b")
+        Command::new(compiler)
+            .current_dir(root)
+            .args(["/NOCD", "/INPUTCHARSET", "UTF8"])
+            .arg(format!("/DVERSION={}", env!("CARGO_PKG_VERSION")))
+            .arg(format!("/DGUI_DIR={}", bundle.display()))
+            .arg(format!("/DOUTPUT={}", output.display()))
             .arg(format!(
-                "assets={}",
+                "/DASSETS={}",
                 root.join("crates/orbit-gui/resources")
                     .display()
             ))
-            .arg(root.join("crates/orbit-xtask/resources/windows.wxs"))
-            .arg("-o")
-            .arg(output),
+            .arg(root.join("crates/orbit-xtask/resources/windows.nsi")),
     )
     .await?;
     println!("Created per-user Debug installer: {}", output.display());
     Ok(())
 }
 
-/// Install into isolated storage, verify the actual installed window, and always attempt uninstall.
-pub async fn verify(installer: &Path, server: &Path) -> Result<()> {
-    ensure!(cfg!(windows), "MSI acceptance requires native Windows");
+/// Install into isolated storage, verify the installed window, and always attempt uninstall.
+pub async fn verify(installer: &Path) -> Result<()> {
+    ensure!(
+        cfg!(windows),
+        "installer acceptance requires native Windows"
+    );
     let installer = installer.canonicalize()?;
-    let server = server.canonicalize()?;
     ensure_no_shader_sources()?;
     let directory = tempfile::tempdir()?;
     let install = directory.path().join("Orbit 安装验收");
-    let log = directory.path().join("install.log");
-    let installed = process::run(
-        Command::new("msiexec")
-            .arg("/i")
-            .arg(&installer)
-            .args(["/qn", "/norestart"])
-            .arg(format!("INSTALLFOLDER={}", install.display()))
-            .arg("/l*v")
-            .arg(&log),
-    )
-    .await;
-    if let Err(error) = installed {
-        anyhow::bail!("installation failed: {error:#}\n{}", installer_log(&log));
+    let mut command = Command::new(installer);
+    command.arg("/S");
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+
+        // NSIS requires /D last and unquoted, including when the directory contains spaces.
+        command
+            .as_std_mut()
+            .raw_arg(format!("/D={}", install.display()));
     }
+    process::run(&mut command)
+        .await
+        .context("installation failed")?;
     let retained = install.join("unmanaged-user-data.txt");
     let result = async {
         fs::write(&retained, "synthetic user data")?;
-        remote::verify_gui_executable(&install.join("orbit-gui.exe"), &server).await
+        remote::verify_gui_executable(&install.join("orbit-gui.exe"), None).await
     }
     .await;
-    let uninstall = process::run(
-        Command::new("msiexec")
-            .arg("/x")
-            .arg(&installer)
-            .args(["/qn", "/norestart"])
-            .arg("/l*v")
-            .arg(&log),
-    )
-    .await;
-    uninstall.with_context(|| format!("uninstall failed: {}", installer_log(&log)))?;
+    process::run(Command::new(install.join("uninstall.exe")).arg("/S"))
+        .await
+        .context("uninstall failed")?;
+    // NSIS transfers uninstallation to a temporary executable so it can remove itself.
+    tokio::time::timeout(Duration::from_secs(30), async {
+        while install.join("uninstall.exe").exists() {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .context("uninstaller did not finish")?;
     ensure!(
         !install.join("orbit-gui.exe").exists(),
         "uninstall retained executable"
@@ -86,7 +96,7 @@ pub async fn verify(installer: &Path, server: &Path) -> Result<()> {
         fs::read_to_string(retained)? == "synthetic user data",
         "uninstall changed user data"
     );
-    println!("PASS: MSI installed, rendered without Cargo shader sources, and uninstalled");
+    println!("PASS: installed, rendered without Cargo shader sources, and uninstalled");
     Ok(())
 }
 
@@ -117,40 +127,9 @@ fn check_shader_sources(sources: &Path) -> Result<()> {
     Ok(())
 }
 
-fn installer_log(path: &Path) -> String {
-    let bytes = fs::read(path).unwrap_or_default();
-    if bytes.starts_with(&[0xff, 0xfe]) {
-        let units: Vec<_> = bytes[2..]
-            .as_chunks::<2>()
-            .0
-            .iter()
-            .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
-            .collect();
-        String::from_utf16_lossy(&units)
-    } else {
-        String::from_utf8_lossy(&bytes).into_owned()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn windows_installer_diagnostics_decode_unicode_and_missing_logs() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("installer.log");
-        assert!(installer_log(&path).is_empty());
-        let message = "Installation failed: 目录不存在\r\n";
-        let bytes: Vec<_> = std::iter::once(0xfeff_u16)
-            .chain(message.encode_utf16())
-            .flat_map(u16::to_le_bytes)
-            .collect();
-        fs::write(&path, bytes).unwrap();
-        assert_eq!(installer_log(&path), message);
-        fs::write(&path, "UTF-8 diagnostic").unwrap();
-        assert_eq!(installer_log(&path), "UTF-8 diagnostic");
-    }
 
     #[test]
     fn clean_machine_acceptance_rejects_renderer_sources() {
