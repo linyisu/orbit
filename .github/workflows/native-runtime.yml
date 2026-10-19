@@ -61,11 +61,11 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
-          python-version: '3.12'
+          python-version: '3.15'
       - name: Test production process owner and descendant cleanup
         run: python .github/scripts/test-native-process.py
 
@@ -78,7 +78,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - name: Test complete native runtime
         run: cargo test -p orbit-runtime --locked
@@ -91,7 +91,7 @@ jobs:
       CARGO_PROFILE_TEST_DEBUG: '0'
       CARGO_INCREMENTAL: '0'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - name: Test native service identity and handover
         run: cargo test -p orbit-service --locked workspace::server::lifecycle::tests
@@ -111,11 +111,11 @@ jobs:
       CARGO_PROFILE_TEST_DEBUG: '0'
       CARGO_INCREMENTAL: '0'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
-          python-version: '3.12'
+          python-version: '3.15'
       - name: Test production named pipes and executable cache
         run: python .github/scripts/test-native-windows-io.py
       - name: Check complete native backend dependency graph
@@ -155,7 +155,7 @@ jobs:
       CARGO_PROFILE_TEST_DEBUG: '0'
       CARGO_INCREMENTAL: '0'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - name: Test build and archive contracts
         run: cargo test -p orbit-build -p orbit-xtask --locked

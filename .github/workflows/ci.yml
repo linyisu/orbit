@@ -19,7 +19,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install system dependencies
         run: |
@@ -70,7 +70,7 @@ jobs:
     name: Portable Linux bundle
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install bundle test dependencies
         run: sudo apt-get update && sudo apt-get install -y musl-tools ca-certificates
       - uses: dtolnay/rust-toolchain@stable
@@ -83,7 +83,7 @@ jobs:
         run: cargo xtask verify-bundle target/bundle
       - name: Package executable with permissions
         run: cargo xtask archive target/bundle target/orbit-linux-x86_64.tar.gz
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: orbit-linux-x86_64
           path: target/orbit-linux-x86_64.tar.gz

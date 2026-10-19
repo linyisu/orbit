@@ -42,7 +42,7 @@ jobs:
       CARGO_INCREMENTAL: '0'
       CARGO_BUILD_JOBS: '2'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install Linux desktop dependencies
         if: runner.os == 'Linux'
         run: |
@@ -94,7 +94,7 @@ jobs:
       - name: Archive desktop application
         if: ${{ !cancelled() }}
         run: cargo xtask archive-gui
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: ${{ !cancelled() }}
         with:
           name: orbit-desktop-${{ matrix.os }}-${{ runner.arch }}
