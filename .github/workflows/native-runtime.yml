@@ -3,7 +3,7 @@ name: Native runtime contracts
 on:
   workflow_dispatch:
   push:
-    branches: [main, 'codex/native-runtime-*']
+    branches: [main, native-runtime-foundation]
     paths:
       - 'crates/orbit-runtime/**'
       - 'crates/orbit-service/**'
