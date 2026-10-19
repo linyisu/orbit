@@ -333,7 +333,7 @@ pub async fn verify_native(bundle: &Path) -> Result<()> {
 async fn verify_native_executable(bundle: &Path, client: &Path) -> Result<()> {
     let suffix = std::env::consts::EXE_SUFFIX;
     let server = bundle.join(format!("orbit-workspace-server{suffix}"));
-    embedded_server(&client, &server)?;
+    embedded_server(client, &server)?;
     let directory = tempfile::tempdir()?;
     let root = directory.path().canonicalize()?;
     let mut child = Command::new(&server)
@@ -399,7 +399,7 @@ async fn verify_native_executable(bundle: &Path, client: &Path) -> Result<()> {
     .await
     .context("native bundle verification timed out")??;
     process::run(
-        Command::new(&client)
+        Command::new(client)
             .arg("--help")
             .current_dir(&root),
     )

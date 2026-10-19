@@ -27,7 +27,7 @@ cargo xtask archive-gui
 ```
 
 产物位于 `target/bundle-gui`。macOS 为带图标、应用身份和麦克风用途声明的 `Orbit.app`，
-构建时进行本地临时签名；Windows 为带图标的 `orbit-gui.exe`，发布包静态链接 C 运行库；
+构建时进行本地临时签名；Windows 为带图标的 `orbit-gui.exe`，发布包静态链接 C 运行库并使用 ZIP 归档；
 Linux 为 `orbit-gui`、`orbit.desktop` 和 `orbit.svg`，系统仍需提供对应桌面与音频库。
 Linux 安装时将程序放入 PATH，启动项放入用户 applications 目录，图标放入对应 icons 目录。
 默认归档名包含桌面标记、系统与架构；归档不包含单独的服务，客户端自身已内嵌该资产。

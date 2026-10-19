@@ -115,7 +115,7 @@ fn smoke_frame(report: std::path::PathBuf, frame: u8, window: &Window) {
             cx.background_executor()
                 .timer(std::time::Duration::from_secs(3))
                 .await;
-            let _ = cx.update(|cx| cx.quit());
+            cx.update(|cx| cx.quit());
         })
         .detach();
     });

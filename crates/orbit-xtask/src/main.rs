@@ -96,9 +96,10 @@ async fn main() -> Result<()> {
                 &directory.unwrap_or_else(|| target.join("bundle-gui")),
                 &output.unwrap_or_else(|| {
                     target.join(format!(
-                        "orbit-desktop-{}-{}.tar.gz",
+                        "orbit-desktop-{}-{}.{}",
                         std::env::consts::OS,
-                        std::env::consts::ARCH
+                        std::env::consts::ARCH,
+                        bundle::gui_archive_extension()
                     ))
                 }),
             )

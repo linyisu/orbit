@@ -219,6 +219,10 @@ pub fn gui_executable(directory: &Path) -> PathBuf {
     }
 }
 
+pub fn gui_archive_extension() -> &'static str {
+    if cfg!(windows) { "zip" } else { "tar.gz" }
+}
+
 fn install_gui(root: &Path, output: &Path, executable: &Path) -> Result<()> {
     let resources = root.join("crates/orbit-gui/resources");
     let destination = gui_executable(output);
@@ -263,6 +267,27 @@ pub async fn archive_gui(directory: &Path, output: &Path) -> Result<()> {
     if let Some(parent) = output.parent() {
         fs::create_dir_all(parent)?;
     }
+    if cfg!(windows) {
+        ensure!(
+            output
+                .extension()
+                .is_some_and(|extension| extension == "zip"),
+            "Windows desktop archives use .zip"
+        );
+        let mut archive = zip::ZipWriter::new(fs::File::create(output)?);
+        archive.start_file(
+            executable_name("orbit-gui"),
+            zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Stored),
+        )?;
+        std::io::copy(
+            &mut fs::File::open(gui_executable(&directory))?,
+            &mut archive,
+        )?;
+        archive.finish()?;
+        println!("Desktop archive: {}", output.display());
+        return Ok(());
+    }
     let mut command = Command::new("tar");
     command
         .arg("-czf")
@@ -301,21 +326,30 @@ mod tests {
             b"fixture",
         )
         .unwrap();
-        let output = directory.path().join("desktop.tar.gz");
+        let output = directory
+            .path()
+            .join(format!("desktop.{}", gui_archive_extension()));
         archive_gui(&bundle, &output)
             .await
             .unwrap();
         let extracted = directory.path().join("unpacked");
         fs::create_dir(&extracted).unwrap();
-        process::run(
-            Command::new("tar")
-                .arg("-xzf")
-                .arg(output)
-                .arg("-C")
-                .arg(&extracted),
-        )
-        .await
-        .unwrap();
+        if cfg!(windows) {
+            zip::ZipArchive::new(fs::File::open(&output).unwrap())
+                .unwrap()
+                .extract(&extracted)
+                .unwrap();
+        } else {
+            process::run(
+                Command::new("tar")
+                    .arg("-xzf")
+                    .arg(output)
+                    .arg("-C")
+                    .arg(&extracted),
+            )
+            .await
+            .unwrap();
+        }
         assert_eq!(
             fs::read(gui_executable(&extracted)).unwrap(),
             b"generated desktop executable"

@@ -13,7 +13,7 @@ fn native_model_mapping_supports_unicode_paths_and_positional_reads() {
         "sample": { "dtype": "F32", "shape": [2], "data_offsets": [0, 8] }
     })
     .to_string();
-    while header.len() % 8 != 0 {
+    while !header.len().is_multiple_of(8) {
         header.push(' ');
     }
     let data = [1.25_f32, -2.5_f32]
