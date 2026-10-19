@@ -159,7 +159,7 @@ jobs:
       - name: Test native session controls during model refresh
         run: cargo test -p orbit-client --locked pump::session::tests
       - name: Test native MCP transport lifecycle
-        run: cargo test -p orbit-tools --locked mcp::tests
+        run: cargo test -p orbit-tools --lib --locked mcp::tests
       - name: Build native terminal with embedded service
         run: cargo xtask bundle debug
       - name: Verify native deployment and protocol
