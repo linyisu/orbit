@@ -159,6 +159,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Test build and archive contracts
         run: cargo test -p orbit-build -p orbit-xtask --locked
+      - name: Test native client editor launch adapter
+        run: cargo test -p orbit-client --locked platform::editor::tests
       - name: Build native terminal with embedded service
         if: ${{ !cancelled() }}
         run: cargo xtask bundle debug
