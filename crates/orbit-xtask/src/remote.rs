@@ -427,7 +427,7 @@ fn desktop_probe(command: &mut Command, root: &Path) {
         .arg("--workspace")
         .arg(root.join("workspace"))
         .arg("--database")
-        .arg(root.join("state/sessions.db"))
+        .arg(root.join("database/sessions.db"))
         .arg("--auth-dir")
         .arg(root.join("auth"))
         .env("USERPROFILE", root)
