@@ -469,7 +469,8 @@ impl Client {
         {
             // Reject invalid frames before preparing any execution state.
             orbit_protocol::EncodedFrame::new(&request).map_err(RequestError::Encoding)?;
-            crate::connect::prepare_session(self, &connection, session)
+            // Bound the transport future on native debug stacks.
+            Box::pin(crate::connect::prepare_session(self, &connection, session))
                 .await
                 .map_err(|error| RequestError::Remote(format!("无法发送请求：{error:#}")))?;
         }
@@ -508,7 +509,7 @@ impl Client {
                 if let Some(connection) = &self.connection
                     && let Response::Profile(info) = &mut response
                 {
-                    crate::connect::enrich_browsing(info, connection).await;
+                    Box::pin(crate::connect::enrich_browsing(info, connection)).await;
                 }
                 let info = match &response {
                     Response::Opened(info) => Some(info),
@@ -679,6 +680,81 @@ pub(crate) mod tests {
                 .unwrap(),
             Response::FileMissing
         ));
+    }
+
+    #[test]
+    fn request_futures_fit_native_executor_stacks() {
+        const MEASUREMENT_STACK_BYTES: usize = 8 * 1_024 * 1_024;
+        // Report an oversized future instead of overflowing the test harness before assertion.
+        std::thread::Builder::new()
+            .stack_size(MEASUREMENT_STACK_BYTES)
+            .spawn(|| {
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .unwrap();
+                let mut client = runtime.block_on(fixture_client(Vec::new()));
+                let connection = Connection {
+                    local_configuration: None,
+                    target: Target::Local,
+                    workspace: "generated-workspace".into(),
+                    executable: "generated-peer".into(),
+                    config: "generated.toml".into(),
+                    database: None,
+                    auth_dir: None,
+                    allow_mcp_start: false,
+                    unattended: true,
+                    interactive: None,
+                };
+                let request = || Request::Browse { resume: None };
+                let request_bytes = std::mem::size_of_val(&client.request(request()));
+                let raw_bytes = std::mem::size_of_val(&client.raw_request(request()));
+                let open_bytes = std::mem::size_of_val(&crate::connect::open_session(
+                    &mut client,
+                    &connection,
+                    None,
+                    None,
+                ));
+                let prepare_bytes = std::mem::size_of_val(&crate::connect::prepare_session(
+                    &mut client,
+                    &connection,
+                    "generated-session".into(),
+                ));
+                let (_commands, receiver) = tokio::sync::mpsc::channel(1);
+                let (events, _incoming) = tokio::sync::mpsc::channel(1);
+                let (progress, _updates) = crate::interaction::channel();
+                let observe_bytes = std::mem::size_of_val(&crate::pump::observe(
+                    crate::pump::SessionOptions {
+                        connection: Arc::new(connection),
+                        resume: None,
+                        model: None,
+                        relink_on_resume: false,
+                        recover_draft: false,
+                        attachment_cache: "generated-attachments".into(),
+                    },
+                    receiver,
+                    &events,
+                    progress,
+                ));
+                let sizes = [
+                    ("request", request_bytes),
+                    ("raw_request", raw_bytes),
+                    ("open_session", open_bytes),
+                    ("prepare_session", prepare_bytes),
+                    ("observe", observe_bytes),
+                ];
+                const MAX_REQUEST_FUTURE_BYTES: usize = 64 * 1_024;
+                eprintln!("native executor future sizes: {sizes:?}");
+                assert!(
+                    sizes
+                        .iter()
+                        .all(|(_, bytes)| *bytes <= MAX_REQUEST_FUTURE_BYTES),
+                    "request futures exceed the native stack budget: {sizes:?}"
+                );
+            })
+            .unwrap()
+            .join()
+            .unwrap();
     }
 
     #[tokio::test]

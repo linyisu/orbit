@@ -25,7 +25,7 @@ permissions:
   actions: read
 
 concurrency:
-  group: native-desktop-${{ github.ref }}${{ contains(github.event.head_commit.message, '[installer-only]') && '-installer' || '' }}
+  group: native-desktop-${{ github.ref }}${{ contains(github.event.head_commit.message, '[installer-only]') && '-installer' || contains(github.event.head_commit.message, '[native-stack]') && '-stack' || '' }}
   cancel-in-progress: true
 
 jobs:
@@ -96,7 +96,9 @@ jobs:
         run: |
           $nativeTarget = (rustc -vV | Select-String '^host: ').Line.Substring(6)
           $env:CARGO_ENCODED_RUSTFLAGS = "-C$([char]31)target-feature=+crt-static"
-          cargo test -p orbit-gui --features test-support --test transport --target "$nativeTarget" --locked
+          cargo test -p orbit-client request_futures_fit_native_executor_stacks --target "$nativeTarget" --locked -- --nocapture
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test -p orbit-gui --features test-support --test transport --target "$nativeTarget" --locked -- --test-threads=1 --nocapture
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test -p orbit-service workspace::server::tests::browsing --target "$nativeTarget" --locked
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

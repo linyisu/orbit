@@ -300,7 +300,8 @@ async fn run_connection(
         Some(progress.clone()),
     )
     .await?;
-    orbit_client::pump::observe(
+    // Keep the observer state out of the wrapper's unoptimized native stack frame.
+    Box::pin(orbit_client::pump::observe(
         orbit_client::pump::SessionOptions {
             connection,
             resume: options.resume,
@@ -312,7 +313,7 @@ async fn run_connection(
         commands,
         events,
         progress,
-    )
+    ))
     .await
 }
 
@@ -320,5 +321,30 @@ struct AbortTask(tokio::task::JoinHandle<()>);
 impl Drop for AbortTask {
     fn drop(&mut self) {
         self.0.abort();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn observer_wrappers_fit_native_executor_stacks() {
+        const MEASUREMENT_STACK_BYTES: usize = 8 * 1_024 * 1_024;
+        std::thread::Builder::new().stack_size(MEASUREMENT_STACK_BYTES).spawn(|| {
+            let options = || serde_json::from_value::<Options>(serde_json::json!({
+                "config": "generated.toml",
+                "workspace": "generated-workspace",
+            })).unwrap();
+            let (_commands, receiver) = mpsc::channel(1);
+            let (events, _incoming) = mpsc::channel(1);
+            let (progress, _updates) = orbit_client::interaction::channel();
+            let connection_bytes = std::mem::size_of_val(&run_connection(options(), receiver, &events, progress));
+            let (_commands, receiver) = mpsc::channel(1);
+            let wrapper_bytes = std::mem::size_of_val(&run(options(), receiver, &events));
+            const MAX_OBSERVER_FUTURE_BYTES: usize = 64 * 1_024;
+            eprintln!("native GUI future sizes: connection={connection_bytes}, wrapper={wrapper_bytes}");
+            assert!(connection_bytes <= MAX_OBSERVER_FUTURE_BYTES && wrapper_bytes <= MAX_OBSERVER_FUTURE_BYTES);
+        }).unwrap().join().unwrap();
     }
 }
