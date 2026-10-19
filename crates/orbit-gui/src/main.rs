@@ -36,9 +36,11 @@ fn main() -> anyhow::Result<()> {
     let mut options = backend::Options::parse();
     options.resolve_paths()?;
     let smoke_test = options.smoke_test.take();
+    let shutdown_report = smoke_test.clone();
     let runtime = Arc::new(tokio::runtime::Runtime::new()?);
+    let application_runtime = runtime.clone();
     let preferences = preferences::Preferences::load(options.preferences.as_deref(), &runtime)?;
-    let (loaded, _writer) = workbench::storage::Storage::load(&options)?;
+    let (loaded, writer) = workbench::storage::Storage::load(&options)?;
     gpui_kit::application()
         .with_assets(assets::AppAssets)
         .with_http_client(Arc::new(image_http::ImageHttpClient::new(
@@ -68,7 +70,9 @@ fn main() -> anyhow::Result<()> {
                 cx,
                 |window, cx| {
                     window.set_window_title("Orbit");
-                    cx.new(|cx| workbench::Workbench::new(options, runtime, loaded, window, cx))
+                    cx.new(|cx| {
+                        workbench::Workbench::new(options, application_runtime, loaded, window, cx)
+                    })
                 },
             );
             if let Err(error) = result {
@@ -109,6 +113,24 @@ fn main() -> anyhow::Result<()> {
             .detach();
             cx.activate(true);
         });
+    let mut shutdown_receipt = shutdown_report
+        .as_ref()
+        .and_then(|path| {
+            std::fs::read(path)
+                .ok()
+                .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        });
+    if let (Some(path), Some(receipt)) = (&shutdown_report, &mut shutdown_receipt) {
+        receipt["event_loop_exited"] = true.into();
+        std::fs::write(path, serde_json::to_vec(receipt)?)?;
+    }
+    drop(writer);
+    if let (Some(path), Some(receipt)) = (&shutdown_report, &mut shutdown_receipt) {
+        receipt["storage_flushed"] = true.into();
+        std::fs::write(path, serde_json::to_vec(receipt)?)?;
+    }
+    // Keep the executor alive until views release transports and the durable writer drains.
+    drop(runtime);
     Ok(())
 }
 
