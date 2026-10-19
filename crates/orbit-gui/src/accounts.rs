@@ -26,6 +26,7 @@ use std::{path::PathBuf, sync::Arc};
 
 pub(crate) enum AccountsEvent {
     Changed,
+    RefreshRequested,
 }
 
 pub(crate) struct Accounts {
@@ -47,16 +48,35 @@ pub(crate) struct Accounts {
     project: Entity<InputState>,
     pending_project: Option<PendingAccountSetup>,
     adding: bool,
-    api_form: bool,
+    setup: Setup,
 }
 
 impl EventEmitter<AccountsEvent> for Accounts {}
 
 pub(crate) enum AccountCheck {
     Loading,
+    Providers,
+    Chatgpt,
+    Google,
+    Official,
     Editing,
     Discovering,
     Saving,
+}
+
+impl AccountCheck {
+    pub(crate) fn frame_name(&self) -> &'static str {
+        match self {
+            Self::Loading => "accounts",
+            Self::Providers => "providers",
+            Self::Chatgpt => "chatgpt",
+            Self::Google => "google",
+            Self::Official => "official-api",
+            Self::Editing => "custom-api",
+            Self::Discovering => "discovered-models",
+            Self::Saving => "saved-account",
+        }
+    }
 }
 
 enum AccountEvent {
@@ -72,6 +92,13 @@ enum AccountEvent {
 enum LoginStage {
     Browser,
     Project,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Setup {
+    Providers,
+    OAuth(OAuthProvider),
+    Api,
 }
 
 #[derive(Clone)]
@@ -119,6 +146,26 @@ impl Accounts {
         }
         match step {
             AccountCheck::Loading => {
+                self.adding = true;
+                self.setup = Setup::Providers;
+                *step = AccountCheck::Providers;
+                cx.notify();
+            }
+            AccountCheck::Providers => {
+                self.setup = Setup::OAuth(OAuthProvider::Chatgpt);
+                *step = AccountCheck::Chatgpt;
+                cx.notify();
+            }
+            AccountCheck::Chatgpt => {
+                self.setup = Setup::OAuth(OAuthProvider::Google);
+                *step = AccountCheck::Google;
+                cx.notify();
+            }
+            AccountCheck::Google => {
+                self.edit(None, Some(ApiKeyProvider::Deepseek), window, cx);
+                *step = AccountCheck::Official;
+            }
+            AccountCheck::Official => {
                 let name = self
                     .entries
                     .first()
@@ -199,7 +246,7 @@ impl Accounts {
             oauth: None,
             api_provider: None,
             adding: false,
-            api_form: false,
+            setup: Setup::Providers,
             error,
             busy: false,
             loading: false,
@@ -284,7 +331,7 @@ impl Accounts {
                             AccountEvent::ProjectRequired(pending, error) => {
                                 view.pending_project = Some(pending);
                                 view.adding = true;
-                                view.api_form = false;
+                                view.setup = Setup::OAuth(OAuthProvider::Google);
                                 view.busy = false;
                                 view.login_stage = None;
                                 view.operation = None;
@@ -310,7 +357,7 @@ impl Accounts {
                                     Ok(entries) => {
                                         view.entries = entries;
                                         view.adding = false;
-                                        view.api_form = false;
+                                        view.setup = Setup::Providers;
                                         view.draft = None;
                                         view.fields[2].update(cx, |input, cx| {
                                             input.set_value("", window, cx)
@@ -332,7 +379,7 @@ impl Accounts {
                                     Ok(entries) => {
                                         view.entries = entries;
                                         view.adding = false;
-                                        view.api_form = false;
+                                        view.setup = Setup::Providers;
                                         view.draft = None;
                                         view.fields[2].update(cx, |input, cx| {
                                             input.set_value("", window, cx)
@@ -419,6 +466,8 @@ impl Accounts {
                             input.set_placeholder(
                                 if draft.original_name().is_some() {
                                     "留空以保留现有密钥"
+                                } else if provider.is_some() {
+                                    "输入 API Key"
                                 } else {
                                     "没有密钥时可留空"
                                 },
@@ -428,7 +477,7 @@ impl Accounts {
                         });
                         view.draft = Some(draft);
                         view.adding = true;
-                        view.api_form = true;
+                        view.setup = Setup::Api;
                         let ix = if provider.is_some() {
                             2
                         } else {
@@ -477,7 +526,7 @@ impl Accounts {
             let result = async {
                 let login = Login::start(
                     provider,
-                    (!project.is_empty()).then_some(project),
+                    (provider == OAuthProvider::Google && !project.is_empty()).then_some(project),
                     &auth,
                     credential,
                 )
@@ -856,7 +905,7 @@ impl Render for Accounts {
                 .is_some_and(ConnectionDraft::account);
         let mut content = v_flex()
             .w_full()
-            .gap_4()
+            .gap_2()
             .child(
                 h_flex()
                     .gap_2()
@@ -864,7 +913,7 @@ impl Render for Accounts {
                         div()
                             .flex_1()
                             .font_weight(FontWeight::MEDIUM)
-                            .child(if self.api_form {
+                            .child(if self.setup == Setup::Api {
                                 if editing {
                                     "编辑连接"
                                 } else {
@@ -885,10 +934,13 @@ impl Render for Accounts {
                                 .label(if self.loading {
                                     "刷新中…"
                                 } else {
-                                    "刷新"
+                                    "刷新模型"
                                 })
                                 .disabled(self.busy || self.loading)
-                                .on_click(cx.listener(|view, _, _, cx| view.load(cx))),
+                                .on_click(cx.listener(|view, _, _, cx| {
+                                    view.load(cx);
+                                    cx.emit(AccountsEvent::RefreshRequested);
+                                })),
                         )
                     })
                     .child(
@@ -902,7 +954,7 @@ impl Render for Accounts {
                             .disabled(self.busy || self.loading)
                             .on_click(cx.listener(|view, _, _, cx| {
                                 view.adding = !view.adding;
-                                view.api_form = false;
+                                view.setup = Setup::Providers;
                                 view.draft = None;
                                 view.oauth = None;
                                 view.api_provider = None;
@@ -1029,8 +1081,140 @@ impl Render for Accounts {
                         ),
                 );
             }
-        } else if !self.api_form {
+        } else if self.setup == Setup::Providers && !awaiting_project {
+            content = content.child(
+                div()
+                    .text_sm()
+                    .text_color(cx.theme().muted_foreground)
+                    .child("选择服务商。订阅账号通过浏览器登录，API 连接只需填写密钥。"),
+            );
+            content = content.child(
+                div()
+                    .text_sm()
+                    .font_weight(FontWeight::MEDIUM)
+                    .child("订阅账号"),
+            );
+            for (provider, label, description) in [
+                (OAuthProvider::Chatgpt, "ChatGPT", "使用 ChatGPT 账号授权"),
+                (OAuthProvider::Anthropic, "Claude", "使用 Claude 账号授权"),
+                (
+                    OAuthProvider::Google,
+                    "Gemini",
+                    "使用 Google 账号授权 Gemini CLI",
+                ),
+                (
+                    OAuthProvider::Antigravity,
+                    "Antigravity",
+                    "使用 Google 账号授权 Antigravity",
+                ),
+            ] {
+                content = content.child(
+                    h_flex()
+                        .gap_4()
+                        .py_2()
+                        .border_b_1()
+                        .border_color(cx.theme().border)
+                        .child(
+                            v_flex()
+                                .flex_1()
+                                .min_w_0()
+                                .gap_1()
+                                .child(label)
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child(description),
+                                ),
+                        )
+                        .child(
+                            Button::new(provider.name())
+                                .label("登录…")
+                                .disabled(self.busy || self.loading)
+                                .on_click(cx.listener(move |view, _, _, cx| {
+                                    view.setup = Setup::OAuth(provider);
+                                    view.error = None;
+                                    cx.notify();
+                                })),
+                        ),
+                );
+            }
+            content = content.child(
+                div()
+                    .mt_2()
+                    .text_sm()
+                    .font_weight(FontWeight::MEDIUM)
+                    .child("API 密钥"),
+            );
+            for provider in [ApiKeyProvider::Deepseek, ApiKeyProvider::ZhipuCodingPlan] {
+                content = content.child(
+                    h_flex()
+                        .gap_4()
+                        .py_2()
+                        .border_b_1()
+                        .border_color(cx.theme().border)
+                        .child(
+                            v_flex()
+                                .flex_1()
+                                .min_w_0()
+                                .gap_1()
+                                .child(provider.label())
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child("使用官方地址，自动获取模型与能力"),
+                                ),
+                        )
+                        .child(
+                            Button::new(provider.name())
+                                .label("添加…")
+                                .disabled(self.busy || self.loading)
+                                .on_click(cx.listener(move |view, _, window, cx| {
+                                    view.edit(None, Some(provider), window, cx)
+                                })),
+                        ),
+                );
+            }
+            content =
+                content.child(
+                    h_flex()
+                        .gap_4()
+                        .py_2()
+                        .child(
+                            v_flex()
+                                .flex_1()
+                                .min_w_0()
+                                .gap_1()
+                                .child("自定义 API")
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child("连接其他服务或本机模型"),
+                                ),
+                        )
+                        .child(
+                            Button::new("add-api-key")
+                                .label("配置…")
+                                .disabled(self.busy || self.loading)
+                                .on_click(cx.listener(|view, _, window, cx| {
+                                    view.edit(None, None, window, cx)
+                                })),
+                        ),
+                );
+        } else if let Setup::OAuth(provider) = self.setup {
             content = content
+                .child(
+                    div()
+                        .font_weight(FontWeight::MEDIUM)
+                        .child(match provider {
+                            OAuthProvider::Chatgpt => "ChatGPT",
+                            OAuthProvider::Anthropic => "Claude",
+                            OAuthProvider::Google => "Gemini",
+                            OAuthProvider::Antigravity => "Antigravity",
+                        }),
+                )
                 .child(
                     div()
                         .text_sm()
@@ -1038,67 +1222,51 @@ impl Render for Accounts {
                         .child(if awaiting_project {
                             "账号已授权，填写项目后继续连接"
                         } else {
-                            "选择登录方式"
+                            "在浏览器中完成账号授权，Orbit 不会读取账号密码。"
                         }),
                 )
-                .when(!awaiting_project, |view| {
-                    view.child(
-                        h_flex().gap_2().flex_wrap().children(
-                            [
-                                (OAuthProvider::Antigravity, "Antigravity"),
-                                (OAuthProvider::Chatgpt, "ChatGPT"),
-                                (OAuthProvider::Google, "Gemini"),
-                                (OAuthProvider::Anthropic, "Claude"),
-                            ]
-                            .into_iter()
-                            .map(|(provider, label)| {
-                                Button::new(provider.name())
-                                    .label(format!("登录 {label}"))
-                                    .disabled(self.busy)
-                                    .on_click(
-                                        cx.listener(move |view, _, _, cx| view.login(provider, cx)),
-                                    )
-                            }),
-                        ),
-                    )
-                })
-                .child(
-                    v_flex()
-                        .gap_1()
-                        .child(if awaiting_project {
-                            "Google Cloud 项目 ID"
-                        } else {
-                            "Google Cloud 项目 ID（可选）"
-                        })
-                        .child(
-                            Input::new(&self.project)
-                                .aria_label("Google Cloud 项目 ID")
-                                .disabled(self.busy),
-                        ),
+                .when(
+                    awaiting_project || provider == OAuthProvider::Google,
+                    |view| {
+                        view.child(
+                            v_flex()
+                                .gap_1()
+                                .child(if awaiting_project {
+                                    "Google Cloud 项目 ID"
+                                } else {
+                                    "Google Cloud 项目 ID（可选）"
+                                })
+                                .child(
+                                    Input::new(&self.project)
+                                        .aria_label("Google Cloud 项目 ID")
+                                        .disabled(self.busy),
+                                ),
+                        )
+                    },
                 )
                 .when(!awaiting_project, |view| {
                     view.child(
-                        h_flex().gap_2().flex_wrap().children(
-                            [ApiKeyProvider::Deepseek, ApiKeyProvider::ZhipuCodingPlan]
-                                .into_iter()
-                                .map(|provider| {
-                                    Button::new(provider.name())
-                                        .label(provider.label())
-                                        .disabled(self.busy || self.loading)
-                                        .on_click(cx.listener(move |view, _, window, cx| {
-                                            view.edit(None, Some(provider), window, cx)
-                                        }))
-                                }),
-                        ),
-                    )
-                    .child(
-                        Button::new("add-api-key")
-                            .label("自定义 API…")
-                            .disabled(self.busy || self.loading)
-                            .on_click(
-                                cx.listener(|view, _, window, cx| {
-                                    view.edit(None, None, window, cx)
-                                }),
+                        h_flex()
+                            .gap_2()
+                            .justify_end()
+                            .child(
+                                Button::new("choose-other-provider")
+                                    .label("选择其他服务商")
+                                    .disabled(self.busy || self.loading)
+                                    .on_click(cx.listener(|view, _, _, cx| {
+                                        view.setup = Setup::Providers;
+                                        view.error = None;
+                                        cx.notify();
+                                    })),
+                            )
+                            .child(
+                                Button::new("login-selected-account")
+                                    .primary()
+                                    .label("在浏览器中登录")
+                                    .disabled(self.busy || self.loading)
+                                    .on_click(
+                                        cx.listener(move |view, _, _, cx| view.login(provider, cx)),
+                                    ),
                             ),
                     )
                 })
@@ -1143,11 +1311,13 @@ impl Render for Accounts {
                     ),
                 )
                 .child(
-                    Button::new("save-official-api")
-                        .primary()
-                        .label("验证并保存")
-                        .disabled(self.busy || self.loading)
-                        .on_click(cx.listener(|view, _, _, cx| view.save_key(cx))),
+                    h_flex().justify_end().child(
+                        Button::new("save-official-api")
+                            .primary()
+                            .label("验证并保存")
+                            .disabled(self.busy || self.loading)
+                            .on_click(cx.listener(|view, _, _, cx| view.save_key(cx))),
+                    ),
                 );
         } else {
             let protocol = div().w_full().h_8().child(

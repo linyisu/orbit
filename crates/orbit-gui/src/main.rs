@@ -177,7 +177,50 @@ fn smoke_frame(
             );
             return;
         }
+        if account_check.is_some() && frame == 0 {
+            smoke_frame(
+                report,
+                1,
+                view,
+                window,
+                account_check,
+                account_edit_verified,
+            );
+            return;
+        }
         if let Some(step) = &mut account_check {
+            if let Some(directory) = std::env::var_os("ORBIT_GUI_CAPTURE_DIR") {
+                let path =
+                    std::path::PathBuf::from(directory).join(format!("{}.png", step.frame_name()));
+                if cfg!(target_os = "linux") {
+                    if let Some(parent) = path.parent() {
+                        let _ = std::fs::create_dir_all(parent);
+                    }
+                    // This branch is confined to the explicit isolated native acceptance probe.
+                    if let Ok(display) = std::env::var("DISPLAY") {
+                        let _ = std::process::Command::new("ffmpeg")
+                            .args([
+                                "-nostdin",
+                                "-loglevel",
+                                "error",
+                                "-y",
+                                "-f",
+                                "x11grab",
+                                "-draw_mouse",
+                                "0",
+                                "-video_size",
+                                "1280x900",
+                                "-i",
+                            ])
+                            .arg(display)
+                            .args(["-frames:v", "1"])
+                            .arg(&path)
+                            .stdout(std::process::Stdio::null())
+                            .stderr(std::process::Stdio::null())
+                            .status();
+                    }
+                }
+            }
             let result = view.update(cx, |view, cx| view.check_account_edit(step, window, cx));
             match result {
                 Ok(Ok(complete)) => {

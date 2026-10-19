@@ -459,27 +459,7 @@ impl SettingsPage {
             0 => self
                 .appearance_page(cx)
                 .into_any_element(),
-            1 => {
-                let owner = self.owner.clone();
-                v_flex()
-                    .gap_4()
-                    .child(self.accounts.clone())
-                    .child(
-                        h_flex().child(
-                            Button::new("refresh-settings-models")
-                                .outline()
-                                .small()
-                                .icon(IconName::RefreshCw)
-                                .label("刷新模型列表")
-                                .on_click(move |_, window, cx| {
-                                    let _ = owner.update(cx, |view, cx| {
-                                        view.execute(WorkspaceCommand::RefreshModels, window, cx)
-                                    });
-                                }),
-                        ),
-                    )
-                    .into_any_element()
-            }
+            1 => self.accounts.clone().into_any_element(),
             2 => self.skills.clone().into_any_element(),
             3 => self.mcp.clone().into_any_element(),
             4 => self.memory.clone().into_any_element(),
@@ -716,10 +696,7 @@ fn page_matches(ix: usize, query: &str) -> bool {
 }
 
 fn content_column() -> Div {
-    v_flex()
-        .w_full()
-        .max_w(rems(60.))
-        .mx_auto()
+    v_flex().w_full().max_w(rems(60.))
 }
 
 fn section(title: &'static str, description: &'static str, cx: &App) -> Div {
