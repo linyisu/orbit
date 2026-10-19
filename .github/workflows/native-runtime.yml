@@ -113,6 +113,8 @@ jobs:
           cargo test -p orbit-runtime --locked ipc::
       - name: Test native executable cache
         run: cargo test -p orbit-client --locked local_server::tests
+      - name: Test bridge pipe inheritance isolation
+        run: cargo test -p orbit-service --locked --lib workspace::server::lifecycle::tests
       - name: Check complete native backend dependency graph
         run: cargo check -p orbit-server -p orbit-client --locked
       - name: Test native writes and Git index transactions

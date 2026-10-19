@@ -92,6 +92,8 @@ pub async fn serve(
     let root = runtime_directory()?;
     let socket = endpoints::shared(&root, &database)?;
     if !args.daemon {
+        #[cfg(windows)]
+        lifecycle::isolate_stdio()?;
         let mut child =
             lifecycle::connect_or_start(&socket, &args, &config, &database, &auth).await?;
         protocol::write(

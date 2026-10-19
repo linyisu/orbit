@@ -359,6 +359,40 @@ async fn retire_version(
     }
 }
 
+/// Keep bridge pipes usable locally without leaking them into the persistent daemon.
+#[cfg(windows)]
+pub(super) fn isolate_stdio() -> Result<()> {
+    use std::os::windows::io::BorrowedHandle;
+    use windows_sys::Win32::{
+        Foundation::INVALID_HANDLE_VALUE,
+        System::Console::{GetStdHandle, STD_ERROR_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE},
+    };
+
+    for stream in [STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE] {
+        // SAFETY: GetStdHandle borrows a process standard handle; it does not transfer ownership.
+        let handle = unsafe { GetStdHandle(stream) };
+        if handle.is_null() || handle == INVALID_HANDLE_VALUE {
+            continue;
+        }
+        // SAFETY: the standard handle remains owned by this process throughout the call.
+        prevent_inheritance(unsafe { BorrowedHandle::borrow_raw(handle) })
+            .context("cannot isolate workspace bridge standard handles")?;
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn prevent_inheritance(handle: std::os::windows::io::BorrowedHandle<'_>) -> std::io::Result<()> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Foundation::{HANDLE_FLAG_INHERIT, SetHandleInformation};
+
+    // SAFETY: the borrowed handle is live; only its inheritance flag is cleared.
+    if unsafe { SetHandleInformation(handle.as_raw_handle(), HANDLE_FLAG_INHERIT, 0) } == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
+}
+
 fn launch(
     socket: &Path,
     args: &ServiceOptions,
@@ -412,4 +446,46 @@ fn launch(
         let _ = child.wait();
     });
     Ok(())
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::*;
+    use std::os::windows::io::{AsHandle, AsRawHandle};
+    use windows_sys::Win32::Foundation::{
+        GetHandleInformation, HANDLE_FLAG_INHERIT, SetHandleInformation,
+    };
+
+    #[test]
+    fn bridge_handles_stop_inheriting_without_losing_access() {
+        use std::io::{Read, Seek, SeekFrom, Write};
+
+        let mut file = tempfile::tempfile().unwrap();
+        // SAFETY: file owns a live handle; this fixture enables inheritance before isolation.
+        assert_ne!(
+            unsafe {
+                SetHandleInformation(
+                    file.as_raw_handle(),
+                    HANDLE_FLAG_INHERIT,
+                    HANDLE_FLAG_INHERIT,
+                )
+            },
+            0
+        );
+        prevent_inheritance(file.as_handle()).unwrap();
+        let mut flags = 0;
+        // SAFETY: file is live and flags is a writable DWORD output.
+        assert_ne!(
+            unsafe { GetHandleInformation(file.as_raw_handle(), &mut flags) },
+            0
+        );
+        assert_eq!(flags & HANDLE_FLAG_INHERIT, 0);
+        file.write_all(b"isolated bridge")
+            .unwrap();
+        file.seek(SeekFrom::Start(0)).unwrap();
+        let mut content = String::new();
+        file.read_to_string(&mut content)
+            .unwrap();
+        assert_eq!(content, "isolated bridge");
+    }
 }
