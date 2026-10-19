@@ -450,6 +450,8 @@ fn desktop_probe(command: &mut Command, root: &Path) {
 
 /// Exercise the packaged desktop executable with an isolated real window and native service.
 pub async fn verify_gui(bundle: &Path) -> Result<()> {
+    const DESKTOP_EXIT_TIMEOUT: Duration = Duration::from_secs(120);
+
     let bundle = bundle.canonicalize()?;
     let client = crate::bundle::gui_executable(&bundle);
     verify_native_executable(&bundle, &client).await?;
@@ -484,7 +486,27 @@ pub async fn verify_gui(bundle: &Path) -> Result<()> {
         .arg("--smoke-test")
         .arg(&report)
         .args(["--model", "native::native-model"]);
-    process::run(&mut command).await?;
+    // A detached service must not keep a Windows blocking pipe reader alive at runtime shutdown.
+    let log = root.join("window.log");
+    let output = fs::File::create(&log)?;
+    let mut child = command
+        .stdout(output.try_clone()?)
+        .stderr(output)
+        .kill_on_drop(true)
+        .spawn()?;
+    let status = tokio::time::timeout(DESKTOP_EXIT_TIMEOUT, child.wait()).await;
+    let diagnostics = fs::read_to_string(&log).unwrap_or_default();
+    let status = status.with_context(|| {
+        let receipt = fs::read_to_string(&report).unwrap_or_else(|_| "missing receipt".into());
+        format!(
+            "desktop process did not exit within {} seconds: {receipt}\n{diagnostics}",
+            DESKTOP_EXIT_TIMEOUT.as_secs()
+        )
+    })??;
+    ensure!(
+        status.success(),
+        "desktop failed ({status}):\n{diagnostics}"
+    );
     let receipt: Value = serde_json::from_slice(&fs::read(&report)?)?;
     ensure!(
         receipt["connected"] == true
