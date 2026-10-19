@@ -939,12 +939,35 @@ impl Service {
                 session,
                 expected_workspace,
                 action,
-            } => Ok(Response::Subagents(
-                self.session(&session)
-                    .await?
-                    .subagents(action, expected_workspace)
-                    .await?,
-            )),
+            } => {
+                if let Some(browsing) = self.browsing(&session).await {
+                    ensure!(
+                        expected_workspace == browsing.info().workspace,
+                        "项目已切换，请刷新后重试"
+                    );
+                    let config = session::browsing::Browsing::configuration(connection_options)?;
+                    let policy = orbit_protocol::SessionPolicy {
+                        disabled: config.disabled_capabilities,
+                        ..Default::default()
+                    };
+                    ensure!(
+                        !policy.disabled(orbit_protocol::Capability::Subagents),
+                        "子 Agent 功能已禁用"
+                    );
+                    let orbit_protocol::subagents::Action::List { offset } = action else {
+                        bail!("子 Agent 尚未启动执行");
+                    };
+                    return Ok(Response::Subagents(
+                        super::subagents::list(&browsing.session.store, &session, offset).await?,
+                    ));
+                }
+                Ok(Response::Subagents(
+                    self.session(&session)
+                        .await?
+                        .subagents(action, expected_workspace)
+                        .await?,
+                ))
+            }
             Request::InputQueue {
                 session,
                 expected_workspace,
@@ -976,6 +999,16 @@ impl Service {
                 );
                 if let orbit_protocol::admin::Action::RenameSession { id, title } = &action {
                     super::admin::ensure_title(title)?;
+                    if let Some(mut browsing) = self.browsing(id).await {
+                        browsing
+                            .session
+                            .rename(title.clone())
+                            .await?;
+                        return Ok(Response::Report(orbit_protocol::Report {
+                            title: "会话标题".into(),
+                            text: title.clone(),
+                        }));
+                    }
                     let handle = self
                         .sessions
                         .lock()
@@ -992,7 +1025,9 @@ impl Service {
                         ));
                     }
                 }
+                let mut deleted_browsing = None;
                 if let orbit_protocol::admin::Action::DeleteSession { id } = &action {
+                    deleted_browsing = self.browsing(id).await;
                     let handle = self
                         .sessions
                         .lock()
@@ -1008,10 +1043,16 @@ impl Service {
                 }
                 let store =
                     orbit_store::store::Store::open(connection_options.database.clone()).await?;
-                Ok(Response::Report(
+                let report =
                     super::admin::execute(&store, &connection_options.initial_directory, action)
-                        .await?,
-                ))
+                        .await?;
+                if let Some(browsing) = deleted_browsing {
+                    self.browsing
+                        .lock()
+                        .await
+                        .remove(browsing.session.id());
+                }
+                Ok(Response::Report(report))
             }
             Request::ListSessions { session } => {
                 let (store, info) = self.conversation(&session).await?;

@@ -81,25 +81,7 @@ pub(super) async fn browse(
         ..Default::default()
     };
     if matches!(action, Action::Mcp) {
-        ensure!(!policy.disabled(Capability::Mcp), "MCP 工具已禁用");
-        return Ok(Snapshot::Mcp(
-            config
-                .mcp
-                .servers
-                .iter()
-                .map(|(name, server)| McpServer {
-                    name: name.clone(),
-                    connected: false,
-                    detail: if server.enabled {
-                        "尚未启动执行"
-                    } else {
-                        "已禁用"
-                    }
-                    .into(),
-                    tools: Vec::new(),
-                })
-                .collect(),
-        ));
+        return Ok(Snapshot::Mcp(pending_mcp(&config.mcp, &policy)?));
     }
     if matches!(action, Action::Memories | Action::Memory(_)) {
         ensure!(!policy.disabled(Capability::ProjectState), "记忆功能已禁用");
@@ -116,6 +98,29 @@ pub(super) async fn browse(
     }
     ensure!(!policy.disabled(Capability::Skills), "技能功能已禁用");
     session_action(&mut browsing.session, action, false, None).await
+}
+
+/// Describe configured servers before execution without starting a process or granting tools.
+pub(super) fn pending_mcp(
+    config: &orbit_tools::mcp::McpConfig,
+    policy: &orbit_protocol::SessionPolicy,
+) -> Result<Vec<McpServer>> {
+    ensure!(!policy.disabled(Capability::Mcp), "MCP 工具已禁用");
+    Ok(config
+        .servers
+        .iter()
+        .map(|(name, server)| McpServer {
+            name: name.clone(),
+            connected: false,
+            detail: if server.enabled {
+                "尚未启动执行"
+            } else {
+                "已禁用"
+            }
+            .into(),
+            tools: Vec::new(),
+        })
+        .collect())
 }
 
 async fn session_action(

@@ -26,40 +26,7 @@ pub(super) async fn execute(
     let parent = setup.session.id();
     let store = &setup.session.store;
     match action {
-        Action::List { offset } => {
-            ensure!(offset <= 20_000, "子 Agent 列表页码超出限制");
-            let children = store.subagents(parent).await?;
-            let total = children.len();
-            let mut agents = Vec::new();
-            for child in children
-                .into_iter()
-                .skip(offset)
-                .take(PAGE_SIZE)
-            {
-                let revision = store
-                    .session_revision(&child.id)
-                    .await?
-                    .context("子 Agent 已不存在，请刷新列表")?;
-                agents.push(Agent {
-                    id: child.id,
-                    role: child.role,
-                    model: revision.model,
-                    task: child.task.chars().take(200).collect(),
-                    workspace: revision.workspace,
-                    status: if revision.status.is_empty() {
-                        "idle".into()
-                    } else {
-                        revision.status
-                    },
-                    run: revision.run,
-                });
-            }
-            let end = offset.saturating_add(agents.len());
-            Ok(Snapshot::List {
-                agents,
-                next: (end < total).then_some(end),
-            })
-        }
+        Action::List { offset } => list(store, parent, offset).await,
         Action::Send { id, message } => {
             store
                 .owned_subagent(parent, &id)
@@ -103,4 +70,43 @@ pub(super) async fn execute(
             Ok(Snapshot::Stopping { id, run })
         }
     }
+}
+
+pub(super) async fn list(
+    store: &orbit_store::store::Store,
+    parent: &str,
+    offset: usize,
+) -> Result<Snapshot> {
+    ensure!(offset <= 20_000, "子 Agent 列表页码超出限制");
+    let children = store.subagents(parent).await?;
+    let total = children.len();
+    let mut agents = Vec::new();
+    for child in children
+        .into_iter()
+        .skip(offset)
+        .take(PAGE_SIZE)
+    {
+        let revision = store
+            .session_revision(&child.id)
+            .await?
+            .context("子 Agent 已不存在，请刷新列表")?;
+        agents.push(Agent {
+            id: child.id,
+            role: child.role,
+            model: revision.model,
+            task: child.task.chars().take(200).collect(),
+            workspace: revision.workspace,
+            status: if revision.status.is_empty() {
+                "idle".into()
+            } else {
+                revision.status
+            },
+            run: revision.run,
+        });
+    }
+    let end = offset.saturating_add(agents.len());
+    Ok(Snapshot::List {
+        agents,
+        next: (end < total).then_some(end),
+    })
 }

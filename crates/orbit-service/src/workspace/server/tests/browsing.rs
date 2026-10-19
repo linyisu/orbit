@@ -1,6 +1,100 @@
 use super::*;
 
 #[tokio::test]
+async fn browsing_keeps_session_administration_and_archived_views_consistent() {
+    let fixture = Fixture::new("http://127.0.0.1:1/v1").await;
+    fs::remove_file(&fixture.service.options.config).unwrap();
+    let Response::Opened(info) = fixture
+        .request(Request::Browse { resume: None })
+        .await
+        .unwrap()
+    else {
+        panic!("missing draft");
+    };
+    fixture
+        .service
+        .browsing(&info.id)
+        .await
+        .unwrap()
+        .session
+        .persist()
+        .await
+        .unwrap();
+    fixture
+        .request(Request::Admin {
+            action: orbit_protocol::admin::Action::RenameSession {
+                id: info.id.clone(),
+                title: "Generated archive".into(),
+            },
+        })
+        .await
+        .unwrap();
+    let Response::Opened(renamed) = fixture
+        .request(Request::Browse {
+            resume: Some(info.id.clone()),
+        })
+        .await
+        .unwrap()
+    else {
+        panic!("missing renamed conversation");
+    };
+    assert_eq!(renamed.title, "Generated archive");
+    let children = fixture
+        .request(Request::Subagents {
+            session: info.id.clone(),
+            expected_workspace: info.workspace.clone(),
+            action: orbit_protocol::subagents::Action::List { offset: 0 },
+        })
+        .await
+        .unwrap();
+    assert!(matches!(children,
+        Response::Subagents(orbit_protocol::subagents::Snapshot::List { agents, .. }) if agents.is_empty()
+    ));
+    for section in [
+        orbit_protocol::Inspection::Diagnostics,
+        orbit_protocol::Inspection::Changes,
+        orbit_protocol::Inspection::Status,
+        orbit_protocol::Inspection::Mcp,
+    ] {
+        assert!(matches!(
+            fixture
+                .request(Request::SessionAction {
+                    session: info.id.clone(),
+                    action: orbit_protocol::SessionAction::Inspect { section },
+                })
+                .await
+                .unwrap(),
+            Response::Report(_)
+        ));
+    }
+    fixture
+        .request(Request::Admin {
+            action: orbit_protocol::admin::Action::DeleteSession {
+                id: info.id.clone(),
+            },
+        })
+        .await
+        .unwrap();
+    assert!(
+        fixture
+            .request(Request::Poll {
+                session: info.id.clone(),
+                after: 0
+            })
+            .await
+            .is_err()
+    );
+    assert!(
+        fixture
+            .request(Request::Browse {
+                resume: Some(info.id)
+            })
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
 async fn shutdown_waits_for_browsing_operations_and_rejects_new_sessions() {
     let fixture = Fixture::new("http://127.0.0.1:1/v1").await;
     let Response::Opened(info) = fixture
@@ -140,6 +234,18 @@ async fn session_extensions_and_memory_views_work_before_model_setup() {
     assert!(matches!(skill,
         Response::Resources(Snapshot::Skill { content, .. })
             if content.contains("Preserve public identifiers.")
+    ));
+    assert!(matches!(
+        fixture
+            .request(Request::SessionAction {
+                session: info.id.clone(),
+                action: orbit_protocol::SessionAction::LoadSkill {
+                    name: "generated-skill".into()
+                },
+            })
+            .await
+            .unwrap(),
+        Response::Report(_)
     ));
     assert!(
         fixture

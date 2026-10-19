@@ -109,7 +109,87 @@ pub(super) async fn browse(
             "上下文预算",
             "尚未准备模型请求，执行预算未知；历史会话可以正常查看。".into(),
         ),
-        _ => anyhow::bail!("该操作需要已准备的执行资源；会话历史和草稿仍保留"),
+        SessionAction::Inspect { section } => {
+            if let Some(report) = inspection::stored(&browsing.session, &section).await? {
+                report
+            } else {
+                match section {
+                    orbit_protocol::Inspection::Skills => {
+                        ensure!(
+                            !policy.disabled(orbit_protocol::Capability::Skills),
+                            "技能功能已禁用"
+                        );
+                        report(
+                            "Skills",
+                            super::library::session_skills(&browsing.session)
+                                .await?
+                                .render(),
+                        )
+                    }
+                    orbit_protocol::Inspection::Status => report(
+                        "会话状态",
+                        format!(
+                            "会话：{}\n项目目录：{}\n执行尚未开始；发送请求时校验模型配置。",
+                            browsing.session.id(),
+                            browsing
+                                .session
+                                .snapshot
+                                .session
+                                .workspace,
+                        ),
+                    ),
+                    orbit_protocol::Inspection::Mcp => {
+                        let servers = super::resources::pending_mcp(&config.mcp, &policy)?;
+                        report(
+                            "MCP 状态",
+                            if servers.is_empty() {
+                                "未配置 MCP server。".into()
+                            } else {
+                                servers
+                                    .iter()
+                                    .map(|server| {
+                                        format!(
+                                            "{} · {} · {} 个工具",
+                                            server.name,
+                                            server.detail,
+                                            server.tools.len()
+                                        )
+                                    })
+                                    .collect::<Vec<_>>()
+                                    .join("\n")
+                            },
+                        )
+                    }
+                    orbit_protocol::Inspection::ExportPatch => {
+                        let (workspace, policy) =
+                            super::files::browsing_access(browsing, options).await?;
+                        ensure!(
+                            !policy.disabled(orbit_protocol::Capability::Git),
+                            "Git 功能已禁用"
+                        );
+                        report(
+                            "Git patch",
+                            tokio::task::spawn_blocking(move || {
+                                orbit_tools::git_inspect::working_tree_patch(workspace.root())
+                            })
+                            .await??,
+                        )
+                    }
+                    orbit_protocol::Inspection::Context
+                    | orbit_protocol::Inspection::Diagnostics
+                    | orbit_protocol::Inspection::Changes
+                    | orbit_protocol::Inspection::Diff { .. } => unreachable!(),
+                }
+            }
+        }
+        SessionAction::LoadSkill { name } => {
+            ensure!(
+                !policy.disabled(orbit_protocol::Capability::Skills),
+                "技能功能已禁用"
+            );
+            let skills = super::library::session_skills(&browsing.session).await?;
+            load_skill(&mut browsing.session, &skills, name, false).await?
+        }
     };
     Ok(Response::Report(result))
 }
@@ -129,6 +209,26 @@ async fn memory(
     }
     let result = crate::project_state::actions::memory(session, &mut Vec::new(), action).await?;
     Ok(project::memory_report(result))
+}
+
+async fn load_skill(
+    session: &mut crate::session::SessionState,
+    skills: &crate::skills::Skills,
+    name: String,
+    running: bool,
+) -> Result<Report> {
+    ensure!(!running, "请在当前任务结束后载入 Skill");
+    let skill = skills
+        .get(&name)
+        .ok_or_else(|| anyhow::anyhow!("未找到 Skill {name:?}"))?;
+    let content = crate::skills::read_skill(&skill.path).map_err(anyhow::Error::msg)?;
+    let command = skill.command.clone();
+    let message = ChatMessage::user(format!(
+        "请在后续工作中使用已载入的 Skill /{}：\n{content}",
+        skill.command
+    ));
+    session.append_context(message).await?;
+    Ok(report("Skill", format!("已载入 /{command}。")))
 }
 
 pub(super) async fn execute(
@@ -227,24 +327,13 @@ pub(super) async fn execute(
             Ok(report("会话标题", title))
         }
         SessionAction::LoadSkill { name } => {
-            ensure!(!running, "请在当前任务结束后载入 Skill");
-            let skill = setup
-                .resources
-                .budget
-                .skills
-                .get(&name)
-                .ok_or_else(|| anyhow::anyhow!("未找到 Skill {name:?}"))?;
-            let content = crate::skills::read_skill(&skill.path).map_err(anyhow::Error::msg)?;
-            let command = skill.command.clone();
-            let message = ChatMessage::user(format!(
-                "请在后续工作中使用已载入的 Skill /{}：\n{content}",
-                skill.command
-            ));
-            setup
-                .session
-                .append_context(message)
-                .await?;
-            Ok(report("Skill", format!("已载入 /{command}。")))
+            load_skill(
+                &mut setup.session,
+                &setup.resources.budget.skills,
+                name,
+                running,
+            )
+            .await
         }
     }
 }

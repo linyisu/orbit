@@ -448,6 +448,11 @@ impl Client {
             | Request::QueueInput { session, .. }
             | Request::Steer { session, .. }
             | Request::SteerImages { session, .. }
+            | Request::Subagents {
+                session,
+                action: orbit_protocol::subagents::Action::Send { .. },
+                ..
+            }
             | Request::Plan {
                 session,
                 action:

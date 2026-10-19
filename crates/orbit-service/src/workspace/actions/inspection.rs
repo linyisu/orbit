@@ -6,6 +6,9 @@ use orbit_protocol::{Inspection, Report};
 
 pub(super) async fn inspect(setup: &PreparedWorkspace, section: Inspection) -> Result<Report> {
     let session = &setup.session;
+    if let Some(report) = stored(session, &section).await? {
+        return Ok(report);
+    }
     let resources = &setup.resources;
     let budget = &resources.budget;
     Ok(match section {
@@ -34,45 +37,7 @@ pub(super) async fn inspect(setup: &PreparedWorkspace, section: Inspection) -> R
                     .join("\n")
             },
         ),
-        Inspection::Diagnostics => report(
-            "诊断记录",
-            if session.is_persisted() {
-                orbit_store::diagnostics::text(
-                    &session
-                        .store
-                        .diagnostics(session.id())
-                        .await?,
-                )
-            } else {
-                "尚未开始会话，暂无诊断记录。".into()
-            },
-        ),
-        Inspection::Changes => {
-            let listing = super::super::changes::list(
-                &session
-                    .store
-                    .workspace_changes(session.id())
-                    .await?,
-            );
-            report(
-                "文件改动",
-                format!(
-                    "{listing}{}",
-                    crate::verification::changes_text(session).await
-                ),
-            )
-        }
-        Inspection::Diff { path } => {
-            let changes = session
-                .store
-                .workspace_changes(session.id())
-                .await?;
-            let text = match path {
-                Some(path) => super::super::changes::diff(&changes, &path),
-                None => super::super::changes::list(&changes),
-            };
-            report("文件差异", text)
-        }
+        Inspection::Diagnostics | Inspection::Changes | Inspection::Diff { .. } => unreachable!(),
         Inspection::Status => report("会话状态", status(setup).await?),
         Inspection::Context => {
             let mut history = if session.is_persisted() {
@@ -150,6 +115,54 @@ pub(super) async fn inspect(setup: &PreparedWorkspace, section: Inspection) -> R
             )
         }
     })
+}
+
+pub(super) async fn stored(
+    session: &crate::session::SessionState,
+    section: &Inspection,
+) -> Result<Option<Report>> {
+    Ok(Some(match section {
+        Inspection::Diagnostics => report(
+            "诊断记录",
+            if session.is_persisted() {
+                orbit_store::diagnostics::text(
+                    &session
+                        .store
+                        .diagnostics(session.id())
+                        .await?,
+                )
+            } else {
+                "尚未开始会话，暂无诊断记录。".into()
+            },
+        ),
+        Inspection::Changes => {
+            let listing = super::super::changes::list(
+                &session
+                    .store
+                    .workspace_changes(session.id())
+                    .await?,
+            );
+            report(
+                "文件改动",
+                format!(
+                    "{listing}{}",
+                    crate::verification::changes_text(session).await
+                ),
+            )
+        }
+        Inspection::Diff { path } => {
+            let changes = session
+                .store
+                .workspace_changes(session.id())
+                .await?;
+            let text = match path {
+                Some(path) => super::super::changes::diff(&changes, path),
+                None => super::super::changes::list(&changes),
+            };
+            report("文件差异", text)
+        }
+        _ => return Ok(None),
+    }))
 }
 
 fn estimate_part(history: &[ChatMessage], include: impl Fn(&ChatMessage) -> bool) -> usize {
