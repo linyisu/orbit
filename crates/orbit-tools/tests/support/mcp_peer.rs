@@ -49,7 +49,9 @@ fn main() -> Result<()> {
             .create(true)
             .append(true)
             .open(root.join("requests.jsonl"))?;
-        writeln!(log, "{message}")?;
+        let mut record = serde_json::to_vec(&message)?;
+        record.push(b'\n');
+        log.write_all(&record)?;
         let id = message["id"].clone();
         match message["method"].as_str() {
             Some("initialize") if mode != "init_timeout" => send(

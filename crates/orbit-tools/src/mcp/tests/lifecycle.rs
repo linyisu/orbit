@@ -77,19 +77,41 @@ pub(super) fn config(mode: &str) -> McpServerConfig {
 }
 
 fn messages(directory: &Path) -> Vec<Value> {
-    std::fs::read_to_string(directory.join("requests.jsonl"))
-        .unwrap()
-        .lines()
+    let contents = std::fs::read_to_string(directory.join("requests.jsonl")).unwrap();
+    assert!(
+        contents.is_empty() || contents.ends_with('\n'),
+        "unfinished peer log"
+    );
+    committed_messages(&contents).collect()
+}
+
+fn committed_messages(contents: &str) -> impl Iterator<Item = Value> + '_ {
+    contents
+        .split_inclusive('\n')
+        .filter(|line| line.ends_with('\n'))
         .map(|line| serde_json::from_str(line).unwrap())
-        .collect()
+}
+
+#[test]
+fn a_live_peer_log_can_end_in_an_uncommitted_record() {
+    let snapshot = "{\"method\":\"initialize\"}\n{\"method\":\"tools/";
+    let recorded = committed_messages(snapshot).collect::<Vec<_>>();
+    assert_eq!(recorded, [json!({"method": "initialize"})]);
+    let completed = format!("{snapshot}call\"}}\n");
+    assert_eq!(
+        committed_messages(&completed).collect::<Vec<_>>(),
+        [
+            json!({"method": "initialize"}),
+            json!({"method": "tools/call"})
+        ]
+    );
 }
 
 async fn wait_for_call(directory: &Path) {
     time::timeout(Duration::from_secs(2), async {
         loop {
-            if messages(directory)
-                .iter()
-                .any(|message| message["method"] == "tools/call")
+            let snapshot = std::fs::read_to_string(directory.join("requests.jsonl")).unwrap();
+            if committed_messages(&snapshot).any(|message| message["method"] == "tools/call")
                 && directory.join("child.pid").exists()
             {
                 break;
