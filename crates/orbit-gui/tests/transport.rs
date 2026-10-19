@@ -34,6 +34,49 @@ use tokio::sync::mpsc;
 const TRANSPORT_TEST_STACK_BYTES: usize = 512 * 1_024;
 
 #[test]
+fn first_use_prompts_for_account_before_service_preparation() {
+    use clap::Parser;
+    let root = tempfile::tempdir().unwrap();
+    let runtime = std::sync::Arc::new(tokio::runtime::Runtime::new().unwrap());
+    let mut options = Options::parse_from(["orbit-gui"]);
+    options.config = root.path().join("missing-config.toml");
+    options.auth_dir = Some(root.path().join("auth"));
+    options.workspace = Some(root.path().to_path_buf());
+    options.preferences = Some(root.path().join("preferences.json"));
+    options.server = Some(
+        root.path()
+            .join("missing-server")
+            .to_string_lossy()
+            .into_owned(),
+    );
+    let (backend, mut events) = Backend::start(options, &runtime);
+    runtime.block_on(async {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            let mut prompted = false;
+            loop {
+                match events.recv().await.unwrap() {
+                    Event::ConfigurationRequired => prompted = true,
+                    Event::Disconnected(_) => {
+                        assert!(prompted, "service deployment must not delay account setup");
+                        break;
+                    }
+                    _ => (),
+                }
+            }
+        })
+        .await
+        .unwrap();
+        backend.shutdown().await;
+    });
+    assert!(
+        !root
+            .path()
+            .join("missing-config.toml")
+            .exists()
+    );
+}
+
+#[test]
 fn mcp_start_permission_defaults_off_and_is_forwarded_to_each_target() {
     use clap::Parser;
     for target in [vec![], vec!["--ssh", "test-host"], vec!["--wsl", "Ubuntu"]] {
@@ -544,6 +587,7 @@ fn transport_retries_sends_and_resolves_approvals() {
             appearance: None,
             preferences: None,
             smoke_test: None,
+            smoke_account_edit: false,
             ssh: None,
             ssh_user: None,
             ssh_port: None,
@@ -987,6 +1031,7 @@ fn independent_tasks_keep_running_and_scope_approvals_to_their_connection() {
         appearance: None,
         preferences: None,
         smoke_test: None,
+        smoke_account_edit: false,
         ssh: None,
         ssh_user: None,
         ssh_port: None,
@@ -1111,6 +1156,7 @@ fn history_pages_drain_without_live_poll_delays_and_keep_cursor_order() {
             appearance: None,
             preferences: None,
             smoke_test: None,
+            smoke_account_edit: false,
             ssh: None,
             ssh_user: None,
             ssh_port: None,
@@ -1188,6 +1234,7 @@ fn replacement_directory_links_before_resume_and_preserves_ownership_checks() {
                 appearance: None,
                 preferences: None,
                 smoke_test: None,
+                smoke_account_edit: false,
                 ssh: None,
                 ssh_user: None,
                 ssh_port: None,

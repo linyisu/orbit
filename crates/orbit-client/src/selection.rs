@@ -34,6 +34,16 @@ pub fn requested_model(requested: &str, current: &str, models: &[String]) -> Res
 }
 
 impl Local {
+    /// Identify first-use setup from declarations and cached models, without network discovery.
+    /// Restored sessions and explicit model choices are validated when opening the session.
+    pub async fn requires_model_setup(
+        &self,
+        resume: Option<&str>,
+        model: Option<&str>,
+    ) -> Result<bool> {
+        Ok(resume.is_none() && model.is_none() && self.model_catalog().await?.is_empty())
+    }
+
     pub async fn model_catalog(&self) -> Result<Vec<ModelOption>> {
         let mut config = FileConfig::parse(&self.read()?, &self.auth)?;
         let _ = orbit_config::models::updater::load_cached(&mut config).await;
@@ -141,6 +151,24 @@ mod tests {
         assert_eq!(local.selected_model().await.unwrap(), None);
         assert!(
             local
+                .requires_model_setup(None, None)
+                .await
+                .unwrap()
+        );
+        assert!(
+            !local
+                .requires_model_setup(Some("saved-session"), None)
+                .await
+                .unwrap()
+        );
+        assert!(
+            !local
+                .requires_model_setup(None, Some("explicit-model"))
+                .await
+                .unwrap()
+        );
+        assert!(
+            local
                 .model_catalog()
                 .await
                 .unwrap()
@@ -150,6 +178,12 @@ mod tests {
         std::fs::create_dir(local.config.parent().unwrap()).unwrap();
         std::fs::write(&local.config, "invalid = [").unwrap();
         assert!(local.model_catalog().await.is_err());
+        assert!(
+            local
+                .requires_model_setup(None, None)
+                .await
+                .is_err()
+        );
         std::fs::remove_file(&local.config).unwrap();
         std::fs::create_dir(&local.config).unwrap();
         assert!(local.model_catalog().await.is_err());

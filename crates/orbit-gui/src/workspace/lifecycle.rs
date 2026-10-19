@@ -486,7 +486,7 @@ impl Workspace {
     }
 
     pub(crate) fn configuration_required(&self) -> bool {
-        self.connected && !self.opening && self.info.is_none() && self.error.is_none()
+        self.backend.is_some() && !self.opening && self.info.is_none() && self.error.is_none()
     }
 
     pub(crate) fn startup_diagnostic(&self) -> String {

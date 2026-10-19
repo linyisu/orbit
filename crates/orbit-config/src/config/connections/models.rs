@@ -181,13 +181,86 @@ pub async fn discover(
     };
     Ok(ids
         .iter()
-        .map(ModelProfile::new)
+        .map(|id| {
+            draft
+                .models
+                .iter()
+                .find(|model| &model.id == id)
+                .cloned()
+                .unwrap_or_else(|| ModelProfile::new(id))
+        })
         .collect())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn discovery_retains_overrides_and_saved_credentials_reload() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let root = tempfile::tempdir().unwrap();
+        let config = root.path().join("config.toml");
+        let auth = root.path().join("auth");
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .unwrap();
+        let mut draft = ConnectionDraft::load(&config, None).unwrap();
+        draft.name = "generated-gateway".into();
+        draft.endpoint = format!("http://{}/v1", listener.local_addr().unwrap());
+        let mut existing = ModelProfile::new("generated-model");
+        existing.context_tokens = Some(65_536);
+        existing.supports_vision = Some(false);
+        draft.models = vec![existing];
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            while !request.ends_with(b"\r\n\r\n") {
+                request.push(stream.read_u8().await.unwrap());
+                assert!(request.len() < 16 * 1_024);
+            }
+            let request = String::from_utf8(request).unwrap();
+            assert!(request.starts_with("GET /v1/models "));
+            assert!(
+                request
+                    .to_ascii_lowercase()
+                    .contains("authorization: bearer generated-key")
+            );
+            let body = serde_json::json!({
+                "object": "list",
+                "data": [{"id": "generated-model"}, {"id": "generated-second-model"}],
+            })
+            .to_string();
+            stream.write_all(format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len(),
+            ).as_bytes()).await.unwrap();
+        });
+        draft.models = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            discover(&draft, &KeyChange::Replace("generated-key"), &auth),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        server.await.unwrap();
+        assert!(!config.exists());
+        assert_eq!(draft.models.len(), 2);
+        assert_eq!(draft.models[0].context_tokens, Some(65_536));
+        assert_eq!(draft.models[0].supports_vision, Some(false));
+        super::super::edit::save(&config, &auth, &draft, KeyChange::Replace("generated-key"))
+            .await
+            .unwrap();
+        let reloaded = ConnectionDraft::load(&config, Some("generated-gateway")).unwrap();
+        assert_eq!(reloaded.models.len(), 2);
+        assert_eq!(reloaded.models[0].context_tokens, Some(65_536));
+        assert!(
+            !std::fs::read_to_string(config)
+                .unwrap()
+                .contains("generated-key")
+        );
+    }
 
     #[test]
     fn connection_defaults_participate_in_the_same_budget_validation() {

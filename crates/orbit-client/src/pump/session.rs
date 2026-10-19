@@ -169,11 +169,11 @@ pub async fn observe(
         .send(Event::Response(history))
         .await?;
     let mut agent_watch = catalogue::Watch::default();
-    if resume.is_none()
-        && options.model.is_none()
-        && let Some(local) = &connection.local_configuration
-    {
-        while local.model_catalog().await?.is_empty() {
+    if let Some(local) = &connection.local_configuration {
+        while local
+            .requires_model_setup(resume.as_deref(), options.model.as_deref())
+            .await?
+        {
             events
                 .send(Event::ConfigurationRequired)
                 .await?;

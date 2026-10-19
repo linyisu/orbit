@@ -747,7 +747,7 @@ impl Render for Workspace {
                     } else if self.info.is_none() && self.error.is_some() {
                         self.connection_failure(cx)
                             .into_any_element()
-                    } else if self.info.is_none() && self.connected {
+                    } else if self.configuration_required() {
                         v_flex()
                             .size_full()
                             .items_center()
@@ -761,7 +761,7 @@ impl Render for Workspace {
                             .child(
                                 div()
                                     .text_sm()
-                                    .child("工作区已连接。请先在设置中添加账号或模型服务。"),
+                                    .child("先添加账号或 API 连接，再选择模型开始任务。"),
                             )
                             .child(
                                 Button::new("setup-model-connection")

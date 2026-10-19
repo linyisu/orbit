@@ -485,12 +485,39 @@ async fn verify_gui_startup(client: &Path, server: Option<&Path>, first_use: boo
     fs::create_dir(root.join("runtime"))?;
     fs::create_dir(root.join("workspace"))?;
     let config = root.join("config.toml");
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let endpoint = format!("http://{}/v1", listener.local_addr()?);
+    let mut model_server = tokio::task::JoinSet::new();
+    model_server.spawn(async move {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        loop {
+            let (mut stream, _) = listener.accept().await?;
+            let mut request = Vec::new();
+            while !request.ends_with(b"\r\n\r\n") {
+                let byte = stream.read_u8().await?;
+                request.push(byte);
+                ensure!(request.len() <= 16 * 1_024, "acceptance HTTP headers too large");
+            }
+            ensure!(request.starts_with(b"GET /v1/models "), "unexpected model probe request");
+            let body = serde_json::json!({
+                "object": "list",
+                "data": [{"id": "native-model", "object": "model", "owned_by": "fixture"}],
+            }).to_string();
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len(),
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+        #[allow(unreachable_code)]
+        Ok::<_, anyhow::Error>(())
+    });
     if !first_use {
         fs::write(
             &config,
             toml::toml! {
                 [providers.native]
-                base_url = "http://127.0.0.1:9/v1"
+                base_url = endpoint
                 api_key = "test-only"
                 auto_refresh_models = false
                 models = ["native-model"]
@@ -499,59 +526,84 @@ async fn verify_gui_startup(client: &Path, server: Option<&Path>, first_use: boo
         )?;
     }
     let report = root.join("window.json");
-    let mut command = Command::new(client);
-    desktop_probe(&mut command, &root);
-    command.arg("--smoke-test").arg(&report);
-    if !first_use {
-        command
-            .arg("--config")
-            .arg(&config)
-            .args(["--model", "native::native-model"]);
+    let mut receipt = Value::Null;
+    for launch in 0..if first_use { 1 } else { 2 } {
+        let mut command = Command::new(client);
+        desktop_probe(&mut command, &root);
+        command.arg("--smoke-test").arg(&report);
+        if !first_use {
+            command
+                .arg("--config")
+                .arg(&config)
+                .args(["--model", "native::native-model"]);
+            if launch == 0 {
+                command.arg("--smoke-account-edit");
+            }
+        }
+        #[cfg(windows)]
+        if first_use {
+            let system = std::env::var_os("SystemRoot").context("SystemRoot is missing")?;
+            command.env("PATH", PathBuf::from(system).join("System32"));
+        }
+        // A detached service must not keep a Windows blocking pipe reader alive at runtime shutdown.
+        let log = root.join("window.log");
+        let output = fs::File::create(&log)?;
+        let mut child = command
+            .stdout(output.try_clone()?)
+            .stderr(output)
+            .kill_on_drop(true)
+            .spawn()?;
+        let status = tokio::time::timeout(DESKTOP_EXIT_TIMEOUT, child.wait()).await;
+        let diagnostics = fs::read_to_string(&log).unwrap_or_default();
+        let status = status.with_context(|| {
+            let receipt = fs::read_to_string(&report).unwrap_or_else(|_| "missing receipt".into());
+            format!(
+                "desktop process did not exit within {} seconds: {receipt}\n{diagnostics}",
+                DESKTOP_EXIT_TIMEOUT.as_secs()
+            )
+        })??;
+        ensure!(
+            status.success(),
+            "desktop failed ({status}):\n{diagnostics}"
+        );
+        receipt = serde_json::from_slice(&fs::read(&report).with_context(|| {
+            format!("desktop exited without an acceptance receipt:\n{diagnostics}")
+        })?)?;
+        ensure!(
+            receipt["connected"] == true
+                && receipt["configuration_required"] == first_use
+                && receipt["embedded_icons"]
+                    .as_u64()
+                    .is_some_and(|count| count > 20)
+                && receipt["frames"]
+                    .as_u64()
+                    .is_some_and(|frames| frames >= 3)
+                && receipt["width"]
+                    .as_f64()
+                    .is_some_and(|width| width >= 800.)
+                && receipt["height"]
+                    .as_f64()
+                    .is_some_and(|height| height >= 560.),
+            "desktop did not complete native window rendering: {receipt}"
+        );
+        if !first_use && launch == 0 {
+            ensure!(
+                receipt["account_edit_verified"] == true,
+                "account flow was not exercised"
+            );
+            let saved = fs::read_to_string(&config)?;
+            ensure!(
+                !saved.contains("test-only"),
+                "account save left a plaintext secret"
+            );
+        }
+        println!(
+            "PASS: desktop launch {launch}, account_edit={}, restart={}: {receipt}",
+            !first_use && launch == 0,
+            launch > 0
+        );
+        fs::remove_file(&report)?;
     }
-    #[cfg(windows)]
-    if first_use {
-        let system = std::env::var_os("SystemRoot").context("SystemRoot is missing")?;
-        command.env("PATH", PathBuf::from(system).join("System32"));
-    }
-    // A detached service must not keep a Windows blocking pipe reader alive at runtime shutdown.
-    let log = root.join("window.log");
-    let output = fs::File::create(&log)?;
-    let mut child = command
-        .stdout(output.try_clone()?)
-        .stderr(output)
-        .kill_on_drop(true)
-        .spawn()?;
-    let status = tokio::time::timeout(DESKTOP_EXIT_TIMEOUT, child.wait()).await;
-    let diagnostics = fs::read_to_string(&log).unwrap_or_default();
-    let status = status.with_context(|| {
-        let receipt = fs::read_to_string(&report).unwrap_or_else(|_| "missing receipt".into());
-        format!(
-            "desktop process did not exit within {} seconds: {receipt}\n{diagnostics}",
-            DESKTOP_EXIT_TIMEOUT.as_secs()
-        )
-    })??;
-    ensure!(
-        status.success(),
-        "desktop failed ({status}):\n{diagnostics}"
-    );
-    let receipt: Value = serde_json::from_slice(&fs::read(&report)?)?;
-    ensure!(
-        receipt["connected"] == true
-            && receipt["configuration_required"] == first_use
-            && receipt["embedded_icons"]
-                .as_u64()
-                .is_some_and(|count| count > 20)
-            && receipt["frames"]
-                .as_u64()
-                .is_some_and(|frames| frames >= 3)
-            && receipt["width"]
-                .as_f64()
-                .is_some_and(|width| width >= 800.)
-            && receipt["height"]
-                .as_f64()
-                .is_some_and(|height| height >= 560.),
-        "desktop did not complete native window rendering: {receipt}"
-    );
     let cached_server;
     let server = match server {
         Some(server) => server,

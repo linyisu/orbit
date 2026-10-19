@@ -78,6 +78,8 @@ UTF-8 跨 token 拼接后再展示，暂定尾部整体替换，稳定前缀不�
 - [pump.rs](src/pump.rs)、[prompt.rs](src/prompt.rs)：交互请求和单次任务事件流。
 - [accounts.rs](src/accounts.rs)：账号授权与连接元数据；浏览器及项目输入由前端呈现。
 - [configuration.rs](src/configuration.rs)：本机配置快照与凭据传递。
+  `Local::requires_model_setup` 根据声明及目录缓存判断新会话是否需要先配置模型，
+  不发网络请求；客户端可在服务部署前展示引导，会话观察仍在打开会话前再次校验。
 - [platform/editor.rs](src/platform/editor.rs)：外部编辑器直接接收临时草稿路径，不隐式启动 shell。
   Windows 使用原生参数引用规则，保留路径反斜杠；含空格的程序路径用双引号包裹。Unix 保留 shell words 规则。
 - [directories.rs](src/directories.rs)：目标目录读取、父目录与子目录路径，不通过客户端文件系统解释远端路径。

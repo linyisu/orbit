@@ -36,6 +36,8 @@ fn main() -> anyhow::Result<()> {
     let mut options = backend::Options::parse();
     options.resolve_paths()?;
     let smoke_test = options.smoke_test.take();
+    let smoke_account_edit = options.smoke_account_edit;
+    options.smoke_account_edit = false;
     if smoke_test.is_some() {
         assets::embedded_icon_count()?;
     }
@@ -105,7 +107,14 @@ fn main() -> anyhow::Result<()> {
                 })
                 .detach();
                 let _ = handle.update(cx, |_, window, _| {
-                    smoke_frame(report, 0, view.downgrade(), window)
+                    smoke_frame(
+                        report,
+                        0,
+                        view.downgrade(),
+                        window,
+                        smoke_account_edit.then_some(accounts::AccountCheck::Loading),
+                        false,
+                    )
                 });
             }
             cx.on_window_closed(|cx, _| {
@@ -143,21 +152,60 @@ fn smoke_frame(
     frame: u8,
     view: WeakEntity<workbench::Workbench>,
     window: &Window,
+    mut account_check: Option<accounts::AccountCheck>,
+    account_edit_verified: bool,
 ) {
     window.on_next_frame(move |window, cx| {
         let configuration_required = view
             .upgrade()
             .is_some_and(|view| view.read(cx).configuration_required(cx));
-        let ready = configuration_required
+        let ready = (configuration_required
+            && view
+                .upgrade()
+                .is_some_and(|view| view.read(cx).backend_ready(cx)))
             || view
                 .upgrade()
                 .is_some_and(|view| view.read(cx).ready_for_input(cx));
         if !ready {
-            smoke_frame(report, 0, view, window);
+            smoke_frame(
+                report,
+                0,
+                view,
+                window,
+                account_check,
+                account_edit_verified,
+            );
+            return;
+        }
+        if let Some(step) = &mut account_check {
+            let result = view.update(cx, |view, cx| view.check_account_edit(step, window, cx));
+            match result {
+                Ok(Ok(complete)) => {
+                    smoke_frame(
+                        report,
+                        0,
+                        view,
+                        window,
+                        if complete { None } else { account_check },
+                        complete,
+                    );
+                }
+                error => {
+                    eprintln!("账号流程验收失败：{error:?}");
+                    cx.quit();
+                }
+            }
             return;
         }
         if frame < 2 {
-            smoke_frame(report, frame + 1, view, window);
+            smoke_frame(
+                report,
+                frame + 1,
+                view,
+                window,
+                account_check,
+                account_edit_verified,
+            );
             return;
         }
         let bounds = window.bounds();
@@ -169,6 +217,7 @@ fn smoke_frame(
             "connected": true,
             "configuration_required": configuration_required,
             "embedded_icons": assets::embedded_icon_count().unwrap_or_default(),
+            "account_edit_verified": account_edit_verified,
         });
         let task = cx
             .background_executor()

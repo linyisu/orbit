@@ -42,6 +42,41 @@ pub(crate) struct Workbench {
 }
 
 impl Workbench {
+    pub(crate) fn backend_ready(&self, cx: &App) -> bool {
+        self.tasks.iter().any(|task| {
+            !task.closed
+                && task.view.read(cx).key() == self.active
+                && !task
+                    .view
+                    .read(cx)
+                    .connection_unestablished()
+        })
+    }
+
+    pub(crate) fn check_account_edit(
+        &mut self,
+        step: &mut crate::accounts::AccountCheck,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> anyhow::Result<bool> {
+        let Some(settings) = &self.settings else {
+            let task = self
+                .tasks
+                .iter()
+                .find(|task| !task.closed && task.view.read(cx).key() == self.active)
+                .ok_or_else(|| anyhow::anyhow!("account probe has no active task"))?;
+            task.view
+                .update(cx, |view, cx| view.settings(true, window, cx));
+            return Ok(false);
+        };
+        let complete = settings.update(cx, |settings, cx| {
+            settings.check_account_edit(step, window, cx)
+        })?;
+        if complete {
+            self.show_workspace(window, cx);
+        }
+        Ok(complete)
+    }
     pub(crate) fn configuration_required(&self, cx: &App) -> bool {
         self.tasks.iter().any(|task| {
             !task.closed

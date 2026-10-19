@@ -17,8 +17,8 @@ use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use model_parameters::ModelParameters;
 use orbit_client::accounts::{
-    AccountIdentity, Connection, Login, LoginOutcome, OAuthProvider, PendingAccountSetup,
-    connections,
+    AccountIdentity, ApiKeyProvider, Connection, Login, LoginOutcome, OAuthProvider,
+    PendingAccountSetup, connections,
 };
 use orbit_config::ApiFormat;
 use orbit_config::config::connections::edit::{self, ConnectionDraft, KeyChange};
@@ -36,6 +36,7 @@ pub(crate) struct Accounts {
     entries: Vec<Connection>,
     draft: Option<ConnectionDraft>,
     oauth: Option<OAuthProvider>,
+    api_provider: Option<ApiKeyProvider>,
     error: Option<String>,
     busy: bool,
     loading: bool,
@@ -51,12 +52,20 @@ pub(crate) struct Accounts {
 
 impl EventEmitter<AccountsEvent> for Accounts {}
 
+pub(crate) enum AccountCheck {
+    Loading,
+    Editing,
+    Discovering,
+    Saving,
+}
+
 enum AccountEvent {
     Browser(String),
     ProjectRequired(PendingAccountSetup, Option<String>),
     Connected(Result<Vec<Connection>, String>, Vec<String>),
     Finished(Result<Vec<Connection>, String>),
     Removed(Result<Vec<Connection>, String>, Option<String>),
+    Models(Result<Vec<orbit_config::config::ModelProfile>, String>),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -97,6 +106,60 @@ fn protocol_choices(current: ApiFormat) -> Vec<ProtocolChoice> {
 }
 
 impl Accounts {
+    /// Drive the same handlers as the native controls in an explicitly requested CI probe.
+    pub(crate) fn check_account_edit(
+        &mut self,
+        step: &mut AccountCheck,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> anyhow::Result<bool> {
+        anyhow::ensure!(self.error.is_none(), "account probe: {:?}", self.error);
+        if self.busy || self.loading {
+            return Ok(false);
+        }
+        match step {
+            AccountCheck::Loading => {
+                let name = self
+                    .entries
+                    .first()
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("account probe requires an isolated saved connection")
+                    })?
+                    .draft
+                    .name
+                    .clone();
+                self.edit(Some(name), None, window, cx);
+                *step = AccountCheck::Editing;
+            }
+            AccountCheck::Editing => {
+                anyhow::ensure!(self.draft.is_some(), "account edit form did not open");
+                self.fields[2].update(cx, |input, cx| {
+                    input.set_value("acceptance-key", window, cx)
+                });
+                self.discover_models(cx);
+                *step = AccountCheck::Discovering;
+            }
+            AccountCheck::Discovering => {
+                anyhow::ensure!(
+                    self.draft
+                        .as_ref()
+                        .is_some_and(|draft| !draft.models.is_empty()),
+                    "model discovery returned no models"
+                );
+                self.save_key(cx);
+                *step = AccountCheck::Saving;
+            }
+            AccountCheck::Saving => {
+                anyhow::ensure!(
+                    !self.adding && self.draft.is_none(),
+                    "account save did not finish"
+                );
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     pub(crate) fn has_pending_work(&self) -> bool {
         self.busy
             || self.loading
@@ -134,6 +197,7 @@ impl Accounts {
             entries: Vec::new(),
             draft: None,
             oauth: None,
+            api_provider: None,
             adding: false,
             api_form: false,
             error,
@@ -196,6 +260,26 @@ impl Accounts {
                 if weak
                     .update_in(cx, |view, window, cx| {
                         match event {
+                            AccountEvent::Models(result) => {
+                                view.busy = false;
+                                view.operation = None;
+                                match result {
+                                    Ok(models) => {
+                                        let ids = models
+                                            .iter()
+                                            .map(|model| model.id.as_str())
+                                            .collect::<Vec<_>>()
+                                            .join(", ");
+                                        view.fields[3].update(cx, |input, cx| {
+                                            input.set_value(ids, window, cx)
+                                        });
+                                        if let Some(draft) = &mut view.draft {
+                                            draft.models = models;
+                                        }
+                                    }
+                                    Err(error) => view.error = Some(error),
+                                }
+                            }
                             AccountEvent::Browser(url) => cx.open_url(&url),
                             AccountEvent::ProjectRequired(pending, error) => {
                                 view.pending_project = Some(pending);
@@ -228,6 +312,9 @@ impl Accounts {
                                         view.adding = false;
                                         view.api_form = false;
                                         view.draft = None;
+                                        view.fields[2].update(cx, |input, cx| {
+                                            input.set_value("", window, cx)
+                                        });
                                     }
                                     Err(error) => {
                                         view.error =
@@ -276,7 +363,13 @@ impl Accounts {
         cx.notify();
     }
 
-    fn edit(&mut self, name: Option<String>, window: &mut Window, cx: &mut Context<Self>) {
+    fn edit(
+        &mut self,
+        name: Option<String>,
+        provider: Option<ApiKeyProvider>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.busy || self.loading {
             return;
         }
@@ -288,6 +381,7 @@ impl Accounts {
         });
         self.fields[2].update(cx, |input, cx| input.set_value("", window, cx));
         self.loading = true;
+        self.api_provider = provider;
         self.error = None;
         let config = self.config.clone();
         let job = self
@@ -298,7 +392,11 @@ impl Accounts {
             let _ = owner.update_in(cx, |view, window, cx| {
                 view.loading = false;
                 match result {
-                    Ok(Ok(draft)) => {
+                    Ok(Ok(mut draft)) => {
+                        if let Some(provider) = provider {
+                            draft.name = provider.name().into();
+                            draft.endpoint = provider.base_url().into();
+                        }
                         view.protocol.update(cx, |picker, cx| {
                             picker.set_items(protocol_choices(draft.format), window, cx);
                             picker.set_selected_value(&draft.format, window, cx);
@@ -331,11 +429,15 @@ impl Accounts {
                         view.draft = Some(draft);
                         view.adding = true;
                         view.api_form = true;
-                        let ix = usize::from(
-                            view.draft
-                                .as_ref()
-                                .is_some_and(|draft| draft.original_name().is_some()),
-                        );
+                        let ix = if provider.is_some() {
+                            2
+                        } else {
+                            usize::from(
+                                view.draft
+                                    .as_ref()
+                                    .is_some_and(|draft| draft.original_name().is_some()),
+                            )
+                        };
                         view.fields[ix].update(cx, |input, cx| input.focus(window, cx));
                     }
                     Ok(Err(error)) => view.error = Some(format!("{error:#}")),
@@ -544,6 +646,31 @@ impl Accounts {
         if self.busy || self.loading {
             return;
         }
+        if let Some(provider) = self.api_provider {
+            let secret = self.fields[2]
+                .read(cx)
+                .value()
+                .trim()
+                .to_owned();
+            let config = self.config.clone();
+            let auth = self.auth.clone();
+            let (sender, receiver) = tokio::sync::mpsc::channel(1);
+            self.operation = Some(self.runtime.spawn(async move {
+                let event =
+                    match orbit_client::accounts::connect_api_key(&config, &auth, provider, secret)
+                        .await
+                    {
+                        Ok(outcome) => AccountEvent::Connected(
+                            connections(&config, &auth).map_err(|error| format!("{error:#}")),
+                            outcome.diagnostics,
+                        ),
+                        Err(error) => AccountEvent::Finished(Err(format!("{error:#}"))),
+                    };
+                let _ = sender.send(event).await;
+            }));
+            self.receive(receiver, cx);
+            return;
+        }
         let Some(mut draft) = self.draft.clone() else {
             return;
         };
@@ -590,6 +717,45 @@ impl Accounts {
             .map_err(|error| format!("{error:#}"));
             let _ = sender
                 .send(AccountEvent::Finished(result))
+                .await;
+        }));
+        self.receive(receiver, cx);
+    }
+
+    fn discover_models(&mut self, cx: &mut Context<Self>) {
+        if self.busy || self.loading {
+            return;
+        }
+        let Some(mut draft) = self.draft.clone() else {
+            return;
+        };
+        draft.name = self.fields[0]
+            .read(cx)
+            .value()
+            .trim()
+            .into();
+        draft.endpoint = self.fields[1]
+            .read(cx)
+            .value()
+            .trim()
+            .into();
+        if let Some(format) = self.protocol.read(cx).selected_value() {
+            draft.format = *format;
+        }
+        let secret = self.fields[2]
+            .read(cx)
+            .value()
+            .trim()
+            .to_owned();
+        let auth = self.auth.clone();
+        let (sender, receiver) = tokio::sync::mpsc::channel(1);
+        self.operation = Some(self.runtime.spawn(async move {
+            let key = KeyChange::from_input(&secret, draft.original_name().is_some());
+            let result = orbit_config::config::connections::models::discover(&draft, &key, &auth)
+                .await
+                .map_err(|error| format!("{error:#}"));
+            let _ = sender
+                .send(AccountEvent::Models(result))
                 .await;
         }));
         self.receive(receiver, cx);
@@ -739,6 +905,7 @@ impl Render for Accounts {
                                 view.api_form = false;
                                 view.draft = None;
                                 view.oauth = None;
+                                view.api_provider = None;
                                 view.pending_project = None;
                                 view.error = None;
                                 cx.notify();
@@ -808,22 +975,19 @@ impl Render for Accounts {
                                     div()
                                         .text_xs()
                                         .text_color(cx.theme().muted_foreground)
-                                        .child(format!(
-                                            "{} 个模型{}",
-                                            entry.draft.models.len(),
+                                        .child(
                                             if entry
                                                 .draft
                                                 .provider()
-                                                .is_some_and(|provider| provider
-                                                    .spec()
-                                                    .models
-                                                    .is_auto())
+                                                .is_some_and(|provider| {
+                                                    provider.spec().models.is_auto()
+                                                })
                                             {
-                                                " · 自动发现"
+                                                "自动发现模型".to_owned()
                                             } else {
-                                                ""
-                                            }
-                                        )),
+                                                format!("{} 个模型", entry.draft.models.len())
+                                            },
+                                        ),
                                 ),
                         )
                         .child(
@@ -832,7 +996,7 @@ impl Render for Accounts {
                                 .label("编辑…")
                                 .disabled(self.busy || self.loading)
                                 .on_click(cx.listener(move |view, _, window, cx| {
-                                    view.edit(Some(name.clone()), window, cx)
+                                    view.edit(Some(name.clone()), None, window, cx)
                                 })),
                         )
                         .when_some(oauth, |view, provider| {
@@ -914,11 +1078,27 @@ impl Render for Accounts {
                 )
                 .when(!awaiting_project, |view| {
                     view.child(
+                        h_flex().gap_2().flex_wrap().children(
+                            [ApiKeyProvider::Deepseek, ApiKeyProvider::ZhipuCodingPlan]
+                                .into_iter()
+                                .map(|provider| {
+                                    Button::new(provider.name())
+                                        .label(provider.label())
+                                        .disabled(self.busy || self.loading)
+                                        .on_click(cx.listener(move |view, _, window, cx| {
+                                            view.edit(None, Some(provider), window, cx)
+                                        }))
+                                }),
+                        ),
+                    )
+                    .child(
                         Button::new("add-api-key")
-                            .label("使用 API Key…")
+                            .label("自定义 API…")
                             .disabled(self.busy || self.loading)
                             .on_click(
-                                cx.listener(|view, _, window, cx| view.edit(None, window, cx)),
+                                cx.listener(|view, _, window, cx| {
+                                    view.edit(None, None, window, cx)
+                                }),
                             ),
                     )
                 })
@@ -943,6 +1123,32 @@ impl Render for Accounts {
                             ),
                     )
                 });
+        } else if let Some(provider) = self.api_provider {
+            content = content
+                .child(div().child(provider.label()))
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(format!(
+                            "使用官方地址 {}，验证密钥后自动获取可用模型。",
+                            provider.base_url()
+                        )),
+                )
+                .child(
+                    v_flex().gap_1().child("API Key").child(
+                        Input::new(&self.fields[2])
+                            .aria_label("API Key")
+                            .disabled(self.busy),
+                    ),
+                )
+                .child(
+                    Button::new("save-official-api")
+                        .primary()
+                        .label("验证并保存")
+                        .disabled(self.busy || self.loading)
+                        .on_click(cx.listener(|view, _, _, cx| view.save_key(cx))),
+                );
         } else {
             let protocol = div().w_full().h_8().child(
                 Select::new(&self.protocol)
@@ -975,15 +1181,33 @@ impl Render for Accounts {
                             "密钥留空会保留现有认证。修改 API 地址时需填写该地址的新密钥。已有模型的高级选项会保留。"
                         }),
                 ))
-                .child(h_flex().justify_end().gap_2().flex_wrap().child(
-                    Button::new("model-parameters").label("模型参数…")
-                        .disabled(self.busy || self.loading)
-                        .on_click(cx.listener(|view, _, window, cx| view.parameters(window, cx))),
-                ).child(
-                    Button::new("save-api").primary().label("保存连接")
-                        .disabled(self.busy || self.loading)
-                        .on_click(cx.listener(|view, _, _, cx| view.save_key(cx))),
-                ));
+                .child(
+                    h_flex()
+                        .justify_end()
+                        .gap_2()
+                        .flex_wrap()
+                        .child(
+                            Button::new("discover-models")
+                                .label("检测模型")
+                                .disabled(self.busy || self.loading)
+                                .on_click(cx.listener(|view, _, _, cx| view.discover_models(cx))),
+                        )
+                        .child(
+                            Button::new("model-parameters")
+                                .label("模型参数…")
+                                .disabled(self.busy || self.loading)
+                                .on_click(cx.listener(|view, _, window, cx| {
+                                    view.parameters(window, cx)
+                                })),
+                        )
+                        .child(
+                            Button::new("save-api")
+                                .primary()
+                                .label("保存连接")
+                                .disabled(self.busy || self.loading)
+                                .on_click(cx.listener(|view, _, _, cx| view.save_key(cx))),
+                        ),
+                );
         }
         content.when(self.busy, |view| {
             view.child(
@@ -993,7 +1217,7 @@ impl Render for Accounts {
                     .child(match self.login_stage {
                         Some(LoginStage::Browser) => "等待浏览器登录…",
                         Some(LoginStage::Project) => "正在初始化项目…",
-                        None => "正在保存连接…",
+                        None => "正在验证连接与模型…",
                     })
                     .when(self.login_stage.is_some(), |view| {
                         view.child(

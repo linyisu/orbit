@@ -76,6 +76,9 @@ Windows Debug 另提供按用户安装的 `setup.exe`，包含开始菜单及卸
 未显式传入 `--config` 时，优先读取工作目录已有的 `config.toml`，否则使用用户配置目录
 下的 `orbit/config.toml`（Windows 为 `%APPDATA%`）。首次无配置时引导添加模型连接，
 保存账号或连接时才创建配置，不要求把配置写入安装目录。
+本地首次配置提示在后台服务部署前显示，不等待服务握手。DeepSeek API、智谱 Coding Plan
+提供官方入口，只填写密钥并验证即可获取当前账号可用的模型；自定义 API 可独立检测模型。
+检测失败保留表单，不生成或补造模型名单；再次检测保留已有模型的参数覆盖。
 
 [workspace/](src/workspace/) 管理会话视图与设置，[conversation/](src/conversation/) 渲染消息，[backend.rs](src/backend.rs) 将窗口事件接入共享客户端。认证、配置校验、会话轮询与附件传输由对应共享 crate 提供，前端只保留交互和视图状态。
 

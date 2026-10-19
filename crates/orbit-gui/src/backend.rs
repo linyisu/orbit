@@ -46,6 +46,10 @@ pub(crate) struct Options {
     #[arg(long, hide = true)]
     #[serde(skip)]
     pub(crate) smoke_test: Option<PathBuf>,
+    /// Exercise account discovery and save against the isolated acceptance configuration.
+    #[arg(long, hide = true, requires = "smoke_test")]
+    #[serde(skip)]
+    pub(crate) smoke_account_edit: bool,
     #[arg(long, conflicts_with = "wsl")]
     pub(crate) ssh: Option<String>,
     #[arg(long, requires = "ssh")]
@@ -287,6 +291,21 @@ async fn run_connection(
 ) -> Result<()> {
     let attachment_cache =
         orbit_client::attachments::cache_database(options.preferences.as_deref())?;
+    if options.ssh.is_none() && options.wsl.is_none() {
+        let local = orbit_client::configuration::Local {
+            config: options.config.clone(),
+            auth: orbit_client::configuration::auth_directory(options.auth_dir.clone())?,
+            model: None,
+        };
+        if local
+            .requires_model_setup(options.resume.as_deref(), options.model.as_deref())
+            .await?
+        {
+            events
+                .send(Event::ConfigurationRequired)
+                .await?;
+        }
+    }
     let connection = orbit_client::prepare_connection(
         &options.connection_options()?,
         options.config,

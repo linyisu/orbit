@@ -55,7 +55,7 @@ struct GlobalLibrary {
 const GROUPS: [(&str, &[usize]); 2] = [("全局设置", &[0, 1, 2, 3, 5, 6, 7]), ("当前会话", &[4])];
 
 impl Workspace {
-    pub(super) fn settings(
+    pub(crate) fn settings(
         &mut self,
         accounts_first: bool,
         window: &mut Window,
@@ -281,6 +281,17 @@ struct ResourceContext {
 }
 
 impl SettingsPage {
+    pub(crate) fn check_account_edit(
+        &mut self,
+        step: &mut crate::accounts::AccountCheck,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> anyhow::Result<bool> {
+        self.accounts
+            .update(cx, |accounts, cx| {
+                accounts.check_account_edit(step, window, cx)
+            })
+    }
     /// Retained forms belong to this workspace even when another settings page
     /// or the conversation is visible. A blank conversation is not disposable
     /// while one of those forms is being edited or saved.
