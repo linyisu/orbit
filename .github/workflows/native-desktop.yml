@@ -63,7 +63,8 @@ jobs:
       - name: Build native desktop package
         run: cargo xtask bundle-gui debug
       - name: Test local speech and native model access
-        run: cargo test -p orbit-client --features local-speech --locked speech::
+        run: |
+          cargo test -p orbit-client --features local-speech --locked speech::
       - name: Test desktop preferences
         run: cargo test -p orbit-gui --locked --bin orbit-gui preferences::tests
       - name: Archive desktop application
