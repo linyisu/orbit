@@ -66,7 +66,8 @@ impl Workspace {
                 let tool = self
                     .execution
                     .tools()
-                    .first()
+                    .iter()
+                    .find(|tool| tool.name == "Exec")
                     .cloned()
                     .ok_or_else(|| {
                         anyhow::anyhow!("detail probe requires generated tool history")
@@ -130,7 +131,16 @@ impl Workspace {
                     self.inspector == Some(Section::File),
                     "attachments must use the detail pane"
                 );
-                self.set_inspector(Some(Section::Tool), window, cx);
+                let tool = self
+                    .execution
+                    .tools()
+                    .iter()
+                    .find(|tool| {
+                        tool.name == "Exec" && tool.status == crate::execution::ToolStatus::Failed
+                    })
+                    .cloned()
+                    .ok_or_else(|| anyhow::anyhow!("detail probe requires a failed command"))?;
+                self.open_tool_record(tool, false, window, cx);
             }
             9 => {
                 if let Some(panel) = &self.tool_output {
@@ -254,18 +264,6 @@ impl Workspace {
                     .flex_shrink_0()
                     .border_b_1()
                     .border_color(cx.theme().border)
-                    .when(section != Section::Overview, |row| {
-                        row.child(
-                            Button::new("details-back")
-                                .ghost()
-                                .small()
-                                .icon(IconName::ArrowLeft)
-                                .accessibility_label("返回会话详情")
-                                .on_click(cx.listener(|view, _, window, cx| {
-                                    view.set_inspector(Some(Section::Overview), window, cx);
-                                })),
-                        )
-                    })
                     .child(
                         div()
                             .flex_1()

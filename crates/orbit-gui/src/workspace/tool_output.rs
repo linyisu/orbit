@@ -110,7 +110,7 @@ impl ToolOutput {
     }
 
     pub(super) fn title(&self) -> String {
-        format!("{} · {}", self.tool.name, self.tool.summary())
+        self.tool.summary()
     }
 
     pub(super) fn set_open(&mut self, open: bool, window: &mut Window, cx: &mut Context<Self>) {
@@ -421,6 +421,8 @@ impl Render for ToolOutput {
             "连接已断开，保留已接收输出".to_owned()
         } else if self.paused {
             "已暂停更新".to_owned()
+        } else if self.status.is_empty() {
+            self.tool.status.label().to_owned()
         } else {
             self.status.clone()
         };
@@ -433,7 +435,7 @@ impl Render for ToolOutput {
             .iter()
             .position(|stream| *stream == self.stream)
             .unwrap_or(0);
-        let request_padding = window.rem_size() * 3.;
+        let request_padding = window.rem_size();
         let header_height = self
             .request_height
             .unwrap_or(window.rem_size() * 4.)
@@ -468,32 +470,34 @@ impl Render for ToolOutput {
             .min_w_0()
             .min_h_0()
             .gap_3()
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .min_w_0()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .whitespace_normal()
+                    .child(format!("{} · {status}", self.tool.name)),
+            )
             .when(self.request.layout() == RequestLayout::Body, |view| {
                 view.child(
                     v_flex()
                         .flex_shrink_0()
                         .min_h_0()
                         .min_w_0()
-                        .rounded_md()
-                        .border_1()
-                        .border_color(cx.theme().border)
-                        .bg(background)
                         .overflow_hidden()
                         .child(
                             h_flex()
-                                .px_3()
                                 .h(rems(2.))
                                 .flex_shrink_0()
                                 .gap_2()
                                 .text_xs()
-                                .child(self.request.heading())
                                 .child(
                                     div()
                                         .flex_1()
                                         .min_w_0()
                                         .text_ellipsis()
-                                        .text_color(cx.theme().muted_foreground)
-                                        .child(status),
+                                        .child(self.request.heading()),
                                 )
                                 .when_some(target.clone(), |bar, target| {
                                     bar.child(
@@ -505,7 +509,14 @@ impl Render for ToolOutput {
                                                 view.inspect_target(window, cx)
                                             })),
                                     )
-                                }),
+                                })
+                                .child(
+                                    Clipboard::new("copy-tool-request")
+                                        .small()
+                                        .value(self.request.content().to_owned())
+                                        .tooltip("复制调用内容")
+                                        .accessibility_label("复制调用内容"),
+                                ),
                         )
                         .child(
                             div()
@@ -514,15 +525,12 @@ impl Render for ToolOutput {
                                 .flex_shrink_0()
                                 .min_h_0()
                                 .min_w_0()
+                                .rounded_md()
+                                .border_1()
+                                .border_color(cx.theme().border)
+                                .overflow_hidden()
                                 .child(editor_content(
                                     &self.request_editor,
-                                    Some(
-                                        Clipboard::new("copy-tool-request")
-                                            .small()
-                                            .value(self.request.content().to_owned())
-                                            .tooltip("复制调用内容")
-                                            .accessibility_label("复制调用内容"),
-                                    ),
                                     self.request.heading().into(),
                                     background,
                                     request_padding,
@@ -659,13 +667,9 @@ impl Render for ToolOutput {
                     .flex_1()
                     .min_h_0()
                     .min_w_0()
-                    .rounded_md()
-                    .border_1()
-                    .border_color(cx.theme().border)
                     .overflow_hidden()
                     .child(
                         h_flex()
-                            .px_2()
                             .h(rems(2.5))
                             .flex_shrink_0()
                             .min_w_0()
@@ -693,6 +697,7 @@ impl Render for ToolOutput {
                                         view.select(streams[*ix], window, cx)
                                     })),
                             )
+                            .child(copy())
                             .when(
                                 self.paused
                                     || (!self.disconnected
@@ -757,25 +762,10 @@ impl Render for ToolOutput {
                                     && self.diff_patch.as_deref() == Some(&self.displayed),
                                 |body| {
                                     body.child(
-                                        div()
-                                            .relative()
-                                            .size_full()
-                                            .child(
-                                                Diff::new(&self.diff)
-                                                    .single_line_number(true)
-                                                    .soft_wrap(true)
-                                                    .render_header_suffix(|_, _, _| {
-                                                        div().w_8().flex_shrink_0()
-                                                    })
-                                                    .size_full(),
-                                            )
-                                            .child(
-                                                div()
-                                                    .absolute()
-                                                    .top_2()
-                                                    .right_4()
-                                                    .child(copy()),
-                                            ),
+                                        Diff::new(&self.diff)
+                                            .single_line_number(true)
+                                            .soft_wrap(true)
+                                            .size_full(),
                                     )
                                 },
                             )
@@ -785,10 +775,9 @@ impl Render for ToolOutput {
                                 |body| {
                                     body.child(editor_content(
                                         &self.editor,
-                                        Some(copy()),
                                         format!("工具输出 {}", self.stream.label()).into(),
-                                        background,
-                                        window.rem_size() * 3.,
+                                        cx.theme().background,
+                                        window.rem_size(),
                                     ))
                                 },
                             ),
@@ -872,10 +861,9 @@ impl ToolOutput {
     }
 }
 
-/// The copy control belongs to the viewport, so editor scrolling cannot move it.
+/// The surrounding section owns commands; scrolling belongs only to the read-only editor.
 fn editor_content(
     editor: &Entity<EditorState>,
-    copy: Option<Clipboard>,
     label: SharedString,
     background: Hsla,
     padding_right: Pixels,
@@ -901,13 +889,4 @@ fn editor_content(
                 })
                 .aria_label(label),
         )
-        .when_some(copy, |body, copy| {
-            body.child(
-                div()
-                    .absolute()
-                    .top_2()
-                    .right_4()
-                    .child(copy),
-            )
-        })
 }
