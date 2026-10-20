@@ -84,6 +84,29 @@ fn history_publication_uses_remote_tracking_refs_without_contacting_a_remote() {
 }
 
 #[test]
+fn complete_commit_patch_contains_all_files_without_reading_worktree_content() {
+    use orbit_tools::git_inspect::history;
+    let directory = repository();
+    let root = directory.path();
+    fs::write(root.join("first.rs"), "pub const FIRST: bool = true;\n").unwrap();
+    fs::write(root.join("second.rs"), "pub const SECOND: bool = true;\n").unwrap();
+    git(root, &["add", "first.rs", "second.rs"]);
+    git(root, &["commit", "-qm", "two generated files"]);
+    let index = fs::read(root.join(".git/index")).unwrap();
+    fs::write(root.join("first.rs"), "uncommitted disk content\n").unwrap();
+    let workspace = Workspace::new(root).unwrap();
+    let metadata = history::detail(&workspace, "HEAD").unwrap();
+    assert!(metadata["patch"].is_null());
+    let full = history::commit(&workspace, "HEAD", true).unwrap();
+    let patch = full["patch"].as_str().unwrap();
+    assert!(patch.contains("diff --git a/first.rs b/first.rs"));
+    assert!(patch.contains("diff --git a/second.rs b/second.rs"));
+    assert!(patch.contains("+pub const FIRST: bool = true;"));
+    assert!(!patch.contains("uncommitted disk content"));
+    assert_eq!(fs::read(root.join(".git/index")).unwrap(), index);
+}
+
+#[test]
 fn history_pages_pin_identity_and_reject_nested_workspaces() {
     use orbit_tools::git_inspect::history;
     let directory = repository();

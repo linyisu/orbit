@@ -1,15 +1,12 @@
-//! Retained review surface. Git index transactions and Orbit write receipts
-//! have separate sources and exact reviewed-state guards.
+//! Browse Git changes and session checkpoints. Only checkpoint undo is exposed
+//! here; its receipt and approval checks remain service-owned.
 use super::*;
 use gpui_kit::component::{
     diff::{Diff, DiffFile, DiffState},
     input::{Editor, EditorState},
     list::ListItem,
-    tab::{Tab, TabBar},
 };
 use orbit_protocol::review::{Action, Checkpoint, Entry, Kind, Snapshot};
-
-const KINDS: [(Kind, &str); 2] = [(Kind::Unstaged, "更改"), (Kind::Staged, "已暂存")];
 
 pub(super) struct Review {
     owner: WeakEntity<Workspace>,
@@ -19,18 +16,15 @@ pub(super) struct Review {
     entries: Vec<Entry>,
     selected: Option<String>,
     checkpoint: Option<Checkpoint>,
-    index_receipt: Option<String>,
     list: Entity<TreeState>,
     tree_items: std::collections::HashMap<String, TreeItem>,
     diff: Entity<DiffState>,
     raw: Option<Entity<EditorState>>,
     next: Option<usize>,
-    branch: Option<String>,
     note: SharedString,
     error: Option<SharedString>,
     busy: bool,
     undoing: bool,
-    indexing: bool,
     loaded: bool,
     generation: usize,
     width: Option<Pixels>,
@@ -55,14 +49,11 @@ impl Review {
             raw: None,
             tree_items: Default::default(),
             checkpoint: None,
-            index_receipt: None,
             next: None,
-            branch: None,
             note: "选择文件查看差异".into(),
             error: None,
             busy: false,
             undoing: false,
-            indexing: false,
             loaded: false,
             generation: 0,
             width: None,
@@ -122,7 +113,6 @@ impl Review {
         self.raw = None;
         self.selected = None;
         self.checkpoint = None;
-        self.index_receipt = None;
         self.entries.clear();
         self.loaded = false;
         self.diff
@@ -158,7 +148,6 @@ impl Review {
         self.raw = None;
         self.selected = Some(path.clone());
         self.checkpoint = None;
-        self.index_receipt = None;
         self.fetch(
             Action::Diff {
                 kind: self.kind,
@@ -175,16 +164,12 @@ impl Review {
             self.error = Some(
                 if self.undoing {
                     "连接已中断，撤销结果尚未确认。重连后请刷新检查点，勿重复操作。"
-                } else if self.indexing {
-                    "连接已中断，暂存区更新结果尚未确认。重连后请刷新差异，勿重复操作。"
                 } else {
                     "连接已中断，重连后可刷新差异。"
                 }
                 .into(),
             );
             self.undoing = false;
-            self.indexing = false;
-            self.index_receipt = None;
             cx.notify();
         }
     }
@@ -195,7 +180,7 @@ impl Review {
         }
         let action = match action {
             Action::List {
-                kind: Kind::Unstaged | Kind::Untracked,
+                kind: Kind::Unstaged | Kind::Untracked | Kind::Staged,
                 offset,
             } => Action::Status { offset },
             action => action,
@@ -203,8 +188,6 @@ impl Review {
         let append =
             matches!(action, Action::List { offset, .. } | Action::Status { offset } if offset > 0);
         self.undoing = matches!(action, Action::Undo { .. });
-        self.indexing = matches!(action, Action::Stage { .. } | Action::Unstage { .. });
-        let updating_index = self.indexing;
         self.busy = true;
         self.error = None;
         self.generation += 1;
@@ -256,24 +239,14 @@ impl Review {
                 }
                 view.busy = false;
                 view.undoing = false;
-                view.indexing = false;
                 match result {
-                    Ok(Response::Review(Snapshot::Status {
-                        entries,
-                        next,
-                        branch,
-                    })) => {
-                        let entries = entries
-                            .into_iter()
-                            .filter(|entry| matches!(entry.kind, Kind::Unstaged | Kind::Untracked))
-                            .collect::<Vec<_>>();
+                    Ok(Response::Review(Snapshot::Status { entries, next, .. })) => {
                         if append {
                             view.entries.extend(entries);
                         } else {
                             view.entries = entries;
                         }
                         view.next = next;
-                        view.branch = branch;
                         view.loaded = true;
                         view.rebuild_tree(cx);
                         if !append
@@ -290,18 +263,13 @@ impl Review {
                                 .update(cx, |diff, cx| diff.set_files([], cx));
                         }
                     }
-                    Ok(Response::Review(Snapshot::List {
-                        entries,
-                        next,
-                        branch,
-                    })) => {
+                    Ok(Response::Review(Snapshot::List { entries, next, .. })) => {
                         if append {
                             view.entries.extend(entries);
                         } else {
                             view.entries = entries;
                         }
                         view.next = next;
-                        view.branch = branch;
                         view.loaded = true;
                         view.rebuild_tree(cx);
                         if !append
@@ -316,7 +284,6 @@ impl Review {
                             view.selected = None;
                             view.raw = None;
                             view.checkpoint = None;
-                            view.index_receipt = None;
                             view.diff
                                 .update(cx, |diff, cx| diff.set_files([], cx));
                         }
@@ -325,8 +292,8 @@ impl Review {
                         path,
                         note,
                         checkpoint,
-                        index_receipt,
                         patch,
+                        ..
                     })) => {
                         view.selected = Some(path);
                         view.note = note.into();
@@ -334,17 +301,15 @@ impl Review {
                         match parsed.unwrap_or_else(|| Ok(Vec::new())) {
                             Ok(files) => {
                                 view.raw = None;
-                                view.index_receipt = index_receipt;
                                 view.diff
                                     .update(cx, |diff, cx| diff.set_files(files, cx));
                             }
                             Err(error) => {
-                                view.index_receipt = None;
                                 view.raw = Some(cx.new(|cx| {
                                     EditorState::new(window, cx)
                                         .language("diff")
                                         .line_number(true)
-                                        .soft_wrap(false)
+                                        .soft_wrap(true)
                                         .scroll_beyond_last_line(Some(0))
                                         .default_value(patch)
                                 }));
@@ -354,7 +319,6 @@ impl Review {
                     }
                     Ok(Response::Review(Snapshot::Undone { detail, .. })) => {
                         view.checkpoint = None;
-                        view.index_receipt = None;
                         view.selected = None;
                         view.raw = None;
                         view.note = detail.into();
@@ -368,38 +332,8 @@ impl Review {
                             cx,
                         );
                     }
-                    Ok(Response::Review(Snapshot::IndexUpdated { staged, .. })) => {
-                        view.index_receipt = None;
-                        view.selected = None;
-                        view.raw = None;
-                        view.note = if staged {
-                            "文件已暂存，工作区内容已保留"
-                        } else {
-                            "已取消暂存，工作区内容已保留"
-                        }
-                        .into();
-                        view.diff
-                            .update(cx, |diff, cx| diff.set_files([], cx));
-                        view.fetch(
-                            Action::List {
-                                kind: view.kind,
-                                offset: 0,
-                            },
-                            cx,
-                        );
-                    }
                     Ok(_) => view.error = Some("工作区服务没有返回差异数据，请更新服务".into()),
-                    Err(error) => {
-                        view.index_receipt = None;
-                        view.error = Some(
-                            if updating_index {
-                                format!("暂存区更新结果未确认：{error}。请刷新差异后再操作。")
-                            } else {
-                                error
-                            }
-                            .into(),
-                        );
-                    }
+                    Err(error) => view.error = Some(error.into()),
                 }
                 cx.notify();
             });
@@ -463,25 +397,7 @@ impl Review {
     }
 
     fn mutating(&self) -> bool {
-        self.undoing || self.indexing
-    }
-
-    fn update_index(&mut self, cx: &mut Context<Self>) {
-        if self.busy {
-            return;
-        }
-        let Some(path) = self.selected.clone() else {
-            return;
-        };
-        let Some(receipt) = self.index_receipt.clone() else {
-            return;
-        };
-        let action = match self.kind {
-            Kind::Staged => Action::Unstage { path, receipt },
-            Kind::Unstaged | Kind::Untracked => Action::Stage { path, receipt },
-            Kind::Checkpoint => return,
-        };
-        self.fetch(action, cx);
+        self.undoing
     }
 }
 
@@ -501,9 +417,9 @@ impl Render for Review {
         let list = v_flex()
             .min_h_0()
             .min_w_0()
-            .border_1()
+            .py_2()
+            .border_r_1()
             .border_color(cx.theme().border)
-            .rounded_md()
             .when(narrow, |view| view.h_32())
             .when(!narrow, |view| view.w_56().h_full())
             .capture_key_down(cx.listener(|view, event: &KeyDownEvent, _, cx| {
@@ -544,7 +460,8 @@ impl Render for Review {
                     ListItem::new(item.item().id.clone())
                         .selected(selected)
                         .disabled(busy)
-                        .pl(rems(item.depth() as f32))
+                        .pl(rems(0.75 + item.depth() as f32))
+                        .pr_3()
                         .child(
                             h_flex()
                                 .gap_2()
@@ -599,7 +516,7 @@ impl Render for Review {
                         .p_3()
                         .text_sm()
                         .text_color(cx.theme().muted_foreground)
-                        .child("此分组暂无文件改动"),
+                        .child("暂无文件改动"),
                 )
             });
         v_flex()
@@ -607,81 +524,6 @@ impl Render for Review {
             .relative()
             .min_h_0()
             .min_w_0()
-            .p_3()
-            .gap_3()
-            .child(
-                h_flex()
-                    .gap_2()
-                    .flex_wrap()
-                    .when_some(self.branch.clone(), |view, branch| {
-                        view.child(
-                            div()
-                                .text_xs()
-                                .text_color(cx.theme().muted_foreground)
-                                .child(branch),
-                        )
-                    })
-                    .child(
-                        Button::new("review-refresh")
-                            .small()
-                            .icon(IconName::RefreshCw)
-                            .label("刷新")
-                            .disabled(self.busy)
-                            .on_click(cx.listener(|view, _, _, cx| {
-                                view.fetch(
-                                    Action::List {
-                                        kind: view.kind,
-                                        offset: 0,
-                                    },
-                                    cx,
-                                )
-                            })),
-                    ),
-            )
-            .child(
-                TabBar::new("review-kind")
-                    .small()
-                    .selected_index(
-                        KINDS
-                            .iter()
-                            .position(|(kind, _)| *kind == self.kind)
-                            .unwrap_or(0),
-                    )
-                    .children(
-                        KINDS
-                            .iter()
-                            .map(|(_, label)| Tab::new().label(*label)),
-                    )
-                    .on_click(cx.listener(|view, index: &usize, _, cx| {
-                        if view.mutating() {
-                            return;
-                        }
-                        let Some((kind, _)) = KINDS.get(*index) else {
-                            return;
-                        };
-                        if view.kind == *kind {
-                            return;
-                        }
-                        view.kind = *kind;
-                        view.selected = None;
-                        view.raw = None;
-                        view.checkpoint = None;
-                        view.index_receipt = None;
-                        view.entries.clear();
-                        view.loaded = false;
-                        view.diff
-                            .update(cx, |diff, cx| diff.set_files([], cx));
-                        view.list
-                            .update(cx, |_, cx| cx.notify());
-                        view.fetch(
-                            Action::List {
-                                kind: *kind,
-                                offset: 0,
-                            },
-                            cx,
-                        );
-                    })),
-            )
             .when_some(self.error.clone(), |view, error| {
                 view.child(
                     div()
@@ -736,7 +578,6 @@ impl Render for Review {
                     .min_h_0()
                     .min_w_0()
                     .flex_1()
-                    .gap_3()
                     .items_stretch()
                     .when(narrow, |view| view.flex_col())
                     .child(list)
@@ -746,78 +587,66 @@ impl Render for Review {
                             .min_w_0()
                             .flex_1()
                             .gap_2()
-                            .child(
-                                h_flex()
-                                    .gap_2()
-                                    .flex_wrap()
-                                    .child(
-                                        div()
-                                            .min_w_0()
-                                            .flex_1()
-                                            .text_sm()
-                                            .text_ellipsis()
-                                            .child(
-                                                self.selected
-                                                    .clone()
-                                                    .unwrap_or_else(|| "选择文件查看差异".into()),
-                                            ),
-                                    )
-                                    .when(
-                                        self.checkpoint
-                                            .as_ref()
-                                            .is_some_and(|checkpoint| !checkpoint.undone),
-                                        |row| {
-                                            row.child(
-                                                Button::new("review-undo")
-                                                    .small()
-                                                    .label("撤销此检查点")
-                                                    .disabled(self.busy)
-                                                    .on_click(cx.listener(
-                                                        |view, _, window, cx| {
-                                                            view.confirm_undo(window, cx)
-                                                        },
-                                                    )),
-                                            )
-                                        },
-                                    )
-                                    .when(self.kind != Kind::Checkpoint, |row| {
-                                        row.child(
-                                            Button::new("review-update-index")
-                                                .small()
-                                                .label(if self.kind == Kind::Staged {
-                                                    "取消暂存此文件"
-                                                } else {
-                                                    "暂存此文件"
-                                                })
-                                                .disabled(self.busy || self.index_receipt.is_none())
-                                                .on_click(cx.listener(|view, _, _, cx| {
-                                                    view.update_index(cx)
-                                                })),
+                            .when(self.kind == Kind::Checkpoint, |view| {
+                                view.child(
+                                    h_flex()
+                                        .px_3()
+                                        .gap_2()
+                                        .flex_wrap()
+                                        .child(
+                                            div()
+                                                .min_w_0()
+                                                .flex_1()
+                                                .text_sm()
+                                                .text_ellipsis()
+                                                .child(
+                                                    self.selected
+                                                        .clone()
+                                                        .unwrap_or_else(|| {
+                                                            "选择文件查看差异".into()
+                                                        }),
+                                                ),
                                         )
-                                    }),
-                            )
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child(if self.indexing {
-                                        "正在更新暂存区…".into()
-                                    } else if self.undoing {
-                                        "正在撤销检查点…".into()
-                                    } else if self.busy {
-                                        "正在读取…".into()
-                                    } else {
-                                        self.note.clone()
-                                    }),
-                            )
+                                        .when(
+                                            self.checkpoint
+                                                .as_ref()
+                                                .is_some_and(|checkpoint| !checkpoint.undone),
+                                            |row| {
+                                                row.child(
+                                                    Button::new("review-undo")
+                                                        .small()
+                                                        .label("撤销此检查点")
+                                                        .disabled(self.busy)
+                                                        .on_click(cx.listener(
+                                                            |view, _, window, cx| {
+                                                                view.confirm_undo(window, cx)
+                                                            },
+                                                        )),
+                                                )
+                                            },
+                                        ),
+                                )
+                            })
+                            .when(self.busy || self.undoing || self.raw.is_some(), |view| {
+                                view.child(
+                                    div()
+                                        .px_3()
+                                        .text_xs()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child(if self.undoing {
+                                            "正在撤销检查点…".into()
+                                        } else if self.busy {
+                                            "正在读取…".into()
+                                        } else {
+                                            self.note.clone()
+                                        }),
+                                )
+                            })
                             .child(
                                 div()
                                     .flex_1()
                                     .min_h_0()
                                     .min_w_0()
-                                    .border_1()
-                                    .border_color(cx.theme().border)
-                                    .rounded_md()
                                     .overflow_hidden()
                                     .child(if let Some(raw) = &self.raw {
                                         Editor::new(raw)
@@ -827,6 +656,7 @@ impl Render for Review {
                                             .into_any_element()
                                     } else {
                                         Diff::new(&self.diff)
+                                            .soft_wrap(true)
                                             .single_line_number(true)
                                             .into_any_element()
                                     }),

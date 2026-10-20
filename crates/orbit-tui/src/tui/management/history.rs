@@ -99,7 +99,13 @@ impl State {
                     return Action::None;
                 };
                 let revision = commit.id.clone();
-                Action::Request(self.request(ReviewAction::Commit { revision }, Pending::Commit))
+                Action::Request(self.request(
+                    ReviewAction::Commit {
+                        revision,
+                        include_patch: false,
+                    },
+                    Pending::Commit,
+                ))
             }
             Page::Files => {
                 let Some(detail) = &self.detail else {
@@ -244,6 +250,7 @@ impl Panel for State {
                     commit,
                     message,
                     files,
+                    ..
                 }),
             ) => {
                 self.detail = Some(Detail {

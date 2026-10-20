@@ -185,7 +185,14 @@ impl Workspace {
                 files.read(cx).check_project(true, cx)?;
                 files.update(cx, |files, cx| files.start_disk_probe(cx));
             }
-            16..=19 => {}
+            16..=19 => {
+                self.files
+                    .as_ref()
+                    .expect("file pane")
+                    .update(cx, |files, cx| {
+                        files.check_empty_folder(step - 16, window, cx)
+                    })?;
+            }
             20 => self
                 .files
                 .as_ref()
@@ -341,49 +348,38 @@ impl Workspace {
                     .px_3()
                     .py_1()
                     .gap_2()
-                    .when(
-                        matches!(
-                            section,
-                            Section::ProjectFiles | Section::Review | Section::History
-                        ),
-                        |row| {
-                            row.children(
-                                [
-                                    (Section::ProjectFiles, "文件"),
-                                    (Section::Review, "变更"),
-                                    (Section::History, "历史"),
-                                ]
-                                .into_iter()
-                                .map(|(target, label)| {
-                                    Button::new(label)
-                                        .ghost()
-                                        .small()
-                                        .label(label)
-                                        .selected(section == target)
-                                        .on_click(cx.listener(move |view, _, window, cx| {
-                                            match target {
-                                                Section::ProjectFiles => {
-                                                    view.show_files(None, window, cx)
-                                                }
-                                                Section::Review => {
-                                                    view.show_review(None, window, cx)
-                                                }
-                                                Section::History => {
-                                                    view.show_git_history(window, cx)
-                                                }
-                                                _ => unreachable!(),
-                                            }
-                                        }))
-                                }),
-                            )
-                        },
-                    )
-                    .when(
-                        !matches!(
-                            section,
-                            Section::ProjectFiles | Section::Review | Section::History
-                        ),
-                        |row| row.hidden(),
+                    .when(self.tool_output.is_some(), |row| {
+                        row.child(
+                            Button::new("details-tool-tab")
+                                .ghost()
+                                .small()
+                                .label("工具")
+                                .selected(section == Section::Tool)
+                                .on_click(cx.listener(|view, _, window, cx| {
+                                    view.set_inspector(Some(Section::Tool), window, cx);
+                                })),
+                        )
+                    })
+                    .children(
+                        [
+                            (Section::ProjectFiles, "文件"),
+                            (Section::Review, "变更"),
+                            (Section::History, "历史"),
+                        ]
+                        .into_iter()
+                        .map(|(target, label)| {
+                            Button::new(label)
+                                .ghost()
+                                .small()
+                                .label(label)
+                                .selected(section == target)
+                                .on_click(cx.listener(move |view, _, window, cx| match target {
+                                    Section::ProjectFiles => view.show_files(None, window, cx),
+                                    Section::Review => view.show_review(None, window, cx),
+                                    Section::History => view.show_git_history(window, cx),
+                                    _ => unreachable!(),
+                                }))
+                        }),
                     ),
             )
             .child(
@@ -403,7 +399,7 @@ impl Workspace {
                 div()
                     .text_sm()
                     .text_color(cx.theme().muted_foreground)
-                    .child("点击对话中的工具查看输出，或查看本会话的相关内容。"),
+                    .child("从上方切换文件、变更和历史；点击对话中的工具查看输出。"),
             )
             .when(self.tool_output.is_some(), |view| {
                 view.child(
@@ -418,10 +414,7 @@ impl Workspace {
             .children(
                 [
                     (Section::Plan, self.planning.plan.is_some()),
-                    (Section::Changes, !self.execution.files().is_empty()),
                     (Section::Agents, !self.execution.agents().is_empty()),
-                    (Section::ProjectFiles, self.info.is_some()),
-                    (Section::History, self.info.is_some()),
                 ]
                 .into_iter()
                 .filter(|(_, available)| *available)

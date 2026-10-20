@@ -315,8 +315,16 @@ impl Files {
                                     .collect(),
                             );
                             let items = directory_items(".", &view.listings, &mut view.items);
-                            view.tree
-                                .update(cx, |tree, cx| tree.set_items(items, cx));
+                            let selected = view
+                                .tree
+                                .read(cx)
+                                .selected_item()
+                                .and_then(|item| view.items.get(item.id.as_ref()))
+                                .cloned();
+                            view.tree.update(cx, |tree, cx| {
+                                tree.set_items(items, cx);
+                                tree.set_selected_item(selected.as_ref(), cx);
+                            });
                             view.error = None;
                         }
                     }
@@ -443,12 +451,63 @@ impl Files {
         Ok(())
     }
 
+    #[cfg(feature = "test-support")]
+    pub(super) fn check_empty_folder(
+        &self,
+        step: u8,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> anyhow::Result<()> {
+        if step == 0 {
+            let item = self
+                .items
+                .get("empty-folder")
+                .expect("generated empty folder");
+            self.tree.update(cx, |tree, cx| {
+                tree.set_selected_item(Some(item), cx);
+                tree.focus(window, cx);
+            });
+        } else {
+            let entry = self
+                .tree
+                .read(cx)
+                .selected_entry()
+                .expect("selected folder");
+            anyhow::ensure!(
+                entry.is_folder(),
+                "empty directory lost its folder identity"
+            );
+            anyhow::ensure!(
+                entry.is_expanded() == (step < 3),
+                "empty folder did not toggle"
+            );
+        }
+        if matches!(step, 0 | 2) {
+            let key = if step == 0 { "right" } else { "left" };
+            let handle = window.window_handle();
+            cx.defer(move |cx| {
+                let _ = handle.update(cx, |_, window, cx| {
+                    window.dispatch_event(
+                        PlatformInput::KeyDown(KeyDownEvent {
+                            keystroke: Keystroke::parse(key).expect("static tree key"),
+                            is_held: false,
+                            prefer_character_input: false,
+                        }),
+                        cx,
+                    );
+                });
+            });
+        }
+        Ok(())
+    }
+
     fn browser(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let directories = self.directories.clone();
         let owner = cx.weak_entity();
         div()
             .size_full()
             .py_2()
+            .px_2()
             .capture_key_down(cx.listener(|view, event: &KeyDownEvent, window, cx| {
                 if event.keystroke.key == "enter" {
                     let path = view
@@ -630,7 +689,15 @@ fn directory_items(
                 .unwrap_or_else(|| TreeItem::new(entry.path.clone(), label.to_owned()));
             if entry.kind == EntryKind::Directory {
                 item.children = if listings.contains_key(&entry.path) {
-                    directory_items(&entry.path, listings, retained)
+                    let children = directory_items(&entry.path, listings, retained);
+                    if children.is_empty() {
+                        vec![
+                            TreeItem::new(format!("{}/.empty", entry.path), "空文件夹")
+                                .disabled(true),
+                        ]
+                    } else {
+                        children
+                    }
                 } else {
                     vec![
                         TreeItem::new(format!("{}/.pending", entry.path), "加载目录…")
@@ -675,6 +742,15 @@ mod tests {
         let refreshed = directory_items(".", &listings, &mut retained);
         assert!(!refreshed[0].is_expanded());
         assert_eq!(refreshed[0].children.len(), 1);
+        listings.insert("source".into(), vec![]);
+        let empty = directory_items(".", &listings, &mut retained);
+        assert!(empty[0].is_folder());
+        assert!(empty[0].children[0].is_disabled());
+        empty[0].clone().expanded(true);
+        let opened = directory_items(".", &listings, &mut retained);
+        assert!(opened[0].is_expanded());
+        opened[0].clone().expanded(false);
+        assert!(!directory_items(".", &listings, &mut retained)[0].is_expanded());
     }
 
     #[::core::prelude::v1::test]

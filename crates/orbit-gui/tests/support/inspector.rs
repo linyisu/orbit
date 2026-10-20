@@ -304,6 +304,7 @@ fn prepare_project(root: &Path) -> anyhow::Result<()> {
         return Ok(());
     }
     fs::create_dir_all(root.join("src/nested"))?;
+    fs::create_dir_all(root.join("empty-folder"))?;
     fs::write(
         root.join("src/main.rs"),
         "fn main() { println!(\"Generated project\"); }\n",
@@ -345,8 +346,12 @@ fn prepare_project(root: &Path) -> anyhow::Result<()> {
         root.join("src/main.rs"),
         "// Generated local revision\nfn main() { println!(\"Generated project\"); }\n",
     )?;
+    fs::write(
+        root.join("src/extra.rs"),
+        "pub const GENERATED: bool = true;\n",
+    )?;
     for args in [
-        vec!["add", "src/main.rs"],
+        vec!["add", "src"],
         vec!["commit", "-qm", "Generated local commit"],
     ] {
         let output = Command::new("git")

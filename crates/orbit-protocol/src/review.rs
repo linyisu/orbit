@@ -22,6 +22,8 @@ pub enum Action {
     },
     Commit {
         revision: String,
+        #[serde(default)]
+        include_patch: bool,
     },
     CommitFile {
         revision: String,
@@ -78,6 +80,8 @@ pub enum Snapshot {
         commit: Commit,
         message: String,
         files: Vec<String>,
+        #[serde(default)]
+        patch: Option<String>,
     },
     CommitFile {
         path: String,
@@ -138,6 +142,22 @@ pub struct Checkpoint {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legacy_commit_requests_do_not_start_exporting_patches() {
+        let action: Action = serde_json::from_value(serde_json::json!({
+            "action": "commit",
+            "revision": "HEAD"
+        }))
+        .unwrap();
+        assert!(matches!(
+            action,
+            Action::Commit {
+                include_patch: false,
+                ..
+            }
+        ));
+    }
 
     #[test]
     fn old_commit_records_do_not_invent_publication_status() {

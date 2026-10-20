@@ -78,6 +78,23 @@ async fn history_keeps_readonly_access_but_respects_disabled_capabilities() {
                 matches!(result.unwrap(), Snapshot::History { commits, .. } if commits.len() == 1)
             );
         }
+        let patch = actor_review(
+            &handle,
+            &root.display().to_string(),
+            Action::Commit {
+                revision: "HEAD".into(),
+                include_patch: true,
+            },
+        )
+        .await;
+        if disabled.is_some() {
+            assert!(patch.is_err());
+        } else {
+            assert!(
+                matches!(patch.unwrap(), Snapshot::Commit { patch: Some(patch), .. }
+                if patch.contains("+base") && !patch.contains("+working"))
+            );
+        }
         handle
             .command(session::Command::Close)
             .await

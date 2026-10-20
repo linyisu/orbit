@@ -57,8 +57,15 @@ pub fn execute(workspace: &str, request: &Value) -> Value {
                 value["view"] = "history".into();
                 Ok(serde_json::from_value(value)?)
             }
-            Action::Commit { revision } => {
-                let mut value = orbit_tools::git_inspect::history::detail(&filesystem, &revision)?;
+            Action::Commit {
+                revision,
+                include_patch,
+            } => {
+                let mut value = orbit_tools::git_inspect::history::commit(
+                    &filesystem,
+                    &revision,
+                    include_patch,
+                )?;
                 value["view"] = "commit".into();
                 Ok(serde_json::from_value(value)?)
             }

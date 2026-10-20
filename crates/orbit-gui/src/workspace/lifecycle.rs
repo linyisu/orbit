@@ -609,6 +609,13 @@ impl Workspace {
     }
 
     pub(crate) fn toggle_inspector(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.details_visible()
+            && self.last_inspector == inspector::Section::Overview
+            && self.info.is_some()
+        {
+            self.show_files(None, window, cx);
+            return;
+        }
         let section = if self.details_visible() {
             None
         } else {

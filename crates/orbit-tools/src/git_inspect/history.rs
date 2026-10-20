@@ -202,6 +202,16 @@ fn diff_args(id: &str, parent: Option<String>, patch: bool) -> Vec<String> {
 
 /// Read metadata and paths for the authorized repository root, including merge commits.
 pub fn detail(workspace: &Workspace, requested: &str) -> Result<Value, ToolError> {
+    commit(workspace, requested, false)
+}
+
+/// Read one pinned commit, optionally including every file's bounded first-parent patch.
+/// The patch uses the same repository scope and disables external diff and text conversion.
+pub fn commit(
+    workspace: &Workspace,
+    requested: &str,
+    include_patch: bool,
+) -> Result<Value, ToolError> {
     let token = CancellationToken::new();
     let root = repository_root(workspace.root(), &token)?;
     let id = revision(&root, requested, &token)?;
@@ -242,10 +252,17 @@ pub fn detail(workspace: &Workspace, requested: &str) -> Result<Value, ToolError
             return Err(failed("commit exceeds the file inspection limit"));
         }
     }
+    let patch = if include_patch {
+        let args = diff_args(&id, parent(&root, &id, &token)?, true);
+        Some(text(&git_export(&root, args, &token, false)?)?)
+    } else {
+        None
+    };
     Ok(json!({
         "commit": commit,
         "message": text(&message)?,
-        "files": files
+        "files": files,
+        "patch": patch
     }))
 }
 

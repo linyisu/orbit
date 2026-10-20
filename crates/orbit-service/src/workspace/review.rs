@@ -69,8 +69,11 @@ pub(super) async fn git_read(
                 Action::History { revision, offset } => {
                     orbit_tools::git_inspect::history::list(&workspace, &revision, offset)
                 }
-                Action::Commit { revision } => {
-                    orbit_tools::git_inspect::history::detail(&workspace, &revision)
+                Action::Commit {
+                    revision,
+                    include_patch,
+                } => {
+                    orbit_tools::git_inspect::history::commit(&workspace, &revision, include_patch)
                 }
                 Action::CommitFile { revision, path } => {
                     orbit_tools::git_inspect::history::file(&workspace, &revision, &path)
