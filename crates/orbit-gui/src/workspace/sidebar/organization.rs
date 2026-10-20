@@ -117,7 +117,18 @@ pub(super) fn row_menu(
         let pinned = host.projects.is_pinned(path);
         let pin_options = options.clone();
         let pin_path = path.to_owned();
-        menu.item(
+        let current = view
+            .owner
+            .as_ref()
+            .and_then(|owner| owner.upgrade())
+            .is_some_and(|workspace| {
+                workspace
+                    .read(cx)
+                    .info
+                    .as_ref()
+                    .is_some_and(|info| info.workspace == path)
+            });
+        let mut menu = menu.item(
             PopupMenuItem::new(if pinned {
                 "取消项目置顶"
             } else {
@@ -127,7 +138,33 @@ pub(super) fn row_menu(
             .on_click(move |_, _, cx| {
                 Preferences::set_project_pin(&pin_options, &pin_path, !pinned, cx);
             }),
-        )
+        );
+        for (label, action) in [
+            ("浏览文件", super::super::actions::WorkspaceCommand::File),
+            (
+                "查看 Git 变更",
+                super::super::actions::WorkspaceCommand::Diff,
+            ),
+            (
+                "查看提交历史",
+                super::super::actions::WorkspaceCommand::GitHistory,
+            ),
+        ] {
+            let workspace = view.owner.clone();
+            menu = menu.item(
+                PopupMenuItem::new(label)
+                    .disabled(!current)
+                    .on_click(move |_, window, cx| {
+                        if let Some(owner) = workspace
+                            .as_ref()
+                            .and_then(|owner| owner.upgrade())
+                        {
+                            owner.update(cx, |view, cx| view.execute(action, window, cx));
+                        }
+                    }),
+            );
+        }
+        menu
     } else {
         session_menu(
             view.owner.clone(),

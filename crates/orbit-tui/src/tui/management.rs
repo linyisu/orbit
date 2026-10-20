@@ -1,6 +1,7 @@
 //! Session-bound native management surfaces. Transport receipts retain the
 //! surface identity so a late reply cannot replace a newly opened editor.
 mod files;
+mod history;
 mod keys;
 mod queue;
 mod resources;
@@ -153,6 +154,23 @@ pub(super) fn open(command: &str, session: &str, workspace: &str) -> Option<(Sta
         "/file" => {
             let mut panel = files::State::new(session.clone(), workspace.clone())
                 .at((!argument.is_empty()).then(|| argument.to_owned()));
+            let request = panel.initial();
+            (Box::new(panel), request)
+        }
+        "/review" if argument == "history" || argument.starts_with("history ") => {
+            let revision = argument
+                .strip_prefix("history")
+                .unwrap()
+                .trim();
+            let mut panel = history::State::new(
+                session.clone(),
+                workspace.clone(),
+                if revision.is_empty() {
+                    "HEAD"
+                } else {
+                    revision
+                },
+            );
             let request = panel.initial();
             (Box::new(panel), request)
         }

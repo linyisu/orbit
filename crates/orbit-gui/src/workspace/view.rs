@@ -83,61 +83,6 @@ impl Workspace {
                     ),
                 )
             })
-            .when(
-                self.planning.plan.is_some()
-                    || !self.execution.files().is_empty()
-                    || !self.execution.agents().is_empty(),
-                |view| {
-                    view.child(
-                        h_flex()
-                            .gap_2()
-                            .flex_wrap()
-                            .when(self.planning.plan.is_some(), |row| {
-                                row.child(
-                                    Button::new("context-plan")
-                                        .ghost()
-                                        .small()
-                                        .label("计划")
-                                        .on_click(cx.listener(|view, _, window, cx| {
-                                            view.show_plan(window, cx)
-                                        })),
-                                )
-                            })
-                            .when(!self.execution.files().is_empty(), |row| {
-                                row.child(
-                                    Button::new("context-changes")
-                                        .ghost()
-                                        .small()
-                                        .label(format!(
-                                            "{} 个文件变更",
-                                            self.execution.files().len()
-                                        ))
-                                        .on_click(cx.listener(|view, _, window, cx| {
-                                            view.set_inspector(
-                                                Some(inspector::Section::Changes),
-                                                window,
-                                                cx,
-                                            )
-                                        })),
-                                )
-                            })
-                            .when(!self.execution.agents().is_empty(), |row| {
-                                row.child(
-                                    Button::new("context-agents")
-                                        .ghost()
-                                        .small()
-                                        .label(format!(
-                                            "{} 个子任务",
-                                            self.execution.agents().len()
-                                        ))
-                                        .on_click(cx.listener(|view, _, window, cx| {
-                                            view.open_child_agents(window, cx)
-                                        })),
-                                )
-                            }),
-                    )
-                },
-            )
             .when(self.is_new_conversation(cx), |view| {
                 view.child(self.composer_target(cx))
             })
@@ -1003,6 +948,14 @@ impl Render for Workspace {
                 })
             });
         let body = if let Some(accessory) = accessory {
+            let project = matches!(
+                self.inspector,
+                Some(
+                    inspector::Section::ProjectFiles
+                        | inspector::Section::Review
+                        | inspector::Section::History
+                )
+            );
             if inspector::compact(window.viewport_size().width / window.rem_size()) {
                 div()
                     .size_full()
@@ -1010,12 +963,16 @@ impl Render for Workspace {
                     .into_any_element()
             } else {
                 h_resizable("document-panes")
-                    .with_state(&self.details_panes)
+                    .with_state(if project {
+                        &self.project_panes
+                    } else {
+                        &self.details_panes
+                    })
                     .child(resizable_panel().child(body))
                     .child(
                         resizable_panel()
-                            .size(window.rem_size() * 28.)
-                            .size_range(window.rem_size() * 18. ..window.rem_size() * 48.)
+                            .size(window.rem_size() * if project { 48. } else { 28. })
+                            .size_range(window.rem_size() * 18. ..window.rem_size() * 60.)
                             .child(accessory),
                     )
                     .into_any_element()
@@ -1072,14 +1029,6 @@ impl Render for Workspace {
                 .into_any_element()
         } else {
             body
-        };
-        let body = match self.page {
-            MainPage::Files => div()
-                .size_full()
-                .min_h_0()
-                .children(self.files.clone())
-                .into_any_element(),
-            _ => body,
         };
         v_flex()
             .size_full()

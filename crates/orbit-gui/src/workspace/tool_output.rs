@@ -390,6 +390,16 @@ impl ToolOutput {
                 .detach();
             }
             Target::Question => self.select(Stream::Result, window, cx),
+            Target::Plan(state) => {
+                let owner = self.owner.clone();
+                cx.spawn_in(window, async move |_, cx| {
+                    let _ = owner.update_in(cx, |workspace, window, cx| {
+                        workspace.plan_record = Some(*state);
+                        workspace.set_inspector(Some(inspector::Section::Plan), window, cx);
+                    });
+                })
+                .detach();
+            }
         }
     }
 }

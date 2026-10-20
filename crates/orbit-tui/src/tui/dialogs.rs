@@ -873,6 +873,11 @@ pub fn handle(state: &mut UiState, event: Event) -> Option<String> {
         {
             use orbit_client::execution::details::Target;
             match target {
+                Target::Plan(snapshot) => {
+                    if let Some(plan) = snapshot.plan {
+                        state.info_dialog = Some(InfoDialog::new(&plan.title, plan.markdown));
+                    }
+                }
                 Target::Agent(agent) => {
                     state.info_dialog = None;
                     super::subagents::open(state, agent);

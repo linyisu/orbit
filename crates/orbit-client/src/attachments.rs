@@ -35,6 +35,33 @@ pub fn paths(paths: Vec<PathBuf>) -> Result<Vec<Attachment>> {
         .collect()
 }
 
+/// Stage already-authorized file bytes for the composer. Keep the returned lease until upload.
+/// The display name is never interpreted as a local path.
+pub fn composer_file(name: &str, bytes: &[u8]) -> Result<tempfile::NamedTempFile> {
+    use std::io::Write;
+    anyhow::ensure!(bytes.len() <= Attachment::MAX_FILE_BYTES, "附件超过 20 MiB");
+    let extension = name
+        .rsplit_once('.')
+        .map(|(_, extension)| extension)
+        .filter(|extension| {
+            !extension.is_empty()
+                && extension.len() <= 16
+                && extension
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric())
+        });
+    let suffix = extension
+        .map(|extension| format!(".{extension}"))
+        .unwrap_or_default();
+    let mut file = tempfile::Builder::new()
+        .prefix("orbit-attachment-")
+        .suffix(&suffix)
+        .tempfile()?;
+    file.write_all(bytes)?;
+    file.flush()?;
+    Ok(file)
+}
+
 pub fn rgba(width: usize, height: usize, bytes: Vec<u8>) -> Result<Vec<Attachment>> {
     Ok(vec![temporary_assets()?.import_rgba(
         "clipboard.png",
@@ -371,5 +398,21 @@ mod tests {
             content
         );
         assert!(file_upload(root.path()).is_err());
+    }
+}
+
+#[cfg(test)]
+mod composer_file_tests {
+    #[test]
+    fn bytes_are_staged_without_interpreting_the_display_name_as_a_path() {
+        let bytes = b"generated attachment\r\n";
+        let file = super::composer_file("../../unsafe/sample.txt", bytes).unwrap();
+        assert_eq!(std::fs::read(file.path()).unwrap(), bytes);
+        assert_eq!(file.path().extension().unwrap(), "txt");
+        let path = file.path().to_owned();
+        drop(file);
+        assert!(!path.exists());
+        let file = super::composer_file("name.bad/extension", bytes).unwrap();
+        assert!(file.path().extension().is_none());
     }
 }

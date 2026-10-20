@@ -24,7 +24,7 @@ cargo run --release -p orbit-tui --locked
 | 账号与模型 | `/connect`、`/model`、`/model refresh` |
 | 会话与标签 | `/new`、`/resume`、`/close`、`/restore` |
 | 计划与审批 | `/plan`、`/plan view`、`/build`、`/permissions` |
-| 文件与变更 | `/file`、`/review`、`/changes`、`/diff`、`/undo` |
+| 文件与变更 | `/file`、`/review`、`/review history [分支或提交]`、`/changes`、`/diff`、`/undo` |
 | 任务与扩展 | `/tasks`、`/queue`、`/skills`、`/mcp`、`/plugins` |
 | 快捷键与历史 | `/keys`；Ctrl+Up / Ctrl+Down 浏览输入历史 |
 
@@ -53,3 +53,5 @@ cargo test -p orbit-tui --locked
 ```
 
 运行中普通补充输入默认留到本次结束后逐条发送；在 `/queue` 中使用“引导 Ctrl+G”才进入当前任务的输入边界。
+
+Git 历史继续使用弹窗：方向键选择、Enter 打开提交或文件，默认显示完整历史文件；D 切换差异，B 或 Backspace 返回列表，Ctrl+L 修改分支或提交，N 加载下一页，Esc 直接关闭。分页固定提交身份，与 GUI 共用只读服务查询和权限校验。

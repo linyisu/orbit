@@ -15,6 +15,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
+pub mod history;
 mod index;
 pub use index::{ReviewedFile, review_index_patch, update_review_index};
 

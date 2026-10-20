@@ -12,6 +12,62 @@ pub fn execute(workspace: &str, request: &Value) -> Value {
         let action: Action = serde_json::from_value(request["action"].clone())?;
         let undone = root.join(".fixture-review-undone");
         match action {
+            Action::Status { offset } => {
+                let listing = orbit_tools::git_inspect::review_status(&filesystem, offset)?;
+                let entries = listing["entries"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .map(|entry| Entry {
+                        path: entry["path"]
+                            .as_str()
+                            .unwrap_or_default()
+                            .into(),
+                        kind: if entry["kind"] == "untracked" {
+                            Kind::Untracked
+                        } else if entry["xy"]
+                            .as_str()
+                            .and_then(|xy| xy.as_bytes().get(1))
+                            .is_some_and(|value| !matches!(value, b'.' | b' '))
+                        {
+                            Kind::Unstaged
+                        } else {
+                            Kind::Staged
+                        },
+                        status: entry["xy"]
+                            .as_str()
+                            .unwrap_or("??")
+                            .into(),
+                        undone: false,
+                    })
+                    .collect();
+                Ok(Snapshot::Status {
+                    entries,
+                    next: listing["next_offset"]
+                        .as_u64()
+                        .map(|offset| offset as usize),
+                    branch: listing["branch"]["head"]
+                        .as_str()
+                        .map(str::to_owned),
+                })
+            }
+            Action::History { revision, offset } => {
+                let mut value =
+                    orbit_tools::git_inspect::history::list(&filesystem, &revision, offset)?;
+                value["view"] = "history".into();
+                Ok(serde_json::from_value(value)?)
+            }
+            Action::Commit { revision } => {
+                let mut value = orbit_tools::git_inspect::history::detail(&filesystem, &revision)?;
+                value["view"] = "commit".into();
+                Ok(serde_json::from_value(value)?)
+            }
+            Action::CommitFile { revision, path } => {
+                let mut value =
+                    orbit_tools::git_inspect::history::file(&filesystem, &revision, &path)?;
+                value["view"] = "commit_file".into();
+                Ok(serde_json::from_value(value)?)
+            }
             Action::List {
                 kind: Kind::Checkpoint,
                 ..

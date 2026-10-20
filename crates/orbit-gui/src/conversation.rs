@@ -39,7 +39,10 @@ pub(crate) struct Conversation {
     viewport_bounds: Rc<Cell<Bounds<Pixels>>>,
 }
 #[derive(Clone)]
-pub(crate) struct ToolRequest(pub orbit_client::execution::ToolRun);
+pub(crate) enum ToolRequest {
+    Call(Box<orbit_client::execution::ToolRun>),
+    Changes(Vec<orbit_client::execution::ToolRun>),
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RowKey {
     Prompt(usize),
@@ -52,6 +55,7 @@ struct TurnView {
     parts: Vec<Entity<MessageRow>>,
     reply: SharedString,
     completed: bool,
+    changed_tools: Vec<orbit_client::execution::ToolRun>,
     viewport_bounds: Rc<Cell<Bounds<Pixels>>>,
     _subscriptions: Vec<Subscription>,
 }
@@ -173,6 +177,7 @@ impl Conversation {
                 parts: Vec::new(),
                 reply: "".into(),
                 completed: false,
+                changed_tools: vec![],
                 viewport_bounds: self.viewport_bounds.clone(),
                 _subscriptions: Vec::new(),
             });
@@ -358,6 +363,11 @@ impl TurnView {
     fn sync(&mut self, turn: &Turn, changed: Option<usize>, cx: &mut Context<Self>) {
         self.reply = turn.reply().into();
         self.completed = turn.completed;
+        self.changed_tools = if turn.completed {
+            turn.changed_tools()
+        } else {
+            vec![]
+        };
         if self.user.is_none()
             && let Some(prompt) = &turn.prompt
         {
@@ -469,16 +479,38 @@ fn disclosure_button(id: &'static str, title: SharedString, expanded: bool) -> B
 }
 
 impl Render for TurnView {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        div().when(self.completed && !self.reply.is_empty(), |view| {
-            view.child(
-                gpui_kit::component::clipboard::Clipboard::new("copy-answer")
-                    .value(self.reply.clone())
-                    .small()
-                    .tooltip("复制完整 AI 回答")
-                    .accessibility_label("复制完整 AI 回答"),
-            )
-        })
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let files: std::collections::BTreeSet<_> = self
+            .changed_tools
+            .iter()
+            .flat_map(|tool| {
+                tool.changes
+                    .iter()
+                    .map(|change| &change.path)
+            })
+            .collect();
+        v_flex()
+            .gap_2()
+            .when(self.completed && !self.reply.is_empty(), |view| {
+                view.child(
+                    gpui_kit::component::clipboard::Clipboard::new("copy-answer")
+                        .value(self.reply.clone())
+                        .small()
+                        .tooltip("复制完整 AI 回答")
+                        .accessibility_label("复制完整 AI 回答"),
+                )
+            })
+            .when(self.completed && !files.is_empty(), |view| {
+                view.child(
+                    Button::new("turn-changes")
+                        .ghost()
+                        .small()
+                        .label(format!("查看本轮变更 · {} 个文件", files.len()))
+                        .on_click(cx.listener(|view, _, _, cx| {
+                            cx.emit(ToolRequest::Changes(view.changed_tools.clone()))
+                        })),
+                )
+            })
     }
 }
 
@@ -832,7 +864,7 @@ impl Render for MessageRow {
                         }),
                 )
                 .accessibility_label(format!("{} · {}", tool.status.label(), tool.summary()))
-                .on_click(cx.listener(move |_, _, _, cx| cx.emit(ToolRequest(tool.clone()))))
+                .on_click(cx.listener(move |_, _, _, cx| cx.emit(ToolRequest::Call(Box::new(tool.clone())))))
                 .into_any_element();
         }
         let disclosure_inset = rems(1.5);

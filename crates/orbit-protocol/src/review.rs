@@ -12,6 +12,21 @@ pub enum Kind {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum Action {
+    Status {
+        offset: usize,
+    },
+    /// Browse a pinned commit ancestry without changing HEAD or the index.
+    History {
+        revision: String,
+        offset: usize,
+    },
+    Commit {
+        revision: String,
+    },
+    CommitFile {
+        revision: String,
+        path: String,
+    },
     List {
         kind: Kind,
         offset: usize,
@@ -48,6 +63,27 @@ pub struct Entry {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "view", rename_all = "snake_case")]
 pub enum Snapshot {
+    Status {
+        entries: Vec<Entry>,
+        next: Option<usize>,
+        branch: Option<String>,
+    },
+    History {
+        revision: String,
+        commits: Vec<Commit>,
+        branches: Vec<String>,
+        next: Option<usize>,
+    },
+    Commit {
+        commit: Commit,
+        message: String,
+        files: Vec<String>,
+    },
+    CommitFile {
+        path: String,
+        patch: String,
+        content: Option<String>,
+    },
     List {
         entries: Vec<Entry>,
         next: Option<usize>,
@@ -69,6 +105,15 @@ pub enum Snapshot {
         path: String,
         staged: bool,
     },
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Commit {
+    pub id: String,
+    pub short_id: String,
+    pub authored_at: String,
+    pub author: String,
+    pub subject: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

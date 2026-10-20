@@ -37,6 +37,16 @@ pub struct Turn {
 }
 
 impl Turn {
+    /// Keep confirmed write receipts with their original calls for historical change navigation.
+    pub fn changed_tools(&self) -> Vec<ToolRun> {
+        self.parts
+            .iter()
+            .filter_map(|part| part.tool.as_ref())
+            .filter(|tool| !tool.changes.is_empty())
+            .cloned()
+            .collect()
+    }
+
     /// Projects source parts without reordering or hiding intermediate prose.
     pub fn segments(&self) -> Vec<layout::Segment> {
         let roles = self
@@ -436,6 +446,48 @@ mod tests {
                 "arguments": "{}"
             }
         })
+    }
+
+    #[test]
+    fn historical_changes_keep_each_turns_original_receipts() {
+        let mut transcript = Transcript::default();
+        for (id, before, after) in [("write-a", "old", "first"), ("write-b", "first", "second")] {
+            apply(
+                &mut transcript,
+                json!({"Started": {"prompt": "Generated request"}}),
+            );
+            let call = ToolCall::function(id, "WriteFile", json!({"path": "sample.txt"}));
+            transcript.agent(AgentEvent::ToolStarted { call: call.clone() });
+            assert!(
+                transcript
+                    .turns
+                    .last()
+                    .unwrap()
+                    .changed_tools()
+                    .is_empty()
+            );
+            transcript.agent(AgentEvent::ToolFinished {
+                outcome: None,
+                call,
+                content: "saved".into(),
+                files: None,
+                changes: vec![crate::execution::FileChange {
+                    path: "sample.txt".into(),
+                    before: Some(before.into()),
+                    after: after.into(),
+                }],
+            });
+            apply(
+                &mut transcript,
+                json!({"Finished": {"status": "completed"}}),
+            );
+        }
+        let first = transcript.turns[0].changed_tools();
+        let second = transcript.turns[1].changed_tools();
+        assert_eq!(first[0].id, "write-a");
+        assert_eq!(first[0].changes[0].after, "first");
+        assert_eq!(second[0].id, "write-b");
+        assert_eq!(second[0].changes[0].before.as_deref(), Some("first"));
     }
 
     #[test]

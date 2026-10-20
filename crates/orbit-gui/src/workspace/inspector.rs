@@ -2,7 +2,7 @@
 //! service protocol; this pane has no execution or persistence authority.
 use super::*;
 use actions::WorkspaceCommand;
-use gpui_kit::component::{scroll::ScrollableElement, tooltip::Tooltip};
+use gpui_kit::component::{Selectable, scroll::ScrollableElement, tooltip::Tooltip};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Section {
@@ -12,6 +12,8 @@ pub(super) enum Section {
     Plan,
     Changes,
     Review,
+    ProjectFiles,
+    History,
     Agents,
     AgentConversation,
 }
@@ -25,6 +27,8 @@ impl Section {
             Self::Plan => "计划",
             Self::Changes => "文件变更",
             Self::Review => "变更审查",
+            Self::ProjectFiles => "项目文件",
+            Self::History => "提交历史",
             Self::Agents => "子 Agent",
             Self::AgentConversation => "子 Agent 对话",
         }
@@ -162,6 +166,34 @@ impl Workspace {
                 );
                 self.set_inspector(None, window, cx);
             }
+            12 if std::env::var_os("ORBIT_GUI_PROJECT_PROBE").is_some() => {
+                gpui_kit::component::Theme::change(gpui_kit::component::ThemeMode::Light, None, cx);
+                gpui_kit::component::Theme::global_mut(cx).font_size = px(16.);
+                gpui_kit::component::Theme::sync_base(cx);
+                window.resize(size(px(1_600.), px(900.)));
+                self.show_files(None, window, cx);
+            }
+            13 => self
+                .files
+                .as_ref()
+                .expect("file pane")
+                .read(cx)
+                .check_project(false, cx)?,
+            14 => self.show_files(Some("src/main.rs".into()), window, cx),
+            15 => self
+                .files
+                .as_ref()
+                .expect("file pane")
+                .read(cx)
+                .check_project(true, cx)?,
+            16 => self.show_git_history(window, cx),
+            17..=19 => {
+                self.git_history
+                    .as_ref()
+                    .expect("history pane")
+                    .update(cx, |history, cx| history.check_project(step - 17, cx))?;
+            }
+            20 => self.set_inspector(None, window, cx),
             _ => {
                 anyhow::ensure!(
                     self.inspector.is_none(),
@@ -231,6 +263,14 @@ impl Workspace {
                 .size_full()
                 .children(self.review.clone())
                 .into_any_element(),
+            Section::ProjectFiles => div()
+                .size_full()
+                .children(self.files.clone())
+                .into_any_element(),
+            Section::History => div()
+                .size_full()
+                .children(self.git_history.clone())
+                .into_any_element(),
             Section::Agents => div()
                 .size_full()
                 .children(self.child_agents.clone())
@@ -286,6 +326,56 @@ impl Workspace {
                     ),
             )
             .child(
+                h_flex()
+                    .px_3()
+                    .py_1()
+                    .gap_2()
+                    .when(
+                        matches!(
+                            section,
+                            Section::ProjectFiles | Section::Review | Section::History
+                        ),
+                        |row| {
+                            row.children(
+                                [
+                                    (Section::ProjectFiles, "文件"),
+                                    (Section::Review, "变更"),
+                                    (Section::History, "历史"),
+                                ]
+                                .into_iter()
+                                .map(|(target, label)| {
+                                    Button::new(label)
+                                        .ghost()
+                                        .small()
+                                        .label(label)
+                                        .selected(section == target)
+                                        .on_click(cx.listener(move |view, _, window, cx| {
+                                            match target {
+                                                Section::ProjectFiles => {
+                                                    view.show_files(None, window, cx)
+                                                }
+                                                Section::Review => {
+                                                    view.show_review(None, window, cx)
+                                                }
+                                                Section::History => {
+                                                    view.show_git_history(window, cx)
+                                                }
+                                                _ => unreachable!(),
+                                            }
+                                        }))
+                                }),
+                            )
+                        },
+                    )
+                    .when(
+                        !matches!(
+                            section,
+                            Section::ProjectFiles | Section::Review | Section::History
+                        ),
+                        |row| row.hidden(),
+                    ),
+            )
+            .child(
                 div()
                     .flex_1()
                     .min_h_0()
@@ -319,6 +409,8 @@ impl Workspace {
                     (Section::Plan, self.planning.plan.is_some()),
                     (Section::Changes, !self.execution.files().is_empty()),
                     (Section::Agents, !self.execution.agents().is_empty()),
+                    (Section::ProjectFiles, self.info.is_some()),
+                    (Section::History, self.info.is_some()),
                 ]
                 .into_iter()
                 .filter(|(_, available)| *available)
@@ -329,7 +421,14 @@ impl Workspace {
                         .on_click(cx.listener(move |view, _, window, cx| {
                             if section == Section::Agents {
                                 view.open_child_agents(window, cx);
+                            } else if section == Section::ProjectFiles {
+                                view.show_files(None, window, cx);
+                            } else if section == Section::History {
+                                view.show_git_history(window, cx);
                             } else {
+                                if section == Section::Changes {
+                                    view.change_tools = None;
+                                }
                                 view.set_inspector(Some(section), window, cx);
                             }
                         }))
@@ -344,6 +443,27 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        match orbit_client::execution::details::target(&tool) {
+            Some(orbit_client::execution::details::Target::Plan(state)) => {
+                self.plan_record = Some(*state);
+                self.set_inspector(Some(Section::Plan), window, cx);
+                return;
+            }
+            Some(orbit_client::execution::details::Target::Agent(agent)) if !snapshot => {
+                if let Some(info) = &self.info {
+                    self.command(
+                        Command::Request(Request::ReadSubagent {
+                            session: info.id.clone(),
+                            agent,
+                            after: 0,
+                        }),
+                        cx,
+                    );
+                }
+                return;
+            }
+            _ => {}
+        }
         let Some(info) = &self.info else { return };
         let tool = self
             .execution
@@ -426,9 +546,15 @@ impl Workspace {
     }
 
     fn plan_view(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let plan = self.planning.plan.as_ref();
-        let generation = self.planning.generation;
-        let reviewable = self.planning.mode == orbit_protocol::plan::WorkMode::Plan
+        let state = self
+            .plan_record
+            .as_ref()
+            .unwrap_or(&self.planning);
+        let plan = state.plan.as_ref();
+        let generation = state.generation;
+        let reviewable = generation == self.planning.generation
+            && plan == self.planning.plan.as_ref()
+            && state.mode == orbit_protocol::plan::WorkMode::Plan
             && plan.is_some_and(|plan| plan.status == orbit_protocol::plan::Status::Review);
         v_flex()
             .size_full()
@@ -528,13 +654,35 @@ impl Workspace {
     }
 
     fn changes_view(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let files = self
+            .change_tools
+            .as_ref()
+            .map(|tools| {
+                tools
+                    .iter()
+                    .flat_map(|tool| {
+                        tool.changes
+                            .iter()
+                            .map(|change| change.path.clone())
+                    })
+                    .collect::<std::collections::BTreeSet<_>>()
+            })
+            .unwrap_or_else(|| self.execution.files().clone());
         v_flex()
             .size_full()
             .min_h_0()
             .min_w_0()
             .child(section_summary(
                 "文件变更",
-                format!("{} 个文件 · 本会话", self.execution.files().len()),
+                format!(
+                    "{} 个文件 · {}",
+                    files.len(),
+                    if self.change_tools.is_some() {
+                        "本轮写入快照"
+                    } else {
+                        "本会话"
+                    }
+                ),
                 cx,
             ))
             .child(
@@ -543,7 +691,7 @@ impl Workspace {
                     .flex_1()
                     .min_h_0()
                     .overflow_y_scrollbar()
-                    .child(if self.execution.files().is_empty() {
+                    .child(if files.is_empty() {
                         empty_state(
                             IconName::File,
                             "还没有文件变更",
@@ -554,16 +702,23 @@ impl Workspace {
                     } else {
                         v_flex()
                             .px_2()
-                            .children(
-                                self.execution
-                                    .files()
-                                    .iter()
-                                    .map(|path| {
-                                        let path = path.clone();
-                                        let edit_path = path.clone();
-                                        let (name, parent) = path_labels(&path);
-                                        let tooltip = preview_tooltip(&path, "点击查看文件差异");
-                                        h_flex()
+                            .children(files.iter().map(|path| {
+                                let path = path.clone();
+                                let edit_path = path.clone();
+                                let snapshot = self
+                                    .change_tools
+                                    .as_ref()
+                                    .and_then(|tools| {
+                                        tools.iter().rev().find(|tool| {
+                                            tool.changes
+                                                .iter()
+                                                .any(|change| change.path == path)
+                                        })
+                                    })
+                                    .cloned();
+                                let (name, parent) = path_labels(&path);
+                                let tooltip = preview_tooltip(&path, "点击查看文件差异");
+                                h_flex()
                                     .gap_1()
                                     .min_w_0()
                                     .child(
@@ -620,11 +775,17 @@ impl Workspace {
                                         )
                                         .accessibility_label(format!("查看 {path} 的差异"))
                                         .disabled(self.info.is_none())
-                                        .on_click(
-                                            cx.listener(move |view, _, window, cx| {
-                                                view.show_review(Some(path.clone()), window, cx)
-                                            }),
-                                        ),
+                                        .on_click(cx.listener(move |view, _, window, cx| {
+                                            if let Some(tool) = snapshot.clone() {
+                                                view.open_tool_record(tool, true, window, cx);
+                                            } else {
+                                                view.show_checkpoints(
+                                                    Some(path.clone()),
+                                                    window,
+                                                    cx,
+                                                );
+                                            }
+                                        })),
                                     )
                                     .child(
                                         Button::new(SharedString::from(format!(
@@ -637,14 +798,11 @@ impl Workspace {
                                         .tooltip("编辑文件…")
                                         .accessibility_label(format!("编辑 {edit_path}"))
                                         .disabled(self.info.is_none())
-                                        .on_click(
-                                            cx.listener(move |view, _, window, cx| {
-                                                view.show_files(Some(edit_path.clone()), window, cx)
-                                            }),
-                                        ),
+                                        .on_click(cx.listener(move |view, _, window, cx| {
+                                            view.show_files(Some(edit_path.clone()), window, cx)
+                                        })),
                                     )
-                                    }),
-                            )
+                            }))
                             .into_any_element()
                     }),
             )

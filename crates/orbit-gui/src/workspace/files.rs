@@ -13,6 +13,7 @@ use orbit_protocol::files::{Action, Entry, EntryKind, Snapshot};
 use state::DraftState;
 
 const EDIT_BYTES: usize = 1_024 * 1_024;
+const MAX_BROWSED_ENTRIES: usize = 20_000;
 
 actions!(orbit_gui_files, [SaveFile, RefreshFiles]);
 
@@ -41,11 +42,18 @@ struct DiskVersion {
     editor: Entity<EditorState>,
 }
 
+enum GitState {
+    Loading,
+    Ready(Arc<std::collections::BTreeMap<String, String>>),
+    Unavailable,
+}
+
 #[derive(Clone)]
 enum Operation {
     List { append: bool },
     Read { path: String },
     Compare { path: String },
+    Attach { name: String },
     Save,
 }
 
@@ -58,6 +66,15 @@ pub(super) struct Files {
     path: Entity<InputState>,
     tree: Entity<TreeState>,
     entries: Vec<Entry>,
+    listings: std::collections::BTreeMap<String, Vec<Entry>>,
+    directory_queue: std::collections::VecDeque<String>,
+    items: std::collections::HashMap<String, TreeItem>,
+    tree_root: String,
+    show_tree: bool,
+    editing: bool,
+    _tree_events: Subscription,
+    git: GitState,
+    git_task: Task<()>,
     directories: Arc<std::collections::HashSet<String>>,
     directory: String,
     next_offset: Option<usize>,
@@ -91,6 +108,7 @@ impl Files {
                 if !files.busy && files.document.is_none() {
                     files.browse(".".into(), false, cx);
                 }
+                files.refresh_git(cx);
             });
         });
         let editor = cx.new(|cx| {
@@ -99,6 +117,28 @@ impl Files {
                 .soft_wrap(false)
         });
         let events = Self::subscribe_editor(&editor, cx);
+        let tree = cx.new(|cx| TreeState::new(cx));
+        let tree_events = cx.subscribe(&tree, |files, _, event, cx| {
+            if let gpui_kit::component::tree::TreeEvent::Expanded(path) = event
+                && !files
+                    .listings
+                    .contains_key(path.as_ref())
+            {
+                if files.busy {
+                    if !files
+                        .directory_queue
+                        .iter()
+                        .any(|queued| queued == path.as_ref())
+                    {
+                        files
+                            .directory_queue
+                            .push_back(path.to_string());
+                    }
+                } else {
+                    files.browse(path.to_string(), false, cx);
+                }
+            }
+        });
         Self {
             owner,
             session,
@@ -110,8 +150,15 @@ impl Files {
                     .default_value(".")
                     .placeholder("工作区相对路径")
             }),
-            tree: cx.new(|cx| TreeState::new(cx)),
+            tree,
+            _tree_events: tree_events,
             entries: vec![],
+            listings: Default::default(),
+            directory_queue: Default::default(),
+            items: Default::default(),
+            tree_root: ".".into(),
+            show_tree: true,
+            editing: false,
             directories: Arc::new(std::collections::HashSet::new()),
             directory: ".".into(),
             next_offset: None,
@@ -129,11 +176,111 @@ impl Files {
             width: None,
             task: Task::ready(()),
             editor_events: Some(events),
+            git: GitState::Loading,
+            git_task: Task::ready(()),
         }
     }
 
     pub(super) fn belongs_to(&self, session: &str, workspace: &str) -> bool {
         self.session == session && self.workspace == workspace
+    }
+
+    #[cfg(feature = "test-support")]
+    pub(super) fn check_project(&self, document: bool, cx: &App) -> anyhow::Result<()> {
+        anyhow::ensure!(!self.busy, "project file request did not complete");
+        if document {
+            anyhow::ensure!(
+                self.document
+                    .as_ref()
+                    .is_some_and(|document| document.path == "src/main.rs"),
+                "project document missing"
+            );
+            anyhow::ensure!(!self.editing, "file preview must default to read-only");
+            anyhow::ensure!(
+                self.editor
+                    .read(cx)
+                    .value()
+                    .contains("Changed project"),
+                "file preview must read the current project"
+            );
+        } else {
+            anyhow::ensure!(
+                self.listings.contains_key("."),
+                "project root was not loaded"
+            );
+        }
+        Ok(())
+    }
+
+    pub(super) fn refresh_git(&mut self, cx: &mut Context<Self>) {
+        self.git = GitState::Loading;
+        let session = self.session.clone();
+        let workspace = self.workspace.clone();
+        let owner = self.owner.clone();
+        self.git_task = cx.spawn(async move |entity, cx| {
+            let mut statuses = std::collections::BTreeMap::new();
+            let mut offset = 0;
+            let result = async {
+                loop {
+                    let (result, response) = tokio::sync::oneshot::channel();
+                    let request = Request::Review {
+                        session: session.clone(),
+                        expected_workspace: workspace.clone(),
+                        action: orbit_protocol::review::Action::Status { offset },
+                    };
+                    let sent = owner
+                        .update(cx, |view, _| {
+                            ensure_current(view, &session, &workspace).is_ok()
+                                && view
+                                    .backend
+                                    .as_ref()
+                                    .is_some_and(|backend| {
+                                        backend
+                                            .send(Command::Settings { request, result })
+                                            .is_ok()
+                                    })
+                        })
+                        .unwrap_or(false);
+                    if !sent {
+                        return None;
+                    }
+                    let Ok(Ok(Response::Review(orbit_protocol::review::Snapshot::Status {
+                        entries,
+                        next,
+                        ..
+                    }))) = response.await
+                    else {
+                        return None;
+                    };
+                    for entry in entries {
+                        let mut parent = entry.path.as_str();
+                        while let Some((directory, _)) = parent.rsplit_once('/') {
+                            statuses
+                                .entry(directory.to_owned())
+                                .or_insert_with(|| "•".into());
+                            parent = directory;
+                        }
+                        statuses.insert(entry.path, entry.status);
+                    }
+                    match next {
+                        Some(next) if next > offset && next <= MAX_BROWSED_ENTRIES => offset = next,
+                        Some(_) => return None,
+                        None => return Some(statuses),
+                    }
+                }
+            }
+            .await;
+            let _ = entity.update(cx, |view, cx| {
+                if view.session != session || view.workspace != workspace {
+                    return;
+                }
+                view.git = result.map_or(GitState::Unavailable, |statuses| {
+                    GitState::Ready(Arc::new(statuses))
+                });
+                cx.notify();
+            });
+        });
+        cx.notify();
     }
 
     pub(super) fn belongs_to_workspace(&self, workspace: &str) -> bool {
@@ -269,6 +416,27 @@ impl Files {
                     .and_then(|response| response),
                 Err(error) => Err(error),
             };
+            let mut attachment = if let Operation::Attach { name } = &operation {
+                let name = name.clone();
+                let bytes = match &response {
+                    Ok(Response::File(encoded)) => {
+                        orbit_client::protocol::file_bytes(encoded.clone())
+                            .map_err(|error| error.to_string())
+                    }
+                    Ok(Response::Error(error)) | Err(error) => Err(error.clone()),
+                    _ => Err("服务没有返回文件内容".into()),
+                };
+                Some(
+                    cx.background_spawn(async move {
+                        let bytes = bytes?;
+                        orbit_client::attachments::composer_file(&name, &bytes)
+                            .map_err(|error| error.to_string())
+                    })
+                    .await,
+                )
+            } else {
+                None
+            };
             let _ = entity.update_in(cx, |files, window, cx| {
                 if files.generation != generation {
                     return;
@@ -289,6 +457,40 @@ impl Files {
                     return;
                 }
                 match (operation, response) {
+                    (Operation::Attach { name }, _) => {
+                        match attachment
+                            .take()
+                            .expect("attachment operation has a result")
+                        {
+                            Ok(file) => {
+                                let added = files
+                                    .owner
+                                    .update(cx, |owner, cx| {
+                                        if owner.pending.is_none() {
+                                            owner
+                                                .attachment_names
+                                                .insert(file.path().to_owned(), name);
+                                            owner.paths.push(file.path().to_owned());
+                                            owner
+                                                .clipboard_files
+                                                .push(Arc::new(file));
+                                            cx.emit(WorkspaceEvent::DraftChanged);
+                                            cx.notify();
+                                            true
+                                        } else {
+                                            false
+                                        }
+                                    })
+                                    .unwrap_or(false);
+                                if added {
+                                    files.status = Some("已添加到输入".into());
+                                } else {
+                                    files.error = Some("正在提交消息，请稍后再添加附件".into());
+                                }
+                            }
+                            Err(error) => files.error = Some(error),
+                        }
+                    }
                     (
                         Operation::List { append },
                         Ok(Response::Files(Snapshot::Directory {
@@ -303,10 +505,27 @@ impl Files {
                             files.entries.clear();
                         }
                         files.entries.extend(entries);
+                        if files
+                            .listings
+                            .iter()
+                            .filter(|(cached, _)| **cached != path)
+                            .map(|(_, entries)| entries.len())
+                            .sum::<usize>()
+                            + files.entries.len()
+                            > MAX_BROWSED_ENTRIES
+                        {
+                            files.error = Some("已达到目录缓存上限，请刷新文件树后继续".into());
+                            cx.notify();
+                            return;
+                        }
+                        files
+                            .listings
+                            .insert(path.clone(), files.entries.clone());
                         files.directories = Arc::new(
                             files
-                                .entries
-                                .iter()
+                                .listings
+                                .values()
+                                .flatten()
                                 .filter(|entry| entry.kind == EntryKind::Directory)
                                 .map(|entry| entry.path.clone())
                                 .collect(),
@@ -318,17 +537,8 @@ impl Files {
                         files
                             .path
                             .update(cx, |input, cx| input.set_value(path, window, cx));
-                        let items = files
-                            .entries
-                            .iter()
-                            .map(|entry| {
-                                let name = std::path::Path::new(&entry.path)
-                                    .file_name()
-                                    .and_then(|name| name.to_str())
-                                    .unwrap_or(&entry.path);
-                                TreeItem::new(entry.path.clone(), name.to_owned())
-                            })
-                            .collect::<Vec<_>>();
+                        let items =
+                            directory_items(&files.tree_root, &files.listings, &mut files.items);
                         files
                             .tree
                             .update(cx, |tree, cx| tree.set_items(items, cx));
@@ -395,6 +605,12 @@ impl Files {
                     (_, Ok(Response::Error(error))) | (_, Err(error)) => files.error = Some(error),
                     _ => files.error = Some("服务没有返回文件数据，请更新工作区服务后重试".into()),
                 }
+                if let Some(path) = files.directory_queue.pop_front() {
+                    let entity = cx.weak_entity();
+                    cx.defer(move |cx| {
+                        let _ = entity.update(cx, |files, cx| files.browse(path, false, cx));
+                    });
+                }
                 cx.notify();
             });
         });
@@ -411,6 +627,15 @@ impl Files {
             operation,
             cx,
         );
+    }
+
+    fn browse_root(&mut self, root: String, cx: &mut Context<Self>) {
+        self.tree_root = root.clone();
+        self.listings.clear();
+        self.directory_queue.clear();
+        self.items.clear();
+        self.next_offset = None;
+        self.browse(root, false, cx);
     }
 
     fn browse(&mut self, path: String, append: bool, cx: &mut Context<Self>) {
@@ -569,6 +794,12 @@ impl Files {
             readonly,
             bytes: byte_count,
         });
+        if self
+            .width
+            .is_some_and(|width| width < window.rem_size() * 46.)
+        {
+            self.show_tree = false;
+        }
         self.disk = None;
         self.draft.discard();
         self.error = None;
@@ -581,7 +812,7 @@ impl Files {
                 .is_some_and(|owner| {
                     let owner = owner.read(cx);
                     owner.visible
-                        && owner.page == MainPage::Files
+                        && owner.inspector == Some(inspector::Section::ProjectFiles)
                         && owner
                             .files
                             .as_ref()
@@ -600,7 +831,7 @@ impl Files {
         if self.entries.is_empty() {
             let entity = cx.weak_entity();
             cx.defer(move |cx| {
-                let _ = entity.update(cx, |files, cx| files.browse(parent, false, cx));
+                let _ = entity.update(cx, |files, cx| files.browse_root(parent, cx));
             });
         }
         cx.notify();
@@ -653,12 +884,10 @@ impl Files {
     }
 
     fn activate(&mut self, path: String, window: &mut Window, cx: &mut Context<Self>) {
-        if self
-            .entries
-            .iter()
-            .any(|entry| entry.path == path && entry.kind == EntryKind::Directory)
-        {
-            self.browse(path, false, cx);
+        if self.directories.contains(&path) {
+            if !self.listings.contains_key(&path) {
+                self.browse(path, false, cx);
+            }
         } else {
             self.open(path, window, cx);
         }
@@ -713,6 +942,10 @@ impl Files {
     fn browser(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let entity = cx.weak_entity();
         let directories = self.directories.clone();
+        let statuses = match &self.git {
+            GitState::Ready(statuses) => statuses.clone(),
+            _ => Default::default(),
+        };
         v_flex()
             .size_full()
             .min_h_0()
@@ -729,14 +962,14 @@ impl Files {
                             .ghost()
                             .small()
                             .label("上级")
-                            .disabled(self.busy || self.directory == ".")
+                            .disabled(self.busy || self.tree_root == ".")
                             .on_click(cx.listener(|files, _, _, cx| {
-                                let parent = std::path::Path::new(&files.directory)
+                                let parent = std::path::Path::new(&files.tree_root)
                                     .parent()
                                     .filter(|path| !path.as_os_str().is_empty())
                                     .map(|path| path.to_string_lossy().into_owned())
                                     .unwrap_or_else(|| ".".into());
-                                files.browse(parent, false, cx);
+                                files.browse_root(parent, cx);
                             })),
                     )
                     .child(
@@ -749,7 +982,7 @@ impl Files {
                             .disabled(self.busy)
                             .on_click(cx.listener(|files, _, _, cx| {
                                 files.hidden = !files.hidden;
-                                files.browse(files.directory.clone(), false, cx);
+                                files.browse_root(files.tree_root.clone(), cx);
                             })),
                     ),
             )
@@ -763,18 +996,28 @@ impl Files {
                             cx.stop_propagation();
                         }
                     }))
-                    .child(Tree::new(&self.tree, move |_, entry, _, _, _| {
+                    .child(Tree::new(&self.tree, move |_, entry, state, _, cx| {
                         let path = entry.item().id.to_string();
                         let directory = directories.contains(&path);
+                        let key = if cfg!(windows) {
+                            path.replace('\\', "/")
+                        } else {
+                            path.clone()
+                        };
+                        let status = statuses.get(&key).cloned();
                         let entity = entity.clone();
                         ListItem::new(entry.item().id.clone())
+                            .selected(state)
+                            .pl(rems(entry.depth() as f32))
                             .accessibility_label(entry.item().label.clone())
                             .child(
                                 h_flex()
                                     .gap_2()
                                     .min_w_0()
                                     .child(
-                                        Icon::new(if directory {
+                                        Icon::new(if directory && entry.is_expanded() {
+                                            IconName::FolderOpen
+                                        } else if directory {
                                             IconName::Folder
                                         } else {
                                             IconName::File
@@ -783,10 +1026,19 @@ impl Files {
                                     )
                                     .child(
                                         div()
+                                            .flex_1()
                                             .min_w_0()
                                             .text_ellipsis()
                                             .child(entry.item().label.clone()),
-                                    ),
+                                    )
+                                    .when_some(status, |row, status| {
+                                        row.child(
+                                            div()
+                                                .text_xs()
+                                                .text_color(cx.theme().muted_foreground)
+                                                .child(status),
+                                        )
+                                    }),
                             )
                             .on_click(move |_, window, cx| {
                                 let _ = entity.update(cx, |files, cx| {
@@ -847,7 +1099,7 @@ impl Files {
         let edited = Editor::new(&self.editor)
             .aria_label("文件内容")
             .bordered(false)
-            .readonly(!self.is_editable() || self.busy)
+            .readonly(!self.editing || !self.is_editable() || self.busy)
             .size_full();
         let Some(disk) = &self.disk else {
             return div()
@@ -982,7 +1234,9 @@ impl Render for Files {
                 },
             )
             .child(self.editor_surface(cx));
-        let panes = if narrow {
+        let panes = if !self.show_tree {
+            editor.into_any_element()
+        } else if narrow {
             v_resizable("workspace-files-vertical")
                 .child(
                     resizable_panel()
@@ -1026,7 +1280,8 @@ impl Render for Files {
             .track_focus(&self.focus)
             .on_action(cx.listener(|files, _: &SaveFile, _, cx| files.save(cx)))
             .on_action(cx.listener(|files, _: &RefreshFiles, _, cx| {
-                files.browse(files.directory.clone(), false, cx)
+                files.browse_root(files.tree_root.clone(), cx);
+                files.refresh_git(cx);
             }))
             .border_l_1()
             .border_color(cx.theme().border)
@@ -1049,6 +1304,30 @@ impl Render for Files {
                             .child(title),
                     )
                     .when(self.busy, |view| view.child(Spinner::new().small()))
+                    .child(
+                        Button::new("toggle-file-tree")
+                            .ghost()
+                            .small()
+                            .label("文件树")
+                            .selected(self.show_tree)
+                            .on_click(cx.listener(|files, _, _, cx| {
+                                files.show_tree = !files.show_tree;
+                                cx.notify();
+                            })),
+                    )
+                    .when(!self.editing, |view| {
+                        view.child(
+                            Button::new("edit-preview")
+                                .ghost()
+                                .small()
+                                .label("编辑")
+                                .disabled(!self.is_editable())
+                                .on_click(cx.listener(|files, _, _, cx| {
+                                    files.editing = true;
+                                    cx.notify();
+                                })),
+                        )
+                    })
                     .when(
                         self.busy && !matches!(self.pending, Some(Operation::Save)),
                         |view| {
@@ -1062,80 +1341,136 @@ impl Render for Files {
                             )
                         },
                     )
+                    .when(self.editing, |view| {
+                        view.child(
+                            Button::new("save-file")
+                                .small()
+                                .label("保存")
+                                .disabled(
+                                    self.busy
+                                        || !self.draft.is_edited()
+                                        || !self.is_editable()
+                                        || self.draft.is_unconfirmed(),
+                                )
+                                .tooltip("保存原始文件 · Ctrl+S")
+                                .on_click(cx.listener(|files, _, _, cx| files.save(cx))),
+                        )
+                    })
+                    .when(self.editing, |view| {
+                        view.child(
+                            Button::new("compare-file")
+                                .ghost()
+                                .small()
+                                .label("比较磁盘版本")
+                                .disabled(self.busy || self.document.is_none())
+                                .on_click(cx.listener(|files, _, _, cx| files.compare(cx))),
+                        )
+                    })
+                    .when(self.editing, |view| {
+                        view.child(
+                            Button::new("reload-file")
+                                .ghost()
+                                .small()
+                                .label("重新读取…")
+                                .disabled(self.busy || self.document.is_none())
+                                .on_click(cx.listener(|files, _, window, cx| {
+                                    if let Some(document) = &files.document {
+                                        files.open(document.path.clone(), window, cx);
+                                    }
+                                })),
+                        )
+                    })
+                    .when(self.editing, |view| {
+                        view.child(
+                            Button::new("finish-file-edit")
+                                .ghost()
+                                .small()
+                                .label("结束编辑…")
+                                .on_click(
+                                    cx.listener(|files, _, window, cx| files.close(window, cx)),
+                                ),
+                        )
+                    })
                     .child(
-                        Button::new("save-file")
-                            .small()
-                            .label("保存")
-                            .disabled(
-                                self.busy
-                                    || !self.draft.is_edited()
-                                    || !self.is_editable()
-                                    || self.draft.is_unconfirmed(),
-                            )
-                            .tooltip("保存原始文件 · Ctrl+S")
-                            .on_click(cx.listener(|files, _, _, cx| files.save(cx))),
-                    )
-                    .child(
-                        Button::new("compare-file")
+                        Button::new("attach-project-file")
                             .ghost()
                             .small()
-                            .label("比较磁盘版本")
+                            .label("添加原文件")
+                            .tooltip("将磁盘上的文件作为附件加入输入；未保存的编辑不会发送")
                             .disabled(self.busy || self.document.is_none())
-                            .on_click(cx.listener(|files, _, _, cx| files.compare(cx))),
-                    )
-                    .child(
-                        Button::new("reload-file")
-                            .ghost()
-                            .small()
-                            .label("重新读取…")
-                            .disabled(self.busy || self.document.is_none())
-                            .on_click(cx.listener(|files, _, window, cx| {
-                                if let Some(document) = &files.document {
-                                    files.open(document.path.clone(), window, cx);
-                                }
-                            })),
-                    )
-                    .child(
-                        Button::new("close-files")
-                            .ghost()
-                            .small()
-                            .label("关闭")
-                            .disabled(self.busy)
-                            .on_click(cx.listener(|files, _, window, cx| files.close(window, cx))),
-                    ),
-            )
-            .child(
-                h_flex()
-                    .px_3()
-                    .py_2()
-                    .gap_2()
-                    .flex_wrap()
-                    .child(
-                        Input::new(&self.path)
-                            .small()
-                            .aria_label("文件或目录路径")
-                            .flex_1()
-                            .min_w_0(),
-                    )
-                    .child(
-                        Button::new("browse-path")
-                            .small()
-                            .label("浏览目录")
-                            .disabled(self.busy)
                             .on_click(cx.listener(|files, _, _, cx| {
-                                files.browse(files.path.read(cx).value().to_string(), false, cx)
+                                let Some(document) = &files.document else {
+                                    return;
+                                };
+                                let path = document.path.clone();
+                                let name = path
+                                    .rsplit(['/', '\\'])
+                                    .next()
+                                    .unwrap_or(&path)
+                                    .to_owned();
+                                files.request(
+                                    Request::ReadFile {
+                                        allow_missing: false,
+                                        session: files.session.clone(),
+                                        path,
+                                    },
+                                    Operation::Attach { name },
+                                    cx,
+                                );
                             })),
                     )
                     .child(
-                        Button::new("open-path")
+                        Button::new("preview-file-diff")
+                            .ghost()
                             .small()
-                            .label("打开文件")
-                            .disabled(self.busy)
+                            .label("查看差异")
+                            .disabled(self.busy || self.document.is_none())
                             .on_click(cx.listener(|files, _, window, cx| {
-                                files.open(files.path.read(cx).value().to_string(), window, cx)
+                                let path = files
+                                    .document
+                                    .as_ref()
+                                    .map(|document| document.path.clone());
+                                let _ = files
+                                    .owner
+                                    .update(cx, |owner, cx| owner.show_review(path, window, cx));
                             })),
                     ),
             )
+            .when(self.show_tree, |view| {
+                view.child(
+                    h_flex()
+                        .px_3()
+                        .py_2()
+                        .gap_2()
+                        .flex_wrap()
+                        .child(
+                            Input::new(&self.path)
+                                .small()
+                                .aria_label("文件或目录路径")
+                                .flex_1()
+                                .min_w_0(),
+                        )
+                        .child(
+                            Button::new("browse-path")
+                                .small()
+                                .label("浏览目录")
+                                .disabled(self.busy)
+                                .on_click(cx.listener(|files, _, _, cx| {
+                                    let root = files.path.read(cx).value().to_string();
+                                    files.browse_root(root, cx)
+                                })),
+                        )
+                        .child(
+                            Button::new("open-path")
+                                .small()
+                                .label("打开文件")
+                                .disabled(self.busy)
+                                .on_click(cx.listener(|files, _, window, cx| {
+                                    files.open(files.path.read(cx).value().to_string(), window, cx)
+                                })),
+                        ),
+                )
+            })
             .when_some(self.error.clone(), |view, error| {
                 view.child(
                     div()
@@ -1173,6 +1508,11 @@ impl Render for Files {
                     .border_t_1()
                     .border_color(cx.theme().border)
                     .child(state.to_owned())
+                    .child(match &self.git {
+                        GitState::Loading => "Git 状态读取中",
+                        GitState::Ready(_) => "Git 状态已更新",
+                        GitState::Unavailable => "Git 状态不可用",
+                    })
                     .when_some(self.document.as_ref(), |view, document| {
                         view.child(format!("{} 字节", document.bytes))
                     })
@@ -1232,9 +1572,74 @@ fn text_content(bytes: Vec<u8>) -> Result<String, &'static str> {
 
 use orbit_syntax::label_for_path as language;
 
+fn directory_items(
+    directory: &str,
+    listings: &std::collections::BTreeMap<String, Vec<Entry>>,
+    retained: &mut std::collections::HashMap<String, TreeItem>,
+) -> Vec<TreeItem> {
+    listings
+        .get(directory)
+        .into_iter()
+        .flatten()
+        .map(|entry| {
+            let label = entry
+                .path
+                .rsplit(['/', '\\'])
+                .next()
+                .unwrap_or(&entry.path);
+            let mut item = retained
+                .get(&entry.path)
+                .cloned()
+                .unwrap_or_else(|| TreeItem::new(entry.path.clone(), label.to_owned()));
+            if entry.kind == EntryKind::Directory {
+                item.children = if listings.contains_key(&entry.path) {
+                    directory_items(&entry.path, listings, retained)
+                } else {
+                    vec![
+                        TreeItem::new(format!("{}/.pending", entry.path), "加载目录…")
+                            .disabled(true),
+                    ]
+                };
+            }
+            retained.insert(entry.path.clone(), item.clone());
+            item
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[::core::prelude::v1::test]
+    fn lazy_directory_updates_preserve_expansion_and_other_loaded_children() {
+        let mut listings = std::collections::BTreeMap::from([(
+            ".".into(),
+            vec![Entry {
+                path: "source".into(),
+                kind: EntryKind::Directory,
+            }],
+        )]);
+        let mut retained = std::collections::HashMap::new();
+        let initial = directory_items(".", &listings, &mut retained);
+        assert_eq!(initial[0].children.len(), 1);
+        let expanded = initial[0].clone().expanded(true);
+        listings.insert(
+            "source".into(),
+            vec![Entry {
+                path: "source/example.rs".into(),
+                kind: EntryKind::File,
+            }],
+        );
+        let loaded = directory_items(".", &listings, &mut retained);
+        assert!(expanded.is_expanded());
+        assert!(loaded[0].is_expanded());
+        assert_eq!(loaded[0].children[0].id.as_ref(), "source/example.rs");
+        loaded[0].clone().expanded(false);
+        let refreshed = directory_items(".", &listings, &mut retained);
+        assert!(!refreshed[0].is_expanded());
+        assert_eq!(refreshed[0].children.len(), 1);
+    }
+
     #[::core::prelude::v1::test]
     fn editor_uses_exact_utf8_text_and_rejects_binary() {
         let text = "```rust\r\n你好\r\n```\r\n";

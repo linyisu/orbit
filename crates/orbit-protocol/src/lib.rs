@@ -22,7 +22,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 /// Current request and event schema version advertised during the handshake.
-pub const VERSION: u32 = 30;
+pub const VERSION: u32 = 31;
 /// Peers advertising this feature support browsing independently of model preparation.
 pub const MODEL_INDEPENDENT_SESSIONS: &str = "model_independent_sessions_with_policy";
 /// Oldest peer schema accepted by this implementation.

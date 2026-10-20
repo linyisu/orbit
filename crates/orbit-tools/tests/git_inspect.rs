@@ -15,7 +15,7 @@ fn git(directory: &Path, args: &[&str]) {
         .arg(directory)
         .args(args)
         .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_GLOBAL", orbit_runtime::git::NULL_DEVICE)
         .status()
         .unwrap();
 
@@ -47,6 +47,144 @@ fn repository() -> tempfile::TempDir {
     git(directory.path(), &["commit", "-qm", "initial commit"]);
 
     directory
+}
+
+#[test]
+fn history_pages_pin_identity_and_reject_nested_workspaces() {
+    use orbit_tools::git_inspect::history;
+    let directory = repository();
+    fs::create_dir(directory.path().join("nested")).unwrap();
+    fs::write(
+        directory
+            .path()
+            .join("nested/sample.txt"),
+        "historical\n",
+    )
+    .unwrap();
+    git(directory.path(), &["add", "nested"]);
+    git(directory.path(), &["commit", "-qm", "nested content"]);
+    for _ in 0..51 {
+        git(
+            directory.path(),
+            &["commit", "--allow-empty", "-qm", "generated history"],
+        );
+    }
+    let workspace = Workspace::new(directory.path()).unwrap();
+    let first = history::list(&workspace, "HEAD", 0).unwrap();
+    assert_eq!(
+        first["commits"]
+            .as_array()
+            .unwrap()
+            .len(),
+        50
+    );
+    assert_eq!(first["next"], 50);
+    git(
+        directory.path(),
+        &["commit", "--allow-empty", "-qm", "later commit"],
+    );
+    let pinned = first["revision"].as_str().unwrap();
+    let second = history::list(&workspace, pinned, 50).unwrap();
+    assert_eq!(second["revision"], pinned);
+    assert_eq!(
+        second["commits"]
+            .as_array()
+            .unwrap()
+            .len(),
+        3
+    );
+    assert!(second["next"].is_null());
+    assert_ne!(
+        history::list(&workspace, "HEAD", 0).unwrap()["revision"],
+        pinned
+    );
+    let nested = Workspace::new(directory.path().join("nested")).unwrap();
+    assert!(history::list(&nested, "HEAD", 0).is_err());
+    assert!(history::detail(&nested, "HEAD~52").is_err());
+    assert!(history::file(&nested, "HEAD~52", "sample.txt").is_err());
+    assert!(history::file(&nested, pinned, "../tracked.txt").is_err());
+}
+
+#[test]
+fn history_reads_pinned_commits_and_deleted_files_without_touching_the_worktree() {
+    use orbit_tools::git_inspect::history;
+    let directory = repository();
+    let root = directory.path();
+    fs::write(
+        root.join(".gitattributes"),
+        "*.txt diff=generated filter=generated\n",
+    )
+    .unwrap();
+    git(
+        root,
+        &[
+            "config",
+            "diff.generated.textconv",
+            "orbit-nonexistent-filter",
+        ],
+    );
+    git(
+        root,
+        &[
+            "config",
+            "filter.generated.smudge",
+            "orbit-nonexistent-filter",
+        ],
+    );
+    let workspace = Workspace::new(root).unwrap();
+    let initial = history::list(&workspace, "HEAD", 0).unwrap();
+    let initial_id = initial["revision"].as_str().unwrap();
+    let first = history::detail(&workspace, initial_id).unwrap();
+    assert_eq!(first["files"], json!(["tracked.txt"]));
+    let file = history::file(&workspace, initial_id, "tracked.txt").unwrap();
+    assert_eq!(file["content"], "first\n");
+    assert!(
+        file["patch"]
+            .as_str()
+            .unwrap()
+            .contains("+first")
+    );
+    git(root, &["rm", "-q", "tracked.txt"]);
+    fs::write(root.join("note with spaces.txt"), "second\n").unwrap();
+    git(root, &["add", "note with spaces.txt"]);
+    git(
+        root,
+        &["commit", "-qm", "replace file\n\nGenerated detail body"],
+    );
+    let index = fs::read(root.join(".git/index")).unwrap();
+    let page = history::list(&workspace, "HEAD", 0).unwrap();
+    let id = page["revision"].as_str().unwrap();
+    let commit = history::detail(&workspace, id).unwrap();
+    assert_eq!(
+        commit["files"],
+        json!(["note with spaces.txt", "tracked.txt"])
+    );
+    assert!(
+        commit["message"]
+            .as_str()
+            .unwrap()
+            .contains("Generated detail body")
+    );
+    let deleted = history::file(&workspace, id, "tracked.txt").unwrap();
+    assert!(deleted["content"].is_null());
+    assert!(
+        deleted["patch"]
+            .as_str()
+            .unwrap()
+            .contains("-first")
+    );
+    assert_eq!(
+        history::list(&workspace, initial_id, 0).unwrap()["commits"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(history::file(&workspace, id, "../outside.txt").is_err());
+    assert!(history::list(&workspace, "--output=injected", 0).is_err());
+    assert!(!root.join("injected").exists());
+    assert_eq!(fs::read(root.join(".git/index")).unwrap(), index);
+    assert!(!root.join("tracked.txt").exists());
 }
 
 #[test]

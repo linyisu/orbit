@@ -8,6 +8,7 @@
 - [library.rs](src/library.rs)：全局管理操作、插件选择和可传输的扩展包快照。
 - [resources.rs](src/resources.rs)、[files.rs](src/files.rs)、[project.rs](src/project.rs)：资源、文件与项目操作。
 - [plan.rs](src/plan.rs)、[subagents.rs](src/subagents.rs)、[user_input.rs](src/user_input.rs)：计划、子 Agent 与问答。
+- [review.rs](src/review.rs)：工作区变更、暂存回执与只读提交历史、历史文件查询。
 - [search.rs](src/search.rs)：选择器与补全的共用匹配规则。
 
 全局扩展管理使用无会话的 `Library` 请求；应用与移除以会话 ID 定位，包内路径不引用客户端文件系统。

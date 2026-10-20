@@ -21,6 +21,8 @@ use crate::{
     workspace::{profile, questions::Questions},
 };
 
+const MAX_REVIEW_READS: usize = 2;
+
 struct Running {
     events: mpsc::Receiver<AgentEvent>,
     task: tokio::task::JoinHandle<
@@ -45,6 +47,7 @@ struct Actor {
     setup: PreparedWorkspace,
     view: Arc<Mutex<View>>,
     questions: Questions,
+    review_reads: Arc<tokio::sync::Semaphore>,
     running: Option<Running>,
     continue_after_cancel: bool,
     undo: Option<Undo>,
@@ -93,6 +96,7 @@ pub(super) async fn run(
         setup,
         view,
         questions,
+        review_reads: Arc::new(tokio::sync::Semaphore::new(MAX_REVIEW_READS)),
         running: None,
         continue_after_cancel: false,
         undo: None,
@@ -733,6 +737,34 @@ impl Actor {
                         .workspace;
                 if !scope {
                     let _ = result.send(Err(anyhow::anyhow!("工作区已切换，请重新打开差异审查")));
+                } else if matches!(
+                    action,
+                    orbit_protocol::review::Action::Status { .. }
+                        | orbit_protocol::review::Action::History { .. }
+                        | orbit_protocol::review::Action::Commit { .. }
+                        | orbit_protocol::review::Action::CommitFile { .. }
+                ) {
+                    match self
+                        .review_reads
+                        .clone()
+                        .try_acquire_owned()
+                    {
+                        Ok(permit) => {
+                            let workspace = self.setup.resources.workspace.clone();
+                            let policy = self.setup.resources.policy.clone();
+                            tokio::spawn(async move {
+                                let _permit = permit;
+                                let response =
+                                    crate::workspace::review::git_read(&workspace, &policy, action)
+                                        .await;
+                                let _ = result.send(response);
+                            });
+                        }
+                        Err(_) => {
+                            let _ =
+                                result.send(Err(anyhow::anyhow!("正在读取 Git 数据，请稍后重试")));
+                        }
+                    }
                 } else if matches!(
                     action,
                     orbit_protocol::review::Action::Stage { .. }

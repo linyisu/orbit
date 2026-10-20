@@ -27,6 +27,7 @@ pub(crate) enum WorkspaceCommand {
     Rename,
     Directory,
     File,
+    GitHistory,
     Export,
     Undo,
     Tasks,
@@ -73,6 +74,7 @@ impl WorkspaceCommand {
         (Self::Changes, "文件变更"),
         (Self::Diff, "查看差异"),
         (Self::File, "打开文件…"),
+        (Self::GitHistory, "Git 提交历史"),
         (Self::Export, "导出补丁"),
         (Self::Undo, "撤销文件修改…"),
         (Self::Plan, "计划审阅…"),
@@ -210,6 +212,10 @@ impl Workspace {
 
         if matches!(action, WorkspaceCommand::File) {
             self.show_files(None, window, cx);
+            return;
+        }
+        if action == WorkspaceCommand::GitHistory {
+            self.show_git_history(window, cx);
             return;
         }
         if matches!(action, WorkspaceCommand::Undo) {
@@ -592,6 +598,7 @@ impl Workspace {
     }
 
     pub(super) fn show_plan(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.plan_record = None;
         if let Some(decision) = self.plan_decision() {
             self.attention.present(decision);
         }
@@ -632,6 +639,12 @@ impl Workspace {
             .split_once(char::is_whitespace)
             .unwrap_or((value.trim(), ""));
         let arg = arg.trim();
+        if name == "/review" && arg == "history" {
+            self.show_git_history(window, cx);
+            self.input
+                .update(cx, |input, cx| input.set_value("", window, cx));
+            return true;
+        }
         if matches!(name, "/file" | "/diff" | "/changes" | "/undo") {
             if self.info.is_none() || !self.connected {
                 self.report_error("请先连接工作区，再打开文件或差异", cx);

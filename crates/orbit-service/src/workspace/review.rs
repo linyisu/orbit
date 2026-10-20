@@ -40,6 +40,52 @@ pub(super) async fn browse(
     execute_session(&browsing.session, &workspace, &policy, action).await
 }
 
+/// Read Git data without holding the session actor while subprocesses complete.
+pub(super) async fn git_read(
+    workspace: &orbit_runtime::filesystem::Workspace,
+    policy: &orbit_protocol::SessionPolicy,
+    action: Action,
+) -> Result<Snapshot> {
+    ensure!(!policy.disabled(Capability::Files), "文件功能已禁用");
+    ensure!(!policy.disabled(Capability::Git), "Git 功能已禁用");
+    match action {
+        Action::Status { offset } => {
+            let workspace = workspace.clone();
+            let listing = tokio::task::spawn_blocking(move || {
+                orbit_tools::git_inspect::review_status(&workspace, offset)
+            })
+            .await??;
+            Ok(status_snapshot(listing)?)
+        }
+        action @ (Action::History { .. } | Action::Commit { .. } | Action::CommitFile { .. }) => {
+            let view = match &action {
+                Action::History { .. } => "history",
+                Action::Commit { .. } => "commit",
+                Action::CommitFile { .. } => "commit_file",
+                _ => unreachable!(),
+            };
+            let workspace = workspace.clone();
+            let value = tokio::task::spawn_blocking(move || match action {
+                Action::History { revision, offset } => {
+                    orbit_tools::git_inspect::history::list(&workspace, &revision, offset)
+                }
+                Action::Commit { revision } => {
+                    orbit_tools::git_inspect::history::detail(&workspace, &revision)
+                }
+                Action::CommitFile { revision, path } => {
+                    orbit_tools::git_inspect::history::file(&workspace, &revision, &path)
+                }
+                _ => unreachable!(),
+            })
+            .await??;
+            let mut value = value;
+            value["view"] = view.into();
+            Ok(serde_json::from_value(value)?)
+        }
+        _ => anyhow::bail!("expected a read-only Git browsing action"),
+    }
+}
+
 async fn execute_session(
     session: &crate::session::SessionState,
     workspace: &orbit_runtime::filesystem::Workspace,
@@ -50,11 +96,22 @@ async fn execute_session(
     if matches!(
         action,
         Action::List { kind, .. } | Action::Diff { kind, .. } if kind != Kind::Checkpoint
-    ) || matches!(action, Action::Stage { .. } | Action::Unstage { .. })
-    {
+    ) || matches!(
+        action,
+        Action::Stage { .. }
+            | Action::Unstage { .. }
+            | Action::History { .. }
+            | Action::Commit { .. }
+            | Action::CommitFile { .. }
+            | Action::Status { .. }
+    ) {
         ensure!(!policy.disabled(Capability::Git), "Git 功能已禁用");
     }
     match action {
+        action @ (Action::Status { .. }
+        | Action::History { .. }
+        | Action::Commit { .. }
+        | Action::CommitFile { .. }) => git_read(workspace, policy, action).await,
         Action::List {
             kind: Kind::Checkpoint,
             offset,
@@ -235,4 +292,47 @@ async fn execute_session(
         }
         Action::Undo { .. } => anyhow::bail!("撤销必须由会话执行器处理"),
     }
+}
+
+fn status_snapshot(listing: serde_json::Value) -> Result<Snapshot> {
+    let entries = listing["entries"]
+        .as_array()
+        .context("Git status is missing entries")?
+        .iter()
+        .map(|entry| {
+            let status = entry["xy"]
+                .as_str()
+                .unwrap_or("??")
+                .to_owned();
+            let kind = if entry["kind"] == "untracked" {
+                Kind::Untracked
+            } else if status
+                .as_bytes()
+                .get(1)
+                .is_some_and(|byte| !matches!(byte, b'.' | b' '))
+            {
+                Kind::Unstaged
+            } else {
+                Kind::Staged
+            };
+            Ok(Entry {
+                path: entry["path"]
+                    .as_str()
+                    .context("Git entry is missing a path")?
+                    .into(),
+                kind,
+                status,
+                undone: false,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(Snapshot::Status {
+        entries,
+        next: listing["next_offset"]
+            .as_u64()
+            .map(|offset| offset as usize),
+        branch: listing["branch"]["head"]
+            .as_str()
+            .map(str::to_owned),
+    })
 }

@@ -2,18 +2,18 @@
 //! have separate sources and exact reviewed-state guards.
 use super::*;
 use gpui_kit::component::{
-    IndexPath,
     diff::{Diff, DiffFile, DiffMode, DiffState},
-    list::{List, ListDelegate, ListItem, ListState},
+    input::{Editor, EditorState},
+    list::ListItem,
     tab::{Tab, TabBar},
 };
 use orbit_protocol::review::{Action, Checkpoint, Entry, Kind, Snapshot};
 
 const KINDS: [(Kind, &str); 4] = [
-    (Kind::Checkpoint, "Orbit 检查点"),
     (Kind::Unstaged, "未暂存"),
     (Kind::Staged, "已暂存"),
     (Kind::Untracked, "未跟踪"),
+    (Kind::Checkpoint, "会话写入"),
 ];
 
 pub(super) struct Review {
@@ -25,8 +25,10 @@ pub(super) struct Review {
     selected: Option<String>,
     checkpoint: Option<Checkpoint>,
     index_receipt: Option<String>,
-    list: Entity<ListState<ReviewList>>,
+    list: Entity<TreeState>,
+    tree_items: std::collections::HashMap<String, TreeItem>,
     diff: Entity<DiffState>,
+    raw: Option<Entity<EditorState>>,
     next: Option<usize>,
     branch: Option<String>,
     note: SharedString,
@@ -46,17 +48,18 @@ impl Review {
         owner: WeakEntity<Workspace>,
         session: String,
         workspace: String,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let list_owner = cx.weak_entity();
         Self {
             owner,
             session,
             workspace,
-            kind: Kind::Checkpoint,
+            kind: Kind::Unstaged,
             entries: Vec::new(),
             selected: None,
+            raw: None,
+            tree_items: Default::default(),
             checkpoint: None,
             index_receipt: None,
             next: None,
@@ -72,16 +75,7 @@ impl Review {
             width: None,
             request: Task::ready(()),
             diff: cx.new(|cx| DiffState::new([], cx)),
-            list: cx.new(|cx| {
-                ListState::new(
-                    ReviewList {
-                        owner: list_owner,
-                        selected: None,
-                    },
-                    window,
-                    cx,
-                )
-            }),
+            list: cx.new(|cx| TreeState::new(cx)),
         }
     }
 
@@ -90,20 +84,22 @@ impl Review {
     }
 
     pub(super) fn focus(&self, window: &mut Window, cx: &mut App) {
-        let list = self.list.focus_handle(cx);
-        if !list.contains_focused(window, cx)
-            && !self
-                .diff
-                .focus_handle(cx)
-                .contains_focused(window, cx)
+        if !self
+            .diff
+            .focus_handle(cx)
+            .contains_focused(window, cx)
         {
-            list.focus(window, cx);
+            self.list
+                .update(cx, |tree, cx| tree.focus(window, cx));
         }
     }
 
     pub(super) fn activate(&mut self, path: Option<String>, cx: &mut Context<Self>) {
         if self.mutating() {
             return;
+        }
+        if self.kind == Kind::Checkpoint {
+            self.kind = Kind::Unstaged;
         }
         if let Some(path) = path {
             self.selected = Some(path);
@@ -130,6 +126,7 @@ impl Review {
             return;
         }
         self.kind = Kind::Checkpoint;
+        self.raw = None;
         self.selected = None;
         self.checkpoint = None;
         self.index_receipt = None;
@@ -139,13 +136,25 @@ impl Review {
             .update(cx, |diff, cx| diff.set_files([], cx));
         self.list
             .update(cx, |_, cx| cx.notify());
-        self.activate(path, cx);
+        self.selected = path;
+        self.fetch(
+            Action::List {
+                kind: Kind::Checkpoint,
+                offset: 0,
+            },
+            cx,
+        );
     }
 
     fn select(&mut self, path: String, cx: &mut Context<Self>) {
         if self.mutating() {
             return;
         }
+        if self.selected.as_deref() != Some(&path) {
+            self.diff
+                .update(cx, |diff, cx| diff.set_files([], cx));
+        }
+        self.raw = None;
         self.selected = Some(path.clone());
         self.checkpoint = None;
         self.index_receipt = None;
@@ -232,7 +241,7 @@ impl Review {
             } else {
                 None
             };
-            let _ = owner.update_in(cx, |view, _, cx| {
+            let _ = owner.update_in(cx, |view, window, cx| {
                 if view.generation != generation {
                     return;
                 }
@@ -253,8 +262,7 @@ impl Review {
                         view.next = next;
                         view.branch = branch;
                         view.loaded = true;
-                        view.list
-                            .update(cx, |_, cx| cx.notify());
+                        view.rebuild_tree(cx);
                         if !append
                             && let Some(path) = view.selected.clone().or_else(|| {
                                 view.entries
@@ -265,6 +273,7 @@ impl Review {
                             view.select(path, cx);
                         } else if !append && view.entries.is_empty() {
                             view.selected = None;
+                            view.raw = None;
                             view.checkpoint = None;
                             view.index_receipt = None;
                             view.diff
@@ -276,20 +285,29 @@ impl Review {
                         note,
                         checkpoint,
                         index_receipt,
-                        ..
+                        patch,
                     })) => {
                         view.selected = Some(path);
                         view.note = note.into();
                         view.checkpoint = checkpoint;
                         match parsed.unwrap_or_else(|| Ok(Vec::new())) {
                             Ok(files) => {
+                                view.raw = None;
                                 view.index_receipt = index_receipt;
                                 view.diff
                                     .update(cx, |diff, cx| diff.set_files(files, cx));
                             }
                             Err(error) => {
                                 view.index_receipt = None;
-                                view.error = Some(format!("差异无法解析：{error}").into())
+                                view.raw = Some(cx.new(|cx| {
+                                    EditorState::new(window, cx)
+                                        .language("diff")
+                                        .line_number(true)
+                                        .soft_wrap(false)
+                                        .scroll_beyond_last_line(Some(0))
+                                        .default_value(patch)
+                                }));
+                                view.note = format!("显示原始差异：{error}").into();
                             }
                         }
                     }
@@ -297,6 +315,7 @@ impl Review {
                         view.checkpoint = None;
                         view.index_receipt = None;
                         view.selected = None;
+                        view.raw = None;
                         view.note = detail.into();
                         view.diff
                             .update(cx, |diff, cx| diff.set_files([], cx));
@@ -311,6 +330,7 @@ impl Review {
                     Ok(Response::Review(Snapshot::IndexUpdated { staged, .. })) => {
                         view.index_receipt = None;
                         view.selected = None;
+                        view.raw = None;
                         view.note = if staged {
                             "文件已暂存，工作区内容已保留"
                         } else {
@@ -445,7 +465,75 @@ impl Render for Review {
             .rounded_md()
             .when(narrow, |view| view.h_32())
             .when(!narrow, |view| view.w_56().h_full())
-            .child(List::new(&self.list).size_full())
+            .capture_key_down(cx.listener(|view, event: &KeyDownEvent, _, cx| {
+                if event.keystroke.key == "enter" && !view.mutating() {
+                    let path = view
+                        .list
+                        .read(cx)
+                        .selected_item()
+                        .map(|item| item.id.to_string());
+                    if let Some(path) = path.filter(|path| {
+                        view.entries
+                            .iter()
+                            .any(|entry| entry.path == *path)
+                    }) {
+                        view.select(path, cx);
+                        cx.stop_propagation();
+                    }
+                }
+            }))
+            .child(Tree::new(&self.list, {
+                let owner = cx.weak_entity();
+                let entries = self.entries.clone();
+                let busy = self.mutating();
+                move |_, item, selected, _, _| {
+                    let path = item.item().id.to_string();
+                    let entry = entries
+                        .iter()
+                        .find(|entry| entry.path == path);
+                    let file = entry.is_some();
+                    let status = entry.map(|entry| {
+                        if entry.undone {
+                            "已撤销".into()
+                        } else {
+                            entry.status.clone()
+                        }
+                    });
+                    let owner = owner.clone();
+                    ListItem::new(item.item().id.clone())
+                        .selected(selected)
+                        .disabled(busy)
+                        .pl(rems(item.depth() as f32))
+                        .child(
+                            h_flex()
+                                .gap_2()
+                                .min_w_0()
+                                .child(
+                                    Icon::new(if file {
+                                        IconName::File
+                                    } else if item.is_expanded() {
+                                        IconName::FolderOpen
+                                    } else {
+                                        IconName::Folder
+                                    })
+                                    .small(),
+                                )
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .text_ellipsis()
+                                        .child(item.item().label.clone()),
+                                )
+                                .children(status.map(|status| div().text_xs().child(status))),
+                        )
+                        .on_click(move |_, _, cx| {
+                            if file {
+                                let _ = owner.update(cx, |view, cx| view.select(path.clone(), cx));
+                            }
+                        })
+                }
+            }))
             .when_some(self.next, |view, next| {
                 view.child(
                     Button::new("review-more")
@@ -535,6 +623,7 @@ impl Render for Review {
                         }
                         view.kind = *kind;
                         view.selected = None;
+                        view.raw = None;
                         view.checkpoint = None;
                         view.index_receipt = None;
                         view.entries.clear();
@@ -706,7 +795,17 @@ impl Render for Review {
                                     .border_color(cx.theme().border)
                                     .rounded_md()
                                     .overflow_hidden()
-                                    .child(Diff::new(&self.diff).single_line_number(true)),
+                                    .child(if let Some(raw) = &self.raw {
+                                        Editor::new(raw)
+                                            .readonly(true)
+                                            .bordered(false)
+                                            .size_full()
+                                            .into_any_element()
+                                    } else {
+                                        Diff::new(&self.diff)
+                                            .single_line_number(true)
+                                            .into_any_element()
+                                    }),
                             ),
                     ),
             )
@@ -736,74 +835,57 @@ impl Render for Review {
     }
 }
 
-struct ReviewList {
-    owner: WeakEntity<Review>,
-    selected: Option<IndexPath>,
-}
-
-impl ListDelegate for ReviewList {
-    type Item = ListItem;
-    fn items_count(&self, _: usize, cx: &App) -> usize {
-        self.owner
-            .upgrade()
-            .map_or(0, |owner| owner.read(cx).entries.len())
-    }
-
-    fn render_item(
-        &mut self,
-        index: IndexPath,
-        _: &mut Window,
-        cx: &mut Context<ListState<Self>>,
-    ) -> Option<ListItem> {
-        let owner = self.owner.upgrade()?;
-        let view = owner.read(cx);
-        let entry = view.entries.get(index.row)?;
-        Some(
-            ListItem::new(SharedString::from(format!("review-file-{}", index.row)))
-                .h_12()
-                .px_2()
-                .disabled(view.mutating())
-                .confirmed(view.selected.as_ref() == Some(&entry.path))
-                .child(
-                    v_flex()
-                        .min_w_0()
-                        .w_full()
-                        .gap_1()
-                        .child(div().text_sm().text_ellipsis().child(
-                            orbit_client::directories::display_path(&entry.path).into_owned(),
-                        ))
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(cx.theme().muted_foreground)
-                                .child(if entry.undone {
-                                    "已撤销".into()
-                                } else {
-                                    entry.status.clone()
-                                }),
-                        ),
-                ),
-        )
-    }
-
-    fn set_selected_index(
-        &mut self,
-        selected: Option<IndexPath>,
-        _: &mut Window,
-        _: &mut Context<ListState<Self>>,
-    ) {
-        self.selected = selected;
-    }
-
-    fn confirm(&mut self, _: bool, _: &mut Window, cx: &mut Context<ListState<Self>>) {
-        let Some(index) = self.selected else { return };
-        let _ = self.owner.update(cx, |view, cx| {
-            if view.mutating() {
-                return;
+impl Review {
+    fn rebuild_tree(&mut self, cx: &mut Context<Self>) {
+        let mut directories = std::collections::BTreeMap::<String, Vec<String>>::new();
+        for entry in &self.entries {
+            let mut parent = String::new();
+            let parts: Vec<_> = entry.path.split('/').collect();
+            for (index, part) in parts.iter().enumerate() {
+                let id = if parent.is_empty() {
+                    (*part).to_owned()
+                } else {
+                    format!("{parent}/{part}")
+                };
+                let children = directories
+                    .entry(parent.clone())
+                    .or_default();
+                if !children.contains(&id) {
+                    children.push(id.clone());
+                }
+                self.tree_items
+                    .entry(id.clone())
+                    .or_insert_with(|| {
+                        TreeItem::new(id.clone(), (*part).to_owned()).expanded(true)
+                    });
+                if index + 1 < parts.len() {
+                    parent = id;
+                }
             }
-            if let Some(entry) = view.entries.get(index.row) {
-                view.select(entry.path.clone(), cx);
-            }
-        });
+        }
+        fn build(
+            parent: &str,
+            paths: &std::collections::BTreeMap<String, Vec<String>>,
+            retained: &mut std::collections::HashMap<String, TreeItem>,
+        ) -> Vec<TreeItem> {
+            paths
+                .get(parent)
+                .into_iter()
+                .flatten()
+                .map(|path| {
+                    let children = build(path, paths, retained);
+                    let mut item = retained
+                        .get(path)
+                        .cloned()
+                        .expect("tree paths were inserted");
+                    item.children = children;
+                    retained.insert(path.clone(), item.clone());
+                    item
+                })
+                .collect()
+        }
+        let items = build("", &directories, &mut self.tree_items);
+        self.list
+            .update(cx, |list, cx| list.set_items(items, cx));
     }
 }

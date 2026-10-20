@@ -1,4 +1,4 @@
-//! Shared, read-only detail pages for native and terminal tool inspectors.
+//! Shared, read-only detail pages for desktop and terminal tool inspectors.
 use super::{ToolRun, ToolStatus};
 use serde_json::Value;
 
@@ -66,6 +66,7 @@ pub enum Target {
     Image(String),
     Agent(String),
     Question,
+    Plan(Box<orbit_protocol::plan::State>),
 }
 
 impl Target {
@@ -74,6 +75,7 @@ impl Target {
             Self::Image(_) => "查看图片",
             Self::Agent(_) => "查看子任务",
             Self::Question => "查看问答",
+            Self::Plan(_) => "查看计划",
         }
     }
 }
@@ -82,6 +84,11 @@ impl Target {
 pub fn target(tool: &ToolRun) -> Option<Target> {
     let output: Value = serde_json::from_str(tool.output.as_deref()?).ok()?;
     match tool.name.as_str() {
+        "UpdatePlan" | "SubmitPlan" if tool.status == ToolStatus::Complete => {
+            let state: orbit_protocol::plan::State = serde_json::from_value(output).ok()?;
+            state.plan.as_ref()?;
+            Some(Target::Plan(Box::new(state)))
+        }
         "ReadImage" if tool.status == ToolStatus::Complete => output["path"]
             .as_str()
             .filter(|path| !path.is_empty())
@@ -577,6 +584,36 @@ mod tests {
     use super::*;
     use crate::protocol::model::ToolCall;
     use serde_json::json;
+
+    #[test]
+    fn historical_plan_targets_require_a_completed_valid_snapshot() {
+        let call = ToolCall::function("plan-record", "SubmitPlan", json!({}));
+        let mut tool = ToolRun::new(&call);
+        let state = json!({
+            "generation": 4,
+            "mode": "plan",
+            "plan": {
+                "id": "generated-plan", "workspace": "/generated",
+                "revision": 2, "title": "Generated plan", "markdown": "Inspect first",
+                "steps": ["Inspect"], "status": "review"
+            }
+        });
+        tool.output = Some(state.to_string());
+        assert!(target(&tool).is_none());
+        tool.status = ToolStatus::Complete;
+        let Some(Target::Plan(snapshot)) = target(&tool) else {
+            panic!("missing plan")
+        };
+        assert_eq!(snapshot.generation, 4);
+        assert_eq!(snapshot.plan.unwrap().revision, 2);
+        tool.status = ToolStatus::Failed;
+        assert!(target(&tool).is_none());
+        tool.status = ToolStatus::Complete;
+        tool.output = Some(json!({"generation": 4, "mode": "plan", "plan": null}).to_string());
+        assert!(target(&tool).is_none());
+        tool.output = Some("not JSON".into());
+        assert!(target(&tool).is_none());
+    }
 
     #[test]
     fn command_signal_is_presented_without_inventing_a_success_or_exit_code() {

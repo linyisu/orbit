@@ -73,7 +73,8 @@ impl Workspace {
         }
         self.dictation
             .update(cx, |dictation, cx| dictation.cancel(window, cx));
-        self.page = MainPage::Files;
+        self.page = MainPage::Conversation;
+        self.set_inspector(Some(inspector::Section::ProjectFiles), window, cx);
         if let Some(files) = &self.files {
             files.update(cx, |files, cx| {
                 if let Some(path) = path {
@@ -86,7 +87,32 @@ impl Workspace {
     }
 
     pub(super) fn close_files(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.set_inspector(None, window, cx);
         self.focus_composer(window, cx);
+    }
+
+    pub(super) fn show_git_history(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(info) = &self.info else { return };
+        if !self
+            .git_history
+            .as_ref()
+            .is_some_and(|history| {
+                history
+                    .read(cx)
+                    .belongs_to(&info.id, &info.workspace)
+            })
+        {
+            let owner = cx.weak_entity();
+            let session = info.id.clone();
+            let workspace = info.workspace.clone();
+            self.git_history =
+                Some(cx.new(|cx| history::History::new(owner, session, workspace, window, cx)));
+        }
+        self.page = MainPage::Conversation;
+        self.set_inspector(Some(inspector::Section::History), window, cx);
+        if let Some(history) = &self.git_history {
+            history.update(cx, |history, cx| history.activate(cx));
+        }
     }
 
     pub(super) fn show_review(
@@ -252,8 +278,8 @@ impl Workspace {
     pub(crate) fn discard_file_edits(&mut self, cx: &mut Context<Self>) {
         self.files = None;
         self.file_drafts.clear();
-        if self.page == MainPage::Files {
-            self.page = MainPage::Conversation;
+        if self.inspector == Some(inspector::Section::ProjectFiles) {
+            self.inspector = None;
         }
         cx.notify();
     }
@@ -262,7 +288,8 @@ impl Workspace {
         if let Some(files) = self.files.clone() {
             self.dictation
                 .update(cx, |dictation, cx| dictation.cancel(window, cx));
-            self.page = MainPage::Files;
+            self.page = MainPage::Conversation;
+            self.set_inspector(Some(inspector::Section::ProjectFiles), window, cx);
             files.update(cx, |files, cx| files.focus(window, cx));
             cx.notify();
         }
@@ -547,13 +574,6 @@ impl Workspace {
             MainPage::Conversation => self
                 .input
                 .update(cx, |input, cx| input.focus(window, cx)),
-            MainPage::Files => {
-                if let Some(files) = &self.files {
-                    files.update(cx, |files, cx| files.focus(window, cx));
-                } else {
-                    self.focus.focus(window, cx);
-                }
-            }
             MainPage::Tasks => self.focus.focus(window, cx),
         }
     }

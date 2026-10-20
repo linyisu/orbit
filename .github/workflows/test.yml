@@ -90,10 +90,12 @@ jobs:
           cargo test -p orbit-runtime --locked
           cargo test -p orbit-service --lib --locked workspace::server::lifecycle::tests
           cargo test -p orbit-service --lib --locked workspace::server::tests::browsing
+          cargo test -p orbit-service --lib --locked workspace::server::tests::review
           cargo test -p orbit-service --lib --locked workspace::library::package::native_tests
           cargo test -p orbit-service --lib --locked workspace::configuration::tests
           cargo test -p orbit-service --lib --locked workspace::tool_output::tests
           cargo test -p orbit-tools --locked --test native_files
+          cargo test -p orbit-tools --locked --test git_inspect history_
           cargo test -p orbit-tools --lib --locked mcp::tests
           cargo test -p orbit-tools --lib --locked read_command_output::tests::reads_a_bounded_page
           cargo test -p orbit-build -p orbit-xtask --locked
@@ -116,6 +118,7 @@ jobs:
           cargo test -p orbit-client --lib --locked platform::editor::tests
           cargo test -p orbit-client --lib --locked pump::session::tests
           cargo test -p orbit-client --lib --locked interaction::tests
+          cargo test -p orbit-client --lib --locked historical_
           cargo test -p orbit-client --lib --locked selection::tests
           cargo test -p orbit-client --lib --locked invalid_execution_configuration
           cargo test -p orbit-client --lib --locked request_futures_fit_native_executor_stacks
@@ -125,6 +128,7 @@ jobs:
           cargo test -p orbit-gui --features test-support --test transport --locked -- --test-threads=1
           cargo test -p orbit-gui --bin orbit-gui --locked
           cargo test -p orbit-tui --lib --locked tui::dialogs::
+          cargo test -p orbit-tui --lib --locked tui::management::history::
           cargo test -p orbit-tui --lib --locked configuration_location_is_readable
           cargo test -p orbit-tui --lib --locked tool_path_labels
           cargo test -p orbit-tui --lib --locked path_presentation_does_not

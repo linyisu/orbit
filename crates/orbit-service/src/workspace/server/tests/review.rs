@@ -19,7 +19,7 @@ fn git(root: &Path, args: &[&str]) -> Vec<u8> {
         .arg(root)
         .args(args)
         .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_GLOBAL", orbit_runtime::git::NULL_DEVICE)
         .output()
         .unwrap();
     assert!(
@@ -38,6 +38,51 @@ fn initialize_git(root: &Path) {
     git(root, &["add", "tracked.txt"]);
     git(root, &["commit", "-qm", "base"]);
     fs::write(root.join("tracked.txt"), "working\n").unwrap();
+}
+
+#[tokio::test]
+async fn history_keeps_readonly_access_but_respects_disabled_capabilities() {
+    for disabled in [
+        None,
+        Some(orbit_protocol::Capability::Files),
+        Some(orbit_protocol::Capability::Git),
+    ] {
+        let fixture = Fixture::new("http://127.0.0.1:1/v1").await;
+        let root = &fixture
+            .service
+            .options
+            .initial_directory;
+        initialize_git(root);
+        let mut setup =
+            crate::workspace::setup::prepare_workspace(&fixture.service.options, root, None)
+                .await
+                .unwrap();
+        setup.resources.policy.read_only = true;
+        setup.resources.policy.disabled = disabled.into_iter().collect();
+        let handle = Handle::spawn(setup, None)
+            .await
+            .unwrap();
+        let result = actor_review(
+            &handle,
+            &root.display().to_string(),
+            Action::History {
+                revision: "HEAD".into(),
+                offset: 0,
+            },
+        )
+        .await;
+        if disabled.is_some() {
+            assert!(result.is_err());
+        } else {
+            assert!(
+                matches!(result.unwrap(), Snapshot::History { commits, .. } if commits.len() == 1)
+            );
+        }
+        handle
+            .command(session::Command::Close)
+            .await
+            .unwrap();
+    }
 }
 
 fn index_action(staged: bool, receipt: String) -> Action {

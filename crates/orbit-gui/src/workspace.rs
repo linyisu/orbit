@@ -6,6 +6,7 @@ mod composer;
 mod connection;
 mod feedback;
 mod files;
+mod history;
 mod input_queue;
 mod inspector;
 mod lifecycle;
@@ -148,7 +149,6 @@ struct PendingSend {
 enum MainPage {
     Conversation,
     Tasks,
-    Files,
 }
 
 pub(crate) struct Workspace {
@@ -159,8 +159,11 @@ pub(crate) struct Workspace {
     execution: crate::execution::Execution,
     inspector: Option<inspector::Section>,
     last_inspector: inspector::Section,
+    change_tools: Option<Vec<crate::execution::ToolRun>>,
+    plan_record: Option<orbit_protocol::plan::State>,
     details_focus: FocusHandle,
     details_panes: Entity<gpui_kit::component::resizable::ResizableState>,
+    project_panes: Entity<gpui_kit::component::resizable::ResizableState>,
     options: Options,
     runtime: Arc<tokio::runtime::Runtime>,
     backend: Option<Backend>,
@@ -229,6 +232,7 @@ pub(crate) struct Workspace {
     files: Option<Entity<files::Files>>,
     file_drafts: Vec<Entity<files::Files>>,
     review: Option<Entity<review::Review>>,
+    git_history: Option<Entity<history::History>>,
 }
 
 impl Workspace {
@@ -279,8 +283,17 @@ impl Workspace {
         let tools = cx.subscribe_in(
             &conversation,
             window,
-            |view, source, request: &crate::conversation::ToolRequest, window, cx| {
-                view.open_tool_record(request.0.clone(), *source != view.conversation, window, cx);
+            |view, source, request: &crate::conversation::ToolRequest, window, cx| match request {
+                crate::conversation::ToolRequest::Call(tool) => view.open_tool_record(
+                    (**tool).clone(),
+                    *source != view.conversation,
+                    window,
+                    cx,
+                ),
+                crate::conversation::ToolRequest::Changes(tools) => {
+                    view.change_tools = Some(tools.clone());
+                    view.set_inspector(Some(inspector::Section::Changes), window, cx);
+                }
             },
         );
         (conversation, subscription, tools)
@@ -348,8 +361,11 @@ impl Workspace {
             execution: Default::default(),
             inspector: None,
             last_inspector: inspector::Section::Overview,
+            change_tools: None,
+            plan_record: None,
             details_focus: cx.focus_handle(),
             details_panes: cx.new(|_| gpui_kit::component::resizable::ResizableState::default()),
+            project_panes: cx.new(|_| gpui_kit::component::resizable::ResizableState::default()),
             options,
             runtime,
             backend: None,
@@ -429,6 +445,7 @@ impl Workspace {
             files: None,
             file_drafts: Vec::new(),
             review: None,
+            git_history: None,
         };
         view.input
             .update(cx, |input, cx| input.focus(window, cx));
@@ -755,6 +772,8 @@ impl Workspace {
             self.file_preview = None;
             self.inspector = None;
             self.last_inspector = inspector::Section::Overview;
+            self.change_tools = None;
+            self.plan_record = None;
             self.panel = None;
             if let Some(panel) = &self.input_queue {
                 panel.update(cx, |panel, cx| panel.disconnected(cx));

@@ -3,6 +3,9 @@ use serde_json::{Value, json};
 use std::{collections::VecDeque, path::Path};
 
 pub(super) fn seed(workspace: &str) -> (Vec<Value>, VecDeque<Value>, Value) {
+    if std::env::var_os("ORBIT_GUI_PROJECT_PROBE").is_some() {
+        prepare_project(Path::new(workspace)).expect("prepare isolated project fixture");
+    }
     let mut history = vec![
         json!({
             "Started": {
@@ -292,4 +295,49 @@ fn command_result(code: i32, elapsed_ms: u64, stdout: &str, stderr: &str) -> Str
         "retained_output_truncated": false
     })
     .to_string()
+}
+
+fn prepare_project(root: &Path) -> anyhow::Result<()> {
+    use std::{fs, process::Command};
+    anyhow::ensure!(root.is_dir(), "fixture workspace must exist");
+    if root.join(".git").exists() {
+        return Ok(());
+    }
+    fs::create_dir_all(root.join("src/nested"))?;
+    fs::write(
+        root.join("src/main.rs"),
+        "fn main() { println!(\"Generated project\"); }\n",
+    )?;
+    fs::write(
+        root.join("src/nested/example.rs"),
+        "pub const VALUE: usize = 1;\n",
+    )?;
+    for args in [
+        vec!["init", "-q"],
+        vec!["config", "user.name", "Orbit fixture"],
+        vec!["config", "user.email", "fixture@example.invalid"],
+        vec!["add", "src"],
+        vec!["commit", "-qm", "Generated project history"],
+    ] {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(args)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env(
+                "GIT_CONFIG_GLOBAL",
+                if cfg!(windows) { "NUL" } else { "/dev/null" },
+            )
+            .output()?;
+        anyhow::ensure!(
+            output.status.success(),
+            "fixture Git failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    fs::write(
+        root.join("src/main.rs"),
+        "fn main() { println!(\"Changed project\"); }\n",
+    )?;
+    Ok(())
 }
