@@ -79,6 +79,55 @@ fn commits(
         .collect()
 }
 
+fn publication(
+    root: &Path,
+    id: &str,
+    count: usize,
+    entries: &mut [Value],
+    token: &CancellationToken,
+) -> Result<(), ToolError> {
+    let refs = git_export(
+        root,
+        vec![
+            "for-each-ref".into(),
+            "--count=1".into(),
+            "--format=%(objectname)".into(),
+            "refs/remotes".into(),
+        ],
+        token,
+        false,
+    )?;
+    if refs.is_empty() {
+        return Ok(());
+    }
+    let local = git_export(
+        root,
+        vec![
+            "rev-list".into(),
+            format!("--max-count={count}"),
+            id.into(),
+            "--not".into(),
+            "--remotes".into(),
+            "--".into(),
+        ],
+        token,
+        false,
+    )?;
+    let local = text(&local)?;
+    let ids = local
+        .lines()
+        .collect::<std::collections::HashSet<_>>();
+    for entry in entries {
+        entry["publication"] = if ids.contains(entry["id"].as_str().unwrap_or_default()) {
+            "unpushed"
+        } else {
+            "published"
+        }
+        .into();
+    }
+    Ok(())
+}
+
 /// Pin the requested branch to an object ID so later pages cannot move with new commits.
 pub fn list(workspace: &Workspace, requested: &str, offset: usize) -> Result<Value, ToolError> {
     if offset > MAX_OFFSET {
@@ -90,6 +139,13 @@ pub fn list(workspace: &Workspace, requested: &str, offset: usize) -> Result<Val
     let mut entries = commits(&root, &id, offset, &token)?;
     let more = entries.len() > HISTORY_PAGE_COMMITS;
     entries.truncate(HISTORY_PAGE_COMMITS);
+    publication(
+        &root,
+        &id,
+        offset + HISTORY_PAGE_COMMITS,
+        &mut entries,
+        &token,
+    )?;
     let branches = git_export(
         &root,
         vec![
@@ -149,10 +205,11 @@ pub fn detail(workspace: &Workspace, requested: &str) -> Result<Value, ToolError
     let token = CancellationToken::new();
     let root = repository_root(workspace.root(), &token)?;
     let id = revision(&root, requested, &token)?;
-    let commit = commits(&root, &id, 0, &token)?
+    let mut commit = commits(&root, &id, 0, &token)?
         .into_iter()
         .next()
         .ok_or_else(|| failed("commit not found"))?;
+    publication(&root, &id, 1, std::slice::from_mut(&mut commit), &token)?;
     let message = git_export(
         &root,
         vec![

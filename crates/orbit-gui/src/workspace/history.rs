@@ -3,8 +3,8 @@ use super::*;
 use gpui_kit::component::{
     Selectable,
     diff::{Diff, DiffFile, DiffState},
-    input::{Editor, EditorState, Input, InputState},
-    scroll::ScrollableElement,
+    input::{Editor, EditorState},
+    resizable::ResizableState,
 };
 use orbit_protocol::review::{Action, Commit, Snapshot};
 
@@ -24,7 +24,7 @@ pub(super) struct History {
     owner: WeakEntity<Workspace>,
     session: String,
     workspace: String,
-    revision: Entity<InputState>,
+    revision: String,
     pinned: String,
     commits: Vec<Commit>,
     branches: Vec<String>,
@@ -36,10 +36,14 @@ pub(super) struct History {
     diff: Entity<DiffState>,
     raw_diff: Option<Entity<EditorState>>,
     busy: bool,
-    show_commits: bool,
+    panes: Entity<ResizableState>,
     error: Option<String>,
     generation: u64,
     task: Task<()>,
+    #[cfg(feature = "test-support")]
+    probe_bounds: std::rc::Rc<std::cell::Cell<Option<Bounds<Pixels>>>>,
+    #[cfg(feature = "test-support")]
+    probe_width: Option<Pixels>,
 }
 
 impl History {
@@ -54,11 +58,7 @@ impl History {
             owner,
             session,
             workspace,
-            revision: cx.new(|cx| {
-                InputState::new(window, cx)
-                    .default_value("HEAD")
-                    .placeholder("分支或提交")
-            }),
+            revision: "HEAD".into(),
             pinned: "HEAD".into(),
             commits: vec![],
             branches: vec![],
@@ -69,16 +69,20 @@ impl History {
             editor: cx.new(|cx| {
                 EditorState::new(window, cx)
                     .line_number(true)
-                    .soft_wrap(false)
+                    .soft_wrap(true)
                     .scroll_beyond_last_line(Some(0))
             }),
             diff: cx.new(|cx| DiffState::new([], cx)),
             raw_diff: None,
             busy: false,
-            show_commits: true,
+            panes: cx.new(|_| ResizableState::default()),
             error: None,
             generation: 0,
             task: Task::ready(()),
+            #[cfg(feature = "test-support")]
+            probe_bounds: Default::default(),
+            #[cfg(feature = "test-support")]
+            probe_width: None,
         }
     }
 
@@ -93,58 +97,84 @@ impl History {
     }
 
     #[cfg(feature = "test-support")]
-    pub(super) fn check_project(&mut self, step: u8, cx: &mut Context<Self>) -> anyhow::Result<()> {
+    pub(super) fn check_project(
+        &mut self,
+        step: u8,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> anyhow::Result<()> {
         anyhow::ensure!(!self.busy, "Git history request did not complete");
         anyhow::ensure!(self.error.is_none(), "Git history failed: {:?}", self.error);
-        match step {
-            0 => {
-                let commit = self
-                    .commits
-                    .first()
-                    .ok_or_else(|| anyhow::anyhow!("missing generated commit"))?;
-                self.fetch(
-                    Action::Commit {
-                        revision: commit.id.clone(),
-                    },
-                    cx,
-                );
-            }
-            1 => {
-                let selected = self
-                    .selected
-                    .as_ref()
-                    .ok_or_else(|| anyhow::anyhow!("missing commit detail"))?;
-                anyhow::ensure!(
-                    selected
-                        .files
-                        .contains(&"src/main.rs".into()),
-                    "missing committed path"
-                );
-                self.fetch(
-                    Action::CommitFile {
-                        revision: selected.commit.id.clone(),
-                        path: "src/main.rs".into(),
-                    },
-                    cx,
-                );
-            }
-            _ => {
-                anyhow::ensure!(
-                    self.path.as_deref() == Some("src/main.rs"),
-                    "missing historical file"
-                );
-                anyhow::ensure!(
-                    self.editor
-                        .read(cx)
-                        .value()
-                        .contains("Generated project"),
-                    "history must show the committed blob, not the worktree"
-                );
-                self.view = FileView::Diff;
-                self.show_commits = false;
-                cx.notify();
-            }
+        let selected = self
+            .selected
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("missing automatically selected commit"))?;
+        anyhow::ensure!(
+            selected.commit.publication == orbit_protocol::review::Publication::Unpushed,
+            "local commit must be marked unpushed"
+        );
+        anyhow::ensure!(
+            self.path.as_deref() == Some("src/main.rs"),
+            "first historical file must open automatically"
+        );
+        anyhow::ensure!(
+            self.editor
+                .read(cx)
+                .value()
+                .contains("Generated project"),
+            "history must show the committed blob, not the worktree"
+        );
+        if step == 4 {
+            anyhow::ensure!(
+                self.panes.read(cx).sizes()[0] > self.probe_width.unwrap() + px(20.),
+                "dragging the history divider did not resize the list"
+            );
+            self.view = FileView::Diff;
+            cx.notify();
+            return Ok(());
         }
+        let bounds = self
+            .probe_bounds
+            .get()
+            .ok_or_else(|| anyhow::anyhow!("missing history pane bounds"))?;
+        let width = *self
+            .probe_width
+            .get_or_insert(self.panes.read(cx).sizes()[0]);
+        let position = point(
+            bounds.left()
+                + width
+                + match step {
+                    0 => px(0.),
+                    1 => px(10.),
+                    _ => px(40.),
+                },
+            bounds.center().y,
+        );
+        let event = match step {
+            0 => PlatformInput::MouseDown(MouseDownEvent {
+                position,
+                button: MouseButton::Left,
+                click_count: 1,
+                ..Default::default()
+            }),
+            1 | 2 => PlatformInput::MouseMove(MouseMoveEvent {
+                position,
+                pressed_button: Some(MouseButton::Left),
+                ..Default::default()
+            }),
+            _ => PlatformInput::MouseUp(MouseUpEvent {
+                position,
+                button: MouseButton::Left,
+                click_count: 1,
+                ..Default::default()
+            }),
+        };
+        let handle = window.window_handle();
+        cx.defer(move |cx| {
+            let _ = handle.update(cx, |_, window, cx| {
+                window.dispatch_event(event, cx);
+            });
+        });
         Ok(())
     }
 
@@ -183,6 +213,17 @@ impl History {
                             )),
                     ),
             )
+            .when(
+                commit.publication == orbit_protocol::review::Publication::Unpushed,
+                |button| {
+                    button.child(
+                        div()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child("未推送"),
+                    )
+                },
+            )
             .disabled(self.busy)
             .on_click(cx.listener(move |view, _, _, cx| {
                 view.fetch(
@@ -199,11 +240,7 @@ impl History {
         self.path = None;
         self.fetch(
             Action::History {
-                revision: self
-                    .revision
-                    .read(cx)
-                    .value()
-                    .to_string(),
+                revision: self.revision.clone(),
                 offset: 0,
             },
             cx,
@@ -279,6 +316,15 @@ impl History {
                         }
                         view.branches = branches;
                         view.next = next;
+                        if !append && let Some(commit) = view.commits.first() {
+                            let revision = commit.id.clone();
+                            let entity = cx.weak_entity();
+                            cx.defer(move |cx| {
+                                let _ = entity.update(cx, |view, cx| {
+                                    view.fetch(Action::Commit { revision }, cx)
+                                });
+                            });
+                        }
                     }
                     Ok(Response::Review(Snapshot::Commit {
                         commit,
@@ -286,8 +332,15 @@ impl History {
                         files,
                     })) => {
                         view.path = None;
-                        if window.viewport_size().width < window.rem_size() * 80. {
-                            view.show_commits = false;
+                        if let Some(path) = files.first() {
+                            let path = path.clone();
+                            let revision = commit.id.clone();
+                            let entity = cx.weak_entity();
+                            cx.defer(move |cx| {
+                                let _ = entity.update(cx, |view, cx| {
+                                    view.fetch(Action::CommitFile { revision, path }, cx)
+                                });
+                            });
                         }
                         view.selected = Some(SelectedCommit {
                             commit,
@@ -304,7 +357,7 @@ impl History {
                             EditorState::new(window, cx)
                                 .language(orbit_syntax::label_for_path(&path))
                                 .line_number(true)
-                                .soft_wrap(false)
+                                .soft_wrap(true)
                                 .scroll_beyond_last_line(Some(0))
                                 .default_value(content.unwrap_or_else(|| {
                                     "此提交中不存在该文件，或文件不是文本".into()
@@ -322,7 +375,7 @@ impl History {
                                     EditorState::new(window, cx)
                                         .language("diff")
                                         .line_number(true)
-                                        .soft_wrap(false)
+                                        .soft_wrap(true)
                                         .scroll_beyond_last_line(Some(0))
                                         .default_value(patch)
                                 }))
@@ -340,16 +393,16 @@ impl History {
 }
 
 impl Render for History {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let branch_owner = cx.weak_entity();
         let branches = self.branches.clone();
         let commits = v_flex()
             .id("git-history-commits")
-            .w_56()
+            .w_full()
             .min_w_0()
             .h_full()
-            .border_r_1()
-            .border_color(cx.theme().border)
+            .px_2()
+            .py_2()
             .child(
                 uniform_list(
                     "git-commit-rows",
@@ -394,13 +447,30 @@ impl Render for History {
                 let id = selected.commit.id.clone();
                 detail
                     .child(
+                        h_flex()
+                            .px_3()
+                            .pt_3()
+                            .gap_2()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(format!(
+                                "{} · {}",
+                                selected.commit.short_id, selected.commit.author
+                            ))
+                            .child(match selected.commit.publication {
+                                orbit_protocol::review::Publication::Unpushed => "未推送",
+                                orbit_protocol::review::Publication::Published => "远端已有",
+                                orbit_protocol::review::Publication::Unknown => "远端状态未知",
+                            }),
+                    )
+                    .child(
                         div()
                             .id("commit-message")
                             .h_auto()
                             .w_full()
                             .flex_shrink_0()
                             .max_h(rems(8.))
-                            .overflow_y_scrollbar()
+                            .overflow_y_scroll()
                             .p_3()
                             .text_sm()
                             .whitespace_normal()
@@ -413,7 +483,7 @@ impl Render for History {
                             .w_full()
                             .flex_shrink_0()
                             .max_h(rems(12.))
-                            .overflow_y_scrollbar()
+                            .overflow_y_scroll()
                             .px_2()
                             .children(selected.files.iter().map(|path| {
                                 let path = path.clone();
@@ -522,50 +592,20 @@ impl Render for History {
                     .py_2()
                     .gap_2()
                     .child(
-                        Button::new("history-list")
-                            .ghost()
-                            .small()
-                            .label("提交列表")
-                            .selected(self.show_commits)
-                            .on_click(cx.listener(|view, _, _, cx| {
-                                view.show_commits = !view.show_commits;
-                                cx.notify();
-                            })),
-                    )
-                    .child(
-                        Input::new(&self.revision)
-                            .small()
-                            .flex_1()
-                            .min_w_0()
-                            .aria_label("Git 分支或提交"),
-                    )
-                    .child(
-                        Button::new("history-load")
-                            .small()
-                            .label("查看")
-                            .disabled(self.busy)
-                            .on_click(cx.listener(|view, _, _, cx| view.refresh(cx))),
-                    ),
-            )
-            .when(!self.branches.is_empty(), |view| {
-                view.child(
-                    div().px_3().child(
                         Button::new("history-branches")
                             .ghost()
                             .small()
-                            .label("选择分支")
-                            .disabled(self.busy)
+                            .label(self.revision.clone())
                             .dropdown_caret(true)
+                            .disabled(self.busy)
                             .dropdown_menu(move |mut menu, _, _| {
                                 for branch in &branches {
                                     let owner = branch_owner.clone();
                                     let branch = branch.clone();
                                     menu = menu.item(PopupMenuItem::new(branch.clone()).on_click(
-                                        move |_, window, cx| {
+                                        move |_, _, cx| {
                                             let _ = owner.update(cx, |view, cx| {
-                                                view.revision.update(cx, |input, cx| {
-                                                    input.set_value(branch.clone(), window, cx)
-                                                });
+                                                view.revision = branch.clone();
                                                 view.refresh(cx);
                                             });
                                         },
@@ -573,9 +613,18 @@ impl Render for History {
                                 }
                                 menu
                             }),
+                    )
+                    .child(div().flex_1())
+                    .child(
+                        Button::new("history-refresh")
+                            .ghost()
+                            .small()
+                            .icon(IconName::RefreshCw)
+                            .accessibility_label("刷新提交历史")
+                            .disabled(self.busy)
+                            .on_click(cx.listener(|view, _, _, cx| view.refresh(cx))),
                     ),
-                )
-            })
+            )
             .when(self.busy, |view| {
                 view.child(
                     div()
@@ -595,13 +644,34 @@ impl Render for History {
                 )
             })
             .child(
-                h_flex()
+                div()
                     .flex_1()
-                    .min_w_0()
                     .min_h_0()
-                    .items_stretch()
-                    .when(self.show_commits, |view| view.child(commits))
-                    .child(detail),
+                    .relative()
+                    .when(cfg!(feature = "test-support"), |view| {
+                        #[cfg(feature = "test-support")]
+                        {
+                            let bounds = self.probe_bounds.clone();
+                            view.child(
+                                canvas(move |value, _, _| bounds.set(Some(value)), |_, _, _, _| {})
+                                    .absolute()
+                                    .size_full(),
+                            )
+                        }
+                        #[cfg(not(feature = "test-support"))]
+                        view
+                    })
+                    .child(
+                        h_resizable("history-panes")
+                            .with_state(&self.panes)
+                            .child(
+                                resizable_panel()
+                                    .size(window.rem_size() * 17.)
+                                    .size_range(window.rem_size() * 12. ..window.rem_size() * 32.)
+                                    .child(commits),
+                            )
+                            .child(resizable_panel().child(detail)),
+                    ),
             )
     }
 }

@@ -50,6 +50,40 @@ fn repository() -> tempfile::TempDir {
 }
 
 #[test]
+fn history_publication_uses_remote_tracking_refs_without_contacting_a_remote() {
+    use orbit_tools::git_inspect::history;
+    let directory = repository();
+    let root = directory.path();
+    let workspace = Workspace::new(root).unwrap();
+    let initial = history::list(&workspace, "HEAD", 0).unwrap();
+    assert!(initial["commits"][0]["publication"].is_null());
+    let published = initial["revision"].as_str().unwrap();
+    git(root, &["update-ref", "refs/remotes/origin/main", published]);
+    git(root, &["commit", "--allow-empty", "-qm", "local change"]);
+    let index = fs::read(root.join(".git/index")).unwrap();
+    let page = history::list(&workspace, "HEAD", 0).unwrap();
+    assert_eq!(page["commits"][0]["publication"], "unpushed");
+    assert_eq!(page["commits"][1]["publication"], "published");
+    assert_eq!(
+        history::detail(&workspace, "HEAD").unwrap()["commit"]["publication"],
+        "unpushed"
+    );
+    git(
+        root,
+        &[
+            "update-ref",
+            "refs/remotes/origin/main",
+            page["revision"].as_str().unwrap(),
+        ],
+    );
+    assert_eq!(
+        history::list(&workspace, "HEAD", 0).unwrap()["commits"][0]["publication"],
+        "published"
+    );
+    assert_eq!(fs::read(root.join(".git/index")).unwrap(), index);
+}
+
+#[test]
 fn history_pages_pin_identity_and_reject_nested_workspaces() {
     use orbit_tools::git_inspect::history;
     let directory = repository();

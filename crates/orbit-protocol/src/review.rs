@@ -114,6 +114,18 @@ pub struct Commit {
     pub authored_at: String,
     pub author: String,
     pub subject: String,
+    #[serde(default)]
+    pub publication: Publication,
+}
+
+/// Reachability from local remote-tracking refs; no network request is implied.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Publication {
+    #[default]
+    Unknown,
+    Unpushed,
+    Published,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -121,4 +133,22 @@ pub struct Checkpoint {
     pub run_id: i64,
     pub call_id: String,
     pub undone: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn old_commit_records_do_not_invent_publication_status() {
+        let commit: Commit = serde_json::from_value(serde_json::json!({
+            "id": "generated",
+            "short_id": "gen",
+            "authored_at": "2020-01-01",
+            "author": "Example",
+            "subject": "Generated record"
+        }))
+        .unwrap();
+        assert_eq!(commit.publication, Publication::Unknown);
+    }
 }

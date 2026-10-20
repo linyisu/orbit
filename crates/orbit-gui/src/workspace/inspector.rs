@@ -180,20 +180,31 @@ impl Workspace {
                 .read(cx)
                 .check_project(false, cx)?,
             14 => self.show_files(Some("src/main.rs".into()), window, cx),
-            15 => self
+            15 => {
+                let files = self.files.as_ref().expect("file pane");
+                files.read(cx).check_project(true, cx)?;
+                files.update(cx, |files, cx| files.start_disk_probe(cx));
+            }
+            16..=19 => {}
+            20 => self
                 .files
                 .as_ref()
                 .expect("file pane")
                 .read(cx)
-                .check_project(true, cx)?,
-            16 => self.show_git_history(window, cx),
-            17..=19 => {
+                .check_disk_probe(cx)?,
+            21 => {
+                window.resize(size(px(1_200.), px(800.)));
+                self.show_git_history(window, cx);
+            }
+            22..=26 => {
                 self.git_history
                     .as_ref()
                     .expect("history pane")
-                    .update(cx, |history, cx| history.check_project(step - 17, cx))?;
+                    .update(cx, |history, cx| {
+                        history.check_project(step - 22, window, cx)
+                    })?;
             }
-            20 => self.set_inspector(None, window, cx),
+            27 => self.set_inspector(None, window, cx),
             _ => {
                 anyhow::ensure!(
                     self.inspector.is_none(),

@@ -22,7 +22,7 @@
 
 关闭标签视图不等于停止任务，计划批准和未确认请求重发需显式操作。GUI 支持图文暂存，编辑时撤回到输入框；TUI 使用 `/queue` 管理队列。
 
-GUI 提供系统字体、图片灯箱和编辑器；TUI 的字体与图片协议由终端决定，`/editor` 使用外部编辑器。两端启动时通过 `orbit-client::windows` 自动恢复标签和草稿，TUI 的 `/restore` 是手动补充入口。
+GUI 提供系统字体、图片灯箱和只读文件预览；TUI 的字体与图片协议由终端决定，`/editor` 使用外部编辑器。两端启动时通过 `orbit-client::windows` 自动恢复标签和草稿，TUI 的 `/restore` 是手动补充入口。
 
 构建与操作见 [TUI](crates/orbit-tui/README.md) 和 [GUI](crates/orbit-gui/README.md)。
 

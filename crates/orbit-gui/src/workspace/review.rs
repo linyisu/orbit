@@ -2,19 +2,14 @@
 //! have separate sources and exact reviewed-state guards.
 use super::*;
 use gpui_kit::component::{
-    diff::{Diff, DiffFile, DiffMode, DiffState},
+    diff::{Diff, DiffFile, DiffState},
     input::{Editor, EditorState},
     list::ListItem,
     tab::{Tab, TabBar},
 };
 use orbit_protocol::review::{Action, Checkpoint, Entry, Kind, Snapshot};
 
-const KINDS: [(Kind, &str); 4] = [
-    (Kind::Unstaged, "未暂存"),
-    (Kind::Staged, "已暂存"),
-    (Kind::Untracked, "未跟踪"),
-    (Kind::Checkpoint, "会话写入"),
-];
+const KINDS: [(Kind, &str); 2] = [(Kind::Unstaged, "更改"), (Kind::Staged, "已暂存")];
 
 pub(super) struct Review {
     owner: WeakEntity<Workspace>,
@@ -38,7 +33,6 @@ pub(super) struct Review {
     indexing: bool,
     loaded: bool,
     generation: usize,
-    split: bool,
     width: Option<Pixels>,
     request: Task<()>,
 }
@@ -71,7 +65,6 @@ impl Review {
             indexing: false,
             loaded: false,
             generation: 0,
-            split: false,
             width: None,
             request: Task::ready(()),
             diff: cx.new(|cx| DiffState::new([], cx)),
@@ -154,6 +147,14 @@ impl Review {
             self.diff
                 .update(cx, |diff, cx| diff.set_files([], cx));
         }
+        if self.kind != Kind::Checkpoint
+            && let Some(entry) = self
+                .entries
+                .iter()
+                .find(|entry| entry.path == path)
+        {
+            self.kind = entry.kind;
+        }
         self.raw = None;
         self.selected = Some(path.clone());
         self.checkpoint = None;
@@ -192,7 +193,15 @@ impl Review {
         if self.mutating() {
             return;
         }
-        let append = matches!(action, Action::List { offset, .. } if offset > 0);
+        let action = match action {
+            Action::List {
+                kind: Kind::Unstaged | Kind::Untracked,
+                offset,
+            } => Action::Status { offset },
+            action => action,
+        };
+        let append =
+            matches!(action, Action::List { offset, .. } | Action::Status { offset } if offset > 0);
         self.undoing = matches!(action, Action::Undo { .. });
         self.indexing = matches!(action, Action::Stage { .. } | Action::Unstage { .. });
         let updating_index = self.indexing;
@@ -249,6 +258,38 @@ impl Review {
                 view.undoing = false;
                 view.indexing = false;
                 match result {
+                    Ok(Response::Review(Snapshot::Status {
+                        entries,
+                        next,
+                        branch,
+                    })) => {
+                        let entries = entries
+                            .into_iter()
+                            .filter(|entry| matches!(entry.kind, Kind::Unstaged | Kind::Untracked))
+                            .collect::<Vec<_>>();
+                        if append {
+                            view.entries.extend(entries);
+                        } else {
+                            view.entries = entries;
+                        }
+                        view.next = next;
+                        view.branch = branch;
+                        view.loaded = true;
+                        view.rebuild_tree(cx);
+                        if !append
+                            && let Some(path) = view
+                                .entries
+                                .first()
+                                .map(|entry| entry.path.clone())
+                        {
+                            view.select(path, cx);
+                        } else if view.entries.is_empty() {
+                            view.selected = None;
+                            view.raw = None;
+                            view.diff
+                                .update(cx, |diff, cx| diff.set_files([], cx));
+                        }
+                    }
                     Ok(Response::Review(Snapshot::List {
                         entries,
                         next,
@@ -720,23 +761,6 @@ impl Render for Review {
                                                     .clone()
                                                     .unwrap_or_else(|| "选择文件查看差异".into()),
                                             ),
-                                    )
-                                    .child(
-                                        Button::new("review-mode")
-                                            .ghost()
-                                            .small()
-                                            .label(if self.split { "并排" } else { "统一" })
-                                            .on_click(cx.listener(|view, _, _, cx| {
-                                                view.split = !view.split;
-                                                let mode = if view.split {
-                                                    DiffMode::Split
-                                                } else {
-                                                    DiffMode::Unified
-                                                };
-                                                view.diff
-                                                    .update(cx, |diff, cx| diff.set_mode(mode, cx));
-                                                cx.notify();
-                                            })),
                                     )
                                     .when(
                                         self.checkpoint

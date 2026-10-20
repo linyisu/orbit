@@ -86,11 +86,6 @@ impl Workspace {
         cx.notify();
     }
 
-    pub(super) fn close_files(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.set_inspector(None, window, cx);
-        self.focus_composer(window, cx);
-    }
-
     pub(super) fn show_git_history(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(info) = &self.info else { return };
         if !self

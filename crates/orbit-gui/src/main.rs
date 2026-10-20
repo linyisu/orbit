@@ -189,7 +189,7 @@ fn smoke_frame(
         }
         #[cfg(feature = "test-support")]
         if details_probe {
-            if matches!(frame, 1 | 4 | 6 | 8..=21)
+            if matches!(frame, 1 | 4 | 6 | 8..=28)
                 && let Some(directory) = std::env::var_os("ORBIT_GUI_CAPTURE_DIR")
             {
                 let directory = std::path::PathBuf::from(directory);

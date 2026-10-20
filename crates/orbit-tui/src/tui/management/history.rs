@@ -308,7 +308,7 @@ impl Panel for State {
                         .take(available)
                         .map(|(index, commit)| {
                             Line::from(format!(
-                                "{} {}  {} · {}",
+                                "{} {}  {}{} · {}",
                                 if index == self.commit_index {
                                     "›"
                                 } else {
@@ -316,6 +316,13 @@ impl Panel for State {
                                 },
                                 commit.short_id,
                                 safe_output(&commit.subject),
+                                if commit.publication
+                                    == orbit_protocol::review::Publication::Unpushed
+                                {
+                                    " · 未推送"
+                                } else {
+                                    ""
+                                },
                                 safe_output(&commit.author)
                             ))
                         }),

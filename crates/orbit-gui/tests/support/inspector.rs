@@ -335,9 +335,33 @@ fn prepare_project(root: &Path) -> anyhow::Result<()> {
             String::from_utf8_lossy(&output.stderr)
         );
     }
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["update-ref", "refs/remotes/origin/main", "HEAD"])
+        .output()?;
+    anyhow::ensure!(output.status.success(), "fixture commit setup failed");
     fs::write(
         root.join("src/main.rs"),
-        "fn main() { println!(\"Changed project\"); }\n",
+        "// Generated local revision\nfn main() { println!(\"Generated project\"); }\n",
+    )?;
+    for args in [
+        vec!["add", "src/main.rs"],
+        vec!["commit", "-qm", "Generated local commit"],
+    ] {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(args)
+            .output()?;
+        anyhow::ensure!(output.status.success(), "fixture local revision failed");
+    }
+    fs::write(
+        root.join("src/main.rs"),
+        format!(
+            "// {}\nfn main() {{ println!(\"Changed project\"); }}\n",
+            "Generated wrapping example ".repeat(20)
+        ),
     )?;
     Ok(())
 }
