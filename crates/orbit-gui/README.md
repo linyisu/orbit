@@ -17,6 +17,8 @@ macOS 使用 Rust stable 与 Xcode 工具链；Windows 使用 Rust stable MSVC �
 
 支持 `--workspace`、`--model`、`--resume`、`--ssh` 与 `--wsl`，其他参数见 `--help`。
 GUI 内嵌同平台服务；Linux 使用 musl 静态服务，macOS 使用系统库，Windows 服务静态链接 C 运行库。
+CI 分发包还内嵌同一提交、同架构的 Linux 静态服务供 SSH/WSL 使用；部署在后台校验并复用目标缓存。
+Windows 原生窗口验收会最大化实际窗口并比较客户区与屏幕工作区边界，随后还原继续账号流程。
 
 ## 桌面发布包
 

@@ -72,20 +72,16 @@ jobs:
           key: native-repair-${{ matrix.os }}
           cache-targets: 'true'
           cache-on-failure: 'true'
-      - name: Test native interpreter, output decoding and process ownership
+      - name: Test cache reuse, leases and target paths
         if: ${{ !contains(github.event.head_commit.message, '[test-only]') }}
         run: |
-          cargo test -p orbit-runtime --lib --locked execution::shell_environment::tests
-          cargo test -p orbit-runtime --lib --locked execution::output::encoding::tests
-          cargo test -p orbit-runtime --lib --locked execution::process::tests
-          cargo test -p orbit-runtime --test native_execution --locked
-      - name: Test target context, path projection and retained log pagination
-        if: ${{ !contains(github.event.head_commit.message, '[test-only]') }}
-        run: |
-          cargo test -p orbit-service --lib --locked context::instructions::tests
+          cargo test -p orbit-client --lib --locked local_server::tests
           cargo test -p orbit-client --lib --locked directories::display_tests
-          cargo test -p orbit-client --lib --locked execution::details::request::tests
-          cargo test -p orbit-tools --lib --locked read_command_output::tests
+          cargo test -p orbit-client --lib --locked bootstrap::tests
+      - name: Test native terminal path presentation
+        if: ${{ !contains(github.event.head_commit.message, '[test-only]') }}
+        run: |
+          cargo test -p orbit-tui --lib --locked configuration_location_is_readable
       - name: Retest the Windows private log fixture
         if: contains(github.event.head_commit.message, '[test-only]')
         run: cargo test -p orbit-tools --lib --locked read_command_output::tests::reads_a_bounded_page

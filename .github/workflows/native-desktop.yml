@@ -29,10 +29,46 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  desktop:
+  remote-server:
     if: >-
-      github.event_name != 'push' || github.ref != 'refs/heads/native-runtime-foundation'
-      || !contains(github.event.head_commit.message, '[test-only]')
+      !contains(github.event.head_commit.message, '[test-only]')
+      && !contains(github.event.head_commit.message, '[installer-only]')
+    name: Embedded Linux service (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include: >-
+          ${{ fromJSON(
+            github.event_name == 'push' && github.ref == 'refs/heads/native-runtime-foundation'
+            && !contains(github.event.head_commit.message, '[native-full]')
+            && '[{"os":"ubuntu-26.04","arch":"x86_64"}]'
+            || '[{"os":"ubuntu-26.04","arch":"x86_64"},{"os":"ubuntu-26.04-arm","arch":"aarch64"}]'
+          ) }}
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.arch }}-unknown-linux-musl
+      - run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: remote-musl-${{ matrix.arch }}
+      - name: Build the matching static service from this commit
+        run: cargo build -p orbit-server --bin orbit-workspace-server --release --target ${{ matrix.arch }}-unknown-linux-musl --locked
+      - uses: actions/upload-artifact@v7
+        with:
+          name: remote-server-${{ matrix.arch }}
+          path: target/${{ matrix.arch }}-unknown-linux-musl/release/orbit-workspace-server
+          retention-days: 7
+
+  desktop:
+    needs: remote-server
+    if: >-
+      always() && !cancelled()
+      && (needs.remote-server.result == 'success' || needs.remote-server.result == 'skipped')
+      && (github.event_name != 'push' || github.ref != 'refs/heads/native-runtime-foundation'
+      || !contains(github.event.head_commit.message, '[test-only]'))
     name: Desktop (${{ matrix.os }})
     strategy:
       fail-fast: false
@@ -73,14 +109,32 @@ jobs:
           key: ${{ matrix.os }}
           cache-targets: 'true'
           cache-on-failure: 'true'
+      - uses: actions/download-artifact@v8
+        if: runner.os != 'Linux' && !contains(github.event.head_commit.message, '[installer-only]')
+        with:
+          pattern: remote-server-*
+          path: target/remote-services
+      - name: Select the embedded SSH and WSL service
+        if: runner.os != 'Linux' && !contains(github.event.head_commit.message, '[installer-only]')
+        shell: bash
+        run: |
+          architecture=$(rustc -vV | sed -n 's/^host: \([^-]*\)-.*/\1/p')
+          echo "ORBIT_REMOTE_WORKSPACE_SERVER=$GITHUB_WORKSPACE/target/remote-services/remote-server-$architecture/orbit-workspace-server" >> "$GITHUB_ENV"
       - name: Rebuild Linux speech libraries from complete sources
         if: runner.os == 'Linux'
         run: cargo clean -p openblas-src
       - name: Build native desktop package
         if: ${{ !contains(github.event.head_commit.message, '[installer-only]') }}
         run: cargo xtask bundle-gui debug
+      - name: Verify the conversation tail regression on Windows
+        if: ${{ runner.os == 'Windows' && !contains(github.event.head_commit.message, '[installer-only]') }}
+        run: |
+          $nativeTarget = (rustc -vV | Select-String '^host: ').Line.Substring(6)
+          $env:CARGO_ENCODED_RUSTFLAGS = "-C$([char]31)target-feature=+crt-static"
+          cargo test -p orbit-gui --features test-support --bin orbit-gui conversation::navigation::tests --target "$nativeTarget" --locked
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Verify shared browsing and provider regressions
-        if: ${{ runner.os != 'Windows' && !contains(github.event.head_commit.message, '[installer-only]') }}
+        if: ${{ runner.os != 'Windows' && !contains(github.event.head_commit.message, '[installer-only]') && (github.event_name != 'push' || github.ref != 'refs/heads/native-runtime-foundation' || contains(github.event.head_commit.message, '[native-full]')) }}
         run: |
           cargo test -p orbit-config discovery_retains_overrides_and_saved_credentials_reload --locked
           cargo test -p orbit-gui --features test-support --test transport missing_native_service_is_distinct_from_model_configuration --locked
@@ -95,7 +149,7 @@ jobs:
           cargo test -p orbit-model advertised_api_metadata --locked
           cargo test -p orbit-auth usage::tests --locked
       - name: Verify Windows browsing with packaged runtime flags
-        if: ${{ runner.os == 'Windows' && !contains(github.event.head_commit.message, '[installer-only]') }}
+        if: ${{ runner.os == 'Windows' && !contains(github.event.head_commit.message, '[installer-only]') && (github.event_name != 'push' || github.ref != 'refs/heads/native-runtime-foundation' || contains(github.event.head_commit.message, '[native-full]')) }}
         run: |
           $nativeTarget = (rustc -vV | Select-String '^host: ').Line.Substring(6)
           $env:CARGO_ENCODED_RUSTFLAGS = "-C$([char]31)target-feature=+crt-static"

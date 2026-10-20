@@ -104,3 +104,7 @@ cargo test -p orbit-client
 本机服务资产按客户端平台选择，Windows 使用 `.exe` 与私有命名管道，macOS 使用原生
 可执行文件与 Unix socket。Linux 静态远端资产独立注册；非 Linux 构建可通过
 `ORBIT_REMOTE_WORKSPACE_SERVER` 内置此资产，否则 SSH/WSL 使用显式上传或已安装服务。
+桌面 CI 为 Windows 和 macOS 同时内嵌同一次提交、匹配架构的 Linux 静态服务，
+SSH/WSL 连接无需在用户机器上安装 Rust 或构建服务。
+本机服务缓存校验完整字节后使用 OS 租约保护，当前版本、客户端仍使用的版本及一个旧版本保留；
+其他版本在准备服务时尝试清理。无法删除的运行中 Windows 程序留待下次回收，清理失败不阻止启动。
