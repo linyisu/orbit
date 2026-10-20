@@ -304,7 +304,7 @@ async fn in_container(bundle: &Path, container: &str) -> Result<()> {
     orbit_build::verify_static_server(&deployed).map_err(anyhow::Error::msg)?;
     ensure!(
         digest != sha256(&client)?,
-        "Uploaded native client instead of the static server"
+        "Uploaded client instead of the static server"
     );
     fs::remove_file(deployed)?;
     let before = text(&mut docker(container, &["stat", "-c", "%i:%Y", executable])).await?;
@@ -326,7 +326,7 @@ async fn in_container(bundle: &Path, container: &str) -> Result<()> {
     Ok(())
 }
 
-/// Verify the packaged native service in an isolated workspace without a shell or container.
+/// Verify the packaged service in an isolated workspace without a shell or container.
 pub async fn verify_native(bundle: &Path) -> Result<()> {
     let bundle = bundle.canonicalize()?;
     let client = bundle.join(format!("orbit{}", std::env::consts::EXE_SUFFIX));
@@ -351,7 +351,7 @@ async fn verify_native_executable(server: &Path, client: &Path) -> Result<()> {
         None,
     )
     .await
-    .context("native client service preflight failed")?;
+    .context("client service preflight failed")?;
     let mut child = Command::new(server)
         .current_dir(&root)
         .arg("workspace-service")
@@ -392,35 +392,35 @@ async fn verify_native_executable(server: &Path, client: &Path) -> Result<()> {
                     ..
                 }
             ),
-            "native service handshake failed"
+            "service handshake failed"
         );
         ensure!(
             matches!(
                 request(&mut child, Request::Sessions).await?,
                 Response::Sessions(_)
             ),
-            "native session storage failed"
+            "session storage failed"
         );
         ensure!(
             matches!(request(&mut child, Request::Shutdown).await?, Response::Ok),
-            "native service shutdown failed"
+            "service shutdown failed"
         );
         child.stdin.take();
         ensure!(
             child.wait().await?.success(),
-            "native service exited unsuccessfully"
+            "service exited unsuccessfully"
         );
         Ok::<(), anyhow::Error>(())
     })
     .await
-    .context("native bundle verification timed out")??;
+    .context("bundle verification timed out")??;
     process::run(
         Command::new(client)
             .arg("--help")
             .current_dir(&root),
     )
     .await?;
-    println!("PASS: native client, embedded service, protocol, session storage and shutdown");
+    println!("PASS: client, embedded service, protocol, session storage and shutdown");
     Ok(())
 }
 
@@ -452,7 +452,7 @@ fn desktop_probe(command: &mut Command, root: &Path) {
     }
 }
 
-/// Exercise the packaged desktop executable with an isolated real window and native service.
+/// Exercise the packaged desktop executable with an isolated real window and embedded service.
 pub async fn verify_gui(bundle: &Path) -> Result<()> {
     let bundle = bundle.canonicalize()?;
     let client = crate::bundle::gui_executable(&bundle);
@@ -594,7 +594,7 @@ async fn verify_gui_startup(client: &Path, server: Option<&Path>, first_use: boo
                 && receipt["height"]
                     .as_f64()
                     .is_some_and(|height| height >= 560.),
-            "desktop did not complete native window rendering: {receipt}"
+            "desktop did not complete window rendering: {receipt}"
         );
         if !first_use && launch == 0 {
             ensure!(
@@ -666,7 +666,7 @@ async fn verify_gui_startup(client: &Path, server: Option<&Path>, first_use: boo
     .await
     .context("desktop service cleanup timed out")??;
     println!(
-        "PASS: isolated native desktop window (first_use={first_use}) rendered and exited normally: {receipt}"
+        "PASS: isolated desktop window (first_use={first_use}) rendered and exited normally: {receipt}"
     );
     Ok(())
 }
@@ -691,7 +691,7 @@ fn desktop_cached_server(root: &Path) -> Result<PathBuf> {
     }
     ensure!(
         servers.len() == 1,
-        "desktop must extract exactly one native server"
+        "desktop must extract exactly one embedded server"
     );
     Ok(servers.remove(0))
 }

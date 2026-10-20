@@ -442,7 +442,7 @@ impl Render for Advanced {
                     div()
                         .text_sm()
                         .text_color(cx.theme().muted_foreground)
-                        .child("联网声明用于命令审批，不限制原生进程实际访问网络。"),
+                        .child("联网声明用于命令审批，不限制进程实际访问网络。"),
                 ),
         )
         .child(

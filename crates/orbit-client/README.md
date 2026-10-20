@@ -45,14 +45,14 @@ Linux 静态链接 OpenBLAS，macOS 使用 Accelerate；Linux 源码构建需要
 首次构建下载 OpenBLAS 源码。x86_64 要求 AVX2 与 FMA，运行前检测，不能仅凭编译成功认定兼容。
 编码和预填充使用浮点运算，后端单 token 解码使用内部 INT8 矩阵向量内核；
 准确率必须以增量路径的实测为准。Linux 上内核池限制为两个工作线程，OpenBLAS 单线程。
-所有本机模型操作在后台串行进入不可重入的原生内核池，等待期间可取消。
+所有本机模型操作在后台串行进入不可重入的 Qwen 内核池，等待期间可取消。
 
 缓存位于 `$XDG_CACHE_HOME/orbit/speech`，缺省根目录在 Unix 为 `~/.cache`、Windows 为
 `LOCALAPPDATA`，独立于项目与 SSH/WSL 目标；Windows 不要求 HOME 或 XDG 环境变量。
 准备阶段区分缓存校验、累计下载进度和模型加载；取消下载保留固定版本的 `.part` 文件，
 重试使用 HTTP Range 继续，服务端忽略 Range 时安全重新下载。完整文件通过大小和 SHA-256
 校验后原子替换缓存；损坏下载不替换既有文件。跨进程准备使用可取消的缓存锁，已验证缓存离线可用。
-取消加载立即结束调用方等待；无法中断的原生加载在后台结束并丢弃结果，重试不会与旧加载竞争。
+取消加载立即结束调用方等待；无法中断的模型加载在后台结束并丢弃结果，重试不会与旧加载竞争。
 
 音频按 16 kHz 单声道 PCM 输入，[speech/input.rs](src/speech/input.rs) 按采样数维护采集队列，
 容量不受麦克风回调包大小影响。
@@ -64,7 +64,7 @@ Linux 静态链接 OpenBLAS，macOS 使用 Accelerate；Linux 源码构建需要
 UTF-8 跨 token 拼接后再展示，暂定尾部整体替换，稳定前缀不会重复追加。
 静音等待仅保留 200 ms 预录，连续 600 ms 静音后补齐当前句并释放该句缓存。
 停止时补齐未满窗口及回滚尾部，即使恰好位于窗口边界也不丢尾字。
-取消不再发布结果；已开始的单次原生计算在后台结束。失败保留已发布预览，不返回完整转写成功。
+取消不再发布结果；已开始的单次内核计算在后台结束。失败保留已发布预览，不返回完整转写成功。
 音频不写入会话、工作区或网络请求。GUI 只负责录音、音量反馈、进度展示和草稿插入。
 
 ## 入口
@@ -82,7 +82,7 @@ UTF-8 跨 token 拼接后再展示，暂定尾部整体替换，稳定前缀不�
 - [configuration.rs](src/configuration.rs)：本机配置快照与凭据传递。
   浏览阶段只读取声明及目录缓存，不等待网络发现；完整执行配置在发送前传给服务。
 - [platform/editor.rs](src/platform/editor.rs)：外部编辑器直接接收临时草稿路径，不隐式启动 shell。
-  Windows 使用原生参数引用规则，保留路径反斜杠；含空格的程序路径用双引号包裹。Unix 保留 shell words 规则。
+  Windows 使用系统参数引用规则，保留路径反斜杠；含空格的程序路径用双引号包裹。Unix 保留 shell words 规则。
 - [directories.rs](src/directories.rs)：目标目录读取、父目录与子目录路径，不通过客户端文件系统解释远端路径。
   路径及诊断的展示统一隐藏 Windows 驱动器与 UNC 路径的 verbatim 前缀；工具参数、执行路径、
   会话身份及权限判断保留原值。工具详情按目标路径格式连接目录，不使用前端主机的路径规则。
@@ -101,7 +101,7 @@ cargo test -p orbit-client
 
 [项目总览](../../README.md)
 
-本机服务资产按客户端平台选择，Windows 使用 `.exe` 与私有命名管道，macOS 使用原生
+本机服务资产按客户端平台选择，Windows 使用 `.exe` 与私有命名管道，macOS 使用 Mach-O
 可执行文件与 Unix socket。Linux 静态远端资产独立注册；非 Linux 构建可通过
 `ORBIT_REMOTE_WORKSPACE_SERVER` 内置此资产，否则 SSH/WSL 使用显式上传或已安装服务。
 桌面 CI 为 Windows 和 macOS 同时内嵌同一次提交、匹配架构的 Linux 静态服务，

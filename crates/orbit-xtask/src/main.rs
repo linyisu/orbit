@@ -30,21 +30,21 @@ enum Task {
         #[arg(value_enum, default_value_t = Profile::Release)]
         profile: Profile,
     },
-    /// Build the desktop client and its native application package.
+    /// Build the desktop client and its application package.
     BundleGui {
         #[arg(value_enum, default_value_t = Profile::Release)]
         profile: Profile,
     },
-    /// Archive the native desktop application with its launch assets.
+    /// Archive the desktop application with its launch assets.
     ArchiveGui {
         directory: Option<PathBuf>,
         output: Option<PathBuf>,
     },
     /// Verify standalone deployment, protocol and cache reuse in Ubuntu 20.04.
     VerifyBundle { directory: Option<PathBuf> },
-    /// Verify the native client and service without a container.
+    /// Verify the client and service without a container.
     VerifyNativeBundle { directory: Option<PathBuf> },
-    /// Verify native desktop window rendering and the embedded service in isolated storage.
+    /// Verify desktop window rendering and the embedded service in isolated storage.
     VerifyGuiBundle {
         directory: Option<PathBuf>,
         /// Verify a distribution archive, which contains no separate service fixture.

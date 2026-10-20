@@ -8,8 +8,8 @@ Rust 编写的编码 Agent，提供终端界面和实验性桌面客户端。支
 
 ## 快速开始
 
-底层服务、终端与桌面客户端提供 Linux、macOS 和 Windows 原生构建，Windows 不依赖 WSL。
-桌面发布包与实际窗口启动由[构建](.github/workflows/build.yml)分平台验收。
+底层服务、终端与桌面客户端提供 Linux、macOS 和 Windows 构建，Windows 不依赖 WSL。
+桌面发布包与实际窗口启动由[Build](.github/workflows/build.yml)分平台验收。
 
 Linux 源码构建需要 Rust stable、`musl-tools` 及对应架构的 musl target；以下以 x86-64 为例：
 
@@ -26,7 +26,7 @@ macOS 安装 Rust stable 与 Xcode Command Line Tools；Windows 安装 Rust stab
 
 客户端内置同平台、同架构的工作区服务，首次构建较慢，使用时无需额外安装服务。Linux 内置 musl 静态服务，macOS 使用系统库，Windows 服务静态链接 C 运行库。发布包使用 `cargo xtask bundle`，Windows 客户端也静态链接 C 运行库。桌面客户端的依赖与启动方式见 [GUI README](crates/orbit-gui/README.md)。
 
-SSH/WSL 的自动部署目标仍为 Linux。非 Linux 构建可通过 `ORBIT_REMOTE_WORKSPACE_SERVER` 额外内置同架构 Linux 静态服务；未内置时可指定 `--upload-server` 或目标已安装的 `--server`。本机连接始终使用原生服务。
+SSH/WSL 的自动部署目标仍为 Linux。非 Linux 构建可通过 `ORBIT_REMOTE_WORKSPACE_SERVER` 额外内置同架构 Linux 静态服务；未内置时可指定 `--upload-server` 或目标已安装的 `--server`。本机使用内嵌的同平台服务。
 
 ## 使用
 
@@ -61,7 +61,7 @@ TUI / GUI → client → server → service → agent / tools / store
 | [orbit-tools](crates/orbit-tools/README.md) | Agent 工具实现 |
 | [orbit-store](crates/orbit-store/README.md) | SQLite 持久化 |
 | [orbit-syntax](crates/orbit-syntax/README.md) | 共用语法与语言识别 |
-| [orbit-build](crates/orbit-build/README.md) | 构建并内嵌原生服务与 Linux 远端资产 |
+| [orbit-build](crates/orbit-build/README.md) | 构建并内嵌服务与 Linux 远端资产 |
 | [orbit-xtask](crates/orbit-xtask/README.md) | 仓库检查与发布工具 |
 
 ## 开发
@@ -76,11 +76,11 @@ cargo test --workspace --features orbit-gui/test-support --locked
 测试使用临时数据；部分测试需要本地回环监听，真实网络测试单独标记为 ignored。
 CI 只保留两个入口：
 
-- [测试](.github/workflows/test.yml)：`main` 推送、面向 `main` 的 PR 或手动触发。
-  Linux 运行格式、依赖边界、全工作区静态检查和测试；macOS、Windows 运行原生平台回归。
+- [Tests](.github/workflows/test.yml)：`main` 推送、面向 `main` 的 PR 或手动触发。
+  Linux 运行格式、依赖边界、全工作区静态检查和测试；macOS、Windows 运行平台回归。
   保留进程回收、文件安全、本机通信、账号、GUI/TUI 和语音等责任 crate 的测试覆盖。
-- [构建](.github/workflows/build.yml)：手动触发，生成三平台 TUI、GUI Debug 包及 Windows 安装包。
-  同时验证原生服务、协议、实际窗口、Linux 容器部署及干净 Windows 主机安装与卸载。
+- [Build](.github/workflows/build.yml)：手动触发，生成三平台 TUI、GUI Debug 包及 Windows 安装包。
+  同时验证服务、协议、实际窗口、Linux 容器部署及干净 Windows 主机安装与卸载。
   SSH/WSL 所需的 Linux 服务与客户端使用同一提交，不因普通推送自动打包。
 
 不再通过提交消息标记或专用分支选择 CI 模式。

@@ -1055,7 +1055,7 @@ fn read_worktree(
                 return Err(conflict());
             }
             if file.metadata().map_err(failed)?.len() > MAX_FILE_BYTES as u64 {
-                return Err(failed("文件超过 8MiB，暂不支持原生暂存"));
+                return Err(failed("文件超过 8MiB，暂不支持暂存"));
             }
             let mut bytes = Vec::new();
             (&mut file)

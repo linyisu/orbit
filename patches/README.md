@@ -20,13 +20,13 @@ MessageScroller 提供暂停自动跟随的入口，手动展开内容时保留�
 已合并上游 `main` 的上述提交；此前两条 Orbit 专用 Codex 分支已合入并删除，历史提交完整保留。
 上游将组件脚本目录合入 `gpui-shell::components`；Orbit 仅启用所需的 QuickJS 与组件能力。
 底层 GPUI 更新为 0.3.9，WGPU 补丁同步此版本并保留符号与 Emoji 字体加载回归。
-Windows 原生平台补丁也固定到上述 fork 提交，源码、发布版来源和许可位于 fork 的
+Windows 平台补丁也固定到上述 fork 提交，源码、发布版来源和许可位于 fork 的
 `patches/gpui-pre-windows`；Orbit 通过根 Cargo patch 使用，不复制到本仓库 vendor。
 DPI 切换使用 Win32 提供的外框矩形，并以实际客户区尺寸更新渲染，避免最大化时重复扣除系统边框。
 
 SpeechWaveform 的可选 `live()` 模式在持续静音或音频中断 320 ms 后回到基线，保留默认历史波形行为。
 
-原生默认图标资源在 Debug 中也使用静态内嵌数据，安装后不读取构建机器的源码目录；
+默认图标资源在 Debug 中也使用静态内嵌数据，安装后不读取构建机器的源码目录；
 覆盖侧栏、工具栏与 Windows 窗口按钮。未注册的完整图标目录仍不会被默认打包。
 
-[Qwen 增量补丁](../vendor/qwen-asr/ORBIT_PATCH.md) 固定原生库来源，边界修复见 `qwen-asr.patch`。
+[Qwen 增量补丁](../vendor/qwen-asr/ORBIT_PATCH.md) 固定推理库来源，边界修复见 `qwen-asr.patch`。

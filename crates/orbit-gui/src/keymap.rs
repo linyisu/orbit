@@ -396,7 +396,7 @@ fn normalize(command: &Command, text: &str) -> Result<String, ValidationError> {
         ));
     }
     if matches!(first.key.as_str(), "escape" | "backspace" | "delete") && !command_modifier {
-        return Err(invalid("此按键用于原生编辑和关闭界面"));
+        return Err(invalid("此按键用于编辑和关闭界面"));
     }
     if (modifiers.control || modifiers.platform)
         && !modifiers.alt
@@ -654,7 +654,7 @@ fn protect_native(
         .any(|native| !(command.composer && native.enter) && overlapping(text, &native.text))
     {
         Err(ValidationError::Invalid(
-            "此快捷键与原生文本编辑操作冲突，请选择其它按键".into(),
+            "此快捷键与文本编辑操作冲突，请选择其它按键".into(),
         ))
     } else {
         Ok(())

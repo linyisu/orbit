@@ -1,4 +1,4 @@
-name: 构建
+name: Build
 
 on:
   workflow_dispatch:
@@ -19,7 +19,7 @@ env:
 
 jobs:
   remote-service:
-    name: Linux 服务 (${{ matrix.arch }})
+    name: Linux service (${{ matrix.arch }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     strategy:
@@ -35,12 +35,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.arch }}-unknown-linux-musl
-      - name: 安装 musl 工具链
+      - name: Install the musl toolchain
         run: sudo apt-get update && sudo apt-get install -y musl-tools
       - uses: Swatinem/rust-cache@v2
         with:
           key: remote-musl-${{ matrix.arch }}
-      - name: 构建同版本 SSH 与 WSL 服务
+      - name: Build the matching SSH and WSL service
         run: cargo build -p orbit-server --bin orbit-workspace-server --release --target ${{ matrix.arch }}-unknown-linux-musl --locked
       - uses: actions/upload-artifact@v7
         with:
@@ -69,7 +69,7 @@ jobs:
             remote-arch: x86_64
     steps:
       - uses: actions/checkout@v7
-      - name: 安装 Linux 桌面依赖
+      - name: Install Linux desktop dependencies
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
@@ -78,7 +78,7 @@ jobs:
             libssl-dev libzstd-dev libasound2-dev libvulkan-dev xvfb \
             mesa-vulkan-drivers fonts-noto-cjk fonts-noto-color-emoji
       - uses: dtolnay/rust-toolchain@stable
-      - name: 安装 Linux 服务 target
+      - name: Install Linux service target
         if: runner.os == 'Linux'
         run: rustup target add x86_64-unknown-linux-musl
       - uses: Swatinem/rust-cache@v2
@@ -89,7 +89,7 @@ jobs:
         with:
           name: remote-server-${{ matrix.remote-arch }}
           path: target/remote-services
-      - name: 选择同版本内嵌服务
+      - name: Select the matching embedded service
         shell: bash
         run: |
           echo "ORBIT_REMOTE_WORKSPACE_SERVER=$GITHUB_WORKSPACE/target/remote-services/orbit-workspace-server" >> "$GITHUB_ENV"
@@ -97,33 +97,33 @@ jobs:
             chmod +x target/remote-services/orbit-workspace-server
             echo "ORBIT_WORKSPACE_SERVER=$GITHUB_WORKSPACE/target/remote-services/orbit-workspace-server" >> "$GITHUB_ENV"
           fi
-      - name: 重建完整的 Linux 语音库
+      - name: Rebuild Linux speech libraries from complete sources
         if: runner.os == 'Linux'
         run: cargo clean -p openblas-src
-      - name: 构建 TUI Debug 程序
+      - name: Build the TUI Debug package
         run: cargo xtask bundle debug
-      - name: 验收原生 TUI 与内嵌服务
+      - name: Verify the TUI and embedded service
         run: cargo xtask verify-native-bundle target/bundle
-      - name: 验收旧 Linux 系统的服务部署
+      - name: Verify service deployment on older Linux
         if: runner.os == 'Linux'
         run: cargo xtask verify-bundle target/bundle
-      - name: 归档 TUI
+      - name: Archive the TUI
         run: cargo xtask archive target/bundle
-      - name: 构建 GUI Debug 程序
+      - name: Build the GUI Debug package
         run: cargo xtask bundle-gui debug
-      - name: 验收 Linux 原生窗口
+      - name: Verify the Linux window
         if: runner.os == 'Linux'
         run: xvfb-run -a -s '-screen 0 1280x900x24' cargo xtask verify-gui-bundle
-      - name: 验收 macOS 原生窗口
+      - name: Verify the macOS window
         if: runner.os == 'macOS'
         run: cargo xtask verify-gui-bundle
-      - name: 验收 Windows 原生窗口
+      - name: Verify the Windows window
         if: runner.os == 'Windows'
         timeout-minutes: 10
         run: .\target\debug\orbit-xtask.exe verify-gui-bundle
-      - name: 归档 GUI
+      - name: Archive the GUI
         run: cargo xtask archive-gui
-      - name: 安装 Windows 打包工具
+      - name: Install Windows packaging tools
         if: runner.os == 'Windows'
         run: |
           New-Item -ItemType Directory -Force target/installer-tools | Out-Null
@@ -136,7 +136,7 @@ jobs:
           $nsis = Join-Path $env:GITHUB_WORKSPACE 'target/installer-tools/nsis-3.13'
           "NSISDIR=$nsis" >> $env:GITHUB_ENV
           $nsis >> $env:GITHUB_PATH
-      - name: 构建 Windows Debug 安装包
+      - name: Build the Windows Debug installer
         if: runner.os == 'Windows'
         run: .\target\debug\orbit-xtask.exe installer-gui target/bundle-gui target/orbit-gui-debug-windows-x64-setup.exe
       - uses: actions/upload-artifact@v7
@@ -171,7 +171,7 @@ jobs:
           if-no-files-found: error
 
   windows-installer:
-    name: Windows 安装验收
+    name: Windows installer verification
     needs: clients
     runs-on: windows-2025
     timeout-minutes: 15
@@ -184,7 +184,7 @@ jobs:
         with:
           name: orbit-windows-installer-acceptance
           path: acceptance
-      - name: 在无源码与 Cargo 缓存的机器上安装、运行和卸载
+      - name: Install, run and uninstall without source or Cargo cache
         run: >-
           .\acceptance\orbit-xtask.exe verify-gui-installer
           package/orbit-gui-debug-windows-x64-setup.exe

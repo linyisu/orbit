@@ -26,7 +26,7 @@ cargo test -p orbit-xtask
 [项目总览](../../README.md)
 
 `bundle` 按本机平台收集可执行文件，Windows 保留 `.exe` 后缀。
-`cargo xtask verify-native-bundle target/bundle` 在临时工作区验证原生服务的握手、会话存储和
+`cargo xtask verify-native-bundle target/bundle` 在临时工作区验证服务的握手、会话存储和
 关闭，再检查客户端启动；不需要 Docker 或 WSL。Linux 容器兼容性验收仍使用 `verify-bundle`。
 默认归档名包含本机系统与架构。
 
@@ -55,10 +55,10 @@ NSIS 保持强制完整性检查，不绕过损坏文件。开始菜单启动目
 验证实际安装程序的服务连接、窗口渲染和退出，最后卸载。CI 使用全新 runner，不检出仓库或恢复 Cargo 缓存。
 安装包按用户安装到本地应用目录，提供开始菜单入口和系统卸载入口，不修改会话数据。
 验收从隔离缓存取出程序实际释放的服务，再检查完整内嵌字节、协议和关闭行为。
-CI 的[构建](../../.github/workflows/build.yml)入口手动触发，三平台分别构建 TUI 与 GUI Debug 包。
+CI 的[Build](../../.github/workflows/build.yml)入口手动触发，三平台分别构建 TUI 与 GUI Debug 包。
 内嵌的 Linux 远端服务来自同一工作流、同一提交；不跨提交复用应用产物。
-原生窗口、服务协议与干净 Windows 主机安装验收是构建流程中的必经步骤。
-普通推送只运行[测试](../../.github/workflows/test.yml)，无需使用提交消息标记选择构建模式。
+桌面窗口、服务协议与干净 Windows 主机安装验收是构建流程中的必经步骤。
+普通推送只运行[Tests](../../.github/workflows/test.yml)，无需使用提交消息标记选择构建模式。
 Debug 包仅关闭 `gpui-pre-windows` 的调试断言，使其采用上游已有的构建期内嵌着色器路径；
 Orbit 本身保持 Debug，用户机器无需 Cargo 源码、HLSL 编译工具或构建机目录。
 框架默认图标在 Debug 中同样内嵌；窗口验收检查所有注册图标均可直接读取静态资源。

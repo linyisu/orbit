@@ -13,12 +13,12 @@ cargo run -p orbit-gui --locked -- --config config.toml
 ```
 
 macOS 使用 Rust stable 与 Xcode 工具链；Windows 使用 Rust stable MSVC 与 Visual Studio C++ Build Tools。
-两者均可运行 `cargo run -p orbit-gui --locked`，本机服务原生执行，不需要 WSL。
+两者均可运行 `cargo run -p orbit-gui --locked`，服务在本机执行，不需要 WSL。
 
 支持 `--workspace`、`--model`、`--resume`、`--ssh` 与 `--wsl`，其他参数见 `--help`。
 GUI 内嵌同平台服务；Linux 使用 musl 静态服务，macOS 使用系统库，Windows 服务静态链接 C 运行库。
 CI 分发包还内嵌同一提交、同架构的 Linux 静态服务供 SSH/WSL 使用；部署在后台校验并复用目标缓存。
-Windows 原生窗口验收会最大化实际窗口并比较客户区与屏幕工作区边界，随后还原继续账号流程。
+Windows 窗口验收会最大化实际窗口并比较客户区与屏幕工作区边界，随后还原继续账号流程。
 
 ## 桌面发布包
 
@@ -35,13 +35,13 @@ Linux 安装时将程序放入 PATH，启动项放入用户 applications 目录�
 默认归档名包含桌面标记、系统与架构；归档不包含单独的服务，客户端自身已内嵌该资产。
 商店分发、开发者证书签名和 Apple 公证需另行配置发布凭据，本地临时签名不等于公证。
 
-`verify-gui-bundle` 在临时用户目录检查内嵌服务、原生协议、会话存储，等待真实窗口连接隔离会话并完成渲染，
+`verify-gui-bundle` 在临时用户目录检查内嵌服务、协议、会话存储，等待真实窗口连接隔离会话并完成渲染，
 随后关闭窗口与验收服务。配置使用编造的本机供应商，不发送模型请求。
 账号编辑验收先通过实际按钮命中区域检查左右侧栏的单击和双击，确认面板切换且窗口不缩放。
-Linux 验收需在独立 Xvfb 中运行；原生 macOS/Windows 使用 GitHub Actions 的隔离 runner。
-Windows 窗口验收不设置 HOME 或 XDG 配置变量，同时覆盖原生设置路径。
-自动测试见[测试](../../.github/workflows/test.yml)，
-原生窗口、打包与安装验收见手动触发的[构建](../../.github/workflows/build.yml)。
+Linux 验收需在独立 Xvfb 中运行；macOS/Windows 使用 GitHub Actions 的隔离 runner。
+Windows 窗口验收不设置 HOME 或 XDG 配置变量，同时覆盖系统设置路径。
+自动测试见[Tests](../../.github/workflows/test.yml)，
+桌面窗口、打包与安装验收见手动触发的[Build](../../.github/workflows/build.yml)。
 桌面构建只保留 Ubuntu 26.04、macOS 26、Windows Server 2025，编译器使用 Rust stable。
 Linux 桌面包以该构建系统的 glibc 为基线；内嵌的 Linux musl 服务仍独立验证较早系统兼容性。
 Windows 回归使用与发布包一致的显式 MSVC target 和静态 C 运行库，不要求安装 Unix shell。
@@ -104,6 +104,6 @@ Shell 入口为 [appearance/main.js](appearance/main.js)，主题位于 [appeara
 cargo test -p orbit-gui --features test-support --locked
 ```
 
-[传输测试](tests/transport.rs) 使用隔离的 [fixture 服务](tests/support/server.rs)，不连接真实模型。原生验收使用 Xvfb、临时 HOME、配置、数据库和工作区，避免操作用户桌面。
+[传输测试](tests/transport.rs) 使用隔离的 [fixture 服务](tests/support/server.rs)，不连接真实模型。界面验收使用 Xvfb、临时 HOME、配置、数据库和工作区，避免操作用户桌面。
 
 补充指令贴着输入框展示，默认在本次回复完成后逐条启动新一轮；点击“引导”才进入当前任务的安全输入边界。撤回、编辑和断线恢复仍以服务端持久队列为准。

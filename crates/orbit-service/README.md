@@ -7,7 +7,7 @@
 - [workspace/](src/workspace/)：服务生命周期、会话 actor、请求与事件分页。
 - [session.rs](src/session.rs)、[execution.rs](src/execution.rs)：会话恢复、Agent 启动与运行结果。
 - [tools.rs](src/tools.rs)、[planning.rs](src/planning.rs)、[user_input.rs](src/user_input.rs)：工具装配、计划与问答。
-- [subagents.rs](src/subagents.rs)、[side_questions.rs](src/side_questions.rs)：子任务与旁路提问。子 Agent 的原生操作与模型工具共用类型化控制入口和授权规则。
+- [subagents.rs](src/subagents.rs)、[side_questions.rs](src/side_questions.rs)：子任务与旁路提问。子 Agent 的控制操作与模型工具共用类型化控制入口和授权规则。
 - [context/](src/context/)、[extensions/](src/extensions/)：指令、记忆、技能与插件。
 - [workspace/library.rs](src/workspace/library.rs)：无会话全局管理、有界资源快照与会话应用恢复。
 

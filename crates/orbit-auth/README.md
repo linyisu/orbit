@@ -24,7 +24,7 @@ models = "auto"
 
 默认凭据目录为 `$XDG_CONFIG_HOME/orbit/auth`，未设置时使用 `~/.config/orbit/auth`。Unix 目录与文件权限分别为 `0700`、`0600`，刷新通过锁和原子替换协调。API Key 与连接配置联动提交时持有凭据锁，配置写入失败会恢复旧凭据；这不承诺跨文件的崩溃原子性。
 
-Windows 存储复用 runtime 的原生私有文件访问，校验当前用户所有权与受保护 DACL，
+Windows 存储复用 runtime 的私有文件访问，校验当前用户所有权与受保护 DACL，
 拒绝重解析点和硬链接；临时凭据在创建时即具有私有权限，原子替换后检查目录同步。
 
 ChatGPT 新登录使用 [Sign in with ChatGPT](https://developers.openai.com/siwc/token-sharing-open-source/sign-in) 的动态客户端注册，校验 ID token 后保存账号及注册身份。套餐调用需要用户授予直接使用额度的权限。旧 Codex 凭据保持原地址约束；重新授权后才迁移到公开接口。新流程尚无已接入的公开额度查询接口。
