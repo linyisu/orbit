@@ -696,7 +696,10 @@ fn page_matches(ix: usize, query: &str) -> bool {
 }
 
 fn content_column() -> Div {
-    v_flex().w_full().max_w(rems(60.))
+    v_flex()
+        .w_full()
+        .max_w(rems(60.))
+        .mx_auto()
 }
 
 fn section(title: &'static str, description: &'static str, cx: &App) -> Div {
