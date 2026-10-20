@@ -611,13 +611,14 @@ async fn disconnect_preserves_approval_and_run_duplicate_submission_does_not_rep
             .iter()
             .all(|update| update.get("Profile").is_some())
     );
-    let cursor = empty["value"]["next"].as_u64().unwrap();
+    // Background metadata can append Profile after an idle poll, making next + 1 valid.
+    // Use an unreachable cursor to test rejection independently of those updates.
     assert_eq!(
         client
             .request(json!({
                 "method": "poll",
                 "session": id,
-                "after": cursor + 1
+                "after": usize::MAX
             }))
             .await["type"],
         "error"
