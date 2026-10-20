@@ -25,11 +25,14 @@ permissions:
   actions: read
 
 concurrency:
-  group: native-desktop-${{ github.ref }}${{ contains(github.event.head_commit.message, '[window-only]') && '-window' || contains(github.event.head_commit.message, '[installer-only]') && '-installer' || '' }}
+  group: native-desktop-${{ github.ref }}${{ contains(github.event.head_commit.message, '[test-only]') && '-tests' || contains(github.event.head_commit.message, '[window-only]') && '-window' || contains(github.event.head_commit.message, '[installer-only]') && '-installer' || '' }}
   cancel-in-progress: true
 
 jobs:
   desktop:
+    if: >-
+      github.event_name != 'push' || github.ref != 'refs/heads/native-runtime-foundation'
+      || !contains(github.event.head_commit.message, '[test-only]')
     name: Desktop (${{ matrix.os }})
     strategy:
       fail-fast: false

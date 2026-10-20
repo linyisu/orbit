@@ -453,7 +453,12 @@ mod tests {
 
     #[test]
     fn reads_a_bounded_page() {
-        let tmp = tempfile::tempdir().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        #[cfg(windows)]
+        let tmp =
+            orbit_runtime::filesystem::private::temporary_directory(root.path(), "logs-").unwrap();
+        #[cfg(unix)]
+        let tmp = root;
         std::fs::write(tmp.path().join("cmd-1-2-3.stdout"), "abcdef").unwrap();
         let content = read(
             tmp.path().to_owned(),
