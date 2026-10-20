@@ -217,6 +217,7 @@ pub struct UiState {
     pub help_keys: bool,
     pub help_scroll: usize,
     pub info_dialog: Option<super::dialogs::InfoDialog>,
+    pub(super) tool_reading_position: Option<super::dialogs::ReadingPosition>,
     pub(super) management: super::management::Store,
     pub(super) usage: super::usage::State,
     pub(super) btw: super::btw::Questions,
@@ -565,6 +566,7 @@ impl UiState {
             help_keys: false,
             help_scroll: 0,
             info_dialog: None,
+            tool_reading_position: None,
             management: Default::default(),
             usage: Default::default(),
             btw: Default::default(),
@@ -634,6 +636,14 @@ impl UiState {
         self.transcript
             .push(TranscriptItem::User(prompt));
         self.begin_run();
+    }
+
+    pub(super) fn open_tool_details(&mut self, record: &orbit_client::execution::ToolRun) {
+        let mut dialog = super::dialogs::InfoDialog::tool(record, &self.workspace);
+        if let Some(position) = &self.tool_reading_position {
+            dialog.restore_position(position);
+        }
+        self.info_dialog = Some(dialog);
     }
 
     pub fn begin_run(&mut self) {

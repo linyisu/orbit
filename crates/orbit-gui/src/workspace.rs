@@ -149,7 +149,6 @@ enum MainPage {
     Conversation,
     Tasks,
     Files,
-    Review,
 }
 
 pub(crate) struct Workspace {
@@ -158,9 +157,10 @@ pub(crate) struct Workspace {
     open_tasks: Vec<WorkspaceSummary>,
     navigation_tasks: Vec<WorkspaceSummary>,
     execution: crate::execution::Execution,
-    execution_scroll: UniformListScrollHandle,
     inspector: Option<inspector::Section>,
-    inspector_state: inspector::State,
+    last_inspector: inspector::Section,
+    details_focus: FocusHandle,
+    details_panes: Entity<gpui_kit::component::resizable::ResizableState>,
     options: Options,
     runtime: Arc<tokio::runtime::Runtime>,
     backend: Option<Backend>,
@@ -212,6 +212,7 @@ pub(crate) struct Workspace {
     input_queue: Option<Entity<input_queue::InputQueue>>,
     input_queue_updates: Option<Subscription>,
     tool_output: Option<Entity<tool_output::ToolOutput>>,
+    file_preview: Option<(String, Entity<crate::file_preview::Preview>)>,
     command_search: Entity<gpui_kit::component::command::CommandState>,
     command_open: bool,
     arguments: slash::Arguments,
@@ -236,9 +237,10 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> (Entity<Conversation>, Subscription, Subscription) {
         let conversation = cx.new(Conversation::new);
-        let subscription = cx.subscribe(
+        let subscription = cx.subscribe_in(
             &conversation,
-            |view, source, request: &crate::file_preview::FileRequest, cx| {
+            window,
+            |view, source, request: &crate::file_preview::FileRequest, window, cx| {
                 if let Some(response) = request.take_response() {
                     let current = source.entity_id() == view.conversation.entity_id()
                         || view
@@ -252,6 +254,10 @@ impl Workspace {
                         .as_ref()
                         .filter(|_| current)
                         .map(|info| info.id.clone());
+                    if current && let Some(preview) = request.preview() {
+                        view.file_preview = Some(preview);
+                        view.set_inspector(Some(inspector::Section::File), window, cx);
+                    }
                     if let Some(session) = session {
                         view.command(
                             Command::Settings {
@@ -340,9 +346,10 @@ impl Workspace {
             open_tasks: Vec::new(),
             navigation_tasks: Vec::new(),
             execution: Default::default(),
-            execution_scroll: UniformListScrollHandle::new(),
             inspector: None,
-            inspector_state: inspector::State::new(cx),
+            last_inspector: inspector::Section::Overview,
+            details_focus: cx.focus_handle(),
+            details_panes: cx.new(|_| gpui_kit::component::resizable::ResizableState::default()),
             options,
             runtime,
             backend: None,
@@ -404,6 +411,7 @@ impl Workspace {
             input_queue: None,
             input_queue_updates: None,
             tool_output: None,
+            file_preview: None,
             command_search: cx
                 .new(|cx| gpui_kit::component::command::CommandState::new(window, cx)),
             command_open: false,
@@ -575,29 +583,8 @@ impl Workspace {
                     self._subscriptions
                         .extend([image_subscription, tool_subscription]);
                     self.subagent = Some((agent.clone(), conversation.clone()));
-                    let owner = cx.weak_entity();
-                    let title = format!("子 Agent · {agent}");
                     if self.visible {
-                        let width = (window.rem_size() * 48.).min(
-                            (window.viewport_size().width - window.rem_size() * 2.).max(px(0.)),
-                        );
-                        window.open_sheet(cx, move |sheet, _, _| {
-                            let owner = owner.clone();
-                            sheet
-                                .title(title.clone())
-                                .size(width)
-                                .child(
-                                    div()
-                                        .h_full()
-                                        .child(conversation.clone()),
-                                )
-                                .on_close(move |_, _, cx| {
-                                    let _ = owner.update(cx, |view, cx| {
-                                        view.subagent = None;
-                                        view.command(Command::CloseSubagent, cx);
-                                    });
-                                })
-                        });
+                        self.set_inspector(Some(inspector::Section::AgentConversation), window, cx);
                     }
                 }
                 if let Some((current, conversation)) = &self.subagent
@@ -764,6 +751,11 @@ impl Workspace {
             }
             self.question_form = None;
             self.disconnect_tool_output(cx);
+            self.tool_output = None;
+            self.file_preview = None;
+            self.inspector = None;
+            self.last_inspector = inspector::Section::Overview;
+            self.panel = None;
             if let Some(panel) = &self.input_queue {
                 panel.update(cx, |panel, cx| panel.disconnected(cx));
             }
@@ -810,9 +802,6 @@ impl Workspace {
                     files.update(cx, |files, cx| files.bind_session(info.id.clone(), cx));
                 }
                 self.review = None;
-                if self.page == MainPage::Review {
-                    self.page = MainPage::Conversation;
-                }
             }
         }
         if let Some(entry) = self

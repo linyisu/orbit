@@ -197,9 +197,9 @@ impl Workbench {
                         .ghost()
                         .small()
                         .icon(IconName::PanelRight)
-                        .accessibility_label("工作面板")
+                        .accessibility_label("会话详情")
                         .tooltip(crate::keymap::tooltip(
-                            "执行、计划、变更与 Agent",
+                            "查看会话详情",
                             "toggle_inspector",
                             cx,
                         ))

@@ -123,8 +123,8 @@ jobs:
         if: runner.os != 'Linux'
         run: |
           cargo test -p orbit-gui --features test-support --test transport --locked -- --test-threads=1
-          cargo test -p orbit-gui --bin orbit-gui --locked conversation::navigation::tests
-          cargo test -p orbit-gui --bin orbit-gui --locked preferences::tests
+          cargo test -p orbit-gui --bin orbit-gui --locked
+          cargo test -p orbit-tui --lib --locked tui::dialogs::
           cargo test -p orbit-tui --lib --locked configuration_location_is_readable
           cargo test -p orbit-tui --lib --locked tool_path_labels
           cargo test -p orbit-tui --lib --locked path_presentation_does_not

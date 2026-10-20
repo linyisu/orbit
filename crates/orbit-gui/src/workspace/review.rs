@@ -484,26 +484,6 @@ impl Render for Review {
                 h_flex()
                     .gap_2()
                     .flex_wrap()
-                    .child(
-                        Button::new("review-back")
-                            .ghost()
-                            .small()
-                            .icon(IconName::ArrowLeft)
-                            .accessibility_label("返回会话")
-                            .disabled(self.mutating())
-                            .on_click(cx.listener(|view, _, window, cx| {
-                                let _ = view.owner.update(cx, |owner, cx| {
-                                    owner.focus_composer(window, cx);
-                                });
-                            })),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .text_sm()
-                            .font_weight(FontWeight::MEDIUM)
-                            .child("变更审查"),
-                    )
                     .when_some(self.branch.clone(), |view, branch| {
                         view.child(
                             div()

@@ -104,6 +104,23 @@ impl ToolOutput {
         }
     }
 
+    #[cfg(feature = "test-support")]
+    pub(super) fn result_focus(&self, cx: &App) -> FocusHandle {
+        self.editor.focus_handle(cx)
+    }
+
+    pub(super) fn title(&self) -> String {
+        format!("{} · {}", self.tool.name, self.tool.summary())
+    }
+
+    pub(super) fn set_open(&mut self, open: bool, window: &mut Window, cx: &mut Context<Self>) {
+        self.closed = !open;
+        if open {
+            self.refresh(window, cx);
+        }
+        cx.notify();
+    }
+
     pub(super) fn belongs_to(&self, options: &Options, session: &str, workspace: &str) -> bool {
         self.options.same_host(options) && self.session == session && self.workspace == workspace
     }
@@ -325,7 +342,6 @@ impl ToolOutput {
                         cx,
                     );
                 });
-                window.close_dialog(cx);
             }
             Target::Image(path) => {
                 if !matches!(self.image, ImageContent::Idle) {
@@ -379,55 +395,15 @@ impl ToolOutput {
 }
 
 pub(super) fn present(panel: Entity<ToolOutput>, window: &mut Window, cx: &mut App) {
-    let image = matches!(
-        orbit_client::execution::details::target(&panel.read(cx).tool),
-        Some(orbit_client::execution::details::Target::Image(_))
-    );
     panel.update(cx, |panel, cx| {
-        panel.closed = false;
-        panel.refresh(window, cx);
-        if image {
-            // The caller may still lease Workspace; resolve the image after that update ends.
+        panel.set_open(true, window, cx);
+        if matches!(
+            orbit_client::execution::details::target(&panel.tool),
+            Some(orbit_client::execution::details::Target::Image(_))
+        ) {
             cx.defer_in(window, |panel, window, cx| panel.inspect_target(window, cx));
         }
     });
-    let build =
-        move |dialog: gpui_kit::component::dialog::Dialog, window: &mut Window, cx: &mut App| {
-            let close = panel.downgrade();
-            let height = (window.rem_size() * if image { 16. } else { 46. })
-                .min(window.viewport_size().height * 0.8);
-            let content = panel.clone();
-            dialog
-                .title(panel.read(cx).tool.name.clone())
-                .h(height)
-                // The editor owns scrolling; Dialog's ordinary child slot adds
-                // a second scroll viewport around the entire inspector.
-                .content(move |body, _, _| {
-                    body.size_full()
-                        .min_h_0()
-                        .min_w_0()
-                        .overflow_hidden()
-                        .child(content.clone())
-                })
-                .on_ok(|_, _, _| false)
-                .on_close(move |_, _, cx| {
-                    let _ = close.update(cx, |panel, cx| {
-                        panel.closed = true;
-                        cx.notify();
-                    });
-                })
-        };
-    if image {
-        window.open_dialog(cx, move |dialog, window, cx| {
-            build(dialog, window, cx)
-                .width((window.rem_size() * 28.).min(crate::dialog::width(window)))
-                .margin_top(window.viewport_size().height * 0.1)
-                .p_4()
-                .gap_4()
-        });
-    } else {
-        crate::dialog::open(window, cx, build);
-    }
 }
 
 impl Render for ToolOutput {
@@ -492,10 +468,6 @@ impl Render for ToolOutput {
             .min_w_0()
             .min_h_0()
             .gap_3()
-            // Forward the editor's unhandled Escape to the native dialog close path.
-            .on_action(|_: &gpui_kit::component::input::Escape, window, cx| {
-                window.dispatch_action(Box::new(gpui_kit::base::actions::Cancel), cx)
-            })
             .when(self.request.layout() == RequestLayout::Body, |view| {
                 view.child(
                     v_flex()

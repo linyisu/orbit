@@ -71,6 +71,22 @@ impl Workbench {
         ))
     }
 
+    #[cfg(feature = "test-support")]
+    pub(crate) fn check_details(
+        &mut self,
+        step: u8,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> anyhow::Result<bool> {
+        let task = self
+            .tasks
+            .iter()
+            .find(|task| !task.closed && task.view.read(cx).key() == self.active)
+            .ok_or_else(|| anyhow::anyhow!("detail probe has no active session"))?;
+        task.view
+            .update(cx, |view, cx| view.check_details(step, window, cx))
+    }
+
     pub(crate) fn backend_ready(&self, cx: &App) -> bool {
         self.tasks.iter().any(|task| {
             !task.closed
@@ -744,7 +760,17 @@ impl Render for Workbench {
                 )
                 .into_any_element()
         };
-        let body = if self.settings.is_none() && self.sidebar.read(cx).visible() {
+        let hide_navigation = self
+            .tasks
+            .iter()
+            .find(|task| !task.closed && task.view.read(cx).key() == self.active)
+            .is_some_and(|task| {
+                task.view
+                    .read(cx)
+                    .hides_navigation(window.viewport_size().width / window.rem_size())
+            });
+        let body = if self.settings.is_none() && self.sidebar.read(cx).visible() && !hide_navigation
+        {
             h_resizable("window-panes")
                 .with_state(&self.panes)
                 .on_resize(|state, window, cx| {

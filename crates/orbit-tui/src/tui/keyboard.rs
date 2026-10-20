@@ -64,8 +64,8 @@ pub(super) fn keyboard_action(state: &mut UiState, event: Event, busy: bool) -> 
                         _ => None,
                     })
                 {
-                    state.info_dialog =
-                        Some(dialogs::InfoDialog::tool(&row.record(), &state.workspace));
+                    let record = row.record();
+                    state.open_tool_details(&record);
                 }
                 return Action::None;
             }

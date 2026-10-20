@@ -1,4 +1,4 @@
-//! Stable, model-free evidence for all four work-panel sections.
+//! Generated, model-free tool, plan, change and subtask evidence.
 use serde_json::{Value, json};
 use std::{collections::VecDeque, path::Path};
 
@@ -6,7 +6,7 @@ pub(super) fn seed(workspace: &str) -> (Vec<Value>, VecDeque<Value>, Value) {
     let mut history = vec![
         json!({
             "Started": {
-                "prompt": "检查工作面板的执行状态、计划、文件变更和协作任务。"
+                "prompt": "检查会话详情的执行状态、计划、文件变更和协作任务。"
             }
         }),
         json!({
@@ -19,7 +19,7 @@ pub(super) fn seed(workspace: &str) -> (Vec<Value>, VecDeque<Value>, Value) {
         json!({
             "Agent": {
                 "Model": {
-                    "TextDelta": "已检查项目入口与模块依赖，正在验证工作面板的交互。\n\n右侧保留本轮执行证据：命令结果、文件变更和协作任务都可以直接打开。"
+                    "TextDelta": "已检查项目入口与模块依赖，正在验证会话详情的交互。\n\n右侧保留本轮执行证据：命令结果、文件变更和协作任务都可以直接打开。"
                 }
             }
         }),
@@ -92,13 +92,13 @@ pub(super) fn seed(workspace: &str) -> (Vec<Value>, VecDeque<Value>, Value) {
             "inspector-docs",
             "WriteFile",
             json!({
-                "path": "docs/界面设计/工作面板交互规范.md"
+                "path": "docs/界面设计/会话详情交互规范.md"
             }),
             "已补充使用说明。".into(),
             json!([{
-                "path": "docs/界面设计/工作面板交互规范.md",
+                "path": "docs/界面设计/会话详情交互规范.md",
                 "before": null,
-                "after": "# 工作面板\n"
+                "after": "# 会话详情\n"
             }]),
         ),
     ] {
@@ -147,7 +147,7 @@ pub(super) fn seed(workspace: &str) -> (Vec<Value>, VecDeque<Value>, Value) {
         }));
     }
     for (id, role, status, task) in [
-        ("child", "explore", "completed", "梳理工作面板的数据来源"),
+        ("child", "explore", "completed", "梳理会话详情的数据来源"),
         (
             "child-running",
             "explore",
@@ -245,8 +245,8 @@ pub(super) fn seed(workspace: &str) -> (Vec<Value>, VecDeque<Value>, Value) {
             "id": "inspector-plan",
             "workspace": workspace,
             "revision": 2,
-            "title": "完善工作面板的执行证据与交互",
-            "markdown": "## 工作面板\n\n1. 统一工具状态和命令摘要。\n2. 保留计划、文件变更和协作任务的直接入口。\n3. 验证窄窗口、大字体、滚动和键盘操作。",
+            "title": "完善会话详情的执行证据与交互",
+            "markdown": "## 会话详情\n\n1. 统一工具状态和命令摘要。\n2. 保留计划、文件变更和协作任务的直接入口。\n3. 验证窄窗口、大字体、滚动和键盘操作。",
             "steps": [
                 "统一工具状态和命令摘要",
                 "保留计划、文件变更和协作任务的直接入口",

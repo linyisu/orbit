@@ -64,7 +64,14 @@ fn main() -> anyhow::Result<()> {
             workspace::bind_keys(cx);
             conversation::bind_keys(cx);
             // Window-system geometry is the physical boundary; content uses rem.
-            let bounds = Bounds::centered(None, size(px(1180.), px(800.)), cx);
+            let bounds = if cfg!(feature = "test-support")
+                && smoke_test.is_some()
+                && std::env::var_os("ORBIT_GUI_DETAILS_PROBE").is_some()
+            {
+                Bounds::new(point(px(0.), px(0.)), size(px(1180.), px(800.)))
+            } else {
+                Bounds::centered(None, size(px(1180.), px(800.)), cx)
+            };
             let result = gpui_kit::open_window(
                 WindowOptions {
                     window_bounds: Some(WindowBounds::Windowed(bounds)),
@@ -167,7 +174,9 @@ fn smoke_frame(
             || view
                 .upgrade()
                 .is_some_and(|view| view.read(cx).ready_for_input(cx));
-        if !ready {
+        let details_probe =
+            cfg!(feature = "test-support") && std::env::var_os("ORBIT_GUI_DETAILS_PROBE").is_some();
+        if !ready && (!details_probe || frame == 0) {
             smoke_frame(
                 report,
                 0,
@@ -177,6 +186,79 @@ fn smoke_frame(
                 account_edit_verified,
             );
             return;
+        }
+        #[cfg(feature = "test-support")]
+        if details_probe {
+            if matches!(frame, 1 | 4 | 6 | 8..=12)
+                && let Some(directory) = std::env::var_os("ORBIT_GUI_CAPTURE_DIR")
+            {
+                let directory = std::path::PathBuf::from(directory);
+                let _ = std::fs::create_dir_all(&directory);
+                if cfg!(target_os = "linux")
+                    && let Ok(display) = std::env::var("DISPLAY")
+                {
+                    let _ = std::process::Command::new("ffmpeg")
+                        .args([
+                            "-nostdin",
+                            "-loglevel",
+                            "error",
+                            "-y",
+                            "-f",
+                            "x11grab",
+                            "-draw_mouse",
+                            "0",
+                            "-video_size",
+                            "1600x1000",
+                            "-i",
+                        ])
+                        .arg(display)
+                        .args(["-frames:v", "1"])
+                        .arg(directory.join(format!("details-{frame}.png")))
+                        .stdout(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::null())
+                        .status();
+                }
+            }
+            match view.update(cx, |view, cx| view.check_details(frame, window, cx)) {
+                Ok(Ok(true)) => {}
+                Ok(Ok(false)) => {
+                    if frame == 9 {
+                        window.dispatch_event(
+                            PlatformInput::KeyDown(KeyDownEvent {
+                                keystroke: Keystroke::parse("escape").expect("static Escape key"),
+                                is_held: false,
+                                prefer_character_input: false,
+                            }),
+                            cx,
+                        );
+                    }
+                    let handle = window.window_handle();
+                    cx.spawn(async move |cx| {
+                        cx.background_executor()
+                            .timer(std::time::Duration::from_millis(300))
+                            .await;
+                        let _ = handle.update(cx, |_, window, _| {
+                            smoke_frame(
+                                report,
+                                frame + 1,
+                                view,
+                                window,
+                                account_check,
+                                account_edit_verified,
+                            );
+                            window.refresh();
+                        });
+                    })
+                    .detach();
+                    window.refresh();
+                    return;
+                }
+                error => {
+                    eprintln!("Detail presentation acceptance failed: {error:?}");
+                    cx.quit();
+                    return;
+                }
+            }
         }
         if account_check.is_some() && frame == 0 {
             smoke_frame(
@@ -274,6 +356,7 @@ fn smoke_frame(
             "configuration_required": configuration_required,
             "embedded_icons": assets::embedded_icon_count().unwrap_or_default(),
             "account_edit_verified": account_edit_verified,
+            "details_verified": details_probe,
         });
         let task = cx
             .background_executor()

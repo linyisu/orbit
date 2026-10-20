@@ -31,6 +31,16 @@ pub(super) struct Header {
     copied: Option<(Pane, Instant)>,
 }
 
+#[derive(Debug)]
+pub(in crate::tui) struct ReadingPosition {
+    id: String,
+    generation: u64,
+    stream: details::Stream,
+    scroll: usize,
+    request_scroll: usize,
+    page_scrolls: std::collections::BTreeMap<String, usize>,
+}
+
 impl Header {
     pub(super) fn content(&self, index: usize) -> String {
         self.retained
@@ -56,6 +66,41 @@ impl Header {
 }
 
 impl InfoDialog {
+    pub(in crate::tui) fn reading_position(&self) -> Option<ReadingPosition> {
+        let header = self.tool_header.as_ref()?;
+        Some(ReadingPosition {
+            id: header.record.id.clone(),
+            generation: header.record.generation,
+            stream: *header.streams.get(self.selected_page)?,
+            scroll: self.scroll,
+            request_scroll: header.scroll,
+            page_scrolls: self.page_scrolls.clone(),
+        })
+    }
+
+    pub(in crate::tui) fn restore_position(&mut self, position: &ReadingPosition) {
+        let Some(header) = &mut self.tool_header else {
+            return;
+        };
+        if header.record.id != position.id || header.record.generation != position.generation {
+            return;
+        }
+        let Some(index) = header
+            .streams
+            .iter()
+            .position(|stream| *stream == position.stream)
+        else {
+            return;
+        };
+        header.select_result();
+        header.scroll = position.request_scroll;
+        self.content = header.content(index);
+        self.selected_page = index;
+        self.scroll = position.scroll;
+        self.page_scrolls = position.page_scrolls.clone();
+        self.max_scroll = usize::MAX;
+    }
+
     pub(crate) fn tool(record: &ToolRun, workspace: &str) -> Self {
         let mut dialog = Self::new(&record.name, String::new());
         dialog.source = Some(ReportSource::Tool(record.id.clone()));
@@ -89,9 +134,8 @@ impl InfoDialog {
             .copied();
         let follow_log = record.name == "Exec"
             && matches!(
-                header.record.status,
-                orbit_client::execution::ToolStatus::Running
-                    | orbit_client::execution::ToolStatus::Background
+                previous,
+                Some(details::Stream::Stdout | details::Stream::Stderr)
             )
             && self.scroll >= self.max_scroll;
         header.record = record.clone();
@@ -449,7 +493,7 @@ impl InfoDialog {
             Paragraph::new(header.icon(Pane::Result)).style(super::super::components::accent()),
             header.copy_result,
         );
-        let mut actions = "Tab 切页 · Y ⧉ · Alt+←/→ 切换调用 · Esc 关闭".to_owned();
+        let mut actions = "Tab 切页 · End 最新 · Y ⧉ · Alt+←/→ 切换调用 · Esc 关闭".to_owned();
         if request_body {
             actions = format!("P 调用/结果 · {actions}");
         }
@@ -668,6 +712,70 @@ mod tests {
             details::Stream::Stderr.label()
         );
         assert_eq!(dialog.content, "error\n");
+    }
+
+    #[test]
+    fn pages_restore_reading_position_and_escape_closes_from_parameters() {
+        let mut dialog = InfoDialog::tool(&record(), "/generated");
+        draw(&mut dialog, 90, 30);
+        let key = |code| Event::Key(KeyEvent::new(code, KeyModifiers::NONE));
+        dialog.handle(&key(KeyCode::PageDown));
+        let position = dialog.scroll;
+        assert!(position > 0);
+        dialog.handle(&key(KeyCode::Tab));
+        draw(&mut dialog, 90, 30);
+        dialog.handle(&key(KeyCode::BackTab));
+        draw(&mut dialog, 90, 30);
+        assert_eq!(dialog.scroll, position);
+        dialog.handle(&key(KeyCode::Char('p')));
+        assert!(dialog.handle(&key(KeyCode::Esc)));
+    }
+
+    #[test]
+    fn reopening_a_tool_restores_its_page_and_position_without_reusing_requests() {
+        let record = record();
+        let mut dialog = InfoDialog::tool(&record, "");
+        draw(&mut dialog, 90, 30);
+        dialog.scroll = 18;
+        let position = dialog.reading_position().unwrap();
+        let mut reopened = InfoDialog::tool(&record, "");
+        reopened.restore_position(&position);
+        draw(&mut reopened, 90, 30);
+        assert_eq!(reopened.scroll, 18);
+        let mut other = record.clone();
+        other.generation += 1;
+        let mut different = InfoDialog::tool(&other, "");
+        different.restore_position(&position);
+        assert_eq!(different.scroll, 0);
+    }
+
+    #[test]
+    fn completed_logs_follow_only_when_the_reader_is_at_the_bottom() {
+        let mut record = record();
+        let mut dialog = InfoDialog::tool(&record, "");
+        draw(&mut dialog, 90, 30);
+        let key = |code| Event::Key(KeyEvent::new(code, KeyModifiers::NONE));
+        dialog.handle(&key(KeyCode::End));
+        record.output = Some(
+            record
+                .output
+                .unwrap()
+                .replace("first", "longer first"),
+        );
+        dialog.update_tool(&record);
+        draw(&mut dialog, 90, 30);
+        assert_eq!(dialog.scroll, dialog.max_scroll);
+        dialog.handle(&key(KeyCode::PageUp));
+        let position = dialog.scroll;
+        record.output = Some(
+            record
+                .output
+                .unwrap()
+                .replace("longer first", "even longer first"),
+        );
+        dialog.update_tool(&record);
+        draw(&mut dialog, 90, 30);
+        assert_eq!(dialog.scroll, position);
     }
 
     #[test]

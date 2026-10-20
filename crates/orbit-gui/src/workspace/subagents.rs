@@ -3,6 +3,7 @@ use super::*;
 use gpui_kit::component::{
     IndexPath,
     list::{List, ListDelegate, ListItem, ListState},
+    scroll::ScrollableElement,
     spinner::Spinner,
     text::TextViewState,
 };
@@ -60,7 +61,7 @@ impl Workspace {
             panel
         };
         panel.update(cx, |panel, _| panel.open = true);
-        present(panel.clone(), window, cx);
+        self.set_inspector(Some(inspector::Section::Agents), window, cx);
         panel
             .read(cx)
             .list
@@ -79,6 +80,10 @@ impl Workspace {
 }
 
 impl ChildAgents {
+    pub(super) fn set_open(&mut self, open: bool) {
+        self.open = open;
+    }
+
     fn new(
         owner: WeakEntity<Workspace>,
         options: Options,
@@ -822,30 +827,9 @@ impl ChildAgents {
     }
 }
 
-fn present(panel: Entity<ChildAgents>, window: &mut Window, cx: &mut App) {
-    window.open_sheet(cx, move |sheet, window, cx| {
-        let close = panel.downgrade();
-        // The native Sheet owns the body's scroll viewport and the fixed
-        // composer footer. Rendering never reads or updates Workspace.
-        let composer = panel.update(cx, |panel, cx| panel.composer(window, cx));
-        sheet
-            .title("已委派的子 Agent")
-            .size(
-                (window.rem_size() * 48.)
-                    .min((window.viewport_size().width - window.rem_size() * 2.).max(px(0.))),
-            )
-            .child(panel.clone())
-            .when_some(composer, |sheet, composer| sheet.footer(composer))
-            .on_close(move |_, _, cx| {
-                // Dismissing navigation never cancels a child or discards a
-                // message draft; pending mutation receipts still reconcile.
-                let _ = close.update(cx, |panel, _| panel.open = false);
-            })
-    });
-}
-
 impl Render for ChildAgents {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let composer = self.composer(window, cx);
         let pending = self.requests.pending.is_some();
         let refreshing = matches!(self.requests.pending, Some(Operation::Refresh));
         let focus = self.list.focus_handle(cx);
@@ -856,7 +840,7 @@ impl Render for ChildAgents {
         let compact = window.viewport_size().height < window.rem_size() * 40.;
         let list_height = if compact { rems(5.) } else { rems(12.) };
         let list_max_height = window.viewport_size().height * if compact { 0.2 } else { 0.3 };
-        v_flex()
+        let body = v_flex()
             .id("child-agent-controls")
             .tab_group()
             .w_full()
@@ -1016,6 +1000,28 @@ impl Render for ChildAgents {
                         .text_sm()
                         .text_color(cx.theme().muted_foreground)
                         .child("当前会话尚未委派子 Agent。"),
+                )
+            });
+        v_flex()
+            .size_full()
+            .min_w_0()
+            .min_h_0()
+            .child(
+                div()
+                    .id("child-agent-scroll")
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scrollbar()
+                    .px_3()
+                    .child(body),
+            )
+            .when_some(composer, |view, composer| {
+                view.child(
+                    div()
+                        .p_3()
+                        .border_t_1()
+                        .border_color(cx.theme().border)
+                        .child(composer),
                 )
             })
     }

@@ -434,7 +434,7 @@ impl Workspace {
         &mut self,
         title: String,
         text: String,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let owner = cx.weak_entity();
@@ -444,7 +444,9 @@ impl Workspace {
             panel.update(cx, |panel, cx| panel.set(text, cx));
             return;
         }
+        self.set_inspector(None, window, cx);
         self.panel = Some(cx.new(|cx| panel::Panel::new(title, text, owner, cx)));
+        self.details_focus.focus(window, cx);
         cx.notify();
     }
 
@@ -590,122 +592,16 @@ impl Workspace {
     }
 
     pub(super) fn show_plan(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let owner = cx.weak_entity();
-        let generation = self.planning.generation;
-        let Some(plan) = &self.planning.plan else {
-            crate::dialog::open(window, cx, move |dialog, _, _| {
-                let owner = owner.clone();
-                dialog
-                    .title("计划")
-                    .child("进入计划模式后，Agent 会先分析并提交方案，批准后再执行。")
-                    .footer(
-                        Button::new("enter-plan")
-                            .label("进入计划模式")
-                            .on_click(move |_, window, cx| {
-                                let _ = owner.update(cx, |view, cx| {
-                                    view.plan_action(plan::Action::Enter, cx)
-                                });
-                                window.close_dialog(cx);
-                            }),
-                    )
-            });
-            return;
-        };
-        let decision = self.plan_decision();
-        if let Some(decision) = &decision {
-            self.attention.present(decision.clone());
+        if let Some(decision) = self.plan_decision() {
+            self.attention.present(decision);
         }
-        let title = plan.title.clone();
-        let markdown = plan.markdown.clone();
-        // SubmitPlan waits inside the active run for this decision. Busy is
-        // expected here; the service validates the generation and file state.
-        let reviewable =
-            self.planning.mode == plan::WorkMode::Plan && plan.status == plan::Status::Review;
-        crate::dialog::open(window, cx, move |dialog, window, cx| {
-            let approve = owner.clone();
-            let feedback = owner.clone();
-            let close = owner.clone();
-            let decision = decision.clone();
-            dialog
-                .on_ok(|_, _, _| false)
-                .on_close(move |_, _, cx| {
-                    if let Some(decision) = &decision {
-                        let _ = close.update(cx, |view, _| view.attention.dismiss(decision));
-                    }
-                })
-                .title(title.clone())
-                .child(
-                    div()
-                        .id("plan-body")
-                        .max_h(crate::dialog::body_height(window))
-                        .overflow_y_scroll()
-                        .child(
-                            TextView::markdown("plan", markdown.clone())
-                                .style(crate::theme::document_style(cx)),
-                        ),
-                )
-                .footer(
-                    h_flex()
-                        .gap_2()
-                        .justify_end()
-                        .child(
-                            Button::new("plan-feedback")
-                                .label("修改意见…")
-                                .on_click(move |_, window, cx| {
-                                    window.close_dialog(cx);
-                                    let _ = feedback.update(cx, |view, cx| {
-                                        if let Some(key) = view.plan_decision() {
-                                            view.attention.dismiss(&key);
-                                        }
-                                        if let Some(info) = &view.info {
-                                            let session = info.id.clone();
-                                            view.prompt(
-                                                ("修改计划", "修改意见"),
-                                                "",
-                                                "提交意见",
-                                                move |text| {
-                                                    Ok(Request::Plan {
-                                                        session: session.clone(),
-                                                        action: plan::Action::Feedback {
-                                                            generation,
-                                                            text,
-                                                        },
-                                                    })
-                                                },
-                                                window,
-                                                cx,
-                                            );
-                                        }
-                                    });
-                                }),
-                        )
-                        .child(
-                            Button::new("approve-plan")
-                                .primary()
-                                .label("批准并执行")
-                                .disabled(!reviewable)
-                                .on_click(move |_, window, cx| {
-                                    let _ = approve.update(cx, |view, cx| {
-                                        if let Some(key) = view.plan_decision() {
-                                            view.attention.dismiss(&key);
-                                        }
-                                        view.plan_action(plan::Action::Approve { generation }, cx)
-                                    });
-                                    window.close_dialog(cx);
-                                }),
-                        ),
-                )
-        });
+        self.set_inspector(Some(inspector::Section::Plan), window, cx);
     }
 
     pub(super) fn track_feedback(&mut self, update: &Update, cx: &mut Context<Self>) {
         match update {
             Update::Started { presentation, .. } => {
                 self.replaying = presentation.replayed;
-                if !presentation.compact {
-                    self.inspector_state.reset();
-                    self.execution_scroll = UniformListScrollHandle::new();
-                }
             }
             Update::Agent(event) => {
                 if let Some(used) = self.context_usage.observe(

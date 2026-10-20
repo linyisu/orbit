@@ -229,7 +229,7 @@ static COMMANDS: &[Command] = &[
     ),
     command!(
         "toggle_inspector",
-        "显示或隐藏检查器",
+        "显示或隐藏会话详情",
         "ctrl-shift-e",
         "工作区",
         workspace::ToggleInspector

@@ -1,6 +1,6 @@
-//! Read-only attachment dialogs. Session reads are routed by the owning workspace.
+//! Read-only attachment views. Session reads are routed by the owning workspace.
 use gpui_kit::component::{
-    ActiveTheme, Sizable, WindowExt,
+    ActiveTheme, Sizable,
     button::{Button, ButtonVariants},
     h_flex,
     input::{Editor, EditorState},
@@ -21,6 +21,7 @@ type FileResponse = oneshot::Sender<Result<Response, String>>;
 pub(crate) struct FileRequest {
     path: String,
     response: Arc<Mutex<Option<FileResponse>>>,
+    preview: Option<(String, Entity<Preview>)>,
 }
 
 impl FileRequest {
@@ -28,11 +29,16 @@ impl FileRequest {
         Self {
             path,
             response: Arc::new(Mutex::new(Some(response))),
+            preview: None,
         }
     }
 
     pub(crate) fn path(&self) -> &str {
         &self.path
+    }
+
+    pub(crate) fn preview(&self) -> Option<(String, Entity<Preview>)> {
+        self.preview.clone()
     }
 
     pub(crate) fn take_response(&self) -> Option<FileResponse> {
@@ -53,7 +59,7 @@ enum PreviewState {
     Unavailable(String),
 }
 
-struct Preview {
+pub(crate) struct Preview {
     state: PreviewState,
     _load: Task<()>,
 }
@@ -76,27 +82,28 @@ pub(crate) fn open(
             .map(FilePreview::from_bytes)
             .map_err(|error| error.to_string())
     });
-    present(file.name, read, window, cx);
-    FileRequest::new(file.path, response)
+    let preview = preview(read, window, cx);
+    let mut request = FileRequest::new(file.path, response);
+    request.preview = Some((file.name, preview));
+    request
 }
 
 /// Draft attachments belong to the desktop host until submission.
-pub(crate) fn open_path(name: String, path: PathBuf, window: &mut Window, cx: &mut App) {
+pub(crate) fn open_path(path: PathBuf, window: &mut Window, cx: &mut App) -> Entity<Preview> {
     let read = cx.background_spawn(async move {
         orbit_client::attachments::read_file(&path)
             .map(FilePreview::from_bytes)
             .map_err(|error| error.to_string())
     });
-    present(name, read, window, cx);
+    preview(read, window, cx)
 }
 
-fn present(
-    name: String,
+fn preview(
     read: Task<Result<FilePreview, String>>,
     window: &mut Window,
     cx: &mut App,
-) {
-    let preview = cx.new(|cx: &mut Context<Preview>| Preview {
+) -> Entity<Preview> {
+    cx.new(|cx: &mut Context<Preview>| Preview {
         state: PreviewState::Loading,
         _load: cx.spawn_in(window, async move |owner, cx| {
             let result = read.await;
@@ -131,17 +138,11 @@ fn present(
                 cx.notify();
             });
         }),
-    });
-    window.open_dialog(cx, move |dialog, window, _| {
-        dialog
-            .title(name.clone())
-            .w(window.rem_size() * 48.)
-            .child(preview.clone())
-    });
+    })
 }
 
 impl Render for Preview {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         match &self.state {
             PreviewState::Loading => h_flex()
                 .gap_2()
@@ -159,11 +160,13 @@ impl Render for Preview {
             } => {
                 let source = editor.clone();
                 v_flex()
-                    .w_full()
+                    .size_full()
                     .min_w_0()
+                    .min_h_0()
                     .gap_2()
                     .child(
                         h_flex()
+                            .flex_shrink_0()
                             .gap_2()
                             .child(
                                 div()
@@ -187,10 +190,12 @@ impl Render for Preview {
                             ),
                     )
                     .child(
-                        Editor::new(editor)
-                            .readonly(true)
-                            .h(window.viewport_size().height * 0.5)
-                            .aria_label("附件文本，只读"),
+                        div().flex_1().min_h_0().child(
+                            Editor::new(editor)
+                                .readonly(true)
+                                .h_full()
+                                .aria_label("附件文本，只读"),
+                        ),
                     )
                     .into_any_element()
             }

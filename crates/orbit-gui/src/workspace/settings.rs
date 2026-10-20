@@ -37,7 +37,7 @@ const PAGES: [(&str, IconName, &str); 8] = [
     (
         "快捷键",
         IconName::Command,
-        "快捷键 keyboard Enter Ctrl 发送 换行 新任务 搜索 切换 聚焦 设置 工作面板",
+        "快捷键 keyboard Enter Ctrl 发送 换行 新任务 搜索 切换 聚焦 设置 会话详情",
     ),
     (
         "高级 Agent",

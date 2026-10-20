@@ -113,7 +113,8 @@ impl Workspace {
         }
         self.dictation
             .update(cx, |dictation, cx| dictation.cancel(window, cx));
-        self.page = MainPage::Review;
+        self.page = MainPage::Conversation;
+        self.set_inspector(Some(inspector::Section::Review), window, cx);
         if let Some(review) = &self.review {
             review.update(cx, |review, cx| {
                 review.activate(path, cx);
@@ -519,12 +520,10 @@ impl Workspace {
 
     pub(crate) fn focus_composer(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.page = MainPage::Conversation;
-        if window.viewport_size().width < window.rem_size() * 72. {
+        if inspector::compact(window.viewport_size().width / window.rem_size()) {
             // At this width the accessory replaces the conversation, including
             // its composer. Returning to the conversation must reveal it first.
-            self.panel = None;
-            self.inspector = None;
-            self.watch_agents(cx);
+            self.set_inspector(None, window, cx);
         }
         self.focus_page(window, cx);
         cx.notify();
@@ -535,7 +534,7 @@ impl Workspace {
             MainPage::Conversation
                 if self.info.is_none()
                     || (self.opening && !self.recovery.is_active())
-                    || (window.viewport_size().width < window.rem_size() * 72.
+                    || (inspector::compact(window.viewport_size().width / window.rem_size())
                         && (self.panel.is_some() || self.inspector.is_some()))
                     || self
                         .question_form
@@ -555,13 +554,6 @@ impl Workspace {
                     self.focus.focus(window, cx);
                 }
             }
-            MainPage::Review => {
-                if let Some(review) = &self.review {
-                    review.update(cx, |review, cx| review.focus(window, cx));
-                } else {
-                    self.focus.focus(window, cx);
-                }
-            }
             MainPage::Tasks => self.focus.focus(window, cx),
         }
     }
@@ -573,7 +565,7 @@ impl Workspace {
         let hidden_composer = self.page != MainPage::Conversation
             || self.info.is_none()
             || (self.opening && !self.recovery.is_active())
-            || (window.viewport_size().width < window.rem_size() * 72.
+            || (inspector::compact(window.viewport_size().width / window.rem_size())
                 && (self.panel.is_some() || self.inspector.is_some()))
             || self
                 .question_form
@@ -602,16 +594,24 @@ impl Workspace {
     }
 
     pub(crate) fn toggle_inspector(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let section = if self.inspector.is_some() {
+        let section = if self.details_visible() {
             None
         } else {
-            Some(inspector::Section::Execution)
+            Some(self.last_inspector)
         };
         self.set_inspector(section, window, cx);
     }
 
     pub(crate) fn inspector_visible(&self) -> bool {
-        self.inspector.is_some()
+        self.details_visible()
+    }
+
+    pub(crate) fn details_visible(&self) -> bool {
+        self.inspector.is_some() || self.panel.is_some()
+    }
+
+    pub(crate) fn hides_navigation(&self, width_rem: f32) -> bool {
+        inspector::hide_navigation(width_rem, self.details_visible())
     }
 
     pub(super) fn set_inspector(
@@ -620,21 +620,51 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if section.is_none()
+            && self
+                .panel
+                .as_ref()
+                .is_some_and(|panel| panel.read(cx).title() == "旁路提问")
+            && let Some(info) = &self.info
+        {
+            self.command(
+                Command::Request(Request::CloseQuestions {
+                    session: info.id.clone(),
+                }),
+                cx,
+            );
+        }
+        if self.inspector == Some(inspector::Section::Plan)
+            && section != self.inspector
+            && let Some(key) = self.plan_decision()
+        {
+            self.attention.dismiss(&key);
+        }
+        if self.inspector == Some(inspector::Section::AgentConversation)
+            && section != self.inspector
+        {
+            self.command(Command::CloseSubagent, cx);
+        }
+        if let Some(panel) = &self.child_agents {
+            panel.update(cx, |panel, _| {
+                panel.set_open(section == Some(inspector::Section::Agents))
+            });
+        }
+        if let Some(panel) = &self.tool_output {
+            panel.update(cx, |panel, cx| {
+                panel.set_open(section == Some(inspector::Section::Tool), window, cx)
+            });
+        }
+        if let Some(section) = section {
+            self.last_inspector = section;
+        }
         self.inspector = section;
         self.watch_agents(cx);
         self.panel = None;
         if self.page == MainPage::Conversation {
-            if self.inspector == Some(inspector::Section::Execution) {
-                self.inspector_state
-                    .focus
-                    .focus(window, cx);
-            } else if self.inspector.is_some()
-                && window.viewport_size().width < window.rem_size() * 72.
-            {
-                // The compact inspector replaces the composer. Sheets opened
-                // from it must restore a focus target that remains visible.
-                self.focus.focus(window, cx);
-            } else if self.inspector.is_none() {
+            if self.inspector.is_some() {
+                self.details_focus.focus(window, cx);
+            } else {
                 self.focus_page(window, cx);
             }
         }

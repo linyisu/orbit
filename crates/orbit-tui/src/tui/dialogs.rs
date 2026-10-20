@@ -12,6 +12,7 @@ use super::{ModelOption, app::UiState, commands::COMMANDS, icons};
 use crate::marketplaces::{Marketplace, PluginPackage};
 
 mod tool;
+pub(super) use tool::ReadingPosition;
 
 #[derive(Debug)]
 pub struct SessionPicker {
@@ -717,6 +718,7 @@ pub struct InfoDialog {
     pages: Vec<ReportPage>,
     selected_page: usize,
     page_areas: Vec<(Rect, usize)>,
+    page_scrolls: std::collections::BTreeMap<String, usize>,
     target: Option<orbit_client::execution::details::Target>,
     tool_header: Option<tool::Header>,
 }
@@ -739,6 +741,7 @@ impl InfoDialog {
             pages: Vec::new(),
             selected_page: 0,
             page_areas: Vec::new(),
+            page_scrolls: Default::default(),
             target: None,
             tool_header: None,
         }
@@ -756,17 +759,28 @@ impl InfoDialog {
     }
 
     fn select_page(&mut self, index: usize) {
-        if let Some(page) = self.pages.get(index) {
-            if let Some(header) = &mut self.tool_header {
-                header.select_result();
-                self.content = header.content(index);
-            } else {
-                self.content = page.content.to_string();
-            }
-            self.selected_page = index;
-            self.scroll = 0;
-            self.max_scroll = 0;
+        let Some(page) = self.pages.get(index) else {
+            return;
+        };
+        if let Some(current) = self.pages.get(self.selected_page) {
+            self.page_scrolls
+                .insert(current.label.clone(), self.scroll);
         }
+        let restored = self
+            .page_scrolls
+            .get(&page.label)
+            .copied()
+            .unwrap_or(0);
+        if let Some(header) = &mut self.tool_header {
+            header.select_result();
+            self.content = header.content(index);
+        } else {
+            self.content = page.content.to_string();
+        }
+        self.selected_page = index;
+        self.scroll = restored;
+        // The next draw clamps against the selected page's actual wrapped height.
+        self.max_scroll = usize::MAX;
     }
 
     fn handle(&mut self, event: &Event) -> bool {
@@ -929,6 +943,7 @@ pub fn handle(state: &mut UiState, event: Event) -> Option<String> {
             return None;
         }
         if dialog.handle(&event) {
+            state.tool_reading_position = dialog.reading_position();
             state.info_dialog = None;
         }
         return None;
@@ -1597,7 +1612,13 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
         state.ime_cursor = picker.draw(frame, frame.area());
         return;
     }
-    let area = if state.info_dialog.is_some() {
+    let area = if state
+        .info_dialog
+        .as_ref()
+        .is_some_and(|dialog| dialog.tool_header.is_some() || !dialog.pages.is_empty())
+    {
+        transcript_area(frame.area())
+    } else if state.info_dialog.is_some() {
         centered_area(frame.area())
     } else if state.btw.visible() || state.subagent_dialog.is_some() {
         transcript_area(frame.area())

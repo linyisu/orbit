@@ -369,50 +369,6 @@ impl Render for Sidebar {
                                     window,
                                 )
                             })),
-                    )
-                    .children(
-                        [
-                            (
-                                "sidebar-mcp",
-                                "MCP",
-                                IconName::Wrench,
-                                WorkspaceCommand::Mcp,
-                            ),
-                            (
-                                "sidebar-skills",
-                                "Skill",
-                                IconName::BookOpen,
-                                WorkspaceCommand::Skills,
-                            ),
-                            (
-                                "sidebar-plugins",
-                                "插件",
-                                IconName::Puzzle,
-                                WorkspaceCommand::Plugins,
-                            ),
-                        ]
-                        .into_iter()
-                        .map(|(id, label, icon, command)| {
-                            Button::new(id)
-                                .ghost()
-                                .small()
-                                .w_full()
-                                .accessibility_label(label)
-                                .child(
-                                    h_flex()
-                                        .w_full()
-                                        .gap_2()
-                                        .child(Icon::new(icon).size_4())
-                                        .child(label),
-                                )
-                                .on_click(cx.listener(move |view, _, window, cx| {
-                                    view.with_owner(
-                                        cx,
-                                        |view, window, cx| view.execute(command, window, cx),
-                                        window,
-                                    );
-                                }))
-                        }),
                     ),
             )
             .child(

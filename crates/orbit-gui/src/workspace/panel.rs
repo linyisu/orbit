@@ -120,24 +120,9 @@ impl Render for Panel {
                             .label("关闭")
                             .accessibility_label("关闭面板")
                             .tooltip("关闭面板")
-                            .on_click(move |_, _, cx| {
-                                let _ = owner.update(cx, |view, cx| {
-                                    if view
-                                        .panel
-                                        .as_ref()
-                                        .is_some_and(|panel| panel.read(cx).title() == "旁路提问")
-                                        && let Some(info) = &view.info
-                                    {
-                                        view.command(
-                                            Command::Request(Request::CloseQuestions {
-                                                session: info.id.clone(),
-                                            }),
-                                            cx,
-                                        );
-                                    }
-                                    view.panel = None;
-                                    cx.notify();
-                                });
+                            .on_click(move |_, window, cx| {
+                                let _ = owner
+                                    .update(cx, |view, cx| view.set_inspector(None, window, cx));
                             }),
                     ),
             )
