@@ -45,7 +45,12 @@ enum Task {
     /// Verify the native client and service without a container.
     VerifyNativeBundle { directory: Option<PathBuf> },
     /// Verify native desktop window rendering and the embedded service in isolated storage.
-    VerifyGuiBundle { directory: Option<PathBuf> },
+    VerifyGuiBundle {
+        directory: Option<PathBuf>,
+        /// Verify a distribution archive, which contains no separate service fixture.
+        #[arg(long)]
+        standalone: bool,
+    },
     #[command(hide = true)]
     ProbeBundle { server: PathBuf },
     /// Archive a prepared bundle, preserving executable permissions.
@@ -132,14 +137,22 @@ async fn main() -> Result<()> {
             };
             remote::verify_native(&directory).await?;
         }
-        Task::VerifyGuiBundle { directory } => {
+        Task::VerifyGuiBundle {
+            directory,
+            standalone,
+        } => {
             let directory = match directory {
                 Some(path) => path,
                 None => bundle::target_directory(root())
                     .await?
                     .join("bundle-gui"),
             };
-            remote::verify_gui(&directory).await?;
+            if standalone {
+                let directory = directory.canonicalize()?;
+                remote::verify_gui_executable(&bundle::gui_executable(&directory), None).await?;
+            } else {
+                remote::verify_gui(&directory).await?;
+            }
         }
         Task::ProbeBundle { server } => remote::probe(&server).await?,
         Task::Archive { directory, output } => {
@@ -158,4 +171,28 @@ async fn main() -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn desktop_fixture_validation_is_the_default_and_archive_mode_is_explicit() {
+        for (arguments, expected) in [
+            (vec!["orbit-xtask", "verify-gui-bundle"], false),
+            (
+                vec!["orbit-xtask", "verify-gui-bundle", "--standalone"],
+                true,
+            ),
+        ] {
+            let Arguments {
+                command: Task::VerifyGuiBundle { standalone, .. },
+            } = Arguments::try_parse_from(arguments).unwrap()
+            else {
+                panic!("desktop validation command expected")
+            };
+            assert_eq!(standalone, expected);
+        }
+    }
 }
