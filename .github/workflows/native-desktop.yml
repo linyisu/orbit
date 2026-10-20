@@ -160,7 +160,8 @@ jobs:
       - name: Verify the corrected native directory assertion
         if: ${{ contains(github.event.head_commit.message, '[installer-only]') && !contains(github.event.head_commit.message, '[window-only]') }}
         shell: bash
-        run: cargo test -p orbit-client --locked directories::
+        run: |
+          cargo test -p orbit-client --locked directories::
       - name: Complete the regressions after the corrected directory assertion
         if: ${{ contains(github.event.head_commit.message, '[installer-only]') && !contains(github.event.head_commit.message, '[window-only]') }}
         shell: bash
