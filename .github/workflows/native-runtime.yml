@@ -13,6 +13,7 @@ on:
       - 'crates/orbit-runtime/**'
       - 'crates/orbit-service/**'
       - 'crates/orbit-client/**'
+      - 'crates/orbit-tui/**'
       - 'crates/orbit-build/**'
       - 'crates/orbit-xtask/**'
       - 'crates/orbit-tools/**'
@@ -31,6 +32,7 @@ on:
       - 'crates/orbit-runtime/**'
       - 'crates/orbit-service/**'
       - 'crates/orbit-client/**'
+      - 'crates/orbit-tui/**'
       - 'crates/orbit-build/**'
       - 'crates/orbit-xtask/**'
       - 'crates/orbit-tools/**'
@@ -44,7 +46,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: native-runtime-${{ github.ref }}
+  group: native-runtime-${{ github.ref }}${{ contains(github.event.head_commit.message, '[test-only]') && '-tests' || '' }}
   cancel-in-progress: true
 
 jobs:
