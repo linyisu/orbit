@@ -451,19 +451,25 @@ mod tests {
         );
     }
 
-    #[test]
-    fn reads_a_bounded_page() {
-        let root = tempfile::tempdir().unwrap();
-        #[cfg(windows)]
-        let tmp =
-            orbit_runtime::filesystem::private::temporary_directory(root.path(), "logs-").unwrap();
-        #[cfg(unix)]
-        let tmp = root;
-        std::fs::write(tmp.path().join("cmd-1-2-3.stdout"), "abcdef").unwrap();
+    #[tokio::test]
+    async fn reads_a_bounded_page() {
+        let outputs = CommandOutputs::default();
+        let _run = outputs.begin_run().unwrap();
+        let log = outputs.create_log().await.unwrap();
+        let id = log.id().to_owned();
+        let lease = outputs.lease().unwrap();
+        std::fs::write(
+            lease
+                .path()
+                .join(format!("{id}.stdout")),
+            "abcdef",
+        )
+        .unwrap();
+        drop(log);
         let content = read(
-            tmp.path().to_owned(),
+            lease.path().to_owned(),
             Arguments {
-                output_id: "cmd-1-2-3".into(),
+                output_id: id,
                 max_bytes: 3,
                 ..Arguments::default()
             },
