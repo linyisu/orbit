@@ -12,8 +12,15 @@ pub fn execute(workspace: &str, request: &Value) -> Value {
         let action: Action = serde_json::from_value(request["action"].clone())?;
         let undone = root.join(".fixture-review-undone");
         match action {
-            Action::Status { offset } => {
-                let listing = orbit_tools::git_inspect::review_status(&filesystem, offset)?;
+            Action::Status {
+                offset,
+                include_patch,
+            } => {
+                let listing = if include_patch {
+                    orbit_tools::git_inspect::review_changes(&filesystem, offset)?
+                } else {
+                    orbit_tools::git_inspect::review_status(&filesystem, offset)?
+                };
                 let entries = listing["entries"]
                     .as_array()
                     .into_iter()
@@ -42,6 +49,9 @@ pub fn execute(workspace: &str, request: &Value) -> Value {
                     })
                     .collect();
                 Ok(Snapshot::Status {
+                    patch: listing["patch"]
+                        .as_str()
+                        .map(str::to_owned),
                     entries,
                     next: listing["next_offset"]
                         .as_u64()

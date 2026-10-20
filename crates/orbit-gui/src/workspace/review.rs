@@ -67,6 +67,31 @@ impl Review {
         self.session == session && self.workspace == workspace
     }
 
+    #[cfg(feature = "test-support")]
+    pub(super) fn check_project(&mut self, cx: &mut Context<Self>) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            !self.busy && self.error.is_none(),
+            "project changes did not load: {:?}",
+            self.error
+        );
+        anyhow::ensure!(
+            self.diff.read(cx).files().len() == 3,
+            "all working changes must open together"
+        );
+        anyhow::ensure!(
+            self.entries
+                .iter()
+                .any(|entry| entry.path == "src/main.rs"),
+            "missing real tracked path"
+        );
+        self.select("src/draft.rs".into(), cx);
+        anyhow::ensure!(
+            !self.busy && self.diff.read(cx).files().len() == 3,
+            "file navigation must not replace the combined diff or start another request"
+        );
+        Ok(())
+    }
+
     pub(super) fn focus(&self, window: &mut Window, cx: &mut App) {
         if !self
             .diff
@@ -133,17 +158,16 @@ impl Review {
         if self.mutating() {
             return;
         }
+        if self.kind != Kind::Checkpoint {
+            self.selected = Some(path.clone());
+            self.diff
+                .update(cx, |diff, cx| diff.scroll_to_file(&path, cx));
+            cx.notify();
+            return;
+        }
         if self.selected.as_deref() != Some(&path) {
             self.diff
                 .update(cx, |diff, cx| diff.set_files([], cx));
-        }
-        if self.kind != Kind::Checkpoint
-            && let Some(entry) = self
-                .entries
-                .iter()
-                .find(|entry| entry.path == path)
-        {
-            self.kind = entry.kind;
         }
         self.raw = None;
         self.selected = Some(path.clone());
@@ -182,11 +206,13 @@ impl Review {
             Action::List {
                 kind: Kind::Unstaged | Kind::Untracked | Kind::Staged,
                 offset,
-            } => Action::Status { offset },
+            } => Action::Status {
+                offset,
+                include_patch: true,
+            },
             action => action,
         };
-        let append =
-            matches!(action, Action::List { offset, .. } | Action::Status { offset } if offset > 0);
+        let append = matches!(action, Action::List { offset, .. } | Action::Status { offset, .. } if offset > 0);
         self.undoing = matches!(action, Action::Undo { .. });
         self.busy = true;
         self.error = None;
@@ -221,7 +247,14 @@ impl Review {
                 Err("工作区未连接，请重新连接后重试".into())
             };
             // Parsing a complete patch can be expensive. Keep it off the UI thread.
-            let parsed = if let Ok(Response::Review(Snapshot::Diff { patch, .. })) = &result {
+            let patch = match &result {
+                Ok(Response::Review(Snapshot::Diff { patch, .. })) => Some(patch),
+                Ok(Response::Review(Snapshot::Status {
+                    patch: Some(patch), ..
+                })) => Some(patch),
+                _ => None,
+            };
+            let parsed = if let Some(patch) = patch {
                 let patch = patch.clone();
                 Some(
                         cx.background_executor()
@@ -240,7 +273,12 @@ impl Review {
                 view.busy = false;
                 view.undoing = false;
                 match result {
-                    Ok(Response::Review(Snapshot::Status { entries, next, .. })) => {
+                    Ok(Response::Review(Snapshot::Status {
+                        entries,
+                        next,
+                        patch,
+                        ..
+                    })) => {
                         if append {
                             view.entries.extend(entries);
                         } else {
@@ -248,19 +286,49 @@ impl Review {
                         }
                         view.next = next;
                         view.loaded = true;
+                        view.raw = None;
+                        match (patch, parsed) {
+                            (Some(patch), Some(parsed)) => match parsed {
+                                Ok(files) => {
+                                    let files = if append {
+                                        view.diff
+                                            .read(cx)
+                                            .files()
+                                            .iter()
+                                            .cloned()
+                                            .chain(files)
+                                            .collect()
+                                    } else {
+                                        files
+                                    };
+                                    view.diff
+                                        .update(cx, |diff, cx| diff.set_files(files, cx));
+                                }
+                                Err(_) => {
+                                    view.diff
+                                        .update(cx, |diff, cx| diff.set_files([], cx));
+                                    view.note = "无法解析当前页，显示原始差异".into();
+                                    view.raw = Some(cx.new(|cx| {
+                                        EditorState::new(window, cx)
+                                            .language("diff")
+                                            .soft_wrap(true)
+                                            .line_number(true)
+                                            .default_value(patch)
+                                    }));
+                                }
+                            },
+                            _ => {
+                                view.diff
+                                    .update(cx, |diff, cx| diff.set_files([], cx));
+                                view.error = Some("服务不支持完整变更预览，请更新服务".into());
+                            }
+                        }
                         view.rebuild_tree(cx);
-                        if !append
-                            && let Some(path) = view
+                        if !append {
+                            view.selected = view
                                 .entries
                                 .first()
-                                .map(|entry| entry.path.clone())
-                        {
-                            view.select(path, cx);
-                        } else if view.entries.is_empty() {
-                            view.selected = None;
-                            view.raw = None;
-                            view.diff
-                                .update(cx, |diff, cx| diff.set_files([], cx));
+                                .map(|entry| entry.path.clone());
                         }
                     }
                     Ok(Response::Review(Snapshot::List { entries, next, .. })) => {
@@ -421,7 +489,7 @@ impl Render for Review {
             .border_r_1()
             .border_color(cx.theme().border)
             .when(narrow, |view| view.h_32())
-            .when(!narrow, |view| view.w_56().h_full())
+            .when(!narrow, |view| view.w_64().h_full())
             .capture_key_down(cx.listener(|view, event: &KeyDownEvent, _, cx| {
                 if event.keystroke.key == "enter" && !view.mutating() {
                     let path = view
@@ -442,20 +510,32 @@ impl Render for Review {
             .child(Tree::new(&self.list, {
                 let owner = cx.weak_entity();
                 let entries = self.entries.clone();
-                let busy = self.mutating();
-                move |_, item, selected, _, _| {
+                let busy = self.busy;
+                let checkpoint = self.kind == Kind::Checkpoint;
+                let stats = self
+                    .diff
+                    .read(cx)
+                    .files()
+                    .iter()
+                    .map(|file| {
+                        (
+                            file.path().to_string(),
+                            (file.additions(), file.deletions(), file.is_binary()),
+                        )
+                    })
+                    .collect::<std::collections::HashMap<_, _>>();
+                move |_, item, selected, _, cx| {
                     let path = item.item().id.to_string();
                     let entry = entries
                         .iter()
                         .find(|entry| entry.path == path);
                     let file = entry.is_some();
-                    let status = entry.map(|entry| {
-                        if entry.undone {
-                            "已撤销".into()
-                        } else {
-                            entry.status.clone()
-                        }
-                    });
+                    let stats = stats.get(&path).copied();
+                    let directory = path
+                        .rsplit_once('/')
+                        .map(|(directory, _)| directory.to_owned())
+                        .unwrap_or_else(|| "项目根目录".into());
+                    let undone = entry.is_some_and(|entry| entry.undone);
                     let owner = owner.clone();
                     ListItem::new(item.item().id.clone())
                         .selected(selected)
@@ -464,6 +544,7 @@ impl Render for Review {
                         .pr_3()
                         .child(
                             h_flex()
+                                .w_full()
                                 .gap_2()
                                 .min_w_0()
                                 .child(
@@ -477,13 +558,46 @@ impl Render for Review {
                                     .small(),
                                 )
                                 .child(
-                                    div()
+                                    v_flex()
                                         .flex_1()
                                         .min_w_0()
-                                        .text_ellipsis()
-                                        .child(item.item().label.clone()),
+                                        .gap_1()
+                                        .child(
+                                            div()
+                                                .text_sm()
+                                                .text_ellipsis()
+                                                .child(item.item().label.clone()),
+                                        )
+                                        .when(!checkpoint, |column| {
+                                            column.child(
+                                                div()
+                                                    .text_xs()
+                                                    .text_color(cx.theme().muted_foreground)
+                                                    .text_ellipsis()
+                                                    .child(directory),
+                                            )
+                                        }),
                                 )
-                                .children(status.map(|status| div().text_xs().child(status))),
+                                .when(!checkpoint, |row| {
+                                    row.child(
+                                        v_flex()
+                                            .items_end()
+                                            .text_xs()
+                                            .when_some(
+                                                stats,
+                                                |column, (added, removed, binary)| {
+                                                    column.child(if binary {
+                                                        "二进制".into()
+                                                    } else {
+                                                        format!("+{added} −{removed}")
+                                                    })
+                                                },
+                                            ),
+                                    )
+                                })
+                                .when(checkpoint && undone, |row| {
+                                    row.child(div().text_xs().child("已撤销"))
+                                }),
                         )
                         .on_click(move |_, _, cx| {
                             if file {
@@ -691,6 +805,24 @@ impl Render for Review {
 
 impl Review {
     fn rebuild_tree(&mut self, cx: &mut Context<Self>) {
+        if self.kind != Kind::Checkpoint {
+            let items = self
+                .entries
+                .iter()
+                .map(|entry| {
+                    let name = entry
+                        .path
+                        .rsplit('/')
+                        .next()
+                        .unwrap_or(&entry.path);
+                    TreeItem::new(entry.path.clone(), name.to_owned())
+                })
+                .collect::<Vec<_>>();
+            self.list
+                .update(cx, |list, cx| list.set_items(items, cx));
+            return;
+        }
+
         let mut directories = std::collections::BTreeMap::<String, Vec<String>>::new();
         for entry in &self.entries {
             let mut parent = String::new();

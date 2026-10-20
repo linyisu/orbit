@@ -50,6 +50,67 @@ fn repository() -> tempfile::TempDir {
 }
 
 #[test]
+fn review_changes_preserves_names_and_combines_index_and_worktree_without_writes() {
+    let directory = repository();
+    let root = directory.path();
+    fs::write(root.join("tracked.txt"), "staged only version\n").unwrap();
+    git(root, &["add", "tracked.txt"]);
+    fs::write(root.join("tracked.txt"), "final working version\n").unwrap();
+    fs::create_dir(root.join("nested")).unwrap();
+    fs::write(root.join("nested/new file.rs"), "generated source\n").unwrap();
+    let index = fs::read(root.join(".git/index")).unwrap();
+    let workspace = Workspace::new(root).unwrap();
+    let page = orbit_tools::git_inspect::review_changes(&workspace, 0).unwrap();
+    let entries = page["entries"].as_array().unwrap();
+    assert!(
+        entries
+            .iter()
+            .any(|entry| entry["path"] == "tracked.txt" && entry["xy"] == "MM")
+    );
+    assert!(
+        entries
+            .iter()
+            .any(|entry| entry["path"] == "nested/new file.rs")
+    );
+    let patch = page["patch"].as_str().unwrap();
+    assert!(patch.contains("-first"));
+    assert!(patch.contains("+final working version"));
+    assert!(!patch.contains("staged only version"));
+    assert!(patch.contains("+generated source"));
+    assert_eq!(fs::read(root.join(".git/index")).unwrap(), index);
+}
+
+#[test]
+fn review_changes_handles_a_repository_before_its_first_commit() {
+    let root = tempfile::tempdir().unwrap();
+    git(root.path(), &["init", "-q"]);
+    fs::write(root.path().join("initial.rs"), "generated initial source\n").unwrap();
+    git(root.path(), &["add", "initial.rs"]);
+    let workspace = Workspace::new(root.path()).unwrap();
+    let page = orbit_tools::git_inspect::review_changes(&workspace, 0).unwrap();
+    assert_eq!(page["entries"][0]["path"], "initial.rs");
+    assert!(
+        page["patch"]
+            .as_str()
+            .unwrap()
+            .contains("+generated initial source")
+    );
+}
+
+#[test]
+fn review_changes_refuses_an_oversized_combined_patch() {
+    let directory = repository();
+    let root = directory.path();
+    let content = vec![b'x'; 2_200_000];
+    fs::write(root.join("first-large.txt"), &content).unwrap();
+    fs::write(root.join("second-large.txt"), &content).unwrap();
+    let workspace = Workspace::new(root).unwrap();
+    let result = orbit_tools::git_inspect::review_changes(&workspace, 0);
+    assert!(matches!(result, Err(ToolError::ExecutionFailed(error))
+        if error.contains("combined review patch exceeds the byte limit")));
+}
+
+#[test]
 fn history_publication_uses_remote_tracking_refs_without_contacting_a_remote() {
     use orbit_tools::git_inspect::history;
     let directory = repository();

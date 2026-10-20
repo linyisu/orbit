@@ -14,6 +14,8 @@ pub enum Kind {
 pub enum Action {
     Status {
         offset: usize,
+        #[serde(default)]
+        include_patch: bool,
     },
     /// Browse a pinned commit ancestry without changing HEAD or the index.
     History {
@@ -69,6 +71,8 @@ pub enum Snapshot {
         entries: Vec<Entry>,
         next: Option<usize>,
         branch: Option<String>,
+        #[serde(default)]
+        patch: Option<String>,
     },
     History {
         revision: String,
@@ -145,6 +149,18 @@ mod tests {
 
     #[test]
     fn legacy_commit_requests_do_not_start_exporting_patches() {
+        let status: Action = serde_json::from_value(serde_json::json!({
+            "action": "status",
+            "offset": 0
+        }))
+        .unwrap();
+        assert!(matches!(
+            status,
+            Action::Status {
+                include_patch: false,
+                ..
+            }
+        ));
         let action: Action = serde_json::from_value(serde_json::json!({
             "action": "commit",
             "revision": "HEAD"

@@ -362,6 +362,21 @@ fn prepare_project(root: &Path) -> anyhow::Result<()> {
         anyhow::ensure!(output.status.success(), "fixture local revision failed");
     }
     fs::write(
+        root.join(".git/info/exclude"),
+        ".fixture-*\ngenerated-new.txt\n",
+    )?;
+    fs::write(
+        root.join("src/extra.rs"),
+        "pub const GENERATED: bool = false;\n",
+    )?;
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["add", "src/extra.rs"])
+        .output()?;
+    anyhow::ensure!(output.status.success(), "fixture staged change failed");
+    fs::write(root.join("src/draft.rs"), "pub const DRAFT: bool = true;\n")?;
+    fs::write(
         root.join("src/main.rs"),
         format!(
             "// {}\nfn main() {{ println!(\"Changed project\"); }}\n",

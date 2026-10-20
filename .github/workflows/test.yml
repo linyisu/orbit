@@ -102,6 +102,10 @@ jobs:
       - name: Test Unix permissions and Git transactions
         if: runner.os == 'macOS'
         run: cargo test -p orbit-tools --locked --test write_file --test git_inspect --test git_index
+      - name: Test Git inspection without debug assertions
+        run: |
+          cargo --config 'profile.test.package.orbit-tools.debug-assertions=false' test -p orbit-tools --lib --locked git_inspect::tests::parses_rename_and_unmerged_porcelain_v2_records
+          cargo --config 'profile.test.package.orbit-tools.debug-assertions=false' test -p orbit-tools --test git_inspect --locked review_changes
       - name: Test accounts, models and clients
         if: runner.os != 'Linux'
         run: |

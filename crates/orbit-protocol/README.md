@@ -36,3 +36,5 @@ cargo test -p orbit-protocol
 `QueueInput` 暂存文本及附件到下一轮，队列项通过附加 `delivery` 字段区分下一轮发送与当前轮次引导，既有状态和旧请求语义保留；`InputQueue::Steer` 按消息原文和运行编号校验后提升为引导输入。旧 `Steer` 请求保持原有即时引导语义。
 
 `Review::Commit.include_patch` 默认关闭，保留旧元数据请求的开销与语义；显式开启时，服务返回固定提交的完整有界差异。旧服务缺少 `Snapshot::Commit.patch` 时保持可解码，GUI 明确要求更新服务，不把缺失数据当作无改动。
+
+`Review::Status.include_patch` 默认关闭；显式开启时附带当前状态页的 HEAD 到工作目录的有界差异，包含未跟踪文件及暂存内容。旧端缺少 `Snapshot::Status.patch` 时不把缺失数据当作空差异，原暂存、撤销及单文件审查契约保持不变。

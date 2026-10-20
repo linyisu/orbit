@@ -95,6 +95,23 @@ async fn history_keeps_readonly_access_but_respects_disabled_capabilities() {
                 if patch.contains("+base") && !patch.contains("+working"))
             );
         }
+        let changes = actor_review(
+            &handle,
+            &root.display().to_string(),
+            Action::Status {
+                offset: 0,
+                include_patch: true,
+            },
+        )
+        .await;
+        if disabled.is_some() {
+            assert!(changes.is_err());
+        } else {
+            assert!(
+                matches!(changes.unwrap(), Snapshot::Status { entries, patch: Some(patch), .. }
+                if entries[0].path == "tracked.txt" && patch.contains("+working"))
+            );
+        }
         handle
             .command(session::Command::Close)
             .await

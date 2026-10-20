@@ -96,6 +96,87 @@ pub fn review_status(workspace: &Workspace, offset: usize) -> Result<Value, Tool
     status_inner(&root, workspace, &args, &cancellation, true)
 }
 
+/// Read one status page with its complete HEAD-to-worktree patch, including untracked files.
+/// Every path keeps the review permission checks; aggregate output is bounded and never truncated.
+pub fn review_changes(workspace: &Workspace, offset: usize) -> Result<Value, ToolError> {
+    let mut listing = review_status(workspace, offset)?;
+    let cancellation = CancellationToken::new();
+    let root = repository_root(workspace.root(), &cancellation)?;
+    let head = git_export(
+        &root,
+        vec![
+            "rev-parse".into(),
+            "--verify".into(),
+            "--quiet".into(),
+            "HEAD".into(),
+        ],
+        &cancellation,
+        true,
+    )?;
+    let head = text(&head)?.trim().to_owned();
+    let mut tracked = Vec::new();
+    let mut additions = Vec::new();
+    for entry in listing["entries"]
+        .as_array()
+        .ok_or_else(|| failed("Git status is missing entries"))?
+    {
+        let path = entry["path"]
+            .as_str()
+            .ok_or_else(|| failed("Git entry is missing a path"))?;
+        let path = checked_review_path(workspace, path)?;
+        if head.is_empty() || entry["kind"] == "untracked" {
+            additions.push(path);
+        } else {
+            tracked.push(path);
+        }
+    }
+    let mut patch = Vec::new();
+    if !tracked.is_empty() {
+        let mut args = vec![
+            "diff".into(),
+            "--no-ext-diff".into(),
+            "--no-textconv".into(),
+            "--no-renames".into(),
+            "--unified=3".into(),
+            head,
+            "--".into(),
+        ];
+        args.extend(tracked.iter().cloned());
+        patch = git_export(&root, args, &cancellation, false)?;
+    }
+    for path in &additions {
+        // A staged addition removed from disk has no HEAD-to-worktree difference.
+        match workspace.open_read(Path::new(path)) {
+            Err(WorkspaceError::Io(error)) if error.kind() == io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(failed(error)),
+            Ok(_) => {}
+        }
+        let next = git_export(
+            &root,
+            vec![
+                "diff".into(),
+                "--no-ext-diff".into(),
+                "--no-textconv".into(),
+                "--no-index".into(),
+                "--".into(),
+                "/dev/null".into(),
+                path.clone(),
+            ],
+            &cancellation,
+            true,
+        )?;
+        if patch.len().saturating_add(next.len()) > MAX_PATCH_BYTES {
+            return Err(failed("combined review patch exceeds the byte limit"));
+        }
+        patch.extend(next);
+    }
+    for path in tracked.iter().chain(&additions) {
+        checked_review_path(workspace, path)?;
+    }
+    listing["patch"] = text(&patch)?.into();
+    Ok(listing)
+}
+
 /// Complete, size-limited patch for one reviewed file. Never silently truncate.
 pub fn review_patch(
     workspace: &Workspace,
@@ -681,7 +762,8 @@ fn parse_status_entry(
     let parts = if tag == "u" { 11 } else { 9 };
 
     let mut fields = record.splitn(parts, ' ');
-    debug_assert_eq!(fields.next(), Some(tag));
+    let record_tag = fields.next();
+    debug_assert_eq!(record_tag, Some(tag));
     let xy = fields.next().unwrap_or_default();
     let fields_to_path = match tag {
         // After XY, ordinary records contain submodule, three modes and two
@@ -1128,6 +1210,15 @@ mod tests {
 
     #[test]
     fn parses_rename_and_unmerged_porcelain_v2_records() {
+        let (ordinary, consumed) = parse_status_entry(
+            b"1 .M N... 100644 100644 100644 aaaaaaa bbbbbbb source/file with spaces.rs",
+            None,
+        )
+        .unwrap();
+        let ordinary = ordinary.unwrap();
+        assert_eq!(consumed, 0);
+        assert_eq!(ordinary["xy"], ".M");
+        assert_eq!(ordinary["path"], "source/file with spaces.rs");
         let (rename, consumed) = parse_status_entry(
             b"2 R. N... 100644 100644 100644 aaaaaaa bbbbbbb R100 new-name.rs",
             Some(b"old-name.rs"),

@@ -157,6 +157,16 @@ impl Workspace {
                     self.inspector.is_none(),
                     "Escape must close compact details"
                 );
+                if std::env::var_os("ORBIT_GUI_PROJECT_PROBE").is_some() {
+                    gpui_kit::component::Theme::change(
+                        gpui_kit::component::ThemeMode::Light,
+                        None,
+                        cx,
+                    );
+                    gpui_kit::component::Theme::global_mut(cx).font_size = px(16.);
+                    gpui_kit::component::Theme::sync_base(cx);
+                    window.resize(size(px(1_200.), px(800.)));
+                }
                 self.show_review(None, window, cx);
             }
             11 => {
@@ -164,6 +174,12 @@ impl Workspace {
                     self.inspector == Some(Section::Review),
                     "diff review must share the detail pane"
                 );
+                if std::env::var_os("ORBIT_GUI_PROJECT_PROBE").is_some() {
+                    self.review
+                        .as_ref()
+                        .expect("review pane")
+                        .update(cx, |review, cx| review.check_project(cx))?;
+                }
                 self.set_inspector(None, window, cx);
             }
             12 if std::env::var_os("ORBIT_GUI_PROJECT_PROBE").is_some() => {

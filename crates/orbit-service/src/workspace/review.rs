@@ -49,10 +49,17 @@ pub(super) async fn git_read(
     ensure!(!policy.disabled(Capability::Files), "文件功能已禁用");
     ensure!(!policy.disabled(Capability::Git), "Git 功能已禁用");
     match action {
-        Action::Status { offset } => {
+        Action::Status {
+            offset,
+            include_patch,
+        } => {
             let workspace = workspace.clone();
             let listing = tokio::task::spawn_blocking(move || {
-                orbit_tools::git_inspect::review_status(&workspace, offset)
+                if include_patch {
+                    orbit_tools::git_inspect::review_changes(&workspace, offset)
+                } else {
+                    orbit_tools::git_inspect::review_status(&workspace, offset)
+                }
             })
             .await??;
             Ok(status_snapshot(listing)?)
@@ -330,6 +337,9 @@ fn status_snapshot(listing: serde_json::Value) -> Result<Snapshot> {
         })
         .collect::<Result<Vec<_>>>()?;
     Ok(Snapshot::Status {
+        patch: listing["patch"]
+            .as_str()
+            .map(str::to_owned),
         entries,
         next: listing["next_offset"]
             .as_u64()
