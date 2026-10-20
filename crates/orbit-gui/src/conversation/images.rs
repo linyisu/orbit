@@ -115,22 +115,50 @@ fn local_path(source: &str) -> Option<String> {
     if source.is_empty() || source.starts_with("//") {
         return None;
     }
-    if let Ok(url) = url::Url::parse(source) {
-        return (url.scheme() == "file")
-            .then(|| url.to_file_path().ok())?
-            .map(|path| path.to_string_lossy().into_owned());
-    }
-    let url = url::Url::parse("file:///")
-        .ok()?
-        .join(source)
-        .ok()?;
-    let path = url.to_file_path().ok()?;
-    let path = if source.starts_with('/') {
-        path.as_path()
+    let drive_path = source
+        .as_bytes()
+        .first()
+        .is_some_and(u8::is_ascii_alphabetic)
+        && source.as_bytes().get(1) == Some(&b':')
+        && matches!(source.as_bytes().get(2), Some(b'/' | b'\\'));
+    let (url, relative) = if drive_path {
+        (url::Url::parse(&format!("file:///{source}")).ok()?, false)
+    } else if let Ok(url) = url::Url::parse(source) {
+        if url.scheme() != "file" {
+            return None;
+        }
+        (url, false)
     } else {
-        path.strip_prefix("/").ok()?
+        (
+            url::Url::parse("file:///")
+                .ok()?
+                .join(source)
+                .ok()?,
+            !source.starts_with('/'),
+        )
     };
-    Some(path.to_string_lossy().into_owned())
+    if url
+        .host_str()
+        .is_some_and(|host| host != "localhost")
+    {
+        return None;
+    }
+    // URL-to-Path conversion uses the desktop OS, but this path belongs to the session host.
+    let decoded = percent_encoding::percent_decode_str(url.path())
+        .decode_utf8()
+        .ok()?;
+    let drive_url = decoded
+        .as_bytes()
+        .get(1)
+        .is_some_and(u8::is_ascii_alphabetic)
+        && decoded.as_bytes().get(2) == Some(&b':')
+        && decoded.as_bytes().get(3) == Some(&b'/');
+    let path = if relative || drive_url {
+        decoded.strip_prefix('/')?
+    } else {
+        &decoded
+    };
+    Some(path.to_owned())
 }
 
 #[cfg(test)]
@@ -148,6 +176,13 @@ mod tests {
                 "/workspace/chart one.svg",
             ),
             ("images/图表.png#preview", "images/图表.png"),
+            ("images/chart+one.png", "images/chart+one.png"),
+            (
+                "file:///C:/workspace/chart%20one.png",
+                "C:/workspace/chart one.png",
+            ),
+            (r"C:\workspace\chart.png", "C:/workspace/chart.png"),
+            ("C:/workspace/chart.png", "C:/workspace/chart.png"),
         ] {
             assert_eq!(local_path(source).as_deref(), Some(expected), "{source}");
         }
@@ -158,6 +193,7 @@ mod tests {
             "//example.test/image.png",
             "file://another-host/image.png",
             "javascript:bad()",
+            "file:///workspace/%FF.png",
         ] {
             assert_eq!(local_path(source), None, "{source}");
         }

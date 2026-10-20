@@ -7353,6 +7353,7 @@ dependencies = [
  "orbit-config",
  "orbit-protocol",
  "orbit-syntax",
+ "percent-encoding",
  "pulldown-cmark",
  "ratex-layout",
  "ratex-parser",

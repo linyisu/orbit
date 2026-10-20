@@ -385,6 +385,12 @@ mod tests {
             path
         );
         assert_eq!(file_list_path(path.clone()), path);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn file_lists_preserve_existing_unix_filenames_with_a_trailing_carriage_return() {
+        let root = tempfile::tempdir().unwrap();
         let special = root.path().join("literal\r");
         std::fs::write(&special, b"literal filename").unwrap();
         assert_eq!(file_list_path(special.clone()), special);
