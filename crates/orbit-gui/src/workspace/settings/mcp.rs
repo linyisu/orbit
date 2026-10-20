@@ -669,7 +669,9 @@ impl Render for Mcp {
                 .text_color(cx
                 .theme()
                 .danger)
-                .child(error)))
+                .child(
+                    orbit_client::directories::display_diagnostic(&error).into_owned()
+                )))
             .when(self.editing && self.error.is_some(), |view| view.child(h_flex().child(
                 Button::new("mcp-reload-base").small().label("保留表单并重载配置")
                     .disabled(self
@@ -822,7 +824,7 @@ impl Render for Mcp {
                     div()
                         .text_sm()
                         .text_color(cx.theme().danger)
-                        .child(error),
+                        .child(orbit_client::directories::display_diagnostic(&error).into_owned()),
                 )
             });
         if let Some(servers) = &self.statuses {

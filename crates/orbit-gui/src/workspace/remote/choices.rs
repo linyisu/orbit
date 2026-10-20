@@ -279,6 +279,7 @@ impl Render for ChoiceInput {
                 }))
                 .child(
                     Input::new(&self.input)
+                        .font_family(cx.theme().font_family.clone())
                         .aria_label(self.label)
                         .selected(self.open)
                         .suffix(Icon::new(IconName::ChevronDown).size_4())
@@ -291,6 +292,7 @@ impl Render for ChoiceInput {
         if self.open {
             popup = popup.content(
                 v_flex()
+                    .font_family(cx.theme().font_family.clone())
                     .track_focus(&self.popup_focus)
                     .w(self.bounds.size.width)
                     .popover_style(cx)

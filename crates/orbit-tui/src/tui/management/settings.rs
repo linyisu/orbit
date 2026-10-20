@@ -997,7 +997,9 @@ impl State {
         frame.render_widget(
             Paragraph::new(format!(
                 "配置文件：{}",
-                safe_output(&self.path.display().to_string())
+                safe_output(&orbit_client::directories::display_path(
+                    &self.path.to_string_lossy()
+                ))
             ))
             .style(components::muted()),
             row(area, 0),
@@ -1206,6 +1208,28 @@ mod tests {
         .unwrap();
         let state = State::new(path, directory.path().join("auth"), mcp);
         (directory, state)
+    }
+
+    #[test]
+    fn configuration_location_is_readable_without_rewriting_the_stored_path() {
+        use ratatui::{Terminal, backend::TestBackend};
+        let (_directory, mut state) = state(true);
+        state.path = std::path::PathBuf::from(r"\\?\D:\generated\config.toml");
+        let original = state.path.clone();
+        let mut terminal = Terminal::new(TestBackend::new(120, 32)).unwrap();
+        terminal
+            .draw(|frame| state.draw(frame, frame.area()))
+            .unwrap();
+        let visible = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(visible.contains(r"D:\generated\config.toml"));
+        assert!(!visible.contains(r"\\?\"));
+        assert_eq!(state.path, original);
     }
 
     #[test]

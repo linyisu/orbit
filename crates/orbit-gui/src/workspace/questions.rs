@@ -400,7 +400,7 @@ impl Render for QuestionForm {
                         .px_2()
                         .text_sm()
                         .text_color(cx.theme().danger)
-                        .child(error),
+                        .child(orbit_client::directories::display_diagnostic(error.as_ref()).into_owned()),
                 )
             })
             .child(

@@ -243,7 +243,9 @@ impl Render for ImagePreview {
                     .child("加载图片…")
                     .into_any_element(),
                 Err(error) => div()
-                    .child(error.clone())
+                    .child(
+                        orbit_client::directories::display_diagnostic(error.as_ref()).into_owned(),
+                    )
                     .into_any_element(),
             })
             .child(

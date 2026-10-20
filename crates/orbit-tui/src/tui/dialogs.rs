@@ -2317,7 +2317,12 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut UiState) {
                         )),
                         Line::styled(
                             super::render::fit_label(
-                                &format!("位置：{}", package.directory.display()),
+                                &format!(
+                                    "位置：{}",
+                                    orbit_client::directories::display_path(
+                                        &package.directory.to_string_lossy()
+                                    )
+                                ),
                                 body.width as usize,
                                 true,
                             ),

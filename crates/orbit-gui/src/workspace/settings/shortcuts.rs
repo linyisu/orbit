@@ -511,7 +511,7 @@ impl Shortcuts {
                     .p_3().border_1().border_color(cx.theme().primary).rounded(cx.theme().radius)
                     .child("正在录制：按下快捷键，或按 Tab 结束、Esc 取消。")))
             .when_some(self.validation.error.clone(), |view, error| view.child(
-                div().text_sm().text_color(cx.theme().danger).child(error)))
+                div().text_sm().text_color(cx.theme().danger).child(orbit_client::directories::display_diagnostic(error.as_ref()).into_owned())))
             .when(!self.validation.conflicts.is_empty(), |view| view.child(
                 v_flex().min_w_0().gap_2()
                     .child(div().text_sm().child("此按键与以下命令冲突；替换会清除这些命令的当前键位："))
@@ -777,7 +777,7 @@ impl Render for Shortcuts {
                     .text_color(cx
                     .theme()
                     .danger)
-                    .child(error))
+                    .child(orbit_client::directories::display_diagnostic(error.as_ref()).into_owned()))
                     .when_some(failed, |view, failed| view.child(h_flex().child(
                         Button::new("shortcut-retry").small().outline().label("重试保存").disabled(busy)
                             .on_click(cx.listener(move |view, _, window, cx| {

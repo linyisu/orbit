@@ -221,7 +221,10 @@ pub(super) fn preview(
                         .text_xs()
                         .whitespace_normal()
                         .text_color(cx.theme().danger)
-                        .child(error),
+                        .child(
+                            orbit_client::directories::display_diagnostic(error.as_ref())
+                                .into_owned(),
+                        ),
                 )
                 .child(
                     Button::new("retry-queued-inputs")
@@ -249,7 +252,10 @@ pub(super) fn preview(
                     div()
                         .text_xs()
                         .text_color(cx.theme().danger)
-                        .child(error),
+                        .child(
+                            orbit_client::directories::display_diagnostic(error.as_ref())
+                                .into_owned(),
+                        ),
                 )
             });
     }

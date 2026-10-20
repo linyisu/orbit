@@ -497,7 +497,10 @@ impl Render for SideQuestions {
                     div()
                         .text_sm()
                         .text_color(cx.theme().danger)
-                        .child(error),
+                        .child(
+                            orbit_client::directories::display_diagnostic(error.as_ref())
+                                .into_owned(),
+                        ),
                 )
             })
             .child(
@@ -671,7 +674,10 @@ impl Render for QuestionDetail {
                         div()
                             .text_sm()
                             .text_color(cx.theme().danger)
-                            .child(error),
+                            .child(
+                                orbit_client::directories::display_diagnostic(error.as_ref())
+                                    .into_owned(),
+                            ),
                     )
                 })
                 .into_any_element()

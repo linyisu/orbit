@@ -260,7 +260,7 @@ impl Render for Importer {
                         .text_sm()
                         .whitespace_normal()
                         .text_color(cx.theme().danger)
-                        .child(error),
+                        .child(orbit_client::directories::display_diagnostic(&error).into_owned()),
                 )
             });
         if let Some((_, candidates)) = &self.scan {

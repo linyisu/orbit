@@ -577,7 +577,7 @@ impl Render for Review {
                     div()
                         .text_sm()
                         .text_color(cx.theme().danger)
-                        .child(error),
+                        .child(orbit_client::directories::display_diagnostic(&error).into_owned()),
                 )
             })
             .when(self.undoing, |view| {
@@ -789,12 +789,9 @@ impl ListDelegate for ReviewList {
                         .min_w_0()
                         .w_full()
                         .gap_1()
-                        .child(
-                            div()
-                                .text_sm()
-                                .text_ellipsis()
-                                .child(entry.path.clone()),
-                        )
+                        .child(div().text_sm().text_ellipsis().child(
+                            orbit_client::directories::display_path(&entry.path).into_owned(),
+                        ))
                         .child(
                             div()
                                 .text_xs()

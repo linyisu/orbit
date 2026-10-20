@@ -987,7 +987,10 @@ impl Render for Workspace {
                                 .text_sm()
                                 .text_ellipsis()
                                 .text_color(cx.theme().muted_foreground)
-                                .child(self.location.clone()),
+                                .child(
+                                    orbit_client::directories::display_path(&self.location)
+                                        .into_owned(),
+                                ),
                         ),
                 )
                 .child(

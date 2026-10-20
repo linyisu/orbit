@@ -903,7 +903,10 @@ impl Render for ChildAgents {
                         .text_sm()
                         .whitespace_normal()
                         .text_color(cx.theme().danger)
-                        .child(error),
+                        .child(
+                            orbit_client::directories::display_diagnostic(error.as_ref())
+                                .into_owned(),
+                        ),
                 )
             })
             .when(!self.rows.is_empty(), |view| {
@@ -970,7 +973,12 @@ impl Render for ChildAgents {
                                     .text_sm()
                                     .whitespace_normal()
                                     .text_color(cx.theme().danger)
-                                    .child(error),
+                                    .child(
+                                        orbit_client::directories::display_diagnostic(
+                                            error.as_ref(),
+                                        )
+                                        .into_owned(),
+                                    ),
                             )
                         })
                         .when_some(row.receipt.clone(), |view, receipt| {

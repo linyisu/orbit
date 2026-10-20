@@ -311,7 +311,14 @@ impl Panel for State {
             .path()
             .display()
             .to_string();
-        components::title(frame, area, format!("终端快捷键 · {path}"));
+        components::title(
+            frame,
+            area,
+            format!(
+                "终端快捷键 · {}",
+                orbit_client::directories::display_path(&path)
+            ),
+        );
         if area.height < 4 {
             return;
         }

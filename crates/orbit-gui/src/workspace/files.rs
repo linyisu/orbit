@@ -1143,7 +1143,7 @@ impl Render for Files {
                         .py_2()
                         .text_sm()
                         .text_color(cx.theme().danger)
-                        .child(error),
+                        .child(orbit_client::directories::display_diagnostic(&error).into_owned()),
                 )
             })
             .when(self.draft.is_unconfirmed(), |view| {

@@ -301,7 +301,10 @@ impl Render for SessionControls {
                 div()
                     .text_xs()
                     .text_color(cx.theme().muted_foreground)
-                    .child(format!("项目目录：{}", self.location)),
+                    .child(format!(
+                        "项目目录：{}",
+                        orbit_client::directories::display_path(&self.location)
+                    )),
             )
             .when(rename, |view| {
                 view.child(
@@ -327,7 +330,7 @@ impl Render for SessionControls {
                     div()
                         .text_sm()
                         .text_color(cx.theme().danger)
-                        .child(error),
+                        .child(orbit_client::directories::display_diagnostic(&error).into_owned()),
                 )
             })
             .child(

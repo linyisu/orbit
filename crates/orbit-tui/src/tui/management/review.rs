@@ -676,7 +676,7 @@ impl Panel for State {
                     Paragraph::new(format!(
                         "{} {}{}",
                         safe_output(&entry.status),
-                        safe_output(&entry.path),
+                        safe_output(&orbit_client::directories::display_path(&entry.path)),
                         if entry.undone { " · 已撤销" } else { "" }
                     ))
                     .style(if index == self.selected {

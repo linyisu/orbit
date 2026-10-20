@@ -162,7 +162,10 @@ impl Workspace {
                         .max_h(rems(18.))
                         .overflow_y_scroll()
                         .text_sm()
-                        .child(error.clone()),
+                        .child(
+                            orbit_client::directories::display_diagnostic(error.as_ref())
+                                .into_owned(),
+                        ),
                 )
                 .footer(
                     h_flex()

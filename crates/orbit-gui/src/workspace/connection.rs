@@ -295,7 +295,10 @@ impl Workspace {
                                             .text_sm()
                                             .text_color(cx.theme().muted_foreground)
                                             .truncate()
-                                            .child(path.clone()),
+                                            .child(
+                                                orbit_client::directories::display_path(&path)
+                                                    .into_owned(),
+                                            ),
                                     )
                             })
                     }))

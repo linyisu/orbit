@@ -1005,9 +1005,11 @@ impl Panel for State {
         }
         let title = format!(
             "文件  {}{}{}",
-            self.document
-                .as_ref()
-                .map_or(self.directory.as_str(), |d| d.path.as_str()),
+            orbit_client::directories::display_path(
+                self.document
+                    .as_ref()
+                    .map_or(self.directory.as_str(), |d| d.path.as_str())
+            ),
             if self.dirty() { " · 未保存" } else { "" },
             if self.pending.is_some() {
                 " · 处理中…"

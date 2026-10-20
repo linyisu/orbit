@@ -372,7 +372,14 @@ impl TailControl {
 
 impl Render for TailControl {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        if !self.scrolled_up {
+        if !self.scrolled_up
+            || self
+                .navigation
+                .read(cx)
+                .messages
+                .read(cx)
+                .is_following_tail()
+        {
             return div().into_any_element();
         }
         Button::new("latest-output")
@@ -418,7 +425,9 @@ pub(super) fn tail_visible(
 ) -> bool {
     rows.iter()
         .find(|(index, _)| *index == last_row)
-        .is_some_and(|(_, bounds)| bounds.bottom() + padding <= bottom)
+        // Fractional rem sizes and device scaling can round the last row and
+        // viewport in opposite directions. One logical pixel is not hidden content.
+        .is_some_and(|(_, bounds)| bounds.bottom() + padding <= bottom + px(1.))
 }
 
 /// The row at the viewport's top owns the current-round marker, including
@@ -449,6 +458,8 @@ mod tests {
         assert!(tail_visible(&last, 479, px(366.), px(36.)));
         assert!(!tail_visible(&last, 480, px(500.), px(36.)));
         assert!(!tail_visible(&[], 479, px(500.), px(36.)));
+        assert!(tail_visible(&last, 479, px(365.5), px(36.)));
+        assert!(!tail_visible(&last, 479, px(364.), px(36.)));
     }
 
     #[test]

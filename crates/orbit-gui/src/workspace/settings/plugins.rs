@@ -359,7 +359,10 @@ impl Plugins {
                             div()
                                 .text_sm()
                                 .text_color(cx.theme().danger)
-                                .child(error.clone()),
+                                .child(
+                                    orbit_client::directories::display_diagnostic(error)
+                                        .into_owned(),
+                                ),
                         )
                     }
                 }
@@ -654,7 +657,9 @@ impl Plugins {
                         div()
                             .text_sm()
                             .text_color(cx.theme().danger)
-                            .child(error),
+                            .child(
+                                orbit_client::directories::display_diagnostic(&error).into_owned(),
+                            ),
                     )
                 },
             );

@@ -877,7 +877,10 @@ impl ToolOutput {
                         ImageContent::Failed(error) => div()
                             .text_sm()
                             .whitespace_normal()
-                            .child(error.clone())
+                            .child(
+                                orbit_client::directories::display_diagnostic(error.as_ref())
+                                    .into_owned(),
+                            )
                             .into_any_element(),
                         ImageContent::Idle
                             if self.disconnected || self.owner.upgrade().is_none() =>

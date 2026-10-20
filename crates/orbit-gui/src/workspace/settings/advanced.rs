@@ -401,7 +401,7 @@ impl Render for Advanced {
                     )
                 })
                 .when_some(self.error.clone(), |view, error| {
-                    view.child(div().text_sm().text_color(cx.theme().danger).child(error))
+                    view.child(div().text_sm().text_color(cx.theme().danger).child(orbit_client::directories::display_diagnostic(&error).into_owned()))
                 }),
         );
         if self.draft.is_none() {

@@ -784,7 +784,10 @@ impl Render for Tasks {
                     div()
                         .text_sm()
                         .text_color(cx.theme().danger)
-                        .child(error),
+                        .child(
+                            orbit_client::directories::display_diagnostic(error.as_ref())
+                                .into_owned(),
+                        ),
                 )
             })
             .when(self.saved, |body| {

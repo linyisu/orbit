@@ -740,7 +740,7 @@ impl Render for RemoteConnection {
                     div()
                         .text_sm()
                         .text_color(cx.theme().danger)
-                        .child(error),
+                        .child(orbit_client::directories::display_diagnostic(&error).into_owned()),
                 )
             })
             .child(

@@ -205,7 +205,7 @@ impl Render for Importer {
                 .text_color(cx
                 .theme()
                 .danger)
-                .child(error)));
+                .child(orbit_client::directories::display_diagnostic(&error).into_owned())));
 
         if let Some(scan) = &self.scan {
             let available = scan
@@ -300,7 +300,11 @@ impl Render for Importer {
                                         .text_xs()
                                         .text_ellipsis()
                                         .text_color(cx.theme().muted_foreground)
-                                        .child(format!("/{} · {}", skill.name, skill.path)),
+                                        .child(format!(
+                                            "/{} · {}",
+                                            skill.name,
+                                            orbit_client::directories::display_path(&skill.path)
+                                        )),
                                 )
                                 .on_click(cx.listener(move |view, checked, _, cx| {
                                     if let Some(scan) = &mut view.scan {
