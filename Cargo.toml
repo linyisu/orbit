@@ -22,11 +22,11 @@ members = [
 exclude = ["vendor/ratex-unicode-font", "vendor/gpui-pre-wgpu", "vendor/qwen-asr"]
 
 [patch.crates-io]
-gpui-pre-windows = { git = "https://github.com/linyisu/gpui-kit", rev = "651d88c231c9f46f22447b5a1d1299ead307c0ad" }
+gpui-pre-windows = { git = "https://github.com/linyisu/gpui-kit", rev = "d7b441dbc0f6dac2cdea76d9df5eb44ffb13f4e4" }
 qwen-asr = { path = "vendor/qwen-asr" }
 gpui-pre-wgpu = { path = "vendor/gpui-pre-wgpu" }
 ratex-unicode-font = { path = "vendor/ratex-unicode-font" }
-rquickjs = { git = "https://github.com/linyisu/gpui-kit", rev = "651d88c231c9f46f22447b5a1d1299ead307c0ad" }
+rquickjs = { git = "https://github.com/linyisu/gpui-kit", rev = "d7b441dbc0f6dac2cdea76d9df5eb44ffb13f4e4" }
 
 [workspace.package]
 version = "0.1.0"
