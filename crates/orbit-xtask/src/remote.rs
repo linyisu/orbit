@@ -14,6 +14,9 @@ use tokio::process::Command;
 
 use crate::process;
 
+#[cfg(windows)]
+mod window_geometry;
+
 const CA_BUNDLES: &[&str] = &[
     "/etc/ssl/certs/ca-certificates.crt",
     "/etc/pki/tls/certs/ca-bundle.crt",
@@ -553,6 +556,13 @@ async fn verify_gui_startup(client: &Path, server: Option<&Path>, first_use: boo
             .stderr(output)
             .kill_on_drop(true)
             .spawn()?;
+        #[cfg(windows)]
+        if !first_use && launch == 0 {
+            let pid = child
+                .id()
+                .context("desktop process has no identity")?;
+            tokio::task::spawn_blocking(move || window_geometry::verify(pid)).await??;
+        }
         let status = tokio::time::timeout(DESKTOP_EXIT_TIMEOUT, child.wait()).await;
         let diagnostics = fs::read_to_string(&log).unwrap_or_default();
         let status = status.with_context(|| {

@@ -17,3 +17,8 @@ tempfile.workspace = true
 tokio.workspace = true
 toml.workspace = true
 zip.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = [
+    "Win32_Graphics_Gdi", "Win32_UI_HiDpi", "Win32_UI_WindowsAndMessaging",
+] }
