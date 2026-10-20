@@ -157,13 +157,21 @@ fn orphan_collection_keeps_live_directories_unknown_files_and_symlinks() {
 }
 
 #[test]
-fn ownership_root_rejects_public_directories_and_symlinks() {
+fn ownership_root_respects_platform_permissions_and_rejects_symlinks() {
     let temporary = tempfile::tempdir().unwrap();
-    let root = temporary.path().join("public");
+    let root = temporary.path().join("existing");
     std::fs::create_dir(&root).unwrap();
     #[cfg(unix)]
-    std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o755)).unwrap();
-    assert!(create_directory(&root).is_err());
+    {
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(create_directory(&root).is_err());
+    }
+    #[cfg(windows)]
+    {
+        // TempDir descendants inherit private ACLs; public ACE rejection is
+        // exercised by filesystem::private::tests with an explicit descriptor.
+        assert!(create_directory(&root).is_ok());
+    }
     let link = temporary.path().join("link");
     #[cfg(unix)]
     std::os::unix::fs::symlink(temporary.path(), &link).unwrap();

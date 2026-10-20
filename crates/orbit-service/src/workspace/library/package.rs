@@ -267,7 +267,11 @@ mod native_tests {
     #[test]
     fn exports_nested_resources_with_portable_paths_and_materializes_them() {
         let temporary = tempfile::tempdir().unwrap();
-        let root = temporary.path().join("sample-skill");
+        let root = temporary
+            .path()
+            .canonicalize()
+            .unwrap()
+            .join("sample-skill");
         fs::create_dir_all(root.join("resources/nested")).unwrap();
         fs::write(
             root.join("SKILL.md"),
