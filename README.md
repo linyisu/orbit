@@ -9,7 +9,7 @@ Rust 编写的编码 Agent，提供终端界面和实验性桌面客户端。支
 ## 快速开始
 
 底层服务、终端与桌面客户端提供 Linux、macOS 和 Windows 原生构建，Windows 不依赖 WSL。
-桌面发布包与实际窗口启动由 [Native desktop](.github/workflows/native-desktop.yml) 分平台验收。
+桌面发布包与实际窗口启动由[构建](.github/workflows/build.yml)分平台验收。
 
 Linux 源码构建需要 Rust stable、`musl-tools` 及对应架构的 musl target；以下以 x86-64 为例：
 
@@ -73,14 +73,18 @@ cargo clippy --workspace --all-targets --features orbit-gui/test-support --locke
 cargo test --workspace --features orbit-gui/test-support --locked
 ```
 
-测试使用临时数据；部分测试需要本地回环监听，真实网络测试单独标记为 ignored。[CI](.github/workflows/ci.yml) 使用同一组检查，原生后端验收见 [Native runtime contracts](.github/workflows/native-runtime.yml)，打包与实际启动验收见 [orbit-xtask](crates/orbit-xtask/README.md)。
+测试使用临时数据；部分测试需要本地回环监听，真实网络测试单独标记为 ignored。
+CI 只保留两个入口：
 
-`native-runtime-foundation` 分支的 push 运行当前修复涉及的目标 shell、输出解码、路径投影、
-进程所有权及桌面退出验收，沿用其他已通过结果；主分支、PR 和手动触发仍运行完整原生矩阵。
-需要对修复分支重新全量验收时，在推送的最新提交说明中加入 `[native-full]`，同时启动
-全仓检查、Linux 容器部署及完整原生底层和桌面矩阵；普通推送继续采用定向验证。
-仅修正当前 Windows 日志测试夹具时，可用 `[test-only]` 重跑该用例；它不重建桌面包，
-也不取消正在进行的桌面构建。此标记不用于应用行为变更。
+- [测试](.github/workflows/test.yml)：`main` 推送、面向 `main` 的 PR 或手动触发。
+  Linux 运行格式、依赖边界、全工作区静态检查和测试；macOS、Windows 运行原生平台回归。
+  保留进程回收、文件安全、本机通信、账号、GUI/TUI 和语音等责任 crate 的测试覆盖。
+- [构建](.github/workflows/build.yml)：手动触发，生成三平台 TUI、GUI Debug 包及 Windows 安装包。
+  同时验证原生服务、协议、实际窗口、Linux 容器部署及干净 Windows 主机安装与卸载。
+  SSH/WSL 所需的 Linux 服务与客户端使用同一提交，不因普通推送自动打包。
+
+不再通过提交消息标记或专用分支选择 CI 模式。
+打包与实际启动验收入口见 [orbit-xtask](crates/orbit-xtask/README.md)。
 
 按职责维护模块和共享接口，注释说明约束与原因。修改后运行相关回归；新增或移动模块时同步 crate README，并检查链接。配置与参数细节以示例、`--help` 和所属模块源码为准。
 

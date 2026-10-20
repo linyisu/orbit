@@ -40,7 +40,8 @@ Linux 安装时将程序放入 PATH，启动项放入用户 applications 目录�
 账号编辑验收先通过实际按钮命中区域检查左右侧栏的单击和双击，确认面板切换且窗口不缩放。
 Linux 验收需在独立 Xvfb 中运行；原生 macOS/Windows 使用 GitHub Actions 的隔离 runner。
 Windows 窗口验收不设置 HOME 或 XDG 配置变量，同时覆盖原生设置路径。
-CI 见 [Native desktop contracts](../../.github/workflows/native-desktop.yml)。
+自动测试见[测试](../../.github/workflows/test.yml)，
+原生窗口、打包与安装验收见手动触发的[构建](../../.github/workflows/build.yml)。
 桌面构建只保留 Ubuntu 26.04、macOS 26、Windows Server 2025，编译器使用 Rust stable。
 Linux 桌面包以该构建系统的 glibc 为基线；内嵌的 Linux musl 服务仍独立验证较早系统兼容性。
 Windows 回归使用与发布包一致的显式 MSVC target 和静态 C 运行库，不要求安装 Unix shell。

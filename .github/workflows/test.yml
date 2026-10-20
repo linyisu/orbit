@@ -1,0 +1,132 @@
+name: 测试
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_BUILD_JOBS: '2'
+  CARGO_INCREMENTAL: '0'
+  CARGO_PROFILE_DEV_DEBUG: '0'
+  CARGO_PROFILE_TEST_DEBUG: '0'
+
+jobs:
+  test:
+    name: ${{ matrix.platform }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: Linux
+            os: ubuntu-26.04
+          - platform: macOS
+            os: macos-26
+          - platform: Windows
+            os: windows-2025
+    steps:
+      - uses: actions/checkout@v7
+      - name: 安装 Linux 依赖
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools build-essential clang pkg-config \
+            libfontconfig-dev libwayland-dev libxkbcommon-x11-dev libx11-xcb-dev \
+            libssl-dev libzstd-dev libasound2-dev libvulkan-dev
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: 安装 Linux 服务 target
+        if: runner.os == 'Linux'
+        run: rustup target add x86_64-unknown-linux-musl
+      - name: 使用原生 Windows 静态运行库
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $nativeTarget = (rustc -vV | Select-String '^host: ').Line.Substring(6)
+          "CARGO_BUILD_TARGET=$nativeTarget" >> $env:GITHUB_ENV
+          "CARGO_ENCODED_RUSTFLAGS=-C$([char]31)target-feature=+crt-static" >> $env:GITHUB_ENV
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: test-${{ matrix.os }}
+          cache-targets: ${{ runner.os != 'Linux' }}
+          cache-on-failure: 'true'
+      - name: 格式检查
+        if: runner.os == 'Linux'
+        run: cargo fmt --all -- --check
+      - name: 职责与依赖边界检查
+        if: runner.os == 'Linux'
+        run: cargo xtask check
+      - name: 全工作区静态检查
+        if: runner.os == 'Linux'
+        run: cargo clippy --workspace --all-targets --features orbit-gui/test-support --locked -- -D warnings
+      - name: 全工作区测试
+        if: runner.os == 'Linux'
+        run: cargo test --workspace --features orbit-gui/test-support --locked
+      - name: 原生依赖与运行时检查
+        if: runner.os != 'Linux'
+        run: |
+          cargo check -p orbit-server -p orbit-client --locked
+          cargo clippy -p orbit-runtime --all-targets --locked -- -D warnings
+      - name: 原生执行、文件安全与服务测试
+        if: runner.os != 'Linux'
+        run: |
+          cargo test -p orbit-runtime --locked
+          cargo test -p orbit-service --lib --locked workspace::server::lifecycle::tests
+          cargo test -p orbit-service --lib --locked workspace::server::tests::browsing
+          cargo test -p orbit-service --lib --locked workspace::library::package::native_tests
+          cargo test -p orbit-service --lib --locked workspace::configuration::tests
+          cargo test -p orbit-service --lib --locked workspace::tool_output::tests
+          cargo test -p orbit-tools --locked --test native_files
+          cargo test -p orbit-tools --lib --locked mcp::tests
+          cargo test -p orbit-tools --lib --locked read_command_output::tests::reads_a_bounded_page
+          cargo test -p orbit-build -p orbit-xtask --locked
+      - name: Unix 文件权限与 Git 事务测试
+        if: runner.os == 'macOS'
+        run: cargo test -p orbit-tools --locked --test write_file --test git_inspect --test git_index
+      - name: 原生账号、模型与客户端测试
+        if: runner.os != 'Linux'
+        run: |
+          cargo test -p orbit-auth --lib --locked store::tests
+          cargo test -p orbit-auth --lib --locked usage::tests
+          cargo test -p orbit-model --locked advertised_api_metadata
+          cargo test -p orbit-config --locked directories::tests
+          cargo test -p orbit-config --locked discovery_retains_overrides_and_saved_credentials_reload
+          cargo test -p orbit-config --locked verified_api_capabilities
+          cargo test -p orbit-config --locked adding_another_official_key
+          cargo test -p orbit-client --lib --locked local_server::tests
+          cargo test -p orbit-client --lib --locked directories::
+          cargo test -p orbit-client --lib --locked bootstrap::tests
+          cargo test -p orbit-client --lib --locked platform::editor::tests
+          cargo test -p orbit-client --lib --locked pump::session::tests
+          cargo test -p orbit-client --lib --locked interaction::tests
+          cargo test -p orbit-client --lib --locked selection::tests
+          cargo test -p orbit-client --lib --locked invalid_execution_configuration
+          cargo test -p orbit-client --lib --locked request_futures_fit_native_executor_stacks
+      - name: 原生 GUI、TUI 与语音测试
+        if: runner.os != 'Linux'
+        run: |
+          cargo test -p orbit-gui --features test-support --test transport --locked -- --test-threads=1
+          cargo test -p orbit-gui --bin orbit-gui --locked conversation::navigation::tests
+          cargo test -p orbit-gui --bin orbit-gui --locked preferences::tests
+          cargo test -p orbit-tui --lib --locked configuration_location_is_readable
+          cargo test -p orbit-tui --lib --locked tool_path_labels
+          cargo test -p orbit-tui --lib --locked path_presentation_does_not
+          cargo test -p orbit-tui --lib --locked browsing_without_an_execution_budget
+          cargo test -p orbit-client --features local-speech --locked speech::

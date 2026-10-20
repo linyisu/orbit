@@ -1,0 +1,190 @@
+name: 构建
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_BUILD_JOBS: '2'
+  CARGO_INCREMENTAL: '0'
+  CARGO_PROFILE_DEV_DEBUG: '0'
+  CARGO_PROFILE_TEST_DEBUG: '0'
+
+jobs:
+  remote-service:
+    name: Linux 服务 (${{ matrix.arch }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-26.04
+            arch: x86_64
+          - os: ubuntu-26.04-arm
+            arch: aarch64
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.arch }}-unknown-linux-musl
+      - name: 安装 musl 工具链
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: remote-musl-${{ matrix.arch }}
+      - name: 构建同版本 SSH 与 WSL 服务
+        run: cargo build -p orbit-server --bin orbit-workspace-server --release --target ${{ matrix.arch }}-unknown-linux-musl --locked
+      - uses: actions/upload-artifact@v7
+        with:
+          name: remote-server-${{ matrix.arch }}
+          path: target/${{ matrix.arch }}-unknown-linux-musl/release/orbit-workspace-server
+          if-no-files-found: error
+          retention-days: 7
+
+  clients:
+    name: ${{ matrix.platform }}
+    needs: remote-service
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: Linux
+            os: ubuntu-26.04
+            remote-arch: x86_64
+          - platform: macOS
+            os: macos-26
+            remote-arch: aarch64
+          - platform: Windows
+            os: windows-2025
+            remote-arch: x86_64
+    steps:
+      - uses: actions/checkout@v7
+      - name: 安装 Linux 桌面依赖
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools build-essential clang pkg-config \
+            libfontconfig-dev libwayland-dev libxkbcommon-x11-dev libx11-xcb-dev \
+            libssl-dev libzstd-dev libasound2-dev libvulkan-dev xvfb \
+            mesa-vulkan-drivers fonts-noto-cjk fonts-noto-color-emoji
+      - uses: dtolnay/rust-toolchain@stable
+      - name: 安装 Linux 服务 target
+        if: runner.os == 'Linux'
+        run: rustup target add x86_64-unknown-linux-musl
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: build-${{ matrix.os }}
+          cache-on-failure: 'true'
+      - uses: actions/download-artifact@v8
+        with:
+          name: remote-server-${{ matrix.remote-arch }}
+          path: target/remote-services
+      - name: 选择同版本内嵌服务
+        shell: bash
+        run: |
+          echo "ORBIT_REMOTE_WORKSPACE_SERVER=$GITHUB_WORKSPACE/target/remote-services/orbit-workspace-server" >> "$GITHUB_ENV"
+          if [[ "$RUNNER_OS" == Linux ]]; then
+            chmod +x target/remote-services/orbit-workspace-server
+            echo "ORBIT_WORKSPACE_SERVER=$GITHUB_WORKSPACE/target/remote-services/orbit-workspace-server" >> "$GITHUB_ENV"
+          fi
+      - name: 重建完整的 Linux 语音库
+        if: runner.os == 'Linux'
+        run: cargo clean -p openblas-src
+      - name: 构建 TUI Debug 程序
+        run: cargo xtask bundle debug
+      - name: 验收原生 TUI 与内嵌服务
+        run: cargo xtask verify-native-bundle target/bundle
+      - name: 验收旧 Linux 系统的服务部署
+        if: runner.os == 'Linux'
+        run: cargo xtask verify-bundle target/bundle
+      - name: 归档 TUI
+        run: cargo xtask archive target/bundle
+      - name: 构建 GUI Debug 程序
+        run: cargo xtask bundle-gui debug
+      - name: 验收 Linux 原生窗口
+        if: runner.os == 'Linux'
+        run: xvfb-run -a -s '-screen 0 1280x900x24' cargo xtask verify-gui-bundle
+      - name: 验收 macOS 原生窗口
+        if: runner.os == 'macOS'
+        run: cargo xtask verify-gui-bundle
+      - name: 验收 Windows 原生窗口
+        if: runner.os == 'Windows'
+        timeout-minutes: 10
+        run: .\target\debug\orbit-xtask.exe verify-gui-bundle
+      - name: 归档 GUI
+        run: cargo xtask archive-gui
+      - name: 安装 Windows 打包工具
+        if: runner.os == 'Windows'
+        run: |
+          New-Item -ItemType Directory -Force target/installer-tools | Out-Null
+          curl.exe --fail --location --retry 4 --retry-all-errors --connect-timeout 20 --max-time 120 'https://downloads.sourceforge.net/project/nsis/NSIS%203/3.13/nsis-3.13.zip' --output target/installer-tools/nsis-3.13.zip
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $expected = 'ba63dffc4410ee89193e1cb5a41989991bd77c61068da17e3156d136b7b0b3d8'
+          $actual = (Get-FileHash target/installer-tools/nsis-3.13.zip -Algorithm SHA256).Hash
+          if ($actual -ne $expected) { throw 'NSIS archive SHA-256 mismatch' }
+          Expand-Archive target/installer-tools/nsis-3.13.zip target/installer-tools -Force
+          $nsis = Join-Path $env:GITHUB_WORKSPACE 'target/installer-tools/nsis-3.13'
+          "NSISDIR=$nsis" >> $env:GITHUB_ENV
+          $nsis >> $env:GITHUB_PATH
+      - name: 构建 Windows Debug 安装包
+        if: runner.os == 'Windows'
+        run: .\target\debug\orbit-xtask.exe installer-gui target/bundle-gui target/orbit-gui-debug-windows-x64-setup.exe
+      - uses: actions/upload-artifact@v7
+        with:
+          name: orbit-tui-${{ matrix.platform }}-${{ runner.arch }}
+          path: |
+            target/orbit-linux-*.tar.gz
+            target/orbit-macos-*.tar.gz
+            target/orbit-windows-*.tar.gz
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v7
+        with:
+          name: orbit-gui-${{ matrix.platform }}-${{ runner.arch }}
+          path: |
+            target/orbit-desktop-*.tar.gz
+            target/orbit-desktop-*.zip
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v7
+        if: runner.os == 'Windows'
+        with:
+          name: orbit-windows-installer-acceptance
+          path: target/debug/orbit-xtask.exe
+          if-no-files-found: error
+          retention-days: 1
+      - uses: actions/upload-artifact@v7
+        if: runner.os == 'Windows'
+        with:
+          name: orbit-gui-debug-windows-x64-installer
+          path: |
+            target/orbit-gui-debug-windows-x64-setup.exe
+            target/orbit-gui-debug-windows-x64-setup.exe.sha256
+          if-no-files-found: error
+
+  windows-installer:
+    name: Windows 安装验收
+    needs: clients
+    runs-on: windows-2025
+    timeout-minutes: 15
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: orbit-gui-debug-windows-x64-installer
+          path: package
+      - uses: actions/download-artifact@v8
+        with:
+          name: orbit-windows-installer-acceptance
+          path: acceptance
+      - name: 在无源码与 Cargo 缓存的机器上安装、运行和卸载
+        run: >-
+          .\acceptance\orbit-xtask.exe verify-gui-installer
+          package/orbit-gui-debug-windows-x64-setup.exe
