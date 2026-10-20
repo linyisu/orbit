@@ -10,7 +10,7 @@ use std::{
 use windows_sys::Win32::{
     Foundation::{HANDLE, INVALID_HANDLE_VALUE},
     System::{
-        Console::{CTRL_BREAK_EVENT, GenerateConsoleCtrlEvent},
+        Console::{CTRL_BREAK_EVENT, GenerateConsoleCtrlEvent, GetConsoleWindow},
         Diagnostics::ToolHelp::{
             CreateToolhelp32Snapshot, TH32CS_SNAPTHREAD, THREADENTRY32, Thread32First, Thread32Next,
         },
@@ -51,8 +51,16 @@ impl ProcessGroup {
                 size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
             )
         })?;
+        // Preserve an existing console for CTRL_BREAK, but never allocate a new one for a GUI
+        // or detached service. CREATE_NO_WINDOW would otherwise detach terminal callers too.
+        // SAFETY: querying this process's console window takes no pointer arguments.
+        let console_flags = if unsafe { GetConsoleWindow() }.is_null() {
+            CREATE_NO_WINDOW
+        } else {
+            0
+        };
         let mut child = command
-            .creation_flags(CREATE_SUSPENDED | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW)
+            .creation_flags(CREATE_SUSPENDED | CREATE_NEW_PROCESS_GROUP | console_flags)
             .kill_on_drop(true)
             .spawn()?;
         let leader = child

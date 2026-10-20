@@ -17,9 +17,17 @@ fn process_tree_fixture() {
     };
     #[cfg(windows)]
     if role == "console" {
+        let expected: usize = std::env::var("ORBIT_PROCESS_TEST_CONSOLE")
+            .unwrap()
+            .parse()
+            .unwrap();
         // SAFETY: querying the current process console has no pointer arguments.
-        assert!(unsafe { windows_sys::Win32::System::Console::GetConsoleWindow() }.is_null());
-        println!("NO_CONSOLE");
+        let actual = unsafe { windows_sys::Win32::System::Console::GetConsoleWindow() } as usize;
+        assert_eq!(
+            actual, expected,
+            "must reuse the host console or remain headless"
+        );
+        println!("NO_NEW_CONSOLE");
         return;
     }
     if role == "descendant" {
@@ -122,11 +130,14 @@ async fn spawn_failure_does_not_create_an_owner() {
 
 #[cfg(windows)]
 #[tokio::test]
-async fn owned_background_process_does_not_allocate_a_console_window() {
+async fn owned_background_process_does_not_allocate_a_new_console_window() {
+    // SAFETY: querying the current process console has no pointer arguments.
+    let console = unsafe { windows_sys::Win32::System::Console::GetConsoleWindow() } as usize;
     let mut command = tokio::process::Command::new(std::env::current_exe().unwrap());
     command
         .args(["--ignored", "--exact", FIXTURE, "--nocapture"])
         .env(ROLE, "console")
+        .env("ORBIT_PROCESS_TEST_CONSOLE", console.to_string())
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -140,5 +151,5 @@ async fn owned_background_process_does_not_allocate_a_console_window() {
         "{}",
         String::from_utf8_lossy(&result.stderr)
     );
-    assert!(String::from_utf8_lossy(&result.stdout).contains("NO_CONSOLE"));
+    assert!(String::from_utf8_lossy(&result.stdout).contains("NO_NEW_CONSOLE"));
 }
