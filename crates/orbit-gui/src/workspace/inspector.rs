@@ -19,6 +19,13 @@ pub(super) enum Section {
 }
 
 impl Section {
+    fn tab(self) -> Self {
+        match self {
+            Self::ProjectFiles | Self::Review | Self::History => self,
+            _ => Self::Tool,
+        }
+    }
+
     fn label(self) -> &'static str {
         match self {
             Self::Overview => "会话详情",
@@ -227,7 +234,31 @@ impl Workspace {
                         history.check_project(step - 22, window, cx)
                     })?;
             }
-            27 => self.set_inspector(None, window, cx),
+            27 => {
+                self.tool_output = None;
+                self.set_inspector(Some(Section::Tool), window, cx);
+            }
+            28 => {
+                anyhow::ensure!(
+                    self.tool_output.is_none() && self.inspector == Some(Section::Tool),
+                    "tools without a selected call must have an empty state"
+                );
+                self.change_tools = Some(
+                    self.execution
+                        .tools()
+                        .iter()
+                        .filter(|tool| !tool.changes.is_empty())
+                        .cloned()
+                        .collect(),
+                );
+                self.set_inspector(Some(Section::Changes), window, cx);
+            }
+            29 => anyhow::ensure!(
+                self.inspector == Some(Section::Changes)
+                    && self.inspector.unwrap().tab() == Section::Tool,
+                "write snapshots must remain tool evidence, not workspace Git changes"
+            ),
+            30 => self.set_inspector(None, window, cx),
             _ => {
                 anyhow::ensure!(
                     self.inspector.is_none(),
@@ -247,27 +278,45 @@ impl Workspace {
         let section = self
             .inspector
             .unwrap_or(Section::Overview);
-        let title = if section == Section::Tool {
-            self.tool_output
-                .as_ref()
-                .map(|panel| panel.read(cx).title())
-                .unwrap_or_else(|| section.label().into())
-        } else if section == Section::File {
-            self.file_preview
-                .as_ref()
-                .map(|(name, _)| name.clone())
-                .unwrap_or_else(|| section.label().into())
-        } else {
-            section.label().into()
-        };
         let content = match section {
             Section::Overview => self
                 .details_overview(cx)
                 .into_any_element(),
-            Section::Tool => div()
+            Section::Tool => v_flex()
                 .size_full()
+                .min_h_0()
                 .p_3()
-                .children(self.tool_output.clone())
+                .gap_2()
+                .when_some(self.tool_output.as_ref(), |view, panel| {
+                    view.child(
+                        div()
+                            .text_sm()
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_ellipsis()
+                            .flex_shrink_0()
+                            .child(panel.read(cx).title()),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_h_0()
+                            .child(panel.clone()),
+                    )
+                })
+                .when(self.tool_output.is_none(), |view| {
+                    view.child(
+                        div()
+                            .text_sm()
+                            .font_weight(FontWeight::MEDIUM)
+                            .child("尚未选择工具调用"),
+                    )
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(cx.theme().muted_foreground)
+                            .child("点击对话中的工具调用，查看输入、输出和执行状态。"),
+                    )
+                })
                 .into_any_element(),
             Section::AgentConversation => div()
                 .size_full()
@@ -277,13 +326,29 @@ impl Workspace {
                         .map(|(_, view)| view.clone()),
                 )
                 .into_any_element(),
-            Section::File => div()
+            Section::File => v_flex()
                 .size_full()
+                .min_h_0()
                 .p_3()
+                .gap_2()
+                .when_some(self.file_preview.as_ref(), |view, (name, _)| {
+                    view.child(
+                        div()
+                            .text_sm()
+                            .text_ellipsis()
+                            .flex_shrink_0()
+                            .child(name.clone()),
+                    )
+                })
                 .children(
                     self.file_preview
                         .as_ref()
-                        .map(|(_, view)| view.clone()),
+                        .map(|(_, view)| {
+                            div()
+                                .flex_1()
+                                .min_h_0()
+                                .child(view.clone())
+                        }),
                 )
                 .on_action(cx.listener(
                     |view, _: &gpui_kit::component::input::Escape, window, cx| {
@@ -338,46 +403,9 @@ impl Workspace {
                     .flex_shrink_0()
                     .border_b_1()
                     .border_color(cx.theme().border)
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .text_sm()
-                            .text_ellipsis()
-                            .font_weight(FontWeight::MEDIUM)
-                            .child(title),
-                    )
-                    .child(
-                        Button::new("close-inspector")
-                            .ghost()
-                            .small()
-                            .icon(IconName::Close)
-                            .accessibility_label("关闭详情，返回对话")
-                            .tooltip("关闭详情 · Esc")
-                            .on_click(cx.listener(|view, _, window, cx| {
-                                view.set_inspector(None, window, cx);
-                            })),
-                    ),
-            )
-            .child(
-                h_flex()
-                    .px_3()
-                    .py_1()
-                    .gap_2()
-                    .when(self.tool_output.is_some(), |row| {
-                        row.child(
-                            Button::new("details-tool-tab")
-                                .ghost()
-                                .small()
-                                .label("工具")
-                                .selected(section == Section::Tool)
-                                .on_click(cx.listener(|view, _, window, cx| {
-                                    view.set_inspector(Some(Section::Tool), window, cx);
-                                })),
-                        )
-                    })
                     .children(
                         [
+                            (Section::Tool, "工具"),
                             (Section::ProjectFiles, "文件"),
                             (Section::Review, "变更"),
                             (Section::History, "历史"),
@@ -388,14 +416,34 @@ impl Workspace {
                                 .ghost()
                                 .small()
                                 .label(label)
-                                .selected(section == target)
-                                .on_click(cx.listener(move |view, _, window, cx| match target {
-                                    Section::ProjectFiles => view.show_files(None, window, cx),
-                                    Section::Review => view.show_review(None, window, cx),
-                                    Section::History => view.show_git_history(window, cx),
-                                    _ => unreachable!(),
+                                .selected(section.tab() == target)
+                                .on_click(cx.listener(move |view, _, window, cx| {
+                                    if section.tab() == target {
+                                        return;
+                                    }
+                                    match target {
+                                        Section::Tool => {
+                                            view.set_inspector(Some(Section::Tool), window, cx)
+                                        }
+                                        Section::ProjectFiles => view.show_files(None, window, cx),
+                                        Section::Review => view.show_review(None, window, cx),
+                                        Section::History => view.show_git_history(window, cx),
+                                        _ => unreachable!(),
+                                    }
                                 }))
                         }),
+                    )
+                    .child(div().flex_1())
+                    .child(
+                        Button::new("close-inspector")
+                            .ghost()
+                            .small()
+                            .icon(IconName::Close)
+                            .accessibility_label("关闭详情，返回对话")
+                            .tooltip("关闭详情 · Esc")
+                            .on_click(cx.listener(|view, _, window, cx| {
+                                view.set_inspector(None, window, cx);
+                            })),
                     ),
             )
             .child(
@@ -417,16 +465,6 @@ impl Workspace {
                     .text_color(cx.theme().muted_foreground)
                     .child("从上方切换文件、变更和历史；点击对话中的工具查看输出。"),
             )
-            .when(self.tool_output.is_some(), |view| {
-                view.child(
-                    Button::new("details-last-tool")
-                        .ghost()
-                        .label("返回上次工具详情")
-                        .on_click(cx.listener(|view, _, window, cx| {
-                            view.set_inspector(Some(Section::Tool), window, cx);
-                        })),
-                )
-            })
             .children(
                 [
                     (Section::Plan, self.planning.plan.is_some()),
@@ -692,19 +730,22 @@ impl Workspace {
             .size_full()
             .min_h_0()
             .min_w_0()
-            .child(section_summary(
-                "文件变更",
-                format!(
-                    "{} 个文件 · {}",
-                    files.len(),
-                    if self.change_tools.is_some() {
-                        "本轮写入快照"
-                    } else {
-                        "本会话"
-                    }
-                ),
-                cx,
-            ))
+            .child(
+                div()
+                    .px_3()
+                    .py_2()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(format!(
+                        "{} · {} 个文件",
+                        if self.change_tools.is_some() {
+                            "本轮写入快照"
+                        } else {
+                            "本会话写入快照"
+                        },
+                        files.len()
+                    )),
+            )
             .child(
                 div()
                     .id("inspector-changes-body")
@@ -715,7 +756,7 @@ impl Workspace {
                         empty_state(
                             IconName::File,
                             "还没有文件变更",
-                            "Agent 修改文件后，可以在这里查看差异或继续编辑。",
+                            "Agent 修改文件后，可以在这里查看写入快照。",
                             cx,
                         )
                         .into_any_element()
@@ -724,7 +765,6 @@ impl Workspace {
                             .px_2()
                             .children(files.iter().map(|path| {
                                 let path = path.clone();
-                                let edit_path = path.clone();
                                 let snapshot = self
                                     .change_tools
                                     .as_ref()
@@ -738,13 +778,8 @@ impl Workspace {
                                     .cloned();
                                 let (name, parent) = path_labels(&path);
                                 let tooltip = preview_tooltip(&path, "点击查看文件差异");
-                                h_flex()
-                                    .gap_1()
-                                    .min_w_0()
-                                    .child(
-                                        Button::new(SharedString::from(format!(
-                                            "changed-file:{path}"
-                                        )))
+                                h_flex().gap_1().min_w_0().child(
+                                    Button::new(SharedString::from(format!("changed-file:{path}")))
                                         .ghost()
                                         .small()
                                         .h_12()
@@ -806,66 +841,12 @@ impl Workspace {
                                                 );
                                             }
                                         })),
-                                    )
-                                    .child(
-                                        Button::new(SharedString::from(format!(
-                                            "edit-changed-file:{edit_path}"
-                                        )))
-                                        .ghost()
-                                        .small()
-                                        .flex_shrink_0()
-                                        .icon(IconName::Pencil)
-                                        .tooltip("编辑文件…")
-                                        .accessibility_label(format!("编辑 {edit_path}"))
-                                        .disabled(self.info.is_none())
-                                        .on_click(cx.listener(move |view, _, window, cx| {
-                                            view.show_files(Some(edit_path.clone()), window, cx)
-                                        })),
-                                    )
+                                )
                             }))
                             .into_any_element()
                     }),
             )
-            .child(
-                h_flex()
-                    .flex_shrink_0()
-                    .px_3()
-                    .py_2()
-                    .border_t_1()
-                    .border_color(cx.theme().border)
-                    .child(
-                        Button::new("inspect-workspace-diff")
-                            .ghost()
-                            .small()
-                            .icon(IconName::File)
-                            .label("审查全部变更…")
-                            .disabled(self.info.is_none())
-                            .on_click(cx.listener(|view, _, window, cx| {
-                                view.execute(WorkspaceCommand::Diff, window, cx)
-                            })),
-                    ),
-            )
     }
-}
-
-fn section_summary(title: &'static str, detail: String, cx: &App) -> impl IntoElement {
-    v_flex()
-        .px_3()
-        .py_3()
-        .gap_1()
-        .flex_shrink_0()
-        .child(
-            div()
-                .text_sm()
-                .font_weight(FontWeight::MEDIUM)
-                .child(title),
-        )
-        .child(
-            div()
-                .text_xs()
-                .text_color(cx.theme().muted_foreground)
-                .child(detail),
-        )
 }
 
 fn empty_state(
@@ -944,7 +925,24 @@ fn preview_tooltip(text: &str, action: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{compact, hide_navigation, path_labels, preview_tooltip};
+    use super::{Section, compact, hide_navigation, path_labels, preview_tooltip};
+
+    #[test]
+    fn tool_evidence_and_workspace_changes_have_distinct_navigation_owners() {
+        for section in [
+            Section::Tool,
+            Section::File,
+            Section::Plan,
+            Section::Changes,
+            Section::Agents,
+            Section::AgentConversation,
+        ] {
+            assert_eq!(section.tab(), Section::Tool);
+        }
+        for section in [Section::ProjectFiles, Section::Review, Section::History] {
+            assert_eq!(section.tab(), section);
+        }
+    }
 
     #[test]
     fn details_reclaim_navigation_before_replacing_the_conversation() {
