@@ -89,6 +89,12 @@ async fn build_client(
     package: &str,
     executable: &str,
 ) -> Result<BTreeMap<String, PathBuf>> {
+    if let Some(remote) = std::env::var_os("ORBIT_REMOTE_WORKSPACE_SERVER") {
+        let remote = Path::new(&remote);
+        orbit_build::verify_static_server(remote)
+            .map_err(anyhow::Error::msg)
+            .with_context(|| format!("invalid embedded SSH/WSL service: {}", remote.display()))?;
+    }
     let mut command = cargo(root);
     command.args(["build", "--locked", "--message-format=json", "-p", package]);
     #[cfg(windows)]

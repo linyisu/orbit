@@ -114,14 +114,13 @@ jobs:
       - uses: actions/download-artifact@v8
         if: runner.os != 'Linux' && !contains(github.event.head_commit.message, '[installer-only]')
         with:
-          pattern: remote-server-*
+          name: remote-server-${{ runner.arch == 'ARM64' && 'aarch64' || 'x86_64' }}
           path: target/remote-services
       - name: Select the embedded SSH and WSL service
         if: runner.os != 'Linux' && !contains(github.event.head_commit.message, '[installer-only]')
         shell: bash
         run: |
-          architecture=$(rustc -vV | sed -n 's/^host: \([^-]*\)-.*/\1/p')
-          echo "ORBIT_REMOTE_WORKSPACE_SERVER=$GITHUB_WORKSPACE/target/remote-services/remote-server-$architecture/orbit-workspace-server" >> "$GITHUB_ENV"
+          echo "ORBIT_REMOTE_WORKSPACE_SERVER=$GITHUB_WORKSPACE/target/remote-services/orbit-workspace-server" >> "$GITHUB_ENV"
       - name: Rebuild Linux speech libraries from complete sources
         if: runner.os == 'Linux'
         run: cargo clean -p openblas-src
