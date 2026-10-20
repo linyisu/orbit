@@ -57,6 +57,11 @@ pub(super) enum Gutter {
         digits: usize,
         indent: usize,
     },
+    DiffPair {
+        original: Option<u64>,
+        modified: Option<u64>,
+        digits: usize,
+    },
     Diff {
         number: u64,
         digits: usize,
@@ -74,6 +79,31 @@ impl Gutter {
                 Style::default().fg(*color),
             ),
 
+            Self::DiffPair {
+                original,
+                modified,
+                digits,
+            } => {
+                let number = |value: Option<u64>| {
+                    if continuation {
+                        " ".repeat(*digits)
+                    } else {
+                        value.map_or_else(
+                            || " ".repeat(*digits),
+                            |value| format!("{value:>digits$}"),
+                        )
+                    }
+                };
+                let sign = if continuation {
+                    ' '
+                } else {
+                    change.map_or(' ', Change::marker)
+                };
+                Span::styled(
+                    format!("{} {} {sign} │ ", number(*original), number(*modified)),
+                    Style::default().fg(THEME.line_number),
+                )
+            }
             Self::Number {
                 number,
                 digits,
@@ -211,6 +241,95 @@ pub(super) fn file_lines(path: &str, content: &str) -> Vec<Line<'static>> {
         .lines()
         .flat_map(|line| renderer.render(line, Options::default()))
         .collect()
+}
+
+/// Render a unified patch with source coordinates instead of patch metadata.
+/// The raw patch remains unchanged for copying and service receipts.
+pub(super) fn patch_lines(patch: &str, width: u16) -> Vec<Line<'static>> {
+    let mut renderer = Renderer::new("diff");
+    let mut position = None;
+    let mut lines = Vec::new();
+    for line in patch.lines() {
+        if let Some(header) = line.strip_prefix("@@ ")
+            && let Some((ranges, _)) = header.split_once(" @@")
+        {
+            let mut ranges = ranges.split_whitespace();
+            let start = |range: &str, prefix| {
+                let range = range.strip_prefix(prefix)?;
+                let (start, count) = range
+                    .split_once(',')
+                    .unwrap_or((range, "1"));
+                Some((start.parse::<u64>().ok()?, count.parse::<u64>().ok()?))
+            };
+            if let Some((original, modified)) = ranges
+                .next()
+                .and_then(|old| start(old, '-'))
+                .zip(
+                    ranges
+                        .next()
+                        .and_then(|new| start(new, '+')),
+                )
+            {
+                position = Some((original.0, modified.0, original.1, modified.1));
+                lines.extend(render_line(
+                    &Line::from(Span::styled(
+                        "旧行 新行",
+                        Style::default().fg(THEME.line_number),
+                    )),
+                    Options {
+                        width: Some(width.max(2)),
+                        ..Default::default()
+                    },
+                ));
+                continue;
+            }
+        }
+        if line.starts_with("diff --git ") {
+            position = None;
+        }
+        let mut gutter = Gutter::None;
+        if let Some((original, modified, old_remaining, new_remaining)) = position.as_mut() {
+            let numbers = match line.as_bytes().first() {
+                Some(b'-') if *old_remaining > 0 => {
+                    let numbers = (Some(*original), None);
+                    *original = original.saturating_add(1);
+                    *old_remaining -= 1;
+                    Some(numbers)
+                }
+                Some(b'+') if *new_remaining > 0 => {
+                    let numbers = (None, Some(*modified));
+                    *modified = modified.saturating_add(1);
+                    *new_remaining -= 1;
+                    Some(numbers)
+                }
+                Some(b' ') if *old_remaining > 0 && *new_remaining > 0 => {
+                    let numbers = (Some(*original), Some(*modified));
+                    *original = original.saturating_add(1);
+                    *old_remaining -= 1;
+                    *modified = modified.saturating_add(1);
+                    *new_remaining -= 1;
+                    Some(numbers)
+                }
+                _ => None,
+            };
+            if let Some((original, modified)) = numbers {
+                gutter = Gutter::DiffPair {
+                    original,
+                    modified,
+                    digits: 4,
+                };
+            }
+        }
+        lines.extend(renderer.render(
+            line,
+            Options {
+                gutter,
+                width: Some(width.max(2)),
+                ..Default::default()
+            },
+        ));
+    }
+    lines
 }
 
 /// Format already parsed, safely escaped source from a cached file or diff side.

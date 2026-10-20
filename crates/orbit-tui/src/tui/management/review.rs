@@ -253,20 +253,7 @@ impl State {
             .as_ref()
             .is_some_and(|(cached_width, _)| *cached_width == width)
         {
-            let mut renderer = code::Renderer::new("diff");
-            let lines = self
-                .patch
-                .lines()
-                .flat_map(|line| {
-                    renderer.render(
-                        line,
-                        code::Options {
-                            width: Some(width.max(2)),
-                            ..Default::default()
-                        },
-                    )
-                })
-                .collect();
+            let lines = code::patch_lines(&self.patch, width);
             self.cache = Some((width, lines));
         }
         &self.cache.as_ref().unwrap().1

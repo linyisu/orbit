@@ -2,7 +2,7 @@
 use super::*;
 use gpui_kit::component::{
     collapsible::Collapsible,
-    diff::{Diff, DiffFile, DiffMode, DiffState},
+    diff::{Diff, DiffFile, DiffHunkSeparator, DiffMode, DiffState},
     input::{Editor, EditorState},
 };
 use orbit_client::protocol::approval::{ApprovalPreview, CommandWorkspaceAccess};
@@ -572,7 +572,7 @@ impl ApprovalContent {
                         .overflow_hidden()
                         .child(
                             Diff::new(&self.diff)
-                                .single_line_number(true)
+                                .hunk_separator(DiffHunkSeparator::Simple)
                                 .header_visible(false),
                         ),
                 );

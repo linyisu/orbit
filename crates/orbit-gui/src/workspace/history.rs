@@ -2,7 +2,7 @@
 use super::*;
 use gpui_kit::component::{
     Selectable,
-    diff::{Diff, DiffFile, DiffState},
+    diff::{Diff, DiffFile, DiffHunkSeparator, DiffState},
     input::{Editor, EditorState},
     resizable::ResizableState,
 };
@@ -458,7 +458,7 @@ impl Render for History {
                     } else {
                         Diff::new(&self.diff)
                             .soft_wrap(true)
-                            .single_line_number(true)
+                            .hunk_separator(DiffHunkSeparator::Simple)
                             .size_full()
                             .into_any_element()
                     }),

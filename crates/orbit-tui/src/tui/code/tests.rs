@@ -521,3 +521,65 @@ fn code_comments_share_a_readable_foreground_across_languages_and_previews() {
         Some(Color::Rgb(163, 173, 190))
     );
 }
+
+#[test]
+fn patch_coordinates_follow_hunks_and_preserve_header_like_source() {
+    let patch = "--- a/generated.txt\n+++ b/generated.txt\n@@ -42,2 +81,2 @@ scope\n--- old text\n+++ new text\n shared\n@@ -99,0 +141,1 @@\n+inserted\n";
+    let rows = patch_lines(patch, 100)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>();
+    assert!(
+        rows.iter()
+            .all(|line| !line.contains("@@"))
+    );
+    assert!(
+        rows.iter()
+            .any(|line| line.starts_with("  42      ") && line.ends_with("--- old text"))
+    );
+    assert!(
+        rows.iter()
+            .any(|line| line.starts_with("       81 ") && line.ends_with("+++ new text"))
+    );
+    assert!(
+        rows.iter()
+            .any(|line| line.starts_with("  43   82 ") && line.ends_with(" shared"))
+    );
+    assert!(
+        rows.iter()
+            .any(|line| line.starts_with("      141 ") && line.ends_with("+inserted"))
+    );
+    for width in [1, 8, 24] {
+        assert!(
+            patch_lines(patch, width)
+                .iter()
+                .all(|line| line.width() <= usize::from(width.max(2)))
+        );
+    }
+}
+
+#[test]
+fn patch_coordinates_reset_for_new_files_and_ignore_newline_notes() {
+    let patch = "--- a/first.txt\n+++ b/first.txt\n@@ -7 +9 @@\n-old\n\\ No newline at end of file\n+new\n\\ No newline at end of file\n--- /dev/null\n+++ b/second.txt\n@@ -0,0 +1 @@\n+created\n";
+    let rows = patch_lines(patch, 80)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>();
+    assert!(
+        rows.iter()
+            .any(|line| line.starts_with("   7      ") && line.ends_with("-old"))
+    );
+    assert!(
+        rows.iter()
+            .any(|line| line.starts_with("        9 ") && line.ends_with("+new"))
+    );
+    assert!(
+        rows.iter()
+            .any(|line| line.starts_with("        1 ") && line.ends_with("+created"))
+    );
+    assert!(
+        rows.iter()
+            .filter(|line| line.contains("No newline"))
+            .all(|line| !line.contains('│'))
+    );
+}

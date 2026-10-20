@@ -2,7 +2,7 @@
 //! here; its receipt and approval checks remain service-owned.
 use super::*;
 use gpui_kit::component::{
-    diff::{Diff, DiffFile, DiffState},
+    diff::{Diff, DiffFile, DiffHunkSeparator, DiffState},
     input::{Editor, EditorState},
     list::ListItem,
 };
@@ -771,7 +771,7 @@ impl Render for Review {
                                     } else {
                                         Diff::new(&self.diff)
                                             .soft_wrap(true)
-                                            .single_line_number(true)
+                                            .hunk_separator(DiffHunkSeparator::Simple)
                                             .into_any_element()
                                     }),
                             ),

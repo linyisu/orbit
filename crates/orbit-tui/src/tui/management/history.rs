@@ -1,6 +1,6 @@
 //! Keyboard-first Git history using the same read-only service contract as the desktop.
 use super::{Action, Panel};
-use crate::tui::{input::InputState, render::safe_output};
+use crate::tui::{code, input::InputState, render::safe_output};
 use crate::workspace::protocol::{Request, Response};
 use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
 use orbit_protocol::review::{Action as ReviewAction, Commit, Snapshot};
@@ -373,24 +373,24 @@ impl Panel for State {
                 }
             }
             Page::Content | Page::Diff => {
-                let text = if self.page == Page::Diff {
-                    &self.patch
+                let rows = if self.page == Page::Diff {
+                    code::patch_lines(&self.patch, area.width)
                 } else {
-                    &self.content
+                    self.content
+                        .lines()
+                        .map(|line| Line::from(safe_output(line)))
+                        .collect()
                 };
                 let available = usize::from(area.height)
                     .saturating_sub(header)
                     .max(1);
-                self.scroll = self.scroll.min(
-                    text.lines()
-                        .count()
-                        .saturating_sub(available),
-                );
+                self.scroll = self
+                    .scroll
+                    .min(rows.len().saturating_sub(available));
                 lines.extend(
-                    text.lines()
+                    rows.into_iter()
                         .skip(self.scroll)
-                        .take(available)
-                        .map(|line| Line::from(safe_output(line))),
+                        .take(available),
                 );
             }
         }

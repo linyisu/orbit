@@ -4,7 +4,7 @@ use super::*;
 use crate::execution::{ToolRun, ToolStatus};
 use gpui_kit::component::{
     clipboard::Clipboard,
-    diff::{Diff, DiffFile, DiffState},
+    diff::{Diff, DiffFile, DiffHunkSeparator, DiffState},
     input::{Editor, EditorState, RopeExt},
     tab::{Tab, TabBar},
 };
@@ -773,7 +773,7 @@ impl Render for ToolOutput {
                                 |body| {
                                     body.child(
                                         Diff::new(&self.diff)
-                                            .single_line_number(true)
+                                            .hunk_separator(DiffHunkSeparator::Simple)
                                             .soft_wrap(true)
                                             .size_full(),
                                     )
