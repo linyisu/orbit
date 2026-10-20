@@ -85,6 +85,8 @@ fn install(bundle: &Bundle, directory: &Path) -> Result<PathBuf> {
             && metadata.mode() & 0o022 == 0,
         "local server cache must be owned by this user and not writable by others"
     );
+    let registry = cache_lock(&directory.join("registry.lock"))?;
+    registry.lock()?;
     let digest = bundle.digest();
     let executable = directory.join(format!(
         "orbit-server-{digest}{}",
@@ -151,12 +153,142 @@ fn install(bundle: &Bundle, directory: &Path) -> Result<PathBuf> {
         actual == digest,
         "cached workspace server checksum mismatch"
     );
+    // Keep a shared OS lease for every executable used by this client. A crashed
+    // client releases its leases automatically; another process may then prune it.
+    static LEASES: std::sync::Mutex<Vec<(PathBuf, std::fs::File)>> =
+        std::sync::Mutex::new(Vec::new());
+    let mut leases = LEASES
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    if !leases
+        .iter()
+        .any(|(path, _)| path == &executable)
+    {
+        let lease = cache_lock(&executable.with_extension("lease"))?;
+        lease.lock_shared()?;
+        leases.push((executable.clone(), lease));
+    }
+    // Cleanup is opportunistic: Windows also refuses removal of running images.
+    // Failure must not turn a verified, usable service into a startup failure.
+    let _ = prune(directory, &executable);
     Ok(executable)
+}
+
+fn cache_lock(path: &Path) -> Result<std::fs::File> {
+    #[cfg(windows)]
+    let file = orbit_runtime::filesystem::private::open_file(path, true, false)?;
+    #[cfg(unix)]
+    let file = {
+        use std::os::unix::fs::OpenOptionsExt;
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK)
+            .open(path)?;
+        let metadata = file.metadata()?;
+        // SAFETY: geteuid has no arguments or memory preconditions.
+        let current_user = unsafe { libc::geteuid() };
+        ensure!(
+            metadata.is_file()
+                && metadata.uid() == current_user
+                && metadata.nlink() == 1
+                && metadata.mode() & 0o077 == 0,
+            "invalid server cache lock"
+        );
+        file
+    };
+    Ok(file)
+}
+
+fn prune(directory: &Path, current: &Path) -> Result<()> {
+    let mut candidates = Vec::new();
+    for entry in std::fs::read_dir(directory)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let Some(digest) = name.to_str().and_then(|name| {
+            name.strip_prefix("orbit-server-")?
+                .strip_suffix(std::env::consts::EXE_SUFFIX)
+        }) else {
+            continue;
+        };
+        if digest.len() != 64
+            || !digest
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit())
+        {
+            continue;
+        }
+        let path = entry.path();
+        let metadata = std::fs::symlink_metadata(&path)?;
+        if path != current && metadata.is_file() && !metadata.file_type().is_symlink() {
+            candidates.push((metadata.modified()?, path));
+        }
+    }
+    candidates.sort_by(|left, right| right.cmp(left));
+    // Retain the current image, all leased images and one previous inactive image.
+    let mut retained_previous = false;
+    for (_, path) in candidates {
+        let lease = cache_lock(&path.with_extension("lease"))?;
+        if lease.try_lock().is_err() {
+            continue;
+        }
+        if !retained_previous {
+            retained_previous = true;
+            continue;
+        }
+        let _ = std::fs::remove_file(path);
+    }
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cache_pruning_preserves_current_leased_and_previous_images() {
+        let root = tempfile::tempdir().unwrap();
+        let path = |index| {
+            root.path().join(format!(
+                "orbit-server-{index:064x}{}",
+                std::env::consts::EXE_SUFFIX
+            ))
+        };
+        let files = (0..5).map(path).collect::<Vec<_>>();
+        for file in &files {
+            std::fs::write(file, b"generated executable").unwrap();
+        }
+        let lease = cache_lock(&files[0].with_extension("lease")).unwrap();
+        lease.lock_shared().unwrap();
+        std::fs::write(root.path().join("unrelated.exe"), b"keep").unwrap();
+        prune(root.path(), &files[1]).unwrap();
+        assert!(files[0].exists());
+        assert!(files[1].exists());
+        assert_eq!(
+            files
+                .iter()
+                .filter(|path| path.exists())
+                .count(),
+            3
+        );
+        assert!(
+            root.path()
+                .join("unrelated.exe")
+                .exists()
+        );
+        drop(lease);
+        prune(root.path(), &files[1]).unwrap();
+        assert_eq!(
+            files
+                .iter()
+                .filter(|path| path.exists())
+                .count(),
+            2
+        );
+    }
 
     #[test]
     fn cached_server_is_verified_even_when_tampering_preserves_length() {
