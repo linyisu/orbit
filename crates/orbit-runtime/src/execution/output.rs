@@ -1,4 +1,6 @@
+mod encoding;
 mod temporary;
+pub use encoding::OutputEncoding;
 pub use temporary::{CommandOutputs, OutputLease, OutputRun};
 
 use std::{

@@ -23,6 +23,37 @@ pub fn snapshot() -> BTreeMap<String, String> {
         .unwrap_or_else(inherited)
 }
 
+/// Resolve the interpreter used by native execution from the target environment.
+pub fn shell(environment: &BTreeMap<String, String>) -> std::io::Result<String> {
+    #[cfg(unix)]
+    {
+        Ok(environment
+            .get("SHELL")
+            .filter(|value| !value.is_empty())
+            .cloned()
+            .unwrap_or_else(|| "/bin/sh".into()))
+    }
+    #[cfg(windows)]
+    {
+        for key in ["SHELL", "ComSpec"] {
+            if let Some((_, value)) = environment
+                .iter()
+                .find(|(name, value)| name.eq_ignore_ascii_case(key) && !value.is_empty())
+            {
+                return Ok(value.clone());
+            }
+        }
+        super::process::system_executable("cmd.exe")
+            .map(|path| path.to_string_lossy().into_owned())
+            .ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "Windows command interpreter is unavailable",
+                )
+            })
+    }
+}
+
 fn inherited() -> BTreeMap<String, String> {
     std::env::vars()
         .filter(|(key, _)| !is_sensitive_key(key))
@@ -118,6 +149,24 @@ fn parse(bytes: &[u8]) -> std::io::Result<BTreeMap<String, String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_interpreter_resolution_uses_the_execution_environment() {
+        let mut environment = BTreeMap::new();
+        #[cfg(unix)]
+        {
+            assert_eq!(shell(&environment).unwrap(), "/bin/sh");
+            environment.insert("SHELL".into(), "/generated/custom-shell".into());
+            assert_eq!(shell(&environment).unwrap(), "/generated/custom-shell");
+        }
+        #[cfg(windows)]
+        {
+            environment.insert("comspec".into(), r"D:\generated\cmd.exe".into());
+            assert_eq!(shell(&environment).unwrap(), r"D:\generated\cmd.exe");
+            environment.insert("shell".into(), r"D:\generated\pwsh.exe".into());
+            assert_eq!(shell(&environment).unwrap(), r"D:\generated\pwsh.exe");
+        }
+    }
 
     #[test]
     fn login_output_preserves_values_and_filters_credentials() {

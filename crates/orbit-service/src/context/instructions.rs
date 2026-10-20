@@ -258,9 +258,25 @@ pub fn inject(history: &mut Vec<ChatMessage>, instructions: &Instructions) {
         )
     });
 
+    let shell = orbit_runtime::execution::shell_environment::shell(
+        &orbit_runtime::execution::shell_environment::snapshot(),
+    );
+    let environment = format!(
+        "\nExecution target: OS={}, architecture={}, native shell={:?}. \
+        Exec scripts run in this interpreter, not in an inferred Linux/WSL shell. \
+        Use syntax and paths appropriate to this target. Do not probe the OS or shell merely \
+        to rediscover these facts. Command output decoding is handled by Orbit; do not prepend \
+        chcp or repeat encoding setup to ordinary commands. Check optional tools or system \
+        features only when the task requires them.\n",
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+        shell
+            .as_deref()
+            .unwrap_or("unavailable"),
+    );
     history.insert(
         0,
-        ChatMessage::system(format!("{CORE_MESSAGE_PREFIX}{CORE_PROMPT}")),
+        ChatMessage::system(format!("{CORE_MESSAGE_PREFIX}{CORE_PROMPT}{environment}")),
     );
 
     if let Some(message) = instructions.prompt() {
@@ -469,6 +485,10 @@ mod tests {
         assert!(matches!(
             &history[0],
             ChatMessage::System { content } if content.starts_with(CORE_MESSAGE_PREFIX)
+                && content.contains(&format!("OS={}", std::env::consts::OS))
+                && content.contains(&format!("architecture={}", std::env::consts::ARCH))
+                && content.contains("native shell=")
+                && content.contains("Do not probe the OS or shell")
         ));
         assert!(matches!(
             &history[1],

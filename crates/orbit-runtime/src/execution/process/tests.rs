@@ -15,6 +15,13 @@ fn process_tree_fixture() {
     let Ok(role) = std::env::var(ROLE) else {
         return;
     };
+    #[cfg(windows)]
+    if role == "console" {
+        // SAFETY: querying the current process console has no pointer arguments.
+        assert!(unsafe { windows_sys::Win32::System::Console::GetConsoleWindow() }.is_null());
+        println!("NO_CONSOLE");
+        return;
+    }
     if role == "descendant" {
         std::io::stdout()
             .write_all(b"DESCENDANT_READY\n")
@@ -111,4 +118,27 @@ async fn spawn_failure_does_not_create_an_owner() {
     let root = tempfile::tempdir().unwrap();
     let mut command = tokio::process::Command::new(root.path().join("missing-program"));
     assert!(ProcessGroup::spawn(&mut command).is_err());
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn owned_background_process_does_not_allocate_a_console_window() {
+    let mut command = tokio::process::Command::new(std::env::current_exe().unwrap());
+    command
+        .args(["--ignored", "--exact", FIXTURE, "--nocapture"])
+        .env(ROLE, "console")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let (child, _group) = ProcessGroup::spawn(&mut command).unwrap();
+    let result = tokio::time::timeout(TEST_TIMEOUT, child.wait_with_output())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert!(String::from_utf8_lossy(&result.stdout).contains("NO_CONSOLE"));
 }

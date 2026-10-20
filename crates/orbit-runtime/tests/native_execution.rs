@@ -226,3 +226,36 @@ async fn native_cmd_preserves_operators_and_spaces_without_a_posix_shell() {
         "saved"
     );
 }
+
+#[cfg(windows)]
+#[tokio::test]
+async fn native_windows_decodes_unicode_and_oem_output_without_encoding_probe_commands() {
+    let root = tempfile::tempdir().unwrap();
+    for (shell, script, expected) in [
+        ("cmd.exe", "echo café", "café"),
+        (
+            "powershell.exe",
+            concat!(
+                "$b=[Text.Encoding]::Unicode.GetBytes('target=就绪🦀'); ",
+                "[Console]::OpenStandardOutput().Write($b,0,$b.Length)",
+            ),
+            "target=就绪🦀",
+        ),
+    ] {
+        let mut environment = ExecutionEnvironment::new(root.path(), root.path()).unwrap();
+        environment.set_var("SHELL", shell);
+        let request = ExecutionRequest::new(script, Duration::from_secs(10));
+        let result = execution_backend()
+            .execute(
+                &request,
+                &ExecutionPolicy::default(),
+                &environment,
+                None,
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+        assert!(result.is_success(), "{result:?}");
+        assert_eq!(result.stdout.trim(), expected);
+    }
+}

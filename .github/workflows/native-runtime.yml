@@ -72,14 +72,18 @@ jobs:
           key: native-repair-${{ matrix.os }}
           cache-targets: 'true'
           cache-on-failure: 'true'
-      - name: Test MCP cancellation and concurrent log snapshots
-        if: runner.os == 'macOS'
+      - name: Test native interpreter, output decoding and process ownership
         run: |
-          cargo test -p orbit-tools --lib --locked mcp::tests::lifecycle::cancellation_notifies_server_and_does_not_start_another_call
-          cargo test -p orbit-tools --lib --locked mcp::tests::lifecycle::a_live_peer_log_can_end_in_an_uncommitted_record
-      - name: Test bridge pipe inheritance isolation
-        if: runner.os == 'Windows'
-        run: cargo test -p orbit-service --lib --locked workspace::server::lifecycle::tests::bridge_handles_stop_inheriting_without_losing_access
+          cargo test -p orbit-runtime --lib --locked execution::shell_environment::tests
+          cargo test -p orbit-runtime --lib --locked execution::output::encoding::tests
+          cargo test -p orbit-runtime --lib --locked execution::process::tests
+          cargo test -p orbit-runtime --test native_execution --locked
+      - name: Test target context, path projection and retained log pagination
+        run: |
+          cargo test -p orbit-service --lib --locked context::instructions::tests
+          cargo test -p orbit-client --lib --locked directories::display_tests
+          cargo test -p orbit-client --lib --locked execution::details::request::tests
+          cargo test -p orbit-tools --lib --locked read_command_output::tests
 
   process-ownership:
     if: >-

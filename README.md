@@ -75,8 +75,8 @@ cargo test --workspace --features orbit-gui/test-support --locked
 
 测试使用临时数据；部分测试需要本地回环监听，真实网络测试单独标记为 ignored。[CI](.github/workflows/ci.yml) 使用同一组检查，原生后端验收见 [Native runtime contracts](.github/workflows/native-runtime.yml)，打包与实际启动验收见 [orbit-xtask](crates/orbit-xtask/README.md)。
 
-`native-runtime-foundation` 分支的 push 仅运行当前修复涉及的 macOS MCP 取消、Windows
-桥接句柄及桌面退出验收，沿用其他已通过结果；主分支、PR 和手动触发仍运行完整原生矩阵。
+`native-runtime-foundation` 分支的 push 运行当前修复涉及的目标 shell、输出解码、路径投影、
+进程所有权及桌面退出验收，沿用其他已通过结果；主分支、PR 和手动触发仍运行完整原生矩阵。
 需要对修复分支重新全量验收时，在推送的最新提交说明中加入 `[native-full]`，同时启动
 全仓检查、Linux 容器部署及完整原生底层和桌面矩阵；普通推送继续采用定向验证。
 

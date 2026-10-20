@@ -1772,16 +1772,10 @@ async fn capabilities() -> orbit_protocol::Capabilities {
             orbit_protocol::Capabilities {
                 system: std::env::consts::OS.into(),
                 architecture: std::env::consts::ARCH.into(),
-                shell: std::env::var("SHELL").unwrap_or_else(|_| {
-                    #[cfg(windows)]
-                    {
-                        std::env::var("ComSpec").unwrap_or_else(|_| "cmd.exe".into())
-                    }
-                    #[cfg(unix)]
-                    {
-                        "/bin/sh".into()
-                    }
-                }),
+                shell: orbit_runtime::execution::shell_environment::shell(
+                    &orbit_runtime::execution::shell_environment::snapshot(),
+                )
+                .unwrap_or_default(),
                 native_processes: true,
                 files: true,
                 features: [

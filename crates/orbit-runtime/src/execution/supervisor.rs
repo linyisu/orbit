@@ -5,6 +5,7 @@ use std::{collections::VecDeque, time::Duration};
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio_util::sync::CancellationToken;
 
+use super::output::OutputEncoding;
 use super::process::{CommandResult, MAX_OUTPUT, OutputLog, ProcessGroup};
 use crate::{
     error::{RuntimeError, failed},
@@ -13,6 +14,7 @@ use crate::{
 
 struct Captured {
     bytes: Vec<u8>,
+    encoding: OutputEncoding,
     total: u64,
     retained_truncated: bool,
     retained_error: Option<String>,
@@ -28,6 +30,8 @@ async fn capture(
     let mut tail = VecDeque::with_capacity(MAX_OUTPUT);
     let mut total = 0u64;
     let mut buffer = [0; 4_096];
+    const ENCODING_SAMPLE_BYTES: usize = 256;
+    let mut prefix = Vec::with_capacity(ENCODING_SAMPLE_BYTES);
 
     let deadline = async {
         finished.cancelled().await;
@@ -47,12 +51,20 @@ async fn capture(
 
         if count == 0 {
             let mut bytes: Vec<u8> = tail.into();
+            let encoding = OutputEncoding::detect(&prefix);
 
             if total > MAX_OUTPUT as u64 {
-                let partial = bytes
-                    .iter()
-                    .take_while(|b| **b & 0xc0 == 0x80)
-                    .count();
+                let partial =
+                    if matches!(encoding, OutputEncoding::Utf16Le | OutputEncoding::Utf16Be) {
+                        ((total - bytes.len() as u64) % 2) as usize
+                    } else if matches!(encoding, OutputEncoding::Utf8) {
+                        bytes
+                            .iter()
+                            .take_while(|b| **b & 0xc0 == 0x80)
+                            .count()
+                    } else {
+                        0
+                    };
                 bytes.drain(..partial);
             }
 
@@ -64,6 +76,7 @@ async fn capture(
 
             return Ok(Captured {
                 bytes,
+                encoding,
                 total,
                 interrupted,
                 retained_error: retained_error.clone(),
@@ -77,6 +90,7 @@ async fn capture(
         }
 
         total = total.saturating_add(count as u64);
+        prefix.extend_from_slice(&buffer[..count.min(ENCODING_SAMPLE_BYTES - prefix.len())]);
 
         if let Some(file) = retained.as_mut()
             && let Err(error) = file.append(&buffer[..count]).await
@@ -178,8 +192,8 @@ pub(crate) async fn run_child_process(
         (None, Some(error)) => Some(format!("stderr: {error}")),
         (Some(stdout), Some(stderr)) => Some(format!("stdout: {stdout}; stderr: {stderr}")),
     };
-    let stdout = String::from_utf8_lossy(&stdout.bytes).into_owned();
-    let stderr = String::from_utf8_lossy(&stderr.bytes).into_owned();
+    let stdout = stdout.encoding.decode(&stdout.bytes);
+    let stderr = stderr.encoding.decode(&stderr.bytes);
 
     Ok(CommandResult {
         exit_code: status.code(),

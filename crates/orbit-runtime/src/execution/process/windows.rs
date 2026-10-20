@@ -20,7 +20,7 @@ use windows_sys::Win32::{
             SetInformationJobObject, TerminateJobObject,
         },
         Threading::{
-            CREATE_NEW_PROCESS_GROUP, CREATE_SUSPENDED, OpenThread, ResumeThread,
+            CREATE_NEW_PROCESS_GROUP, CREATE_NO_WINDOW, CREATE_SUSPENDED, OpenThread, ResumeThread,
             THREAD_SUSPEND_RESUME,
         },
     },
@@ -52,7 +52,7 @@ impl ProcessGroup {
             )
         })?;
         let mut child = command
-            .creation_flags(CREATE_SUSPENDED | CREATE_NEW_PROCESS_GROUP)
+            .creation_flags(CREATE_SUSPENDED | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW)
             .kill_on_drop(true)
             .spawn()?;
         let leader = child

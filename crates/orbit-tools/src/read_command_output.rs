@@ -3,7 +3,7 @@ use std::{io::Read, path::PathBuf};
 use orbit_agent::tool::{Tool, ToolError, ToolOutput};
 use orbit_runtime::execution::{
     MAX_RETAINED_OUTPUT_PER_STREAM,
-    output::{CommandOutputs, open_retained_file},
+    output::{CommandOutputs, OutputEncoding, open_retained_file},
 };
 use serde::Deserialize;
 use serde_json::json;
@@ -170,6 +170,10 @@ fn read(
 
     use std::io::Seek;
 
+    const ENCODING_SAMPLE_BYTES: usize = 256;
+    let mut prefix = [0u8; ENCODING_SAMPLE_BYTES];
+    let prefix_len = file.read(&mut prefix).map_err(failed)?;
+    let encoding = OutputEncoding::detect(&prefix[..prefix_len]);
     file.seek(std::io::SeekFrom::Start(arguments.offset))
         .map_err(failed)?;
     let remaining = total_bytes.saturating_sub(arguments.offset);
@@ -181,37 +185,7 @@ fn read(
         return Err(ToolError::Cancelled);
     }
 
-    let desired = bytes.len().min(arguments.max_bytes);
-    let valid_end = match std::str::from_utf8(&bytes) {
-        Ok(_) => bytes.len(),
-        Err(error) if error.error_len().is_none() && error.valid_up_to() >= desired => {
-            error.valid_up_to()
-        }
-        Err(_) => 0,
-    };
-
-    let page_len = match std::str::from_utf8(&bytes[..valid_end]) {
-        Ok(text) if desired < valid_end => {
-            let mut end = desired;
-
-            while end > 0 && !text.is_char_boundary(end) {
-                end -= 1;
-            }
-
-            if end == 0 {
-                end = desired;
-
-                while end < valid_end && !text.is_char_boundary(end) {
-                    end += 1;
-                }
-            }
-
-            end
-        }
-
-        _ => desired,
-    };
-
+    let page_len = encoding.page_len(&bytes, arguments.max_bytes);
     bytes.truncate(page_len);
     let next_offset = arguments.offset + bytes.len() as u64;
     let receipt = capture_receipt(&directory.join(format!("{}.json", arguments.output_id)));
@@ -232,7 +206,7 @@ fn read(
             !receipt.truncated && receipt.error.is_none()
         }),
         "capture_error": receipt.as_ref().and_then(|receipt| receipt.error.as_deref()),
-        "content": String::from_utf8_lossy(&bytes)
+        "content": encoding.decode(&bytes)
     })
     .to_string())
 }
@@ -269,6 +243,63 @@ fn failed(error: impl std::fmt::Display) -> ToolError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn unicode_logs_page_by_raw_bytes_without_losing_characters() {
+        let outputs = CommandOutputs::default();
+        let _run = outputs.begin_run().unwrap();
+        let log = outputs.create_log().await.unwrap();
+        let id = log.id().to_owned();
+        let path = outputs
+            .lease()
+            .unwrap()
+            .path()
+            .join(format!("{id}.stdout"));
+        let expected = "任务🦀完成\r\n";
+        let bytes: Vec<_> = [0xff, 0xfe]
+            .into_iter()
+            .chain(
+                expected
+                    .encode_utf16()
+                    .flat_map(u16::to_le_bytes),
+            )
+            .collect();
+        std::fs::write(&path, &bytes).unwrap();
+        drop(log);
+        let reader = ReadCommandOutput::new(outputs);
+        let mut offset = 0;
+        let mut text = String::new();
+        loop {
+            let page = reader
+                .execute(
+                    ToolCall::function(
+                        "page",
+                        "CommandOutput",
+                        json!({
+                            "output_id": id, "offset": offset, "max_bytes": 1
+                        }),
+                    ),
+                    CancellationToken::new(),
+                )
+                .await
+                .unwrap();
+            let page: serde_json::Value = serde_json::from_str(&page.content).unwrap();
+            let next = page["next_offset"].as_u64().unwrap();
+            assert!(next > offset);
+            offset = next;
+            text.push_str(page["content"].as_str().unwrap());
+            if page["has_more"] == false {
+                break;
+            }
+        }
+        assert_eq!(
+            text.strip_prefix('\u{feff}')
+                .unwrap_or(&text),
+            expected
+        );
+        assert_eq!(offset, bytes.len() as u64);
+        assert_eq!(std::fs::read(path).unwrap(), bytes);
+    }
     use orbit_model::types::ToolCall;
 
     #[tokio::test]

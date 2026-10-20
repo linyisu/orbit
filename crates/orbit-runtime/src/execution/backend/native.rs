@@ -38,7 +38,7 @@ impl ExecutionBackend for NativeBackend {
                 return Err(RuntimeError::Cancelled);
             }
 
-            let shell = shell(&env.env_vars)?;
+            let shell = super::super::shell_environment::shell(&env.env_vars)?;
             let mut command = Command::new(&shell);
             configure_shell_command(&mut command, &shell, &request.command);
             command
@@ -126,35 +126,6 @@ impl ExecutionBackend for NativeBackend {
             .await;
             result.map(Into::into)
         })
-    }
-}
-
-fn shell(environment: &std::collections::BTreeMap<String, String>) -> std::io::Result<String> {
-    #[cfg(unix)]
-    {
-        Ok(environment
-            .get("SHELL")
-            .cloned()
-            .unwrap_or_else(|| "/bin/sh".into()))
-    }
-    #[cfg(windows)]
-    {
-        for key in ["SHELL", "ComSpec"] {
-            if let Some((_, value)) = environment
-                .iter()
-                .find(|(name, value)| name.eq_ignore_ascii_case(key) && !value.is_empty())
-            {
-                return Ok(value.clone());
-            }
-        }
-        super::super::process::system_executable("cmd.exe")
-            .map(|path| path.to_string_lossy().into_owned())
-            .ok_or_else(|| {
-                std::io::Error::new(
-                    std::io::ErrorKind::NotFound,
-                    "Windows command interpreter is unavailable",
-                )
-            })
     }
 }
 
