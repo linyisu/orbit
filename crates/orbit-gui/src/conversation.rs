@@ -490,16 +490,8 @@ impl Render for TurnView {
             })
             .collect();
         v_flex()
+            .items_start()
             .gap_2()
-            .when(self.completed && !self.reply.is_empty(), |view| {
-                view.child(
-                    gpui_kit::component::clipboard::Clipboard::new("copy-answer")
-                        .value(self.reply.clone())
-                        .small()
-                        .tooltip("复制完整 AI 回答")
-                        .accessibility_label("复制完整 AI 回答"),
-                )
-            })
             .when(self.completed && !files.is_empty(), |view| {
                 view.child(
                     Button::new("turn-changes")
@@ -509,6 +501,15 @@ impl Render for TurnView {
                         .on_click(cx.listener(|view, _, _, cx| {
                             cx.emit(ToolRequest::Changes(view.changed_tools.clone()))
                         })),
+                )
+            })
+            .when(self.completed && !self.reply.is_empty(), |view| {
+                view.child(
+                    gpui_kit::component::clipboard::Clipboard::new("copy-answer")
+                        .value(self.reply.clone())
+                        .small()
+                        .tooltip("复制完整 AI 回答")
+                        .accessibility_label("复制完整 AI 回答"),
                 )
             })
     }
