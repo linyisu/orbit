@@ -159,7 +159,8 @@ mod tests {
         let root = orbit_runtime::filesystem::temporary_directory("output-test-").unwrap();
         let directory = log_directory(root.path());
         let path = directory.path().join("cmd-live.stderr");
-        write_log(&path, b"first\xff\n");
+        // An explicit UTF-16 BOM avoids the host's OEM fallback for invalid UTF-8.
+        write_log(&path, b"\xff\xfef\0i\0r\0s\0t\0\x00\xd8\n\0");
         let source = Source::Command {
             output_id: "cmd-live".into(),
             stream: Stream::Stderr,
@@ -167,20 +168,20 @@ mod tests {
         let first = read(directory.path().into(), source.clone(), 0)
             .await
             .unwrap();
-        assert_eq!(first.content, "first\u{fffd}\n");
-        assert_eq!(first.read_offset, Some(7));
+        assert_eq!(first.content, "\u{feff}first\u{fffd}\n");
+        assert_eq!(first.read_offset, Some(16));
         assert!(first.next_offset.is_none());
         std::fs::OpenOptions::new()
             .append(true)
             .open(path)
             .unwrap()
-            .write_all(b"second\n")
+            .write_all(b"s\0e\0c\0o\0n\0d\0\n\0")
             .unwrap();
         let second = read(directory.path().into(), source, first.read_offset.unwrap())
             .await
             .unwrap();
         assert_eq!(second.content, "second\n");
-        assert_eq!(second.read_offset, Some(14));
+        assert_eq!(second.read_offset, Some(30));
     }
 
     #[tokio::test]
