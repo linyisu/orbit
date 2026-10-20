@@ -28,6 +28,11 @@ pub fn display_diagnostic(text: &str) -> std::borrow::Cow<'_, str> {
     let mut copied = 0;
     let mut changed = false;
     for (start, _) in text.match_indices(r"\\?\") {
+        // A malformed UNC spelling can overlap the next namespace marker.
+        // Never slice backwards after consuming the longer UNC prefix.
+        if start < copied {
+            continue;
+        }
         let suffix = &text[start..];
         let prefix_bytes = if suffix.starts_with(r"\\?\UNC\") {
             Some(8)
@@ -90,6 +95,14 @@ pub fn display_joined_path(base: &str, path: &str) -> String {
 
 #[cfg(test)]
 mod display_tests {
+    #[test]
+    fn overlapping_namespace_markers_do_not_break_diagnostic_rendering() {
+        assert_eq!(
+            super::display_diagnostic(r"failure: \\?\UNC\\?\D:\generated"),
+            r"failure: \\\?\D:\generated"
+        );
+    }
+
     #[test]
     fn diagnostic_path_display_preserves_the_error_and_device_namespace() {
         assert_eq!(
