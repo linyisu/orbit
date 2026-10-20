@@ -76,14 +76,18 @@ jobs:
           cache-on-failure: 'true'
       - name: Test cache reuse, leases and target paths
         if: ${{ !contains(github.event.head_commit.message, '[test-only]') }}
+        shell: bash
         run: |
           cargo test -p orbit-client --lib --locked local_server::tests
           cargo test -p orbit-client --lib --locked directories::display_tests
           cargo test -p orbit-client --lib --locked bootstrap::tests
       - name: Test native terminal path presentation
         if: ${{ !contains(github.event.head_commit.message, '[test-only]') }}
+        shell: bash
         run: |
           cargo test -p orbit-tui --lib --locked configuration_location_is_readable
+          cargo test -p orbit-tui --lib --locked tool_path_labels
+          cargo test -p orbit-tui --lib --locked path_presentation_does_not
       - name: Retest the Windows private log fixture
         if: contains(github.event.head_commit.message, '[test-only]')
         run: cargo test -p orbit-tools --lib --locked read_command_output::tests::reads_a_bounded_page

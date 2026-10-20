@@ -21,6 +21,7 @@ pub(in crate::tui) fn read_file_summary(arguments: &str, output: &str) -> String
         .as_ref()
         .and_then(|v| v["path"].as_str())
         .unwrap_or_default();
+    let path = orbit_client::directories::display_path(path);
     let out = serde_json::from_str::<serde_json::Value>(output).ok();
 
     let start = out
@@ -48,7 +49,7 @@ pub(in crate::tui) fn read_file_summary(arguments: &str, output: &str) -> String
     match (start, end) {
         (Some(s), Some(e)) => format!("{path}[{s}..={e}]"),
         (Some(s), None) => format!("{path}[{s}..]"),
-        _ => path.to_owned(),
+        _ => path.into_owned(),
     }
 }
 
@@ -270,9 +271,17 @@ fn tool_title_with_summary(
         .and_then(|value| {
             ["command", "query", "url", "path"]
                 .iter()
-                .find_map(|key| value[*key].as_str())
+                .find_map(|key| {
+                    value[*key].as_str().map(|text| {
+                        if *key == "path" {
+                            orbit_client::directories::display_path(text)
+                        } else {
+                            text.into()
+                        }
+                    })
+                })
         })
-        .unwrap_or("");
+        .unwrap_or_default();
     let command = if !expanded
         && let Some(command) = arguments
             .as_ref()
@@ -287,7 +296,7 @@ fn tool_title_with_summary(
     } else if !expanded {
         tool_display::tool_summary(&row.name, &row.arguments, &row.output)
     } else {
-        command.to_owned()
+        command.into_owned()
     };
 
     let title_spans = if command.is_empty() {
@@ -449,8 +458,11 @@ pub(in crate::tui) fn default_tool_summary(arguments: &str) -> String {
         return tool_display::command_preview(command, 160);
     }
 
-    let target = value["path"]
+    let path = value["path"]
         .as_str()
+        .map(orbit_client::directories::display_path);
+    let target = path
+        .as_deref()
         .or_else(|| value["query"].as_str())
         .or_else(|| value["url"].as_str())
         .unwrap_or_default();

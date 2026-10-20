@@ -171,11 +171,12 @@ pub(super) fn files(row: &ToolRow, expanded: bool, width: u16) -> Option<Vec<Lin
         let path = path
             .strip_prefix(&prefix)
             .unwrap_or(path);
+        let display = orbit_client::directories::display_path(path);
 
         if entry["kind"] == "directory" {
-            view.push(&format!("{path}/"), crate::tui::theme::THEME.md_h4_plus);
+            view.push(&format!("{display}/"), crate::tui::theme::THEME.md_h4_plus);
         } else {
-            view.push(path, crate::tui::theme::THEME.output_foreground);
+            view.push(&display, crate::tui::theme::THEME.output_foreground);
         }
     }
 
@@ -201,7 +202,10 @@ pub(super) fn summary(arguments: &str) -> String {
     match value["path"].as_str() {
         Some(path) => format!(
             "{label}  {}",
-            super::super::render::compact_preview(path, 100)
+            super::super::render::compact_preview(
+                &orbit_client::directories::display_path(path),
+                100
+            )
         ),
 
         None => label.into(),
@@ -310,8 +314,14 @@ pub(super) fn git(row: &ToolRow, expanded: bool, width: u16) -> Option<Vec<Line<
             let path = entry["path"].as_str()?;
             let path = entry["original_path"]
                 .as_str()
-                .map(|old| format!("{old} → {path}"))
-                .unwrap_or_else(|| path.into());
+                .map(|old| {
+                    format!(
+                        "{} → {}",
+                        orbit_client::directories::display_path(old),
+                        orbit_client::directories::display_path(path)
+                    )
+                })
+                .unwrap_or_else(|| orbit_client::directories::display_path(path).into_owned());
             view.push(&format!("{status:<2}  {path}"), color);
         }
 
@@ -614,7 +624,7 @@ pub(super) fn document_with_links(
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
-            path.to_owned(),
+            orbit_client::directories::display_path(path).into_owned(),
             Style::default().fg(theme.output_foreground),
         ),
         Span::styled(
@@ -736,7 +746,10 @@ pub(super) fn capability(row: &ToolRow, _expanded: bool, width: u16) -> Option<V
                 other => other,
             };
 
-            view.push(&format!("  路径: {path}"), theme.output_foreground);
+            view.push(
+                &format!("  路径: {}", orbit_client::directories::display_path(path)),
+                theme.output_foreground,
+            );
             view.push(&format!("  模式: {access_label}"), theme.tool_detail);
         }
     } else {
@@ -770,7 +783,7 @@ pub(super) fn read_image(row: &ToolRow, _expanded: bool, width: u16) -> Option<V
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
-            path.to_owned(),
+            orbit_client::directories::display_path(path).into_owned(),
             Style::default().fg(theme.output_foreground),
         ),
     ]);

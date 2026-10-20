@@ -49,7 +49,10 @@ pub(super) fn search_summary(arguments: &str) -> String {
             .unwrap_or_default(),
         100,
     );
-    let path = super::render::compact_preview(value["path"].as_str().unwrap_or("."), 100);
+    let path = super::render::compact_preview(
+        &orbit_client::directories::display_path(value["path"].as_str().unwrap_or(".")),
+        100,
+    );
 
     format!("\"{}\"({path})", query)
 }
@@ -116,7 +119,8 @@ pub(super) fn document_summary(arguments: &str, output: Option<&str>) -> String 
     let path = args["path"]
         .as_str()
         .unwrap_or_default();
-    let path_preview = super::render::compact_preview(path, 60);
+    let path_preview =
+        super::render::compact_preview(&orbit_client::directories::display_path(path), 60);
 
     if let Some(out_str) = output
         && let Ok(out_val) = serde_json::from_str::<Value>(out_str)
@@ -148,7 +152,10 @@ pub(super) fn capability_summary(arguments: &str) -> String {
     } else {
         "只读"
     };
-    format!("{access_label} · {path}")
+    format!(
+        "{access_label} · {}",
+        orbit_client::directories::display_path(path)
+    )
 }
 
 pub(super) fn read_image_summary(arguments: &str) -> String {
@@ -156,7 +163,7 @@ pub(super) fn read_image_summary(arguments: &str) -> String {
     let path = args["path"]
         .as_str()
         .unwrap_or_default();
-    super::render::compact_preview(path, 60)
+    super::render::compact_preview(&orbit_client::directories::display_path(path), 60)
 }
 
 fn summary_line(text: &str, limit: usize) -> String {
@@ -607,7 +614,7 @@ pub(super) fn linked_lines(row: &ToolRow, expanded: bool, width: u16) -> Option<
         "ReadImage" => {
             let value: Value = serde_json::from_str(&row.output).ok()?;
             let path = value["path"].as_str()?;
-            let label = super::render::safe_output(path);
+            let label = super::render::safe_output(&orbit_client::directories::display_path(path));
             let mut line = LinkedLine::plain(Line::from(label.clone()));
             line.media.push(super::media::Target {
                 range: 0..label.len(),
@@ -740,7 +747,11 @@ fn overview(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'stati
                     .as_str()
                     .map(|n| format!("  {n}"))
                     .unwrap_or_default();
-                note(&mut out, &format!("{path}{pkg}"), width);
+                note(
+                    &mut out,
+                    &format!("{}{pkg}", orbit_client::directories::display_path(path)),
+                    width,
+                );
             }
         }
         if inventory.is_none() {
@@ -825,7 +836,10 @@ fn overview(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'stati
                     format!("{} ", icons::PACKAGE_VARIANT_CLOSED),
                     Style::default(),
                 ),
-                Span::styled(path.to_owned(), strong_style),
+                Span::styled(
+                    orbit_client::directories::display_path(path).into_owned(),
+                    strong_style,
+                ),
             ];
             if let Some(pkg) = manifest["package"]
                 .as_str()
@@ -1016,7 +1030,10 @@ fn overview(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'stati
                 &mut raw_lines,
                 1,
                 vec![
-                    Span::styled(format!("{path:<28}"), accent_style),
+                    Span::styled(
+                        format!("{:<28}", orbit_client::directories::display_path(path)),
+                        accent_style,
+                    ),
                     Span::styled(format!("{count} 个文件"), detail_style),
                 ],
             );
@@ -1054,7 +1071,10 @@ fn overview(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'stati
             push_line(
                 &mut raw_lines,
                 1,
-                vec![Span::styled(path.to_owned(), detail_style)],
+                vec![Span::styled(
+                    orbit_client::directories::display_path(path).into_owned(),
+                    detail_style,
+                )],
             );
         }
 
@@ -1089,7 +1109,10 @@ fn overview(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'stati
             push_line(
                 &mut raw_lines,
                 1,
-                vec![Span::styled(path.to_owned(), success_style)],
+                vec![Span::styled(
+                    orbit_client::directories::display_path(path).into_owned(),
+                    success_style,
+                )],
             );
         }
     }
@@ -1115,7 +1138,10 @@ fn overview(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'stati
             let score = item
                 .get("score")
                 .and_then(|s| s.as_u64());
-            let mut spans = vec![Span::styled(path.to_owned(), accent_style)];
+            let mut spans = vec![Span::styled(
+                orbit_client::directories::display_path(path).into_owned(),
+                accent_style,
+            )];
             if let Some(s) = score {
                 spans.push(Span::styled(format!(" (匹配分 {s})"), detail_style));
             }
@@ -1154,7 +1180,10 @@ fn overview(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'stati
                 &mut raw_lines,
                 1,
                 vec![
-                    Span::styled(format!("{path}{loc}  "), detail_style),
+                    Span::styled(
+                        format!("{}{loc}  ", orbit_client::directories::display_path(path)),
+                        detail_style,
+                    ),
                     Span::styled(name.to_owned(), accent_style),
                 ],
             );
@@ -1195,7 +1224,10 @@ fn overview(value: &Value, expanded: bool, width: u16) -> Option<Vec<Line<'stati
                 .unwrap_or_default();
 
             let mut spans = vec![
-                Span::styled(format!("{path}:{line}  "), detail_style),
+                Span::styled(
+                    format!("{}:{line}  ", orbit_client::directories::display_path(path)),
+                    detail_style,
+                ),
                 Span::styled(name.to_owned(), accent_style.add_modifier(Modifier::BOLD)),
             ];
 
@@ -1479,7 +1511,11 @@ fn search_linked(value: &Value, expanded: bool, width: u16) -> Option<Vec<Linked
             out.push(LinkedLine::plain(Line::default()));
         }
 
-        note(&mut out, path, width);
+        note(
+            &mut out,
+            &orbit_client::directories::display_path(path),
+            width,
+        );
         let mut renderer = Renderer::for_path(path);
         let mut previous = None;
 

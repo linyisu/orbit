@@ -5,6 +5,70 @@ use crate::tui::app::SessionTab;
 use crate::tui::theme::desaturate_for_thinking;
 
 #[test]
+fn tool_path_labels_preserve_original_arguments_and_image_targets() {
+    use super::super::app::ToolRow;
+    let raw = r"\\?\D:\generated\sample.txt";
+    let visible = r"D:\generated\sample.txt";
+    for name in [
+        "ReadFile",
+        "ReadImage",
+        "ReadDocument",
+        "RequestAccess",
+        "WriteFile",
+    ] {
+        let row = ToolRow {
+            id: "generated-call".into(),
+            name: name.into(),
+            purpose: None,
+            arguments: serde_json::json!({"path": raw, "access": "read"}).to_string(),
+            output: serde_json::json!({"path": raw}).to_string(),
+            status: ToolStatus::Finished,
+            changes: Vec::new(),
+        };
+        let original = row.arguments.clone();
+        for expanded in [false, true] {
+            let lines = super::tool_cards::tool_title_with_links(&row, expanded, 160);
+            let text = lines
+                .iter()
+                .map(|line| line.text())
+                .collect::<String>();
+            assert!(text.contains(visible), "{name}: {text}");
+            assert!(!text.contains(r"\\?\"));
+        }
+        assert_eq!(row.arguments, original);
+        if name == "ReadImage" {
+            let lines = crate::tui::tool_display::linked_lines(&row, true, 160).unwrap();
+            assert_eq!(lines[0].text(), visible);
+            assert_eq!(
+                lines[0].media[0].source,
+                crate::tui::media::Source::Image(raw.into())
+            );
+        }
+    }
+}
+
+#[test]
+fn path_presentation_does_not_rewrite_command_or_query_text() {
+    use super::super::app::ToolRow;
+    let command = r"type \\?\D:\generated\sample.txt";
+    let row = ToolRow {
+        id: "generated-command".into(),
+        name: "Exec".into(),
+        purpose: None,
+        arguments: serde_json::json!({"command": command}).to_string(),
+        output: String::new(),
+        status: ToolStatus::Finished,
+        changes: Vec::new(),
+    };
+    let lines = super::tool_cards::tool_title_with_links(&row, true, 160);
+    assert!(lines[0].text().contains(command));
+    let arguments = serde_json::json!({"query": command, "path": r"\\?\D:\generated"});
+    let summary = crate::tui::tool_display::search_summary(&arguments.to_string());
+    assert!(summary.contains(command));
+    assert!(summary.ends_with(r"(D:\generated)"));
+}
+
+#[test]
 fn browsing_without_an_execution_budget_shows_unknown_context() {
     let mut state = UiState::new("generated-model");
     state.input_context_tokens = 0;
