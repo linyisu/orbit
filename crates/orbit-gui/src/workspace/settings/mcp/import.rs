@@ -214,7 +214,7 @@ impl Render for Importer {
                     .child(format!(
                         "在 {} 获取来源。识别 .mcp.json / mcp.json 配置、Node.js bin 和 Python \
                     project.scripts；扫描时不运行仓库代码。",
-                        self.workspace
+                        orbit_client::directories::display_path(&self.workspace)
                     )),
             )
             .child(

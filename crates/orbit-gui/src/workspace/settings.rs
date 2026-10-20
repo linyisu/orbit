@@ -611,7 +611,8 @@ impl Render for SettingsPage {
         let scope = if self.initial_page == 4 {
             format!(
                 "{} · {}",
-                self.environment, self.contexts[self.context].workspace
+                self.environment,
+                orbit_client::directories::display_path(&self.contexts[self.context].workspace)
             )
         } else if matches!(self.initial_page, 2 | 5) {
             "全局库 · 按会话应用".to_owned()

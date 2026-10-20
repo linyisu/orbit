@@ -84,6 +84,8 @@ UTF-8 跨 token 拼接后再展示，暂定尾部整体替换，稳定前缀不�
 - [platform/editor.rs](src/platform/editor.rs)：外部编辑器直接接收临时草稿路径，不隐式启动 shell。
   Windows 使用原生参数引用规则，保留路径反斜杠；含空格的程序路径用双引号包裹。Unix 保留 shell words 规则。
 - [directories.rs](src/directories.rs)：目标目录读取、父目录与子目录路径，不通过客户端文件系统解释远端路径。
+  路径及诊断的展示统一隐藏 Windows 驱动器与 UNC 路径的 verbatim 前缀；工具参数、执行路径、
+  会话身份及权限判断保留原值。工具详情按目标路径格式连接目录，不使用前端主机的路径规则。
 - [windows.rs](src/windows.rs)：两端共用的窗口恢复、草稿资产、进程租约与旧快照迁移。
 - [attachments.rs](src/attachments.rs)：图片与普通文件的有界上传、粘贴路径识别；普通文件单个上限 20 MiB。
   文本预览保留 UTF-8 原文，最多显示前 1 MiB；二进制文件只提供元数据。

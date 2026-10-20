@@ -68,6 +68,7 @@ impl Feedback {
         let now = Instant::now();
         self.expire(now);
         let title = safe_output(title);
+        let text = orbit_client::directories::display_diagnostic(text);
         let mut chars = text.chars();
         let prefix = chars
             .by_ref()

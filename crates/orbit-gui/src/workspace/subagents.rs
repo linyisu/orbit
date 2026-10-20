@@ -946,7 +946,10 @@ impl Render for ChildAgents {
                                 .text_sm()
                                 .whitespace_normal()
                                 .text_color(cx.theme().muted_foreground)
-                                .child(row.agent.workspace.clone()),
+                                .child(
+                                    orbit_client::directories::display_path(&row.agent.workspace)
+                                        .into_owned(),
+                                ),
                         )
                         .child(
                             div()

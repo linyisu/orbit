@@ -35,6 +35,7 @@ Linux 安装时将程序放入 PATH，启动项放入用户 applications 目录�
 
 `verify-gui-bundle` 在临时用户目录检查内嵌服务、原生协议、会话存储，等待真实窗口连接隔离会话并完成渲染，
 随后关闭窗口与验收服务。配置使用编造的本机供应商，不发送模型请求。
+账号编辑验收先通过实际按钮命中区域检查左右侧栏的单击和双击，确认面板切换且窗口不缩放。
 Linux 验收需在独立 Xvfb 中运行；原生 macOS/Windows 使用 GitHub Actions 的隔离 runner。
 Windows 窗口验收不设置 HOME 或 XDG 配置变量，同时覆盖原生设置路径。
 CI 见 [Native desktop contracts](../../.github/workflows/native-desktop.yml)。

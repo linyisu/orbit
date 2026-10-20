@@ -1456,6 +1456,7 @@ pub(super) fn transcript_lines_at_width(
             }
 
             TranscriptItem::CommandError(text) => {
+                let text = orbit_client::directories::display_diagnostic(text);
                 for (index, line) in text.lines().enumerate() {
                     lines.push(Line::from(Span::styled(
                         format!("{} {line}", if index == 0 { icons::CIRCLE } else { " " }),
@@ -1482,6 +1483,7 @@ pub(super) fn transcript_lines_at_width(
 
             TranscriptItem::Error(text) | TranscriptItem::Notice(text) => {
                 let error = matches!(item, TranscriptItem::Error(_));
+                let text = orbit_client::directories::display_diagnostic(text);
 
                 for line in text.lines() {
                     lines.push(Line::from(Span::styled(

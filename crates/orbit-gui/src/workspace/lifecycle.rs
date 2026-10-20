@@ -610,6 +610,10 @@ impl Workspace {
         self.set_inspector(section, window, cx);
     }
 
+    pub(crate) fn inspector_visible(&self) -> bool {
+        self.inspector.is_some()
+    }
+
     pub(super) fn set_inspector(
         &mut self,
         section: Option<inspector::Section>,

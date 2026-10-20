@@ -488,8 +488,18 @@ impl ApprovalContent {
         } = file;
         let mut body = v_flex()
             .gap_3()
-            .child(Self::row("文件", path.to_owned(), narrow, cx))
-            .child(Self::row("工作区", self.workspace.clone(), narrow, cx))
+            .child(Self::row(
+                "文件",
+                orbit_client::directories::display_path(path).into_owned(),
+                narrow,
+                cx,
+            ))
+            .child(Self::row(
+                "工作区",
+                orbit_client::directories::display_path(&self.workspace).into_owned(),
+                narrow,
+                cx,
+            ))
             .child(
                 div()
                     .text_sm()
@@ -625,19 +635,18 @@ impl Render for ApprovalContent {
             ),
             ApprovalPreview::Command(command) => v_flex()
                 .gap_3()
-                .child(Self::row("工作区", self.workspace.clone(), narrow, cx))
+                .child(Self::row(
+                    "工作区",
+                    orbit_client::directories::display_path(&self.workspace).into_owned(),
+                    narrow,
+                    cx,
+                ))
                 .child(Self::row(
                     "执行目录",
-                    command
-                        .cwd
-                        .as_deref()
-                        .map(|cwd| {
-                            std::path::Path::new(&self.workspace)
-                                .join(cwd)
-                                .display()
-                                .to_string()
-                        })
-                        .unwrap_or_else(|| self.workspace.clone()),
+                    orbit_client::directories::display_joined_path(
+                        &self.workspace,
+                        command.cwd.as_deref().unwrap_or("."),
+                    ),
                     narrow,
                     cx,
                 ))
@@ -764,7 +773,8 @@ impl Render for ApprovalContent {
                 ))
                 .child(Self::row(
                     "访问路径",
-                    capability.path.display().to_string(),
+                    orbit_client::directories::display_path(&capability.path.to_string_lossy())
+                        .into_owned(),
                     narrow,
                     cx,
                 ))

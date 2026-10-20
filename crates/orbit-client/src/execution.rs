@@ -181,6 +181,10 @@ impl ToolRun {
             _ => (self.name.as_str(), None, None, false),
         };
         let target = target.unwrap_or_default();
+        let display_target = file.then(|| crate::directories::display_path(target));
+        let target = display_target
+            .as_deref()
+            .unwrap_or(target);
         let fallback = argument(
             args,
             &[
@@ -193,6 +197,8 @@ impl ToolRun {
         } else {
             (target, directory.unwrap_or_default())
         };
+        let directory = crate::directories::display_path(directory);
+        let directory = directory.as_ref();
         let title = compact_line(if title.is_empty() { label } else { title });
         let subtitle = if directory.is_empty() {
             if label == self.name && target.is_empty() {
@@ -872,6 +878,8 @@ mod tests {
             ("src/测试文件.rs", "测试文件.rs", "src"),
             ("C:\\项目\\main.rs", "main.rs", "C:\\项目"),
             ("C:\\main.rs", "main.rs", "C:\\"),
+            (r"\\?\D:\generated\main.rs", "main.rs", r"D:\generated"),
+            (r"\\?\UNC\host\share\main.rs", "main.rs", r"\\host\share"),
             ("main.rs", "main.rs", ""),
             ("/", "/", ""),
             ("C:\\", "C:\\", ""),
@@ -892,7 +900,11 @@ mod tests {
                     format!("读取文件 · {directory}")
                 }
             );
-            assert!(presentation.tooltip().ends_with(path));
+            assert!(
+                presentation
+                    .tooltip()
+                    .ends_with(crate::directories::display_path(path).as_ref())
+            );
         }
     }
 

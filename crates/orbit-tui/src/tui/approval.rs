@@ -214,7 +214,7 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
                 Span::styled(op_tag, Style::default().fg(crate::tui::theme::THEME.accent)),
                 Span::raw(" "),
                 Span::styled(
-                    preview.path.clone(),
+                    orbit_client::directories::display_path(&preview.path).into_owned(),
                     Style::default()
                         .fg(crate::tui::theme::THEME.accent)
                         .add_modifier(Modifier::BOLD),
@@ -298,7 +298,7 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
                 ),
                 Span::raw(" "),
                 Span::styled(
-                    preview.path.clone(),
+                    orbit_client::directories::display_path(&preview.path).into_owned(),
                     Style::default()
                         .fg(crate::tui::theme::THEME.error)
                         .add_modifier(Modifier::BOLD),
@@ -564,7 +564,10 @@ pub fn draw_in(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
             }
 
             let body_lines = vec![Line::styled(
-                format!("  - {}/*", preview.path.display()),
+                format!(
+                    "  - {}/*",
+                    orbit_client::directories::display_path(&preview.path.to_string_lossy())
+                ),
                 Style::default().fg(crate::tui::theme::THEME.approval_foreground),
             )];
 

@@ -12,6 +12,9 @@ use gpui_kit::{
     },
     prelude::FluentBuilder,
 };
+use std::{cell::Cell, rc::Rc};
+
+pub(super) type ControlProbe = Rc<Cell<[Option<Bounds<Pixels>>; 2]>>;
 
 /// Decide against the pre-close order, including retained background tasks.
 /// Prefer the nearest open tab on the left; only the first tab falls right.
@@ -142,7 +145,7 @@ impl Workbench {
                 .flex_1()
                 .min_w_0()
                 .gap_1()
-                .child(
+                .child(titlebar_control(
                     Button::new("toggle-sidebar")
                         .ghost()
                         .small()
@@ -153,7 +156,9 @@ impl Workbench {
                             view.sidebar
                                 .update(cx, |sidebar, cx| sidebar.toggle(cx))
                         })),
-                )
+                    self.control_probe.clone(),
+                    0,
+                ))
                 .child(
                     div()
                         .flex_1()
@@ -187,7 +192,7 @@ impl Workbench {
                             });
                         }),
                 )
-                .child(
+                .child(titlebar_control(
                     Button::new("toggle-inspector")
                         .ghost()
                         .small()
@@ -204,9 +209,30 @@ impl Workbench {
                                 view.toggle_inspector(window, cx)
                             })
                         })),
-                ),
+                    self.control_probe.clone(),
+                    1,
+                )),
         )
     }
+}
+
+fn titlebar_control(
+    control: impl IntoElement,
+    probe: Option<ControlProbe>,
+    index: usize,
+) -> impl IntoElement {
+    div()
+        .occlude()
+        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .on_mouse_up(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .when_some(probe, |control, probe| {
+            control.on_prepaint(move |bounds, _, _| {
+                let mut controls = probe.get();
+                controls[index] = Some(bounds);
+                probe.set(controls);
+            })
+        })
+        .child(control)
 }
 
 #[cfg(test)]

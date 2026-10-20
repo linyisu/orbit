@@ -21,8 +21,101 @@ pub fn display_path(path: &str) -> std::borrow::Cow<'_, str> {
     path.into()
 }
 
+/// Render paths embedded in user-facing diagnostics without changing the underlying error.
+/// Only Win32 drive and UNC verbatim prefixes are removed; device namespaces stay explicit.
+pub fn display_diagnostic(text: &str) -> std::borrow::Cow<'_, str> {
+    let mut output = String::new();
+    let mut copied = 0;
+    let mut changed = false;
+    for (start, _) in text.match_indices(r"\\?\") {
+        let suffix = &text[start..];
+        let prefix_bytes = if suffix.starts_with(r"\\?\UNC\") {
+            Some(8)
+        } else if suffix.as_bytes().get(5) == Some(&b':')
+            && suffix.as_bytes().get(6) == Some(&b'\\')
+            && suffix
+                .as_bytes()
+                .get(4)
+                .is_some_and(u8::is_ascii_alphabetic)
+        {
+            Some(4)
+        } else {
+            None
+        };
+        if let Some(prefix_bytes) = prefix_bytes {
+            output.push_str(&text[copied..start]);
+            if prefix_bytes == 8 {
+                output.push_str(r"\\");
+            }
+            copied = start + prefix_bytes;
+            changed = true;
+        }
+    }
+    if changed {
+        output.push_str(&text[copied..]);
+        output.into()
+    } else {
+        text.into()
+    }
+}
+
+/// Join a target path for presentation, without applying the client's filesystem semantics.
+/// The result is display-only and must not be used for authorization or file access.
+pub fn display_joined_path(base: &str, path: &str) -> String {
+    let base = display_path(base);
+    let path = display_path(path);
+    let windows = base.as_bytes().get(1) == Some(&b':') || base.starts_with(r"\\");
+    if path.is_empty() || path == "." {
+        return base.into_owned();
+    }
+    if base.is_empty()
+        || path.starts_with('/')
+        || path.as_bytes().get(1) == Some(&b':')
+        || path.starts_with(r"\\")
+    {
+        return path.into_owned();
+    }
+    if windows {
+        if path.starts_with('\\') {
+            if base.as_bytes().get(1) == Some(&b':') {
+                return format!("{}{path}", &base[..2]);
+            }
+            return path.into_owned();
+        }
+        format!(r"{}\{path}", base.trim_end_matches(['/', '\\']))
+    } else {
+        format!("{}/{path}", base.trim_end_matches('/'))
+    }
+}
+
 #[cfg(test)]
 mod display_tests {
+    #[test]
+    fn diagnostic_path_display_preserves_the_error_and_device_namespace() {
+        assert_eq!(
+            super::display_diagnostic(
+                r"cannot read \\?\D:\generated\file; source \\?\UNC\host\share; device \\?\Volume{sample}"
+            ),
+            r"cannot read D:\generated\file; source \\host\share; device \\?\Volume{sample}"
+        );
+    }
+
+    #[test]
+    fn target_directory_display_does_not_depend_on_the_client_platform() {
+        for (base, path, expected) in [
+            (r"\\?\D:\project", "src", r"D:\project\src"),
+            (r"\\?\D:\project", r"\\?\E:\other", r"E:\other"),
+            (r"D:\project", r"\other", r"D:\other"),
+            (r"\\?\UNC\host\share", "src", r"\\host\share\src"),
+            (r"\\?\D:\project", ".", r"D:\project"),
+            ("/srv/project", "src", "/srv/project/src"),
+            ("/srv/project", "/tmp", "/tmp"),
+            ("/", "src", "/src"),
+        ] {
+            assert_eq!(super::display_joined_path(base, path), expected);
+        }
+    }
+
     #[test]
     fn verbatim_paths_are_formatted_without_changing_device_or_unix_paths() {
         for (input, expected) in [

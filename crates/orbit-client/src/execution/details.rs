@@ -242,20 +242,11 @@ fn pretty(text: &str) -> String {
 
 pub fn request_directory(tool: &ToolRun, workspace: &str) -> String {
     let args = serde_json::from_str::<serde_json::Value>(&tool.arguments).ok();
-    args.as_ref()
+    let cwd = args
+        .as_ref()
         .and_then(|args| args["cwd"].as_str())
-        .map_or_else(
-            || workspace.into(),
-            |cwd| {
-                if cwd.starts_with('/') || cwd.as_bytes().get(1) == Some(&b':') {
-                    cwd.to_owned()
-                } else if cwd == "." {
-                    workspace.to_owned()
-                } else {
-                    format!("{}/{cwd}", workspace.trim_end_matches('/'))
-                }
-            },
-        )
+        .unwrap_or(".");
+    crate::directories::display_joined_path(workspace, cwd)
 }
 
 /// Complete request fields for the fixed inspector header. Multiline strings stay literal;
@@ -299,7 +290,11 @@ fn parameter(key: &str, value: &Value) -> String {
     let value = value
         .as_str()
         .map_or_else(|| pretty(&value.to_string()), str::to_owned);
-    format!("{key}: {value}")
+    if matches!(key, "path" | "cwd" | "workspace") {
+        format!("{key}: {}", crate::directories::display_path(&value))
+    } else {
+        format!("{key}: {value}")
+    }
 }
 
 pub fn status(tool: &ToolRun) -> String {

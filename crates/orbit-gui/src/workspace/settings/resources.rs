@@ -705,7 +705,7 @@ impl Render for Resources {
                                     self.session
                                         .as_deref()
                                         .unwrap_or("尚未连接"),
-                                    self.workspace
+                                    orbit_client::directories::display_path(&self.workspace)
                                 ))
                                 .disabled(
                                     self.busy

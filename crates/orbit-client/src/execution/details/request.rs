@@ -207,6 +207,11 @@ impl Request {
                             .join("、")
                     },
                 )
+            } else if key == "path" {
+                value.as_str().map_or_else(
+                    || literal(value),
+                    |path| crate::directories::display_path(path).into_owned(),
+                )
             } else {
                 literal(value)
             };
@@ -238,7 +243,17 @@ impl Request {
             .filter_map(|(key, label)| {
                 args.get(*key)
                     .filter(|value| !value.is_null())
-                    .map(|value| format!("{label}：{}", literal(value)))
+                    .map(|value| {
+                        let value = if *key == "path" {
+                            value.as_str().map_or_else(
+                                || literal(value),
+                                |path| crate::directories::display_path(path).into_owned(),
+                            )
+                        } else {
+                            literal(value)
+                        };
+                        format!("{label}：{value}")
+                    })
             })
             .collect();
         if tool.name == "Exec" {

@@ -10,6 +10,34 @@ fn request(name: &str, args: Value) -> Request {
 }
 
 #[test]
+fn windows_paths_are_readable_without_rewriting_recorded_arguments_or_scripts() {
+    let path = r"\\?\D:\generated\sample.png";
+    let args = json!({ "path": path });
+    let tool = ToolRun::new(&ToolCall::function("image", "ReadImage", args.clone()));
+    assert_eq!(
+        Request::new(&tool, r"\\?\D:\generated").content(),
+        r"D:\generated\sample.png"
+    );
+    assert_eq!(
+        serde_json::from_str::<Value>(&tool.arguments).unwrap(),
+        args
+    );
+    let script = r"echo \\?\D:\generated\sample.png";
+    let command = ToolRun::new(&ToolCall::function(
+        "command",
+        "Exec",
+        json!({"command": script, "cwd": "src"}),
+    ));
+    let view = Request::new(&command, r"\\?\D:\generated");
+    assert_eq!(view.content(), script);
+    assert!(
+        view.context()
+            .contains(r"D:\generated\src")
+    );
+    assert!(!view.context().contains(r"\\?\"));
+}
+
+#[test]
 fn command_copy_preserves_the_script_without_field_names_or_execution_policy() {
     let script = "printf '%s\\n' 'sample'\nprintf 'tail'\n";
     let view = request(

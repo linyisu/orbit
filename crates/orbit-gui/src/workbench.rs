@@ -34,6 +34,7 @@ pub(crate) struct Workbench {
     task_scroll: ScrollHandle,
     task_reveal: bool,
     task_width: Option<Pixels>,
+    control_probe: Option<toolbar::ControlProbe>,
     settings: Option<Entity<crate::workspace::SettingsPage>>,
     origin: Options,
     storage: storage::Storage,
@@ -42,6 +43,34 @@ pub(crate) struct Workbench {
 }
 
 impl Workbench {
+    pub(crate) fn enable_control_probe(&mut self, cx: &mut Context<Self>) {
+        self.control_probe = Some(Default::default());
+        cx.notify();
+    }
+
+    pub(crate) fn control_bounds(&self, index: usize) -> Option<Bounds<Pixels>> {
+        self.control_probe
+            .as_ref()?
+            .get()
+            .get(index)
+            .copied()
+            .flatten()
+    }
+
+    pub(crate) fn panel_visibility(&self, cx: &App) -> Option<(bool, bool)> {
+        if self.settings.is_some() {
+            return None;
+        }
+        let task = self
+            .tasks
+            .iter()
+            .find(|task| !task.closed && task.view.read(cx).key() == self.active)?;
+        Some((
+            self.sidebar.read(cx).visible(),
+            task.view.read(cx).inspector_visible(),
+        ))
+    }
+
     pub(crate) fn backend_ready(&self, cx: &App) -> bool {
         self.tasks.iter().any(|task| {
             !task.closed
@@ -139,6 +168,7 @@ impl Workbench {
             task_scroll: ScrollHandle::new(),
             task_reveal: true,
             task_width: None,
+            control_probe: None,
             settings: None,
             origin: options.clone(),
             storage,

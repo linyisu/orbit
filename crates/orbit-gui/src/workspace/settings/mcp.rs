@@ -814,7 +814,7 @@ impl Render for Mcp {
                     .whitespace_normal()
                     .child(format!(
                         "{} · 应用配置会重新连接服务器，正在执行的任务继续使用原有工具。",
-                        self.workspace
+                        orbit_client::directories::display_path(&self.workspace)
                     )),
             )
             .when_some(self.status_error.clone(), |view, error| {

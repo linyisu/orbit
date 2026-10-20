@@ -106,7 +106,8 @@ fn main() -> anyhow::Result<()> {
                     cx.update(|cx| cx.quit());
                 })
                 .detach();
-                let _ = handle.update(cx, |_, window, _| {
+                let _ = handle.update(cx, |_, window, cx| {
+                    view.update(cx, |view, cx| view.enable_control_probe(cx));
                     smoke_frame(
                         report,
                         0,
@@ -189,6 +190,18 @@ fn smoke_frame(
             return;
         }
         if let Some(step) = &mut account_check {
+            if matches!(step, accounts::AccountCheck::Loading)
+                && let Some(view) = view.upgrade()
+                && view
+                    .read(cx)
+                    .panel_visibility(cx)
+                    .is_some()
+                && let Err(error) = check_titlebar_controls(&view, window, cx)
+            {
+                eprintln!("侧栏按钮验收失败：{error:#}");
+                cx.quit();
+                return;
+            }
             if let Some(directory) = std::env::var_os("ORBIT_GUI_CAPTURE_DIR") {
                 let path =
                     std::path::PathBuf::from(directory).join(format!("{}.png", step.frame_name()));
@@ -279,4 +292,71 @@ fn smoke_frame(
         })
         .detach();
     });
+}
+
+/// Exercise real rendered controls in the explicitly requested isolated native probe.
+fn check_titlebar_controls(
+    view: &Entity<workbench::Workbench>,
+    window: &mut Window,
+    cx: &mut App,
+) -> anyhow::Result<()> {
+    let initial = view
+        .read(cx)
+        .panel_visibility(cx)
+        .ok_or_else(|| anyhow::anyhow!("conversation panels are unavailable"))?;
+    let maximized = window.is_maximized();
+    for (index, id) in ["toggle-sidebar", "toggle-inspector"]
+        .into_iter()
+        .enumerate()
+    {
+        let bounds = view
+            .read(cx)
+            .control_bounds(index)
+            .ok_or_else(|| anyhow::anyhow!("missing rendered control {id}"))?;
+        let position = bounds.center();
+        for click_count in 1..=2 {
+            window.dispatch_event(
+                PlatformInput::MouseMove(MouseMoveEvent {
+                    position,
+                    ..Default::default()
+                }),
+                cx,
+            );
+            window.dispatch_event(
+                PlatformInput::MouseDown(MouseDownEvent {
+                    position,
+                    button: MouseButton::Left,
+                    click_count,
+                    ..Default::default()
+                }),
+                cx,
+            );
+            window.dispatch_event(
+                PlatformInput::MouseUp(MouseUpEvent {
+                    position,
+                    button: MouseButton::Left,
+                    click_count,
+                    ..Default::default()
+                }),
+                cx,
+            );
+            let expected = if click_count == 2 {
+                initial
+            } else if index == 0 {
+                (!initial.0, initial.1)
+            } else {
+                (initial.0, !initial.1)
+            };
+            anyhow::ensure!(
+                view.read(cx).panel_visibility(cx) == Some(expected),
+                "{id} did not toggle its panel"
+            );
+            anyhow::ensure!(
+                window.is_maximized() == maximized,
+                "{id} double click changed window state"
+            );
+        }
+    }
+    eprintln!("PASS: both titlebar controls toggle on click and double click without maximizing");
+    Ok(())
 }

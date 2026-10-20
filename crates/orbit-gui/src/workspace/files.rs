@@ -1181,7 +1181,10 @@ impl Render for Files {
                             .flex_1()
                             .min_w_0()
                             .text_ellipsis()
-                            .child(self.workspace.clone()),
+                            .child(
+                                orbit_client::directories::display_path(&self.workspace)
+                                    .into_owned(),
+                            ),
                     ),
             )
             .child(

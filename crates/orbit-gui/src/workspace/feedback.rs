@@ -98,7 +98,12 @@ impl Workspace {
     }
 
     pub(super) fn report_error(&mut self, error: impl Into<SharedString>, cx: &mut Context<Self>) {
-        self.error = Some(error.into());
+        let error = error.into();
+        self.error = Some(
+            orbit_client::directories::display_diagnostic(&error)
+                .into_owned()
+                .into(),
+        );
         if let Some(form) = &self.question_form {
             let form = form.clone();
             cx.defer(move |cx| form.update(cx, |form, cx| form.retry(cx)));
