@@ -90,13 +90,7 @@ async fn build_client(
     executable: &str,
 ) -> Result<BTreeMap<String, PathBuf>> {
     let mut command = cargo(root);
-    command.args([
-        "build",
-        "--locked",
-        "--message-format=json-render-diagnostics",
-        "-p",
-        package,
-    ]);
+    command.args(["build", "--locked", "--message-format=json", "-p", package]);
     #[cfg(windows)]
     {
         let output = process::run(Command::new("rustc").arg("-vV")).await?;
@@ -129,14 +123,28 @@ async fn build_client(
     // Compilation can take substantially longer than the bounded verification commands.
     let output = command
         .kill_on_drop(true)
+        .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
-        .output()
+        .spawn()?
+        .wait_with_output()
         .await?;
+    let diagnostics = output
+        .stdout
+        .split(|byte| *byte == b'\n')
+        .filter_map(|line| serde_json::from_slice::<Value>(line).ok())
+        .filter(|message| message["reason"] == "compiler-message")
+        .filter_map(|message| {
+            message["message"]["rendered"]
+                .as_str()
+                .map(str::to_owned)
+        })
+        .collect::<String>();
     ensure!(
         output.status.success(),
-        "client build failed: {}",
-        output.status
+        "client build failed: {}\n{diagnostics}",
+        output.status,
     );
+    eprint!("{diagnostics}");
     artifacts(&output.stdout, executable)
 }
 
@@ -310,6 +318,40 @@ pub async fn archive_gui(directory: &Path, output: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn failed_client_build_preserves_the_compiler_diagnostic() {
+        let directory = tempfile::tempdir().unwrap();
+        fs::create_dir(directory.path().join("src")).unwrap();
+        fs::write(
+            directory.path().join("Cargo.toml"),
+            "[package]\nname = \"diagnostic-fixture\"\nversion = \"0.0.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+        fs::write(
+            directory.path().join("Cargo.lock"),
+            "version = 4\n[[package]]\nname = \"diagnostic-fixture\"\nversion = \"0.0.0\"\n",
+        )
+        .unwrap();
+        fs::write(
+            directory.path().join("src/main.rs"),
+            "fn main() { missing_generated_symbol(); }\n",
+        )
+        .unwrap();
+        let error = build_client(
+            directory.path(),
+            Profile::Debug,
+            "diagnostic-fixture",
+            "diagnostic-fixture",
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+        assert!(
+            error.contains("E0425") && error.contains("missing_generated_symbol"),
+            "{error}"
+        );
+    }
 
     #[tokio::test]
     async fn desktop_archive_preserves_native_launch_assets_and_excludes_service_fixture() {

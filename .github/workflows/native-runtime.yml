@@ -46,7 +46,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: native-runtime-${{ github.ref }}${{ contains(github.event.head_commit.message, '[test-only]') && '-tests' || '' }}
+  group: native-runtime-${{ github.ref }}${{ contains(github.event.head_commit.message, '[test-only]') && '-tests' || contains(github.event.head_commit.message, '[window-only]') && '-window' || '' }}
   cancel-in-progress: true
 
 jobs:
@@ -55,6 +55,7 @@ jobs:
       github.event_name == 'push' && github.ref == 'refs/heads/native-runtime-foundation'
       && !contains(github.event.head_commit.message, '[native-full]')
       && !contains(github.event.head_commit.message, '[installer-only]')
+      && !contains(github.event.head_commit.message, '[window-only]')
     name: Repair regressions (${{ matrix.os }})
     strategy:
       fail-fast: false
