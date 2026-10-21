@@ -41,6 +41,44 @@ fn initialize_git(root: &Path) {
 }
 
 #[tokio::test]
+async fn review_uses_published_workspace_identity_after_opening_a_path_alias() {
+    let fixture = Fixture::new("http://127.0.0.1:1/v1").await;
+    let root = &fixture
+        .service
+        .options
+        .initial_directory;
+    initialize_git(root);
+    let alias = root.join("..").join("workspace");
+    let setup = crate::workspace::setup::prepare_workspace(&fixture.service.options, &alias, None)
+        .await
+        .unwrap();
+    let handle = Handle::spawn(setup, None)
+        .await
+        .unwrap();
+    let alias = alias.to_string_lossy();
+    assert_ne!(alias, handle.info.workspace);
+    let action = || Action::History {
+        revision: "HEAD".into(),
+        offset: 0,
+    };
+    assert!(
+        actor_review(&handle, &alias, action())
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("工作区已切换")
+    );
+    assert!(matches!(
+        actor_review(&handle, &handle.info.workspace, action()).await.unwrap(),
+        Snapshot::History { commits, .. } if commits.len() == 1
+    ));
+    handle
+        .command(session::Command::Close)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
 async fn history_keeps_readonly_access_but_respects_disabled_capabilities() {
     for disabled in [
         None,
@@ -64,7 +102,7 @@ async fn history_keeps_readonly_access_but_respects_disabled_capabilities() {
             .unwrap();
         let result = actor_review(
             &handle,
-            &root.display().to_string(),
+            &handle.info.workspace,
             Action::History {
                 revision: "HEAD".into(),
                 offset: 0,
@@ -80,7 +118,7 @@ async fn history_keeps_readonly_access_but_respects_disabled_capabilities() {
         }
         let patch = actor_review(
             &handle,
-            &root.display().to_string(),
+            &handle.info.workspace,
             Action::Commit {
                 revision: "HEAD".into(),
                 include_patch: true,
@@ -97,7 +135,7 @@ async fn history_keeps_readonly_access_but_respects_disabled_capabilities() {
         }
         let changes = actor_review(
             &handle,
-            &root.display().to_string(),
+            &handle.info.workspace,
             Action::Status {
                 offset: 0,
                 include_patch: true,
@@ -158,7 +196,7 @@ async fn index_actor_checks_scope_disabled_capabilities_and_readonly_before_writ
         let handle = Handle::spawn(setup, None)
             .await
             .unwrap();
-        let workspace = root.display().to_string();
+        let workspace = handle.info.workspace.clone();
         for staged in [true, false] {
             let error = actor_review(
                 &handle,
@@ -226,7 +264,7 @@ async fn index_actor_refuses_updates_while_an_agent_is_running() {
         let error = fixture
             .request(Request::Review {
                 session: session.clone(),
-                expected_workspace: root.display().to_string(),
+                expected_workspace: fixture.handle.info.workspace.clone(),
                 action: index_action(staged, "0".repeat(64)),
             })
             .await
@@ -265,7 +303,7 @@ async fn successful_index_transactions_do_not_create_agent_runs_or_file_undo_rec
         .initial_directory;
     initialize_git(root);
     let session = fixture.handle.info.id.clone();
-    let workspace = root.display().to_string();
+    let workspace = fixture.handle.info.workspace.clone();
     let persisted_before = fixture
         .handle
         .store
@@ -419,12 +457,7 @@ async fn checkpoint_review_waits_for_approval_and_refuses_stale_receipts_and_dis
         .await;
     model.await.unwrap();
     assert_eq!(fs::read_to_string(&inside).unwrap(), "inside");
-    let workspace = fixture
-        .service
-        .options
-        .initial_directory
-        .display()
-        .to_string();
+    let workspace = fixture.handle.info.workspace.clone();
     let review = |action| Request::Review {
         session: id.clone(),
         expected_workspace: workspace.clone(),
