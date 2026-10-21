@@ -1,29 +1,7 @@
 //! Project identity is its target-host path, scoped by the existing host rules.
 use super::*;
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
-pub(crate) struct Projects {
-    pinned: BTreeSet<String>,
-    order: Vec<String>,
-}
-
-impl Projects {
-    pub(in crate::preferences) fn is_empty(&self) -> bool {
-        self.pinned.is_empty() && self.order.is_empty()
-    }
-
-    pub(crate) fn is_pinned(&self, path: &str) -> bool {
-        self.pinned.contains(path)
-    }
-
-    pub(crate) fn position(&self, path: &str) -> usize {
-        self.order
-            .iter()
-            .position(|item| item == path)
-            .unwrap_or(usize::MAX)
-    }
-}
+pub(crate) use orbit_client::projects::Projects;
 
 impl Organization {
     pub(in crate::preferences) fn projects(&self, options: &Options) -> Projects {
@@ -59,14 +37,13 @@ impl Organization {
         if pinned {
             self.project_host(options)
                 .projects
-                .pinned
-                .insert(path.to_owned());
+                .set_pin(path, true);
         } else if let Some(host) = self
             .hosts
             .iter_mut()
             .find(|host| host.options.same_host(options))
         {
-            host.projects.pinned.remove(path);
+            host.projects.set_pin(path, false);
         }
         self.hosts
             .retain(|host| !host.sessions.is_empty() || !host.projects.is_empty());
@@ -79,39 +56,9 @@ impl Organization {
         target: &str,
         paths: &[String],
     ) -> anyhow::Result<()> {
-        let from = paths
-            .iter()
-            .position(|path| path == source)
-            .ok_or_else(|| anyhow::anyhow!("拖动的项目已不在列表中"))?;
-        let to = paths
-            .iter()
-            .position(|path| path == target)
-            .ok_or_else(|| anyhow::anyhow!("目标项目已不在列表中"))?;
-        if from == to {
-            return Ok(());
-        }
-        let host = self.project_host(options);
-        // A drop into the other section adopts that section's pin state.
-        if host.projects.is_pinned(target) {
-            host.projects
-                .pinned
-                .insert(source.to_owned());
-        } else {
-            host.projects.pinned.remove(source);
-        }
-        let mut order = paths.to_vec();
-        let source = order.remove(from);
-        order.insert(to, source);
-        // A temporarily absent project retains its saved place after known rows.
-        order.extend(
-            host.projects
-                .order
-                .iter()
-                .filter(|path| !paths.contains(path))
-                .cloned(),
-        );
-        host.projects.order = order;
-        Ok(())
+        self.project_host(options)
+            .projects
+            .reorder(source, target, paths)
     }
 
     pub(in crate::preferences) fn migrate_project_pins(
@@ -132,9 +79,7 @@ impl Organization {
                 && placement.is_pinned()
             {
                 placement.pinned = false;
-                host.projects
-                    .pinned
-                    .insert(path.clone());
+                host.projects.set_pin(path, true);
                 changed = true;
             }
         }
@@ -182,7 +127,7 @@ mod tests {
         let mut restored: Organization =
             serde_json::from_slice(&serde_json::to_vec(&organization).unwrap()).unwrap();
         let projects = restored.projects(&options);
-        assert_eq!(projects.order, ["/alpha", "/gamma", "/beta"]);
+        assert_eq!(projects.order(), ["/alpha", "/gamma", "/beta"]);
         assert!(projects.is_pinned("/alpha"));
         restored.set_project_pin(&options, "/alpha", false);
         assert!(
@@ -191,7 +136,7 @@ mod tests {
                 .is_pinned("/alpha")
         );
         restored.forget(&options, "a");
-        assert_eq!(restored.projects(&options).order, projects.order);
+        assert_eq!(restored.projects(&options).order(), projects.order());
         assert!(
             restored
                 .reorder_project(&options, "/missing", "/beta", &paths)

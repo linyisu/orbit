@@ -5,3 +5,5 @@ include!("local.rs");
 
 #[cfg(feature = "remote")]
 pub mod remote;
+
+pub mod projects;
