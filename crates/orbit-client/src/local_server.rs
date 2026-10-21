@@ -279,6 +279,8 @@ mod tests {
                 .join("unrelated.exe")
                 .exists()
         );
+        // Parallel subprocess tests can briefly inherit this lease between fork and exec.
+        lease.unlock().unwrap();
         drop(lease);
         prune(root.path(), &files[1]).unwrap();
         assert_eq!(
