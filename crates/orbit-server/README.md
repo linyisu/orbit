@@ -16,6 +16,9 @@ cargo build -p orbit-server --locked
 
 ## 验证
 
+Linux 的 `remote authorize/listen/revoke` 入口用于显式设备授权和局域网控制，参数及
+当前限制见 [Android 接入](../../mobile/README.md)。默认不启动网络监听。
+
 ```sh
 cargo test -p orbit-server --locked
 ```

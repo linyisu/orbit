@@ -11,6 +11,8 @@ mod profile;
 pub mod project;
 pub mod protocol;
 mod questions;
+#[cfg(target_os = "linux")]
+pub mod remote;
 mod resources;
 mod review;
 mod run;

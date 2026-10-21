@@ -69,6 +69,10 @@ UTF-8 跨 token 拼接后再展示，暂定尾部整体替换，稳定前缀不�
 
 ## 入口
 
+- `remote` 功能提供固定证书 TLS、设备认证与独立控制/历史连接；使用
+  `default-features = false` 时不引入 Agent、工具、模型、账号和本机部署。
+  默认 `local` 功能保留现有 GUI/TUI 接口。远控不会自动重试副作用请求；断线结果未确认。
+
 - [conversation.rs](src/conversation.rs)、[activity.rs](src/activity.rs)、[execution.rs](src/execution.rs)：
   共享会话分段、进度状态、调用记录与详情页数据。分段保留思考、正文和调用的原始顺序，只合并连续工具；后台返回更新原记录，不改分组或位置。两端不自行解释工具结果。
   新收据的状态优先使用服务返回的明确结果；旧命令记录兼容原有格式。搜索详情支持匹配行及上下文、文件列表与计数。

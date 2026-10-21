@@ -4,6 +4,8 @@
 
 ## 数据与入口
 
+- `remote.rs`：Linux 设备授权的私有不可变登记；只存凭据摘要，撤销删除登记并同步落盘。
+
 - [store.rs](src/store.rs)、[store/writer.rs](src/store/writer.rs)：会话读写与运行事务。
 - [session_log.rs](src/session_log.rs)、[context_archive.rs](src/context_archive.rs)：规范消息与压缩前原文；压缩只替换模型上下文投影。
 - [subagents.rs](src/subagents.rs)、[tasks.rs](src/tasks.rs)、[plans.rs](src/plans.rs)：子 Agent、项目任务与计划。

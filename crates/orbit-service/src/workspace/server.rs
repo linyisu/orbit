@@ -49,6 +49,8 @@ struct ConnectionContext {
     auth: PathBuf,
     allow_mcp_start: bool,
     workspace: PathBuf,
+    #[serde(default)]
+    remote_scope: bool,
 }
 
 pub async fn serve(
@@ -57,6 +59,16 @@ pub async fn serve(
     database: Option<PathBuf>,
     auth: PathBuf,
 ) -> Result<()> {
+    let (directory, config, database, auth) = resolve(&args, config, database, auth)?;
+    serve_resolved(args, directory, config, database, auth).await
+}
+
+fn resolve(
+    args: &ServiceOptions,
+    config: PathBuf,
+    database: Option<PathBuf>,
+    auth: PathBuf,
+) -> Result<(PathBuf, PathBuf, PathBuf, PathBuf)> {
     let directory = expand_home(&args.workspace)?
         .canonicalize()
         .context("target workspace does not exist")?;
@@ -89,6 +101,16 @@ pub async fn serve(
         .open(&database)?;
     let database = database.canonicalize()?;
     let auth = std::path::absolute(auth)?;
+    Ok((directory, config, database, auth))
+}
+
+async fn serve_resolved(
+    args: ServiceOptions,
+    directory: PathBuf,
+    config: PathBuf,
+    database: PathBuf,
+    auth: PathBuf,
+) -> Result<()> {
     let root = runtime_directory()?;
     let socket = endpoints::shared(&root, &database)?;
     if !args.daemon {
@@ -103,6 +125,7 @@ pub async fn serve(
                 auth,
                 allow_mcp_start: args.allow_mcp_start,
                 workspace: directory,
+                remote_scope: false,
             },
         )
         .await?;
@@ -221,6 +244,49 @@ pub async fn serve(
     #[cfg(unix)]
     fs::remove_file(socket)?;
     Ok(())
+}
+
+/// Attach a remote gateway to the same daemon and data source used by local clients.
+#[cfg(target_os = "linux")]
+pub(super) async fn remote_backend(
+    args: &ServiceOptions,
+    config: PathBuf,
+    database: PathBuf,
+    auth: PathBuf,
+) -> Result<impl AsyncRead + AsyncWrite + Unpin + Send> {
+    let (workspace, config, database, auth) = resolve(args, config, Some(database), auth)?;
+    let socket = endpoints::shared(&runtime_directory()?, &database)?;
+    let mut stream = lifecycle::connect_or_start(&socket, args, &config, &database, &auth).await?;
+    protocol::write(
+        &mut stream,
+        &ConnectionContext {
+            config,
+            auth,
+            workspace,
+            allow_mcp_start: args.allow_mcp_start,
+            remote_scope: true,
+        },
+    )
+    .await?;
+    protocol::write(
+        &mut stream,
+        &Request::Hello {
+            version: protocol::VERSION,
+            workspace: None,
+        },
+    )
+    .await?;
+    ensure!(
+        matches!(
+            protocol::read::<Response>(&mut stream).await?,
+            Response::Hello { capabilities, .. }
+                if capabilities.features.iter().any(|feature| {
+                    feature == orbit_protocol::remote::WORKSPACE_SCOPE
+                })
+        ),
+        "workspace service does not support remote scope checks; update the host service"
+    );
+    Ok(stream)
 }
 
 #[cfg(unix)]
@@ -413,6 +479,7 @@ impl Service {
             .await?;
             return Ok(());
         }
+        let remote_scope = context.remote_scope;
         let mut options = self.options.clone();
         options.config = context.config;
         options.auth_directory = context.auth;
@@ -446,6 +513,16 @@ impl Service {
         let result = async {
             loop {
                 let request = protocol::read::<Request>(&mut reader).await?;
+                #[cfg(target_os = "linux")]
+                if remote_scope {
+                    self.check_remote_scope(&request, &options.initial_directory)
+                        .await?;
+                }
+                #[cfg(not(target_os = "linux"))]
+                ensure!(
+                    !remote_scope,
+                    "remote control is not supported on this host"
+                );
                 *self.last_activity.lock().await = tokio::time::Instant::now();
                 let shutdown = matches!(request, Request::Shutdown);
                 let response = match self
@@ -470,6 +547,25 @@ impl Service {
         self.release_client(opened, viewer)
             .await;
         result
+    }
+
+    #[cfg(target_os = "linux")]
+    async fn check_remote_scope(&self, request: &Request, workspace: &Path) -> Result<()> {
+        let session = match request {
+            Request::Poll { session, .. }
+            | Request::Prepare { session, .. }
+            | Request::Start { session, .. }
+            | Request::Cancel { session }
+            | Request::Approve { session, .. } => session,
+            Request::Sessions | Request::Browse { .. } => return Ok(()),
+            _ => bail!("request is unavailable to remote controllers"),
+        };
+        let (_, info) = self.conversation(session).await?;
+        ensure!(
+            Path::new(&info.workspace) == workspace,
+            "remote workspace scope changed"
+        );
+        Ok(())
     }
 
     async fn release_client(&self, opened: Vec<String>, viewer: u64) {
@@ -1780,6 +1876,8 @@ async fn capabilities() -> orbit_protocol::Capabilities {
                 files: true,
                 features: [
                     orbit_protocol::MODEL_INDEPENDENT_SESSIONS,
+                    #[cfg(target_os = "linux")]
+                    orbit_protocol::remote::WORKSPACE_SCOPE,
                     "sessions",
                     "events",
                     "approvals",

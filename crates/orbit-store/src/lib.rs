@@ -28,6 +28,8 @@ pub mod live_context;
 pub mod workspace_requests;
 
 pub mod plans;
+#[cfg(target_os = "linux")]
+pub mod remote;
 pub mod user_input;
 
 mod extensions;

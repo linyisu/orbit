@@ -474,6 +474,7 @@ async fn shared_server_negotiates_released_clients_and_rejects_unknown_versions(
                 auth: options.auth_directory,
                 allow_mcp_start: false,
                 workspace: options.initial_directory,
+                remote_scope: false,
             },
         )
         .await

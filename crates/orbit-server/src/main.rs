@@ -22,6 +22,41 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     WorkspaceService(ServiceArgs),
+    #[cfg(target_os = "linux")]
+    Remote(RemoteArgs),
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Args)]
+struct RemoteArgs {
+    #[arg(long)]
+    state: PathBuf,
+    #[arg(long)]
+    workspace: PathBuf,
+    #[command(subcommand)]
+    action: RemoteAction,
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Subcommand)]
+enum RemoteAction {
+    Authorize {
+        #[arg(long)]
+        address: String,
+        #[arg(long)]
+        output: PathBuf,
+        #[arg(long)]
+        control: bool,
+        #[arg(long)]
+        approve: bool,
+    },
+    Listen {
+        #[arg(long)]
+        bind: std::net::SocketAddr,
+    },
+    Revoke {
+        device: String,
+    },
 }
 
 #[derive(Args)]
@@ -46,6 +81,40 @@ async fn run() -> Result<()> {
     let cli = Cli::parse();
     let auth = platform::auth_directory(cli.auth_dir)?;
     match cli.command {
+        #[cfg(target_os = "linux")]
+        Command::Remote(args) => {
+            if let RemoteAction::Revoke { device } = &args.action {
+                return workspace::remote::revoke(args.state, device);
+            }
+            let options = workspace::remote::HostOptions {
+                state: args.state,
+                workspace: args.workspace.canonicalize()?,
+                database: orbit_service::session::database_path(cli.database)?,
+                config: std::path::absolute(cli.config)?,
+                auth,
+            };
+            match args.action {
+                RemoteAction::Authorize {
+                    address,
+                    output,
+                    control,
+                    approve,
+                } => {
+                    let device = workspace::remote::authorize(
+                        &options,
+                        address,
+                        output,
+                        workspace::remote::Permissions { control, approve },
+                    )?;
+                    println!("Authorized device: {device}");
+                    Ok(())
+                }
+                RemoteAction::Listen { bind } => workspace::remote::serve(options, bind).await,
+                RemoteAction::Revoke { device } => {
+                    workspace::remote::revoke(options.state, &device)
+                }
+            }
+        }
         Command::WorkspaceService(args) => {
             workspace::serve(
                 workspace::ServiceOptions {

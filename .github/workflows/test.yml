@@ -70,10 +70,12 @@ jobs:
       - name: Check formatting
         if: runner.os == 'Linux'
         run: cargo fmt --all -- --check
-      - name: Check Android prototype
+      - name: Check Android client
         if: runner.os == 'Linux'
         run: |
           rustup target add aarch64-linux-android
+          export CC_aarch64_linux_android="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang"
+          export AR_aarch64_linux_android="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
           cargo fmt --manifest-path mobile/Cargo.toml -- --check
           cargo clippy --manifest-path mobile/Cargo.toml --target aarch64-linux-android --lib --locked -- -D warnings
       - name: Check architecture and dependency boundaries

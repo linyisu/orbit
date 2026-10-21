@@ -12,6 +12,9 @@ name = "orbit_mobile_probe"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+orbit-client = { path = "../crates/orbit-client", default-features = false, features = ["remote"] }
+serde_json = "1"
+tokio = { version = "1.53.1", features = ["rt-multi-thread", "sync", "time"] }
 gpui-kit = { git = "https://github.com/linyisu/gpui-kit", rev = "d7b441dbc0f6dac2cdea76d9df5eb44ffb13f4e4", default-features = false, features = ["component", "assets"] }
 
 [target.'cfg(target_os = "android")'.dependencies]

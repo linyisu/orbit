@@ -8,6 +8,7 @@ pub mod library;
 pub mod plan;
 pub mod plugins;
 pub mod project;
+pub mod remote;
 pub mod resources;
 pub mod review;
 pub mod search;

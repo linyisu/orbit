@@ -90,5 +90,5 @@ CI 只保留两个入口：
 
 仓库维护与编码约定见 [AGENTS.md](AGENTS.md)。
 
-Android 远控的平台验证工程见 [mobile](mobile/README.md)。当前仅验证 GPUI Kit Mobile
-界面与构建链路，尚未接入设备配对或真实工作区。
+Android 远控接入见 [mobile](mobile/README.md)。目前支持显式授权后的 Linux 局域网会话控制，
+手机使用 GPUI Kit Mobile；扫码、公网连接和手机凭据持久化仍未接入。

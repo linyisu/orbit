@@ -1,6 +1,10 @@
 #[path = "support/client_probe.rs"]
 mod client_probe;
 
+#[cfg(target_os = "linux")]
+#[path = "support/remote_control.rs"]
+mod remote_control;
+
 #[cfg(test)]
 use orbit_config::test_support::{TestConfig, TestModel, TestProvider};
 use std::{path::Path, process::Stdio, time::Duration};

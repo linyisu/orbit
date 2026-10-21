@@ -1,16 +1,16 @@
-//! Isolated Android platform acceptance surface; never connects to a workspace.
-mod view;
+//! Android controller entry point; workspace execution remains on the paired host.
+mod remote;
 
 use gpui_kit::*;
 
-/// Open the isolated acceptance surface after the platform has supplied a window.
+/// Open the controller after the platform has supplied a window.
 pub fn open(cx: &mut App) {
     gpui_kit::init(cx);
     cx.open_window(WindowOptions::default(), |window, cx| {
-        let view = cx.new(|cx| view::Probe::new(window, cx));
+        let view = cx.new(|cx| remote::Remote::new(window, cx));
         cx.new(|cx| gpui_kit::component::Root::new(view, window, cx))
     })
-    .expect("open mobile acceptance window");
+    .expect("open mobile controller window");
 }
 
 #[cfg(target_os = "android")]

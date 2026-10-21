@@ -290,6 +290,7 @@ async fn retire_version(
                 auth: auth.into(),
                 allow_mcp_start: args.allow_mcp_start,
                 workspace: expand_home(&args.workspace)?.canonicalize()?,
+                remote_scope: false,
             },
         )
         .await?;

@@ -8,23 +8,26 @@ name = "orbit-client-test-peer"
 path = "tests/support/session_peer.rs"
 
 [features]
-test-support = []
-local-speech = ["dep:qwen-asr", "dep:reqwest"]
+default = ["local"]
+local = ["dep:orbit-config", "dep:orbit-agent", "dep:orbit-model", "dep:orbit-auth", "dep:orbit-tools", "dep:orbit-runtime"]
+remote = ["dep:tokio-rustls"]
+test-support = ["local"]
+local-speech = ["local", "dep:qwen-asr", "dep:reqwest"]
 
 [dependencies]
 similar.workspace = true
 chrono.workspace = true
 url.workspace = true
-orbit-config.workspace = true
+orbit-config = { workspace = true, optional = true }
 anyhow.workspace = true
 globset.workspace = true
 base64.workspace = true
 libc.workspace = true
-orbit-agent.workspace = true
-orbit-model.workspace = true
-orbit-auth.workspace = true
-orbit-tools.workspace = true
-orbit-runtime.workspace = true
+orbit-agent = { workspace = true, optional = true }
+orbit-model = { workspace = true, optional = true }
+orbit-auth = { workspace = true, optional = true }
+orbit-tools = { workspace = true, optional = true }
+orbit-runtime = { workspace = true, optional = true }
 orbit-protocol.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -32,6 +35,7 @@ sha2.workspace = true
 shlex.workspace = true
 tempfile.workspace = true
 tokio.workspace = true
+tokio-rustls = { workspace = true, optional = true }
 tokio-util.workspace = true
 toml.workspace = true
 qwen-asr = { workspace = true, optional = true }
