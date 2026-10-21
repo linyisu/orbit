@@ -1,0 +1,61 @@
+diff --git a/crates/nsh-platform-android/java/com/longbridge/nsh/InputBox.java b/crates/nsh-platform-android/java/com/longbridge/nsh/InputBox.java
+index c584c2b..e205bca 100644
+--- a/crates/nsh-platform-android/java/com/longbridge/nsh/InputBox.java
++++ b/crates/nsh-platform-android/java/com/longbridge/nsh/InputBox.java
+@@ -54,6 +54,21 @@ final class InputBox extends FrameLayout implements Node {
+         this.id = id;
+         setBackground(decor);
+         edit = new EditText(context) {
++            @Override
++            public void scrollTo(int x, int y) {
++                // Short inputs have no vertical scroll range, even during IME relayout.
++                android.text.Layout layout = getLayout();
++                int available = getHeight() - getTotalPaddingTop() - getTotalPaddingBottom();
++                int maximum = layout == null ? 0 : Math.max(0, layout.getHeight() - available);
++                super.scrollTo(x, multiline ? Math.max(0, Math.min(y, maximum)) : 0);
++            }
++
++            @Override
++            protected void onSizeChanged(int w, int h, int oldw, int oldh) {
++                super.onSizeChanged(w, h, oldw, oldh);
++                scrollTo(getScrollX(), getScrollY());
++            }
++
+             @Override
+             public boolean onKeyUp(int code, android.view.KeyEvent event) {
+                 // The up of an Enter whose down submitted another field (focus
+@@ -91,7 +106,11 @@ final class InputBox extends FrameLayout implements Node {
+         };
+         edit.setBackground(new ColorDrawable(0));
+         edit.setPadding(0, 0, 0, 0);
+-        edit.setIncludeFontPadding(false);
++        edit.setMinHeight(0);
++        edit.setMinimumHeight(0);
++        // Fallback CJK fonts may extend beyond the primary font ascent/descent.
++        edit.setIncludeFontPadding(true);
++        if (Build.VERSION.SDK_INT >= 28) edit.setFallbackLineSpacing(true);
+         edit.addTextChangedListener(new TextWatcher() {
+             @Override
+             public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
+@@ -165,6 +184,10 @@ final class InputBox extends FrameLayout implements Node {
+         if (letterSpacingDp != 0) edit.setLetterSpacing(letterSpacingDp / fontSizeDp);
+         int horizontal = align == 1 ? Gravity.CENTER_HORIZONTAL : align == 2 ? Gravity.END : Gravity.START;
+         edit.setGravity(horizontal | (multiline ? Gravity.TOP : Gravity.CENTER_VERTICAL));
++        LayoutParams inputLayout = (LayoutParams) edit.getLayoutParams();
++        inputLayout.height = LayoutParams.WRAP_CONTENT;
++        inputLayout.gravity = multiline ? Gravity.TOP : Gravity.CENTER_VERTICAL;
++        edit.setLayoutParams(inputLayout);
+         edit.setHint(placeholder);
+         if (hasPlaceholderColor) edit.setHintTextColor(placeholderColor);
+         int type;
+@@ -222,6 +245,10 @@ final class InputBox extends FrameLayout implements Node {
+                 public int getIntrinsicWidth() {
+                     return Math.round(2 * mounter.density);
+                 }
++                @Override
++                public int getIntrinsicHeight() {
++                    return Math.round(edit.getTextSize() * 1.25f);
++                }
+             });
+             edit.setHighlightColor((selectionColor & 0x00ffffff) | 0x55000000);
+         } else if (!hasSelectionColor) {

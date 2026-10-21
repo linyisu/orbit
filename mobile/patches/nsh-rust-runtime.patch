@@ -1,0 +1,13 @@
+diff --git a/crates/xtask/src/android.rs b/crates/xtask/src/android.rs
+index de5827d..b502e9e 100644
+--- a/crates/xtask/src/android.rs
++++ b/crates/xtask/src/android.rs
+@@ -208,7 +208,7 @@ fn cargo_lib(
+     dev: bool,
+ ) -> anyhow::Result<PathBuf> {
+     let mut cmd = ndk_cargo(sdk, triple);
+-    cmd.args(["build", "-p", "nsh-platform-android", "--target", triple]);
++    cmd.args(["build", "-p", "nsh-platform-android", "--no-default-features", "--target", triple]);
+     if release {
+         cmd.arg("--release");
+     }

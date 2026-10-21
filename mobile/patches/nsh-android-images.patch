@@ -1,0 +1,46 @@
+diff --git a/crates/nsh-platform-android/java/com/longbridge/nsh/Images.java b/crates/nsh-platform-android/java/com/longbridge/nsh/Images.java
+index 6a8cccd..fd8b6be 100644
+--- a/crates/nsh-platform-android/java/com/longbridge/nsh/Images.java
++++ b/crates/nsh-platform-android/java/com/longbridge/nsh/Images.java
+@@ -78,6 +78,7 @@ final class Images {
+     volatile Redirects redirects = (base, location) -> null;
+ 
+     private static final int MAX_REDIRECTS = 20;
++    private static final int MAX_INLINE_IMAGE_CHARS = 32 * 1024 * 1024;
+ 
+     private static final ExecutorService POOL = Executors.newFixedThreadPool(4, r -> {
+         Thread t = new Thread(r, "nsh-images");
+@@ -370,6 +371,19 @@ final class Images {
+ 
+     /** Reads `uri` (off the UI thread), reporting download progress. */
+     private byte[] read(String uri, Download download) throws Exception {
++        if (uri.startsWith("data:")) {
++            // Inline images follow the same SVG/bitmap decoding path as files and assets.
++            int comma = uri.indexOf(',');
++            if (comma < 0 || !uri.substring(0, comma).endsWith(";base64")
++                    || !uri.startsWith("data:image/") || uri.length() > MAX_INLINE_IMAGE_CHARS) {
++                throw new java.io.IOException("Unsupported or oversized inline image");
++            }
++            try {
++                return android.util.Base64.decode(uri.substring(comma + 1), android.util.Base64.DEFAULT);
++            } catch (IllegalArgumentException error) {
++                throw new java.io.IOException("Invalid inline image encoding", error);
++            }
++        }
+         if (uri.startsWith("asset:/")) {
+             byte[] bytes = assets.read(uri);
+             if (bytes == null) throw new java.io.FileNotFoundException(uri);
+diff --git a/crates/nsh-platform-android/java/com/longbridge/nsh/Mounter.java b/crates/nsh-platform-android/java/com/longbridge/nsh/Mounter.java
+index c11e92e..392de1e 100644
+--- a/crates/nsh-platform-android/java/com/longbridge/nsh/Mounter.java
++++ b/crates/nsh-platform-android/java/com/longbridge/nsh/Mounter.java
+@@ -1668,7 +1668,8 @@ final class Mounter {
+             return;
+         }
+         cancelImage(image);
+-        image.setImage(null, 0);
++        // Continuous sources keep the previous frame until decoding finishes.
++        if (fadeMs != 0 || uri == null || uri.isEmpty()) image.setImage(null, 0);
+         image.imageShown = false;
+         image.uri = uri;
+         image.placeholderUri = placeholder;

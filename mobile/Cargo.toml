@@ -1,40 +1,37 @@
 [package]
-name = "orbit-mobile-probe"
+name = "orbit-mobile"
 version = "0.1.0"
 edition = "2024"
 publish = false
 
-# Keep the platform experiment out of the desktop dependency resolution.
 [workspace]
 
 [lib]
-name = "orbit_mobile_probe"
-crate-type = ["cdylib", "rlib"]
+crate-type = ["rlib"]
 
 [dependencies]
 orbit-client = { path = "../crates/orbit-client", default-features = false, features = ["remote"] }
+serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+rqrr = "0.10"
+base64 = "0.22"
 tokio = { version = "1.53.1", features = ["rt-multi-thread", "sync", "time"] }
-gpui-kit = { git = "https://github.com/linyisu/gpui-kit", rev = "d7b441dbc0f6dac2cdea76d9df5eb44ffb13f4e4", default-features = false, features = ["component", "assets"] }
+nsh-core = { git = "https://github.com/longbridge/nsh", rev = "d5839d7a302e2061d54c58090588f0f953e366d0" }
+nsh-base = { git = "https://github.com/longbridge/nsh", rev = "d5839d7a302e2061d54c58090588f0f953e366d0", default-features = false, features = ["highlight"] }
 
-[target.'cfg(target_os = "android")'.dependencies]
-gpui-mobile = { package = "gpui-pre-mobile", git = "https://github.com/longbridge/gpui-mobile", rev = "c24a1308e1dcb47ce94d9ef8d8d05ca4d77d2aa7", default-features = false, features = ["clipboard"] }
-android-activity = { version = "0.6", features = ["native-activity"] }
-android_logger = "0.15"
-log = "0.4"
-
-[patch.crates-io]
-gpui-pre-wgpu = { git = "https://github.com/longbridge/gpui-mobile", rev = "c24a1308e1dcb47ce94d9ef8d8d05ca4d77d2aa7" }
-gpui-pre-windows = { git = "https://github.com/linyisu/gpui-kit", rev = "d7b441dbc0f6dac2cdea76d9df5eb44ffb13f4e4" }
+[dev-dependencies]
+qrcode = { version = "0.14", default-features = false, features = ["image"] }
+orbit-protocol = { path = "../crates/orbit-protocol" }
+rcgen = "0.14"
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+nsh-testing = { git = "https://github.com/longbridge/nsh", rev = "d5839d7a302e2061d54c58090588f0f953e366d0", default-features = false }
+nsh-engine = { git = "https://github.com/longbridge/nsh", rev = "d5839d7a302e2061d54c58090588f0f953e366d0", default-features = false }
 
 [profile.release]
 strip = true
 lto = "thin"
 
-[features]
-preview = []
-
-[[bin]]
-name = "orbit-mobile-preview"
-path = "src/main.rs"
-required-features = ["preview"]
+[target.'cfg(target_os = "android")'.dependencies]
+jni = "0.21"
+ndk-sys = { version = "0.6", features = ["media"] }

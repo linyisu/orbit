@@ -1,126 +1,99 @@
-# Android 远控接入
+# Orbit Android
 
-当前已接入 Linux 电脑的真实局域网控制链路：会话列表、打开及新建会话、历史分页、
-发送文本、停止当前响应和单次工具审批。电脑显式生成设备授权资料，手机导入后通过
-固定主机证书的 TLS 连接；设备撤销后旧连接和新连接都失去访问权。
-手机仅通过 `orbit-client` 的 `remote` 功能访问服务，不依赖 Agent、工具、模型或账号模块。
-GPUI Kit 负责界面，Android 宿主采用上游 `GpuiInputActivity`。
+手机端使用 NSH Rust 组件，任务和模型账号留在电脑。远程传输使用 iroh 1.4.0，
+优先直连，无法直连时通过公共中继传输端到端加密的数据；不需要自行部署服务器或安装 VPN。
+公共中继不保证可用性，网络阻断、主机休眠或主机服务退出时无法连接。
 
-这是接入版本，尚非完整移动产品。会话事件和审批参数目前以有界原始内容展示；
-扫码、Keystore、持久草稿、公网穿透、附件、队列及计划审阅尚未接入。
-连接资料只存在于本次进程内，切到后台停止手机连接，电脑任务继续；重新连接不自动重发消息。
-若发送结果未确认，先检查主机会话，不直接另发一条。该版本没有操作回执查询界面。
+## 配对与使用
 
-独立 Cargo workspace 避免移动试验改变桌面锁文件与 renderer 补丁。
-共享客户端已提供不包含主机部署依赖的 remote 构建；后续仍需统一完整会话投影并将
-移动项目纳入仓库的完整依赖边界检查。没有复制桌面会话恢复逻辑。
+1. 在电脑 Orbit 打开本机项目，进入 **设置 → 手机连接**，开启连接。
+2. 开启后直接显示二维码，扫码授权包含项目、会话、附件与工具审批。
+3. 手机打开连接页，点击 **扫描配对二维码**，授予相机权限，对准电脑二维码。
+4. 识别二维码后立即关闭相机，显示连接进度；连接完成进入会话首页。二维码有效期 5 分钟，仅能使用一次；刷新二维码使旧邀请失效。
+5. 手机保存设备授权并进入会话主页。新任务通过右上角选择项目；已有会话右上角直接打开工作区。不需要安全码或额外密码。
+6. 通过左侧会话抽屉切换项目和会话，通过工作区页查看文件、Git、模型、计划、任务、
+   子 Agent、待发送消息和扩展；新配对默认允许操作电脑；会话自身的工具审批模式仍生效。
 
-## 连接电脑
+扫码授权整台电脑，不绑定初始项目，也不会将主机模型密钥传给手机。
+旧项目级授权不会自动扩大，需重新扫码配对。电脑端可撤销设备，撤销后已有及后续连接
+均失去访问权，不回滚已执行的任务。关闭手机不取消任务。
+启动首先显示连接页，选择已保存的电脑或扫码添加，连接成功后进入会话主页；已连接设备再次启动会自动恢复连接和会话。
+会话菜单从左侧打开抽屉，支持返回和点击遮罩关闭；项目目录可输入或从已有会话选择。
+会话抽屉底部的设置提供设备管理、断开与开源许可。连接监听和草稿保存由应用持有，切换页面不会取消。
 
-电脑先构建 `cargo build -p orbit-server --locked`。下列路径使用绝对路径，并替换为
-电脑现有的配置、数据库、凭据和项目目录；父目录必须已经存在。
-设备授权资料包含私密凭据，只交给该手机。`--control` 授予发送和停止，`--approve`
-授予单次审批；两个参数都省略则只读。不提供长期记住审批或修改主机配置的接口。
+附件通过 Android 系统文件选择器读取，最多 8 个、总计 20 MiB，分块上传并校验 SHA-256。
+完整内容才进入既有会话附件提交路径；未完成上传在连接断开或过期后丢弃。
+发送结果不确定时不自动重发。手机文本草稿保留；未发送附件仅保留在当前页面内存中，
+退出会话或重新连接后需要重新选择。
+
+重复扫码优先验证并复用同一电脑的有效授权，连接列表按电脑证书去重，不使用项目目录作为设备名称。
+二维码使用紧凑的 v2 编码，手机仍接受 v1 二维码；扫码授权不需要电脑二次确认，需要电脑运行更新后的服务。
+
+设备凭据和文本草稿保存于 Android 应用私有存储，应用禁止系统备份，无需单独设置应用密码。
+旧版本加密保险箱不自动迁移，请重新扫码；手机不保存主机供应商凭据。
+
+## 源码与平台边界
+
+- `src/app.rs`：导航、扫码预览、连接页、会话与发送交互。
+- `src/platform/android.rs`：Android 生命周期、权限和系统文件选择的 JNI 接口。
+- `src/platform/camera.rs`：Rust 调用 Camera2 NDK 获取有界灰度帧，rqrr 识别二维码。
+- `orbit-client/remote`：iroh、固定证书、配对、设备认证、附件传输和共享会话投影。
+- `orbit-service/workspace/remote*`：主机开关、单次邀请、扫码授权与设备访问检查。
+
+业务和界面使用 Rust，不引入 Go、JS/TS 页面或 JavaScript 运行时。
+NSH 的 Android 控件仍通过系统 Java 桥接；`patches/nsh-android-activity.patch` 仅增加
+Activity 生命周期、权限与选择结果转发，以及相机权限声明。配对、读取、识别和网络逻辑
+均在 Rust 中；不复制 NSH 源码到仓库。
+`patches/nsh-android-images.patch` 提供 Android 内嵌 Base64 图片加载，
+图标、Logo 和扫码预览共用既有 SVG/位图解码器，不产生临时文件。
+关闭淡入的连续图片源保留上一帧，直到新帧完成解码；相机预览不逐帧清空或淡入。
+
+## 构建与验证
+
+NSH 固定提交 `d5839d7a302e2061d54c58090588f0f953e366d0`。
+需要 Rust stable、Android SDK / Build Tools 35、NDK r30、JDK 17，
+以及 `aarch64-linux-android` target。最低 Android 9（API 28），发布 arm64-v8a。
+
+在固定提交的 NSH checkout 中应用补丁，再构建工具和运行时：
 
 ```sh
-target/debug/orbit-workspace-server \
-  --config /path/to/config.toml --database /path/to/orbit.db --auth-dir /path/to/auth \
-  remote --state /path/to/remote-state --workspace /path/to/project \
-  authorize --address 192.168.1.10:9443 --output /path/to/phone.json --control --approve
-
-target/debug/orbit-workspace-server \
-  --config /path/to/config.toml --database /path/to/orbit.db --auth-dir /path/to/auth \
-  remote --state /path/to/remote-state --workspace /path/to/project \
-  listen --bind 192.168.1.10:9443
+git apply /path/to/orbit/mobile/patches/nsh-rust-runtime.patch
+git apply /path/to/orbit/mobile/patches/nsh-android-activity.patch
+git apply /path/to/orbit/mobile/patches/nsh-android-images.patch
+git apply /path/to/orbit/mobile/patches/nsh-android-input.patch
+cargo +stable build -p nsh-cli --locked
+cargo +stable xtask android --abi arm64-v8a
 ```
 
-手机粘贴 `phone.json` 内容后连接。电脑必须保持网关进程运行；关闭网关不会停止已有
-Agent。该网关附着现有共享服务，不另开一套会话数据库。
-电脑授权命令输出设备 ID；用相同全局参数和 `remote` 参数执行 `revoke DEVICE_ID`
-撤销访问。撤销只删除设备登记，不删除会话，也不回滚已经执行的操作。
-授权限定指定工作区和数据库；工作区不是操作系统沙箱，任务仍以电脑用户权限执行。
-
-## 固定依赖
-
-| 项目 | 版本 |
-| --- | --- |
-| GPUI Kit | Orbit fork `d7b441dbc0f6dac2cdea76d9df5eb44ffb13f4e4` |
-| GPUI Mobile / 移动 renderer | `c24a1308e1dcb47ce94d9ef8d8d05ca4d77d2aa7` |
-| GPUI core | 0.3.9，实际传递依赖见 Cargo.lock |
-| Android ABI / 最低 API | arm64-v8a / 26，待真机验收 |
-| Android compile / target SDK | 35 |
-| Android Gradle Plugin / Gradle | 8.9.2 / 8.11.1 |
-| Java | JDK 17 |
-| 本次链接验证 NDK | r30（30.0.16248370） |
-
-Mobile manifest 包含 renderer 的 `offscreen` 能力引用，因此此实验显式固定其配套
-renderer，而不覆盖桌面使用的本仓库补丁。正式合并前需核对两者补丁与字体回退。
-Android Activity 和剪贴板桥从同一固定上游源码读取，不复制整个示例及演示权限。
-构建脚本拒绝不匹配的上游提交。上游许可选用 Apache-2.0，打包时附带其许可文件。
-
-## 构建
-
-安装 Android SDK 35、Build Tools 35.0.0、NDK r30、JDK 17、Gradle 8.11.1，
-以及 Rust `aarch64-linux-android` target。以下命令在仓库根执行。
-`ANDROID_NDK_HOME` 指向 NDK 根目录；`ANDROID_HOME` 指向 SDK，`JAVA_HOME` 指向 JDK 17。
-
-Linux 主机无需 cargo-ndk 即可构建动态库：
+设置 `ANDROID_HOME`、`ANDROID_NDK_HOME`、`JAVA_HOME`，将 JDK bin 加入 PATH；
+然后在 Orbit 根目录用上述 CLI 打包：
 
 ```sh
-export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang"
-export CC_aarch64_linux_android="$CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER"
-export AR_aarch64_linux_android="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
-cargo build --manifest-path mobile/Cargo.toml --target aarch64-linux-android --lib --release --locked
-mkdir -p mobile/android/app/src/main/jniLibs/arm64-v8a
-cp mobile/target/aarch64-linux-android/release/liborbit_mobile_probe.so mobile/android/app/src/main/jniLibs/arm64-v8a/
-```
-
-准备固定 Android 宿主源码并打包。`gpuiMobileSource` 必须为绝对路径：
-
-```sh
-git clone https://github.com/longbridge/gpui-mobile.git target/gpui-mobile
-git -C target/gpui-mobile checkout c24a1308e1dcb47ce94d9ef8d8d05ca4d77d2aa7
-gradle -p mobile/android -PgpuiMobileSource="$PWD/target/gpui-mobile" assembleDebug
-```
-
-产物：`mobile/android/app/build/outputs/apk/debug/app-debug.apk`。
-Debug APK 仅用于设备验收，不是正式签名发布包。打包前检查动态库存在，避免生成空壳 APK。
-桌面预览可用 `cargo run --manifest-path mobile/Cargo.toml --features preview`，
-必须在隔离 Xvfb 和临时 HOME 下验收，不能用桌面运行替代 Android 验收。
-
-## 自动检查
-
-```sh
+nsh package mobile --target android --out target/android-nsh
 cargo fmt --manifest-path mobile/Cargo.toml -- --check
-cargo clippy --manifest-path mobile/Cargo.toml --target aarch64-linux-android --lib --locked -- -D warnings
-cargo tree --manifest-path mobile/Cargo.toml --target aarch64-linux-android -i gpui-pre --locked
+cargo test --manifest-path mobile/Cargo.toml --locked
+cargo clippy --manifest-path mobile/Cargo.toml --all-targets --locked -- -D warnings
+cargo test -p orbit-service --lib pairing_completes_once --locked
+cargo test -p orbit-server --test workspace_service authenticated_phone_controls --locked
 ```
 
-## 验收门槛
+公网中继测试单独运行，需要真实网络：
 
-此前的平台原型已完成 Android arm64 Debug 动态库链接和 APK 打包，验证了 Activity、
-输入法入口及 16 KB LOAD 对齐。本次远控接入已通过 Android Clippy；尚未重新打包 APK，
-原型 APK 不包含本次远控功能。
-共享客户端到真实服务的 TLS、发送、断线续接、审批、去重及撤销已由集成测试验证，
-模型使用合成替身。尚未完成 Android 真机启动、视觉和交互验收。
+```sh
+cargo test -p orbit-service --lib public_relay_pairing_and_device_revocation --locked -- --ignored
+cargo test -p orbit-server --test workspace_service public_iroh_desktop --locked -- --ignored
+```
 
-编译和链接通过只能证明构建链路可用。以下项目必须记录真实结果，不预先打勾：
-
-- 两台不同 GPU/系统的 arm64 设备正常启动，release 动态库可加载。
-- 中文组合输入、候选选择、emoji、粘贴、删除、多行输入正确。
-- 键盘、安全区、旋转、分屏、前后台与 surface 重建不遮挡主要操作。
-- Markdown、表格、代码、长文本的滚动、选择、复制可用。
-- 深浅模式、系统字体放大、TalkBack 与系统返回操作可用。
-- APK 中每个动态库的 ABI、依赖、16 KB LOAD 对齐及 ZIP 对齐合格。
-
-## 后续接入边界
-
-桌面 `orbit-client::protocol` 的事件和审批类型仍引用 agent/tools/runtime；
-移动 remote 构建使用通用协议负载进行初期接入，不自行解释工具执行结果。
-下一阶段应将纯数据契约归入 protocol，再复用完整 conversation/activity/execution 投影。
-
-网络网关在 service/server，显式设备授权在共享服务，登记和撤销在 store。
-手机只附着主机已有数据源，不上传配置覆盖主机，不持有模型账号；未经配对不得进入
-普通业务分发。补齐交互式配对、回执查询和移动恢复后，再选择一个公网穿透方案。
+默认 APK 为调试签名，正式分发需提供自己的签名参数。CI 同时验证 APK 签名和 16 KiB 对齐。
+自动测试覆盖合成二维码、组件事件、配对授权与上传边界；相机硬件、输入法、字体缩放、
+前后台和网络切换仍需 Android 实机或模拟器验证，交付说明应列出实际完成的范围。
 
 [项目总览](../README.md)
+
+Android 输入框保留字体上下边界和 fallback 行距，避免中文字体被裁切。网络恢复时重连并重新读取会话历史，绝不自动重发结果未知的写操作。系统结束应用进程后连接无法继续保活，再次打开时恢复；电脑任务不依赖手机进程。
+
+项目置顶和排序规则由 `orbit-client::projects` 与桌面共用，手机按已保存连接保存展示偏好。
+抽屉列表独立滚动，搜索时根据键盘高度缩小可用区域；展开和收起使用文件夹图标。
+Android 原生输入框将短内容的垂直滚动范围限制为零，长内容达到输入区上限后才滚动。
+原生验收可让 `remote_navigation` 测试通过 `ORBIT_MOBILE_NATIVE_STORAGE` 输出合成连接存储，
+同时保持合成服务十分钟，供隔离模拟器检查；不使用真实工作区或账号。

@@ -1,0 +1,64 @@
+diff --git a/crates/nsh-cli/src/android.rs b/crates/nsh-cli/src/android.rs
+index 2afd9c9..3877dda 100644
+--- a/crates/nsh-cli/src/android.rs
++++ b/crates/nsh-cli/src/android.rs
+@@ -254,7 +254,10 @@ fn manifest_xml(apk: &Apk<'_>) -> String {
+         r#"<?xml version="1.0" encoding="utf-8"?>
+ <manifest xmlns:android="http://schemas.android.com/apk/res/android" package="{package}">
+     <uses-permission android:name="android.permission.INTERNET" />
++    <uses-permission android:name="android.permission.CAMERA" />
++    <uses-feature android:name="android.hardware.camera" android:required="false" />
+     <application android:label="{label}"{icon}{cleartext}
++        android:allowBackup="false"
+         android:extractNativeLibs="false"
+         android:enableOnBackInvokedCallback="true"
+         android:supportsRtl="true"
+diff --git a/crates/nsh-platform-android/java/com/longbridge/nsh/AppActivity.java b/crates/nsh-platform-android/java/com/longbridge/nsh/AppActivity.java
+index 4ff349b..3372f88 100644
+--- a/crates/nsh-platform-android/java/com/longbridge/nsh/AppActivity.java
++++ b/crates/nsh-platform-android/java/com/longbridge/nsh/AppActivity.java
+@@ -20,6 +20,44 @@ public final class AppActivity extends Activity {
+         setContentView(view);
+         if (rustApp()) view.runRustApp("nsh");
+         else view.loadAssetBundle("nsh");
++        orbitReady();
++    }
++
++    private native void orbitReady();
++    private native void orbitStopped();
++    private native void orbitResult(int request, int result, android.content.Intent data);
++    private native void orbitPermission(int granted);
++
++    public void orbitLaunch(android.content.Intent intent, int request) {
++        runOnUiThread(() -> {
++            try { startActivityForResult(intent, request); }
++            catch (android.content.ActivityNotFoundException error) { orbitResult(request, 0, null); }
++        });
++    }
++
++    public void orbitCameraPermission() {
++        runOnUiThread(() -> {
++            if (checkSelfPermission("android.permission.CAMERA") == 0) orbitPermission(0);
++            else requestPermissions(new String[]{"android.permission.CAMERA"}, 702);
++        });
++    }
++
++    @Override
++    protected void onActivityResult(int request, int result, android.content.Intent data) {
++        super.onActivityResult(request, result, data);
++        orbitResult(request, result, data);
++    }
++
++    @Override
++    public void onRequestPermissionsResult(int request, String[] permissions, int[] results) {
++        super.onRequestPermissionsResult(request, permissions, results);
++        if (request == 702) orbitPermission(results.length > 0 ? results[0] : -1);
++    }
++
++    @Override
++    protected void onStop() {
++        orbitStopped();
++        super.onStop();
+     }
+ 
+     /** A Rust app (`nsh package --rust` sets the manifest's `com.longbridge.nsh.RUST`). */

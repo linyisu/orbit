@@ -1,0 +1,10 @@
+{
+  "name": "Orbit",
+  "id": "dev.orbit.remote",
+  "version": "0.1.0",
+  "build": 8,
+  "appearance": "system",
+  "icon": "../assets/branding/orbit-1024.png",
+  "rust": ".",
+  "root": "App"
+}
