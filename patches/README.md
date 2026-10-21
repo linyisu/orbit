@@ -1,31 +1,39 @@
 # 依赖补丁
 
-GPUI Kit 修复已发布到 [fork 补丁分支](https://github.com/linyisu/gpui-kit/tree/orbit-rely)，
-Cargo 固定使用提交 `d7b441dbc0f6dac2cdea76d9df5eb44ffb13f4e4`，无需复制框架源码。
+依赖补丁维护固定来源、许可和功能约束。Cargo 使用确定提交，补丁文件提供对应差异；
+第三方源码保持上游格式。
 
-`gpui-kit.patch` 保存此前组件补丁提交 `7b1a4b8b86c71ca036fa941fd6565e6a05b58f8c`
-相对上游 `9254c58028cebe8122b989c30e15f9139e0b2569`
-的完整补丁，包含选择、滚动、图片、表格及差异预览修复，沿用 Apache-2.0。
-MessageScroller 提供暂停自动跟随的入口，手动展开内容时保留阅读位置，显式回到底部后恢复。
-表格与行内代码使用 Unicode 换行边界，避免闭括号和标点被单独留在行首。
-行内代码以独立对象参与正文的断行判定，代码内部的点号等符号不影响相邻正文；
-窄窗口下短代码保持完整，连续代码可正常换行，超宽代码仍可按原有字素边界拆分。
-列宽包含左右内边距各自取整的像素预算，避免字体缩放后短标签仍被拆行；未指定语言的代码块标签显示 `text`。
+## GPUI Kit
 
-`vendor` 保留 GPUI WGPU 字体回退、RaTeX 日志与 Qwen 增量识别补丁；说明见各目录。
+框架来源为 [fork 的 orbit-rely 分支](https://github.com/linyisu/gpui-kit/tree/orbit-rely)，
+Cargo 固定提交 `d7b441dbc0f6dac2cdea76d9df5eb44ffb13f4e4`。
+`gpui-kit.patch` 记录提交 `7b1a4b8b86c71ca036fa941fd6565e6a05b58f8c`
+相对上游 `9254c58028cebe8122b989c30e15f9139e0b2569` 的组件差异，采用 Apache-2.0 许可。
 
-只读代码视图隐藏插入光标但保留选择与复制；编辑器支持源码起始行号，滚动条与文本区使用一致的高度预算，组件内边距不会移动滚动条。
+- MessageScroller 支持暂停跟随；手动展开保留阅读位置，回到底部后恢复跟随。
+- 表格和行内代码使用 Unicode 换行边界。行内代码以独立对象参与断行，超宽代码按字素拆分。
+- 列宽包含两侧内边距各自取整的像素预算；无语言代码块显示 `text`。
+- 只读代码视图支持选择、复制和源码起始行号，隐藏插入光标。滚动条与文本区共用高度预算。
+- SpeechWaveform 的 `live()` 模式在静音或音频中断 320 ms 后回到基线，默认模式保留历史波形。
+- Debug 与发布构建均内嵌已注册图标，运行时不读取构建机器的源码目录。
 
-`orbit-rely` 是 Orbit 框架补丁的统一维护分支，后续补丁继续在此维护，Cargo 仍固定具体提交。
-上游将组件脚本目录合入 `gpui-shell::components`；Orbit 仅启用所需的 QuickJS 与组件能力。
-底层 GPUI 更新为 0.3.9，WGPU 补丁同步此版本并保留符号与 Emoji 字体加载回归。
-Windows 平台补丁也固定到上述 fork 提交，源码、发布版来源和许可位于 fork 的
-`patches/gpui-pre-windows`；Orbit 通过根 Cargo patch 使用，不复制到本仓库 vendor。
-DPI 切换使用 Win32 提供的外框矩形，并以实际客户区尺寸更新渲染，避免最大化时重复扣除系统边框。
+组件脚本由 `gpui-shell::components` 提供，Orbit 启用所需的 QuickJS 与组件能力。
+底层 GPUI 版本为 0.3.9。
 
-SpeechWaveform 的可选 `live()` 模式在持续静音或音频中断 320 ms 后回到基线，保留默认历史波形行为。
+## 平台渲染与字体
 
-默认图标资源在 Debug 中也使用静态内嵌数据，安装后不读取构建机器的源码目录；
-覆盖侧栏、工具栏与 Windows 窗口按钮。未注册的完整图标目录仍不会被默认打包。
+Windows 补丁随上述 fork 固定，来源和许可见 fork 的 `patches/gpui-pre-windows`；
+根 Cargo patch 引用该来源。DPI 切换使用 Win32 外框矩形，以实际客户区尺寸更新渲染。
 
-[Qwen 增量补丁](../vendor/qwen-asr/ORBIT_PATCH.md) 固定推理库来源，边界修复见 `qwen-asr.patch`。
+[GPUI WGPU 补丁](../vendor/gpui-pre-wgpu/README.orbit.md) 提供符号和 Emoji 字体回退，
+并保留字体选择与预览的回归覆盖。RaTeX 日志补丁位于 `vendor/ratex-unicode-font`。
+
+## 本机语音
+
+[Qwen 增量补丁](../vendor/qwen-asr/ORBIT_PATCH.md) 说明推理库来源、平台适配及增量缓存契约，
+完整差异见 `qwen-asr.patch`。
+
+## Android
+
+NSH 的固定提交、补丁应用与构建方式见 [Android 客户端](../mobile/README.md#构建与验证)。
+`mobile/patches` 提供 Rust 运行时、Activity 桥接、内嵌图片和原生输入适配。

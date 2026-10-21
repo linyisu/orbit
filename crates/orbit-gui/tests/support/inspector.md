@@ -2,6 +2,8 @@
 
 `inspector.rs` 通过测试服务的正常协议恢复一个混合状态会话。它不调用模型，也不执行记录中的命令。
 
+## 合成会话与启动
+
 在临时工作区创建以下空文件，然后以 `--resume demo` 打开：
 
 - `.fixture-inspector`：恢复 18 个工具记录、3 个文件修改、已批准计划和 3 个子 Agent。
@@ -24,7 +26,7 @@ env -u WAYLAND_DISPLAY DISPLAY=:91 XDG_RUNTIME_DIR="$qa_root/runtime" \
   --workspace "$qa_root/workspace" --model fixture::local --resume demo
 ```
 
-验收顺序：
+## 布局与交互检查
 
 1. 点击对话中的成功和失败工具，检查详情区显示完整参数与结果，没有弹窗遮住对话，也没有第二份执行清单。
 2. 拖动详情宽度、切换输出页、阅读历史位置，关闭后恢复对话宽度；再次打开同一次调用，保留页和位置。
@@ -37,7 +39,9 @@ env -u WAYLAND_DISPLAY DISPLAY=:91 XDG_RUNTIME_DIR="$qa_root/runtime" \
 设置 `ORBIT_GUI_CAPTURE_DIR` 可保存各阶段截图，Xvfb 屏幕至少为 1600×1000。
 该路径要求 `.fixture-inspector` 合成历史，普通启动不会执行验收。
 
-恢复 `demo` 时会重新生成这组记录。删除 `.fixture-inspector` 并重新打开，可检查常规无工具数据的空状态。用过的临时配置、数据库及 Xvfb 进程只属于本次验收；不要复用或停止用户实际工作区中的服务。
+恢复 `demo` 时会重新生成这组记录。删除 `.fixture-inspector` 并重新打开，可检查常规无工具数据的空状态。临时配置、数据库及 Xvfb 进程只属于对应验收实例；不要复用或停止用户实际工作区中的服务。
+
+## 代码、日志与图片
 
 以 `--resume tool-details` 打开可检查工具详情。生成的长命令只有一个逻辑行，
 末尾带 `COMMAND-END`；在宽、窄窗口及 16、20 字体下打开详情，再调整窗口宽度，
@@ -49,6 +53,8 @@ env -u WAYLAND_DISPLAY DISPLAY=:91 XDG_RUNTIME_DIR="$qa_root/runtime" \
 同一 `tool-details` 会话的 ReadImage 详情应显示图片路径和生成的小图；点击或键盘激活后
 打开大图，Esc 关闭大图回到缩略图详情，再次 Esc 关闭详情。检查加载失败及断开
 连接时的反馈，不显示其他图片参数或原始结果。
+
+## 返回最新输出
 
 用 `--resume navigation` 检查大量未排版历史：向上滚动出现悬浮的圆形返回按钮，
 它不占输入框上方整行，也不遮盖整条会话内容。用滚轮或拖动滚动条回到底部，
