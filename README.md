@@ -4,7 +4,7 @@
   <img src="assets/branding/orbit.svg" width="160" height="160" alt="Orbit 图标">
 </p>
 
-Rust 编写的编码 Agent，提供终端界面和实验性桌面客户端。支持多供应商模型、文件编辑、命令执行、持久化会话和子 Agent，可连接本地、SSH 与 WSL 工作区。
+Rust 编写的编码 Agent，提供终端、实验性 GPUI Kit 桌面和 NSH Android 客户端。支持多供应商模型、文件编辑、命令执行、持久化会话和子 Agent，可连接本地、SSH 与 WSL 工作区。
 
 ## 快速开始
 
@@ -26,7 +26,7 @@ macOS 安装 Rust stable 与 Xcode Command Line Tools；Windows 安装 Rust stab
 
 客户端内置同平台、同架构的工作区服务，首次构建较慢，使用时无需额外安装服务。Linux 内置 musl 静态服务，macOS 使用系统库，Windows 服务静态链接 C 运行库。发布包使用 `cargo xtask bundle`，Windows 客户端也静态链接 C 运行库。桌面客户端的依赖与启动方式见 [GUI README](crates/orbit-gui/README.md)。
 
-SSH/WSL 的自动部署目标仍为 Linux。非 Linux 构建可通过 `ORBIT_REMOTE_WORKSPACE_SERVER` 额外内置同架构 Linux 静态服务；未内置时可指定 `--upload-server` 或目标已安装的 `--server`。本机使用内嵌的同平台服务。
+SSH/WSL 的自动部署目标为 Linux。非 Linux 构建可通过 `ORBIT_REMOTE_WORKSPACE_SERVER` 额外内置同架构 Linux 静态服务；未内置时可指定 `--upload-server` 或目标已安装的 `--server`。本机使用内嵌的同平台服务。
 
 ## 使用
 
@@ -38,10 +38,16 @@ SSH/WSL 的自动部署目标仍为 Linux。非 Linux 构建可通过 `ORBIT_REM
 
 命令以目标用户权限执行；审批声明不提供操作系统隔离。工具没有内置路径黑名单，文件访问遵循会话审批模式和授权。详见 [工具与审批](crates/orbit-tools/README.md)。
 
+## Android 远程控制
+
+电脑设置中开启手机连接即展示二维码，手机扫码后可操作电脑项目、会话与上传附件。
+网络使用 iroh 直连及公共中继，无需自行部署服务器；主机需保持运行和联网。
+安装、配对、能力范围和构建方式见 [Android 客户端](mobile/README.md)。
+
 ## 工作区
 
 ```text
-TUI / GUI → client → server → service → agent / tools / store
+TUI / GUI / Android → client → server → service → agent / tools / store
 ```
 
 | Crate | 用途 |
@@ -74,22 +80,17 @@ cargo test --workspace --features orbit-gui/test-support --locked
 ```
 
 测试使用临时数据；部分测试需要本地回环监听，真实网络测试单独标记为 ignored。
-CI 只保留两个入口：
+CI 提供两个入口：
 
 - [Tests](.github/workflows/test.yml)：`main` 推送、面向 `main` 的 PR 或手动触发。
   Linux 运行格式、依赖边界、全工作区静态检查和测试；macOS、Windows 运行平台回归。
   保留进程回收、文件安全、本机通信、账号、GUI/TUI 和语音等责任 crate 的测试覆盖。
-- [Build](.github/workflows/build.yml)：手动触发，生成三平台 TUI、GUI Debug 包及 Windows 安装包。
+- [Build](.github/workflows/build.yml)：手动触发，生成三平台 TUI、GUI Debug 包、Windows 安装包和 Android APK。
   同时验证服务、协议、实际窗口、Linux 容器部署及干净 Windows 主机安装与卸载。
   SSH/WSL 所需的 Linux 服务与客户端使用同一提交，不因普通推送自动打包。
 
-不再通过提交消息标记或专用分支选择 CI 模式。
 打包与实际启动验收入口见 [orbit-xtask](crates/orbit-xtask/README.md)。
 
 按职责维护模块和共享接口，注释说明约束与原因。修改后运行相关回归；新增或移动模块时同步 crate README，并检查链接。配置与参数细节以示例、`--help` 和所属模块源码为准。
 
 仓库维护与编码约定见 [AGENTS.md](AGENTS.md)。
-
-Android 远控接入见 [mobile](mobile/README.md)。手机使用 NSH Rust 组件；电脑设置中
-开启手机连接即展示二维码，手机扫码后可操作电脑项目、会话与上传附件。
-网络使用 iroh 直连及公共中继，无需自行部署服务器；主机需保持运行和联网。
