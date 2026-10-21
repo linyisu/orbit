@@ -2,7 +2,7 @@
 
 目标环境中的进程执行、工作区文件访问、Git 检查和权限策略。工具层决定参数与审批，本库执行实际操作。
 
-## 入口
+## 模块职责
 
 - [execution/](src/execution/)：目标 shell 环境、进程组、后台任务、超时、取消与有界输出。
 - [filesystem/](src/filesystem/)：文件描述符访问、跨平台文件版本和私有临时目录。
@@ -10,6 +10,8 @@
 - [git/](src/git/)、[verification.rs](src/verification.rs)：Git 分类与执行证据。
 - [ipc/](src/ipc/)：服务与 SSH 提示共用的本机字节流；Windows 使用排他的命名管道、
   当前用户 DACL 与对端身份校验，拒绝远程连接，客户端不授予服务器模拟身份权限。
+
+## 文件与执行契约
 
 Git 检查的有界输出、绝对期限和取消由 [git/process.rs](src/git/process.rs) 监督，
 使用与普通命令相同的进程所有权；工具层保留 Git 参数、审批和结果解释。
@@ -23,6 +25,8 @@ Git 检查的有界输出、绝对期限和取消由 [git/process.rs](src/git/pr
 工作区指纹默认累计扫描 512 MiB、10000 项，文件内容按 64 KiB 块计算摘要，
 不把整个文件装入内存；`max_scan_mib` 和 `max_scan_entries` 可配置。
 扫描预算不构成命令执行前提，指纹不可用时命令仍可执行并报告证据缺失。
+
+## 权限与进程管理
 
 命令使用目标用户的真实目录、HOME 和工具链，按操作系统用户权限运行。`workspace_access`、`network` 用于审批，不是进程隔离。
 文件工具没有内置路径黑名单；YOLO 允许直接访问系统用户可访问的路径，其他模式保留工作区与外部授权边界。
@@ -45,14 +49,18 @@ Windows 实现使用私有 Job Object：进程以挂起状态启动，加入禁�
 和系统 OEM 代码页。无法推断程序自行切换的任意编码；原始日志字节保持不变，分页游标仍按
 原始字节计算，Unicode 字符不会被分页拆开。
 
+## Windows 平台约束
+
 Windows 文件访问使用目录句柄逐级打开，私有输出和附件目录检查当前用户所有权及 DACL，
 拒绝重解析点、硬链接和 Win32 歧义路径。Windows 默认使用本机 shell，不默认设置 POSIX
 文件描述符上限；显式配置的有限地址空间、单文件大小和文件描述符上限在启动前拒绝，
 不使用轮询或 Job 提交内存上限冒充这些限制。Unix 的默认值和 rlimit 行为保持不变。
 
-[Tests](../../.github/workflows/test.yml)在三个系统执行 runtime 测试，包含文件授权、
+## 平台验证
+
+[Tests](../../.github/workflows/test.yml) 在三个系统执行 runtime 测试，包含文件授权、
 输出保留、子进程回收、资源限制、服务生命周期、文件事务和本机通信。
-[Build](../../.github/workflows/build.yml)手动验证程序的启动、协议、会话存储及关闭，
+[Build](../../.github/workflows/build.yml) 手动验证程序的启动、协议、会话存储及关闭，
 同时验收实际桌面窗口和 Windows 安装包。
 
 ## 验证

@@ -2,7 +2,7 @@
 
 客户端的构建期辅助库，编译、校验并内嵌工作区服务，不参与会话执行。
 
-## 入口
+## 构建入口
 
 [lib.rs](src/lib.rs) 提供 `embed_workspace_server` 与 `verify_static_server`，由 TUI、GUI 的构建脚本调用。
 
@@ -13,18 +13,20 @@
 
 设置 `ORBIT_WORKSPACE_SERVER=/absolute/path/to/orbit-workspace-server` 可复用已有服务，文件仍需通过校验。Windows 路径使用 `.exe` 后缀。
 
-```sh
-cargo check -p orbit-build
-```
-
-[项目总览](../../README.md)
-
 ## 服务资产
 
-Linux 继续使用同架构 musl 静态服务；macOS 使用 Apple 目标，Windows 使用 MSVC
+Linux 使用同架构 musl 静态服务；macOS 使用 Apple 目标，Windows 使用 MSVC
 目标并静态链接 C 运行库。构建时校验格式、CPU 架构和动态依赖；macOS/Windows 只接受
 系统库，不将依赖未打包运行库的服务当作独立资产。
 
 `ORBIT_WORKSPACE_SERVER` 在客户端构建中必须指向对应平台的服务。可另设
 `ORBIT_REMOTE_WORKSPACE_SERVER` 指向同架构 Linux 静态服务，供 SSH/WSL 部署。
 Linux 默认共用内置资产；其他平台没有此资产时，远端连接需显式指定上传服务或已安装服务。
+
+## 验证
+
+```sh
+cargo check -p orbit-build
+```
+
+[项目总览](../../README.md)

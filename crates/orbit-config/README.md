@@ -26,16 +26,18 @@ models = "auto"
 
 能力优先级为显式配置、账号或 API 返回值、公共规格。公共规格来自 models.dev，仅补充能力，不授予模型访问权限；Antigravity 的可用项以账号 Agent 列表为准，禁用或下线模型不会由内置规格恢复。
 
-## 入口与验证
+## 模块职责
 
 [config/](src/config/) 解析配置，[config/connections/](src/config/connections/) 保存连接，[models/](src/models/) 管理目录、缓存和刷新；供应商响应由 orbit-model 解码。
+
+[directories.rs](src/directories.rs) 统一客户端与服务的本机用户目录。Windows 使用
+USERPROFILE、APPDATA 和 LOCALAPPDATA，无需设置 Unix HOME；已有 Unix 路径保持兼容，
+显式 XDG 目录覆盖仍可用于隔离配置。
+
+## 验证
 
 ```sh
 cargo test -p orbit-config
 ```
 
 [项目总览](../../README.md)
-
-[directories.rs](src/directories.rs) 统一客户端与服务的本机用户目录。Windows 使用
-USERPROFILE、APPDATA 和 LOCALAPPDATA，无需设置 Unix HOME；已有 Unix 路径保持兼容，
-显式 XDG 目录覆盖仍可用于隔离配置。

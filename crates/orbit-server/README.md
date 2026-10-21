@@ -14,10 +14,13 @@ cargo build -p orbit-server --locked
 
 标准输入输出传输协议，标准错误记录日志。静态发布构建由 [orbit-build](../orbit-build/README.md) 处理，部署验收见 [orbit-xtask](../orbit-xtask/README.md)。
 
-## 验证
+## 远程控制
 
-Linux 的 `remote authorize/listen/revoke` 入口用于显式设备授权和局域网控制，参数及
-当前限制见 [Android 接入](../../mobile/README.md)。默认不启动网络监听。
+GUI 的“手机连接”和 TUI 的 `/phone` 通过共享服务管理网络监听、扫码配对与设备撤销。
+`remote authorize/listen/revoke` 提供命令行设备授权与监听入口，默认不启动网络监听。
+手机连接、iroh 网络和权限范围见 [Android 客户端](../../mobile/README.md)。
+
+## 验证
 
 ```sh
 cargo test -p orbit-server --locked
