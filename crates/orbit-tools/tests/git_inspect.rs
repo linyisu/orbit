@@ -366,6 +366,7 @@ fn desktop_review_distinguishes_index_worktree_and_untracked_content() {
 
 #[test]
 fn desktop_review_allows_config_and_keeps_external_boundaries() {
+    #[cfg(unix)]
     use std::os::unix::fs::symlink;
     let directory = repository();
     let external = tempfile::tempdir().unwrap();
@@ -398,7 +399,9 @@ fn desktop_review_allows_config_and_keeps_external_boundaries() {
             .join("config-alias.txt"),
     )
     .unwrap();
+    #[cfg(unix)]
     symlink("private/auth.json", directory.path().join("auth-alias.txt")).unwrap();
+    #[cfg(unix)]
     symlink(
         external.path().join("outside.txt"),
         directory
@@ -406,6 +409,7 @@ fn desktop_review_allows_config_and_keeps_external_boundaries() {
             .join("outside-alias.txt"),
     )
     .unwrap();
+    #[cfg(unix)]
     symlink(
         external.path(),
         directory
@@ -417,6 +421,7 @@ fn desktop_review_allows_config_and_keeps_external_boundaries() {
     fs::remove_dir(directory.path().join("removed")).unwrap();
     let workspace = Workspace::new(directory.path()).unwrap();
 
+    #[cfg(unix)]
     for path in ["outside-alias.txt", "outside-directory/outside.txt"] {
         assert!(
             review_patch(&workspace, path, false, false).is_err(),
