@@ -263,6 +263,61 @@ pub fn check(root: &Path) -> Result<Vec<String>> {
             errors.push(format!("{name}: workspace member missing"));
         }
     }
+    let mobile_manifest = root.join("mobile/Cargo.toml");
+    if mobile_manifest.exists() {
+        let mobile = manifest(&mobile_manifest)?;
+        for dependency in dependencies(
+            &mobile,
+            &["dependencies", "build-dependencies", "dev-dependencies"],
+        ) {
+            if (dependency.starts_with("orbit-")
+                && !["orbit-client", "orbit-protocol", "orbit-syntax"]
+                    .contains(&dependency.as_str()))
+                || DATABASE.contains(&dependency.as_str())
+            {
+                errors.push(format!(
+                    "orbit-mobile: unexpected application dependency {dependency}"
+                ));
+            }
+        }
+        let mut scopes = vec![&mobile];
+        if let Some(targets) = mobile
+            .get("target")
+            .and_then(Value::as_table)
+        {
+            scopes.extend(targets.values());
+        }
+        for scope in scopes {
+            for kind in ["dependencies", "dev-dependencies", "build-dependencies"] {
+                if let Some(dependencies) = scope
+                    .get(kind)
+                    .and_then(Value::as_table)
+                {
+                    for (alias, definition) in dependencies {
+                        let name = definition
+                            .get("package")
+                            .and_then(Value::as_str)
+                            .unwrap_or(alias);
+                        if name == "orbit-client"
+                            && (definition
+                                .get("default-features")
+                                .and_then(Value::as_bool)
+                                != Some(false)
+                                || definition
+                                    .get("features")
+                                    .and_then(Value::as_array)
+                                    .is_none_or(|features| {
+                                        features.len() != 1
+                                            || features[0].as_str() != Some("remote")
+                                    }))
+                        {
+                            errors.push("orbit-mobile: orbit-client must use only remote without default features".into());
+                        }
+                    }
+                }
+            }
+        }
+    }
     for directory in ["crates", ".github/scripts"] {
         for extension in ["py", "sh", "ps1"] {
             for source in sources(&root.join(directory), extension)? {
@@ -287,14 +342,8 @@ pub fn check(root: &Path) -> Result<Vec<String>> {
     }
     let execution =
         Regex::new(r"\b(?:Agent::new|run_with_agent_events|compact_configured|workspace_tools)\b")?;
-    for package in ["orbit-tui", "orbit-gui"] {
-        for source in sources(
-            &root
-                .join("crates")
-                .join(package)
-                .join("src"),
-            "rs",
-        )? {
+    for directory in ["crates/orbit-tui/src", "crates/orbit-gui/src", "mobile/src"] {
+        for source in sources(&root.join(directory), "rs")? {
             inspect(
                 root,
                 &source,
@@ -307,14 +356,8 @@ pub fn check(root: &Path) -> Result<Vec<String>> {
     let frontend_domain = Regex::new(
         r"\b(?:orbit_(?:agent|auth|model|runtime|tools)::|FileConfig\b|ModelClient\b|AuthStore\b|OAuthLogin\b|CallbackListener\b|reqwest::)",
     )?;
-    for package in ["orbit-gui", "orbit-tui"] {
-        for source in sources(
-            &root
-                .join("crates")
-                .join(package)
-                .join("src"),
-            "rs",
-        )? {
+    for directory in ["crates/orbit-gui/src", "crates/orbit-tui/src", "mobile/src"] {
+        for source in sources(&root.join(directory), "rs")? {
             inspect(
                 root,
                 &source,
@@ -533,6 +576,28 @@ mod tests {
                 );
             }
             fs::remove_file(path.join("example.rs")).unwrap();
+        }
+    }
+
+    #[test]
+    fn mobile_target_dependencies_cannot_enable_host_execution() {
+        let dir = workspace();
+        let mobile = dir.path().join("mobile");
+        fs::create_dir_all(&mobile).unwrap();
+        for dependency in [
+            "host = { package = 'orbit-client', version = '*', features = ['local'] }",
+            "host = { package = 'orbit-service', version = '*' }",
+        ] {
+            fs::write(mobile.join("Cargo.toml"), format!(
+                "[package]\nname = 'orbit-mobile'\n[target.'cfg(target_os = \"android\")'.dev-dependencies]\n{dependency}\n"
+            )).unwrap();
+            let errors = check(dir.path()).unwrap();
+            assert!(
+                errors
+                    .iter()
+                    .any(|error| error.contains("orbit-mobile")),
+                "{errors:?}"
+            );
         }
     }
 

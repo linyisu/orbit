@@ -188,3 +188,44 @@ jobs:
         run: >-
           .\acceptance\orbit-xtask.exe verify-gui-installer
           package/orbit-gui-debug-windows-x64-setup.exe
+
+  android:
+    name: Android
+    runs-on: ubuntu-26.04
+    timeout-minutes: 45
+    env:
+      RUSTUP_TOOLCHAIN: stable
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Prepare Android toolchain
+        run: |
+          sdkmanager 'platforms;android-35' 'build-tools;35.0.0' 'ndk;30.0.16248370'
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/30.0.16248370" >> "$GITHUB_ENV"
+      - name: Build pinned NSH tools
+        run: |
+          git clone https://github.com/longbridge/nsh "$RUNNER_TEMP/nsh"
+          git -C "$RUNNER_TEMP/nsh" checkout d5839d7a302e2061d54c58090588f0f953e366d0
+          git -C "$RUNNER_TEMP/nsh" apply "$GITHUB_WORKSPACE/mobile/patches/nsh-rust-runtime.patch"
+          git -C "$RUNNER_TEMP/nsh" apply "$GITHUB_WORKSPACE/mobile/patches/nsh-android-activity.patch"
+          git -C "$RUNNER_TEMP/nsh" apply "$GITHUB_WORKSPACE/mobile/patches/nsh-android-images.patch"
+          git -C "$RUNNER_TEMP/nsh" apply "$GITHUB_WORKSPACE/mobile/patches/nsh-android-input.patch"
+          cd "$RUNNER_TEMP/nsh"
+          cargo build -p nsh-cli --locked
+          cargo xtask android --abi arm64-v8a
+      - name: Build Android package
+        run: |
+          "$RUNNER_TEMP/nsh/target/debug/nsh" package mobile --target android --out target/android-nsh
+          "$ANDROID_HOME/build-tools/35.0.0/zipalign" -c -P 16 4 target/android-nsh/Orbit.apk
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify target/android-nsh/Orbit.apk
+      - uses: actions/upload-artifact@v7
+        with:
+          name: orbit-android-arm64
+          path: target/android-nsh/Orbit.apk
+          if-no-files-found: error
