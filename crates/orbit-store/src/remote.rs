@@ -4,40 +4,62 @@ use anyhow::{Context, Result, ensure};
 use orbit_protocol::remote::Permissions;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+#[cfg(unix)]
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::{
     io::Write,
-    os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
 };
 
 #[derive(Serialize, Deserialize)]
 pub struct Grant {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub scope: Scope,
     pub workspace: PathBuf,
     pub database: PathBuf,
     pub permissions: Permissions,
     pub secret_hash: [u8; 32],
 }
 
+/// Legacy device records remain limited to their original project.
+#[derive(Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Scope {
+    #[default]
+    Workspace,
+    Computer,
+}
+
 /// Create a private state directory; reject existing directories with broader access.
 pub fn directory(path: &Path) -> Result<()> {
-    match std::fs::DirBuilder::new()
-        .mode(0o700)
-        .create(path)
+    #[cfg(windows)]
+    return Ok(orbit_runtime::filesystem::private::create_directory(path)?);
+    #[cfg(unix)]
     {
-        Ok(()) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
-        Err(error) => return Err(error.into()),
+        match std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(path)
+        {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(error.into()),
+        }
+        let metadata = std::fs::symlink_metadata(path)?;
+        ensure!(
+            metadata.is_dir() && metadata.permissions().mode() & 0o077 == 0,
+            "remote state must be a private directory"
+        );
+        Ok(())
     }
-    let metadata = std::fs::symlink_metadata(path)?;
-    ensure!(
-        metadata.is_dir() && metadata.permissions().mode() & 0o077 == 0,
-        "remote state must be a private directory"
-    );
-    Ok(())
 }
 
 /// Persist a new secret or grant without replacing an existing identity.
 pub fn create(path: &Path, bytes: &[u8]) -> Result<()> {
+    #[cfg(windows)]
+    let mut file = orbit_runtime::filesystem::private::open_file(path, true, true)?;
+    #[cfg(unix)]
     let mut file = std::fs::OpenOptions::new()
         .create_new(true)
         .write(true)
@@ -45,11 +67,10 @@ pub fn create(path: &Path, bytes: &[u8]) -> Result<()> {
         .open(path)?;
     file.write_all(bytes)?;
     file.sync_all()?;
-    std::fs::File::open(
+    sync_directory(
         path.parent()
             .context("state file has no parent")?,
-    )?
-    .sync_all()?;
+    )?;
     Ok(())
 }
 
@@ -88,6 +109,31 @@ pub fn authenticate(directory: &Path, device: &str, secret: &str) -> Result<Gran
 
 pub fn revoke(directory: &Path, device: &str) -> Result<()> {
     std::fs::remove_file(device_path(directory, device)?)?;
-    std::fs::File::open(directory)?.sync_all()?;
+    sync_directory(directory)?;
     Ok(())
+}
+
+fn sync_directory(path: &Path) -> Result<()> {
+    #[cfg(windows)]
+    orbit_runtime::filesystem::private::sync_directory(path)?;
+    #[cfg(unix)]
+    std::fs::File::open(path)?.sync_all()?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn legacy_grants_do_not_gain_computer_scope() {
+        let value = serde_json::json!({
+            "workspace": "synthetic-project",
+            "database": "synthetic.db",
+            "permissions": { "control": true, "approve": true },
+            "secret_hash": vec![0; 32],
+        });
+        let grant: Grant = serde_json::from_value(value).unwrap();
+        assert!(grant.scope == Scope::Workspace);
+    }
 }

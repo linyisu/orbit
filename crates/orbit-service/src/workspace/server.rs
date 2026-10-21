@@ -28,6 +28,7 @@ use super::{
 };
 
 const IDLE_TIMEOUT: Duration = Duration::from_secs(15 * 60);
+const CLIENT_EXIT_GRACE: Duration = Duration::from_secs(3);
 const START_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_SESSIONS: usize = 32;
 const MAX_CLIENTS: usize = 32;
@@ -51,6 +52,8 @@ struct ConnectionContext {
     workspace: PathBuf,
     #[serde(default)]
     remote_scope: bool,
+    #[serde(default)]
+    owns_service: bool,
 }
 
 pub async fn serve(
@@ -126,6 +129,7 @@ async fn serve_resolved(
                 allow_mcp_start: args.allow_mcp_start,
                 workspace: directory,
                 remote_scope: false,
+                owns_service: true,
             },
         )
         .await?;
@@ -179,6 +183,8 @@ async fn serve_resolved(
         editor_command: "vi".into(),
     };
     let service = Arc::new(Service {
+        owners: std::sync::Mutex::new(Owners::default()),
+        remote_host: Mutex::new(Default::default()),
         library: Mutex::new(super::library::Library::new(&options)?),
         options,
         sessions: Mutex::new(HashMap::new()),
@@ -189,7 +195,7 @@ async fn serve_resolved(
         closing: AtomicBool::new(false),
     });
     let permits = Arc::new(Semaphore::new(MAX_CLIENTS));
-    let mut idle = tokio::time::interval(Duration::from_secs(30));
+    let mut idle = tokio::time::interval(Duration::from_secs(1));
     loop {
         tokio::select! {
             connection = transport::accept(&mut listener) => {
@@ -213,13 +219,28 @@ async fn serve_resolved(
             _ = service.stop.cancelled() => break,
             _ = idle.tick() => {
                 let _opening = service.opening.lock().await;
+                let abandoned = {
+                    let owners = service.owners.lock().unwrap();
+                    let abandoned = owners.abandoned();
+                    if abandoned {
+                        service.closing.store(true, Ordering::Release);
+                    }
+                    abandoned
+                };
+                if abandoned {
+                    service.remote_host.lock().await.stop().await;
+                    for handle in service.sessions.lock().await.values() {
+                        handle.command(session::Command::StopService).await?;
+                    }
+                }
                 service.collect_idle_sessions().await;
-                if service
+                let has_owners = service.owners.lock().unwrap().clients != 0;
+                if !has_owners && (abandoned || service
                     .last_activity
                     .lock()
                     .await
                     .elapsed()
-                    >= IDLE_TIMEOUT
+                    >= IDLE_TIMEOUT)
                     && !service.busy().await
                 {
                     service
@@ -247,13 +268,12 @@ async fn serve_resolved(
 }
 
 /// Attach a remote gateway to the same daemon and data source used by local clients.
-#[cfg(target_os = "linux")]
 pub(super) async fn remote_backend(
     args: &ServiceOptions,
     config: PathBuf,
     database: PathBuf,
     auth: PathBuf,
-) -> Result<impl AsyncRead + AsyncWrite + Unpin + Send> {
+) -> Result<impl AsyncRead + AsyncWrite + Unpin + Send + use<>> {
     let (workspace, config, database, auth) = resolve(args, config, Some(database), auth)?;
     let socket = endpoints::shared(&runtime_directory()?, &database)?;
     let mut stream = lifecycle::connect_or_start(&socket, args, &config, &database, &auth).await?;
@@ -265,6 +285,7 @@ pub(super) async fn remote_backend(
             workspace,
             allow_mcp_start: args.allow_mcp_start,
             remote_scope: true,
+            owns_service: false,
         },
     )
     .await?;
@@ -281,10 +302,10 @@ pub(super) async fn remote_backend(
             protocol::read::<Response>(&mut stream).await?,
             Response::Hello { capabilities, .. }
                 if capabilities.features.iter().any(|feature| {
-                    feature == orbit_protocol::remote::WORKSPACE_SCOPE
+                    feature == orbit_protocol::remote::COMPUTER_SCOPE
                 })
         ),
-        "workspace service does not support remote scope checks; update the host service"
+        "workspace service does not support computer remote operations; update the host service"
     );
     Ok(stream)
 }
@@ -338,7 +359,36 @@ fn resolve_database(path: PathBuf, workspace: &Path) -> Result<PathBuf> {
     })
 }
 
+#[derive(Default)]
+struct Owners {
+    clients: usize,
+    detached: Option<std::time::Instant>,
+}
+
+impl Owners {
+    fn abandoned(&self) -> bool {
+        self.clients == 0
+            && self
+                .detached
+                .is_some_and(|at| at.elapsed() >= CLIENT_EXIT_GRACE)
+    }
+}
+
+struct Owner<'a>(&'a std::sync::Mutex<Owners>);
+
+impl Drop for Owner<'_> {
+    fn drop(&mut self) {
+        let mut owners = self.0.lock().unwrap();
+        owners.clients -= 1;
+        if owners.clients == 0 {
+            owners.detached = Some(std::time::Instant::now());
+        }
+    }
+}
+
 struct Service {
+    owners: std::sync::Mutex<Owners>,
+    remote_host: Mutex<super::remote::host::Host>,
     library: Mutex<super::library::Library>,
     options: crate::WorkspaceOptions,
     sessions: Mutex<HashMap<String, Arc<Handle>>>,
@@ -459,6 +509,19 @@ impl Service {
             protocol::read::<ConnectionContext>(&mut reader),
         )
         .await??;
+        let _owner = if context.owns_service && !context.remote_scope {
+            let _opening = self.opening.lock().await;
+            let mut owners = self.owners.lock().unwrap();
+            ensure!(
+                !self.closing.load(Ordering::Acquire),
+                "workspace service is shutting down"
+            );
+            owners.clients += 1;
+            owners.detached = None;
+            Some(Owner(&self.owners))
+        } else {
+            None
+        };
         let request = tokio::time::timeout(
             Duration::from_secs(10),
             protocol::read::<Request>(&mut reader),
@@ -513,22 +576,21 @@ impl Service {
         let result = async {
             loop {
                 let request = protocol::read::<Request>(&mut reader).await?;
-                #[cfg(target_os = "linux")]
+
                 if remote_scope {
                     self.check_remote_scope(&request, &options.initial_directory)
                         .await?;
                 }
-                #[cfg(not(target_os = "linux"))]
-                ensure!(
-                    !remote_scope,
-                    "remote control is not supported on this host"
-                );
                 *self.last_activity.lock().await = tokio::time::Instant::now();
                 let shutdown = matches!(request, Request::Shutdown);
-                let response = match self
-                    .dispatch(request, &options, viewer)
-                    .await
-                {
+                let result = if shutdown {
+                    self.shutdown(usize::from(_owner.is_some()))
+                        .await
+                } else {
+                    self.dispatch(request, &options, viewer)
+                        .await
+                };
+                let response = match result {
                     Ok(response) => response,
                     Err(error) => Response::Error(format!("{error:#}")),
                 };
@@ -549,16 +611,38 @@ impl Service {
         result
     }
 
-    #[cfg(target_os = "linux")]
+    async fn shutdown(&self, requester_owners: usize) -> Result<Response> {
+        let _opening = self.opening.lock().await;
+        let other_owners = self.owners.lock().unwrap().clients > requester_owners;
+        ensure!(
+            !other_owners,
+            "workspace has active clients; close them before stopping the service"
+        );
+        ensure!(
+            !self.busy().await,
+            "workspace has active tasks; cancel them before stopping the service"
+        );
+        self.closing
+            .store(true, Ordering::Release);
+        Ok(Response::Ok)
+    }
+
     async fn check_remote_scope(&self, request: &Request, workspace: &Path) -> Result<()> {
         let session = match request {
             Request::Poll { session, .. }
             | Request::Prepare { session, .. }
             | Request::Start { session, .. }
+            | Request::SubmitAttachments { session, .. }
             | Request::Cancel { session }
+            | Request::EnableUserInput { session }
+            | Request::AnswerUserInput { session, .. }
             | Request::Approve { session, .. } => session,
-            Request::Sessions | Request::Browse { .. } => return Ok(()),
-            _ => bail!("request is unavailable to remote controllers"),
+            Request::Sessions | Request::AllSessions | Request::Browse { .. } => return Ok(()),
+            _ => match orbit_protocol::remote::access(request) {
+                Some((_, Some(session))) => session,
+                Some((_, None)) => return Ok(()),
+                None => bail!("request is unavailable to remote controllers"),
+            },
         };
         let (_, info) = self.conversation(session).await?;
         ensure!(
@@ -623,6 +707,30 @@ impl Service {
         viewer: u64,
     ) -> Result<Response> {
         match request {
+            Request::RemoteHost { action } => {
+                let options = super::remote::HostOptions {
+                    state: connection_options
+                        .database
+                        .parent()
+                        .context("database has no parent")?
+                        .join("remote-control"),
+                    workspace: connection_options
+                        .initial_directory
+                        .clone(),
+                    database: connection_options.database.clone(),
+                    config: connection_options.config.clone(),
+                    auth: connection_options
+                        .auth_directory
+                        .clone(),
+                };
+                Ok(Response::RemoteHost(
+                    self.remote_host
+                        .lock()
+                        .await
+                        .action(action, options)
+                        .await?,
+                ))
+            }
             Request::Browse {
                 resume,
                 configuration,
@@ -1846,16 +1954,7 @@ impl Service {
                     .await?;
                 Ok(Response::Ok)
             }
-            Request::Shutdown => {
-                let _opening = self.opening.lock().await;
-                ensure!(
-                    !self.busy().await,
-                    "workspace has active tasks; cancel them before stopping the service"
-                );
-                self.closing
-                    .store(true, Ordering::Release);
-                Ok(Response::Ok)
-            }
+            Request::Shutdown => self.shutdown(0).await,
         }
     }
 }
@@ -1876,8 +1975,8 @@ async fn capabilities() -> orbit_protocol::Capabilities {
                 files: true,
                 features: [
                     orbit_protocol::MODEL_INDEPENDENT_SESSIONS,
-                    #[cfg(target_os = "linux")]
                     orbit_protocol::remote::WORKSPACE_SCOPE,
+                    orbit_protocol::remote::COMPUTER_SCOPE,
                     "sessions",
                     "events",
                     "approvals",

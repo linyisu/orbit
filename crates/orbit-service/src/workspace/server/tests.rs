@@ -98,6 +98,8 @@ impl Fixture {
             .clients
             .store(1, Ordering::Release);
         let service = Service {
+            owners: std::sync::Mutex::new(Owners::default()),
+            remote_host: Mutex::new(Default::default()),
             library: Mutex::new(super::super::library::Library::isolated(&options)),
             options,
             sessions: Mutex::new([(handle.info.id.clone(), handle.clone())].into()),
@@ -362,6 +364,8 @@ async fn sent_images_are_readable_only_through_the_owning_session() {
         .unwrap();
     assert!(!Path::new(&path).starts_with(&workspace));
     let service = Service {
+        owners: std::sync::Mutex::new(Owners::default()),
+        remote_host: Mutex::new(Default::default()),
         library: Mutex::new(super::super::library::Library::isolated(&options)),
         options,
         sessions: Mutex::new(
@@ -539,4 +543,92 @@ async fn streaming_request(
     })
     .await
     .unwrap()
+}
+
+#[tokio::test]
+async fn local_connections_share_service_until_the_last_owner_leaves() {
+    let fixture = Fixture::new("http://127.0.0.1:1").await;
+    let service = Arc::new(fixture.service);
+    let mut clients = Vec::new();
+    let mut workers = Vec::new();
+    for _ in 0..2 {
+        let (mut client, server) = tokio::io::duplex(16_384);
+        let owner = service.clone();
+        workers.push(tokio::spawn(async move {
+            let (reader, writer) = tokio::io::split(server);
+            let _ = owner.client(reader, writer).await;
+        }));
+        protocol::write(
+            &mut client,
+            &ConnectionContext {
+                config: service.options.config.clone(),
+                auth: service.options.auth_directory.clone(),
+                workspace: service
+                    .options
+                    .initial_directory
+                    .clone(),
+                allow_mcp_start: false,
+                remote_scope: false,
+                owns_service: true,
+            },
+        )
+        .await
+        .unwrap();
+        protocol::write(
+            &mut client,
+            &Request::Hello {
+                version: protocol::VERSION,
+                workspace: None,
+            },
+        )
+        .await
+        .unwrap();
+        assert!(matches!(
+            protocol::read::<Response>(&mut client)
+                .await
+                .unwrap(),
+            Response::Hello { .. }
+        ));
+        clients.push(client);
+    }
+    assert_eq!(service.owners.lock().unwrap().clients, 2);
+    protocol::write(&mut clients[0], &Request::Shutdown)
+        .await
+        .unwrap();
+    assert!(matches!(
+        protocol::read::<Response>(&mut clients[0])
+            .await
+            .unwrap(),
+        Response::Error(_)
+    ));
+    drop(clients.pop());
+    workers.pop().unwrap().await.unwrap();
+    assert_eq!(service.owners.lock().unwrap().clients, 1);
+    assert!(
+        !service
+            .owners
+            .lock()
+            .unwrap()
+            .abandoned()
+    );
+    protocol::write(&mut clients[0], &Request::AllSessions)
+        .await
+        .unwrap();
+    assert!(!matches!(
+        protocol::read::<Response>(&mut clients[0])
+            .await
+            .unwrap(),
+        Response::Error(_)
+    ));
+    drop(clients);
+    workers.pop().unwrap().await.unwrap();
+    assert_eq!(service.owners.lock().unwrap().clients, 0);
+    assert!(
+        service
+            .owners
+            .lock()
+            .unwrap()
+            .detached
+            .is_some()
+    );
 }

@@ -745,3 +745,52 @@ async fn deferred_followups_start_separate_runs_in_order_after_each_complete_rep
         );
     }
 }
+
+#[tokio::test]
+async fn service_exit_cancels_the_run_without_starting_queued_input() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .unwrap();
+    let fixture = Fixture::new(&format!("http://{}/v1", listener.local_addr().unwrap())).await;
+    let session = fixture.handle.info.id.clone();
+    fixture
+        .request(Request::Start {
+            session: session.clone(),
+            request_id: "exit-run".into(),
+            prompt: "Summarize the sample".into(),
+            images: vec![],
+            compact: false,
+            model: None,
+        })
+        .await
+        .unwrap();
+    let (_stream, _) = streaming_request(&listener).await;
+    fixture
+        .request(Request::Steer {
+            session: session.clone(),
+            message: "Compare the sample".into(),
+        })
+        .await
+        .unwrap();
+    fixture
+        .handle
+        .command(session::Command::StopService)
+        .await
+        .unwrap();
+    fixture.wait(|page| !page.busy).await;
+    assert_eq!(
+        fixture
+            .handle
+            .store
+            .pending_agent_messages(&session)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), listener.accept())
+            .await
+            .is_err()
+    );
+}

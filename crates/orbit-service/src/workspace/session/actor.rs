@@ -50,6 +50,7 @@ struct Actor {
     review_reads: Arc<tokio::sync::Semaphore>,
     running: Option<Running>,
     continue_after_cancel: bool,
+    stopping: bool,
     undo: Option<Undo>,
     import: Option<crate::workspace::resources::Import>,
     mcp_reload: Option<crate::workspace::resources::Reload>,
@@ -99,6 +100,7 @@ pub(super) async fn run(
         review_reads: Arc::new(tokio::sync::Semaphore::new(MAX_REVIEW_READS)),
         running: None,
         continue_after_cancel: false,
+        stopping: false,
         undo: None,
         import: None,
         mcp_reload: None,
@@ -979,8 +981,15 @@ impl Actor {
                     )
                     .await?;
             }
-            Command::Cancel => {
-                self.continue_after_cancel = self.running.is_some();
+            command @ (Command::Cancel | Command::StopService) => {
+                self.continue_after_cancel =
+                    matches!(command, Command::Cancel) && self.running.is_some();
+                if matches!(command, Command::StopService) {
+                    self.stopping = true;
+                    for jobs in self.setup.resources.tools.task_groups() {
+                        jobs.cancel(&[])?;
+                    }
+                }
                 if let Some(envelope) = self.starting.take() {
                     let _ = envelope
                         .reply
@@ -1314,7 +1323,8 @@ impl Actor {
             *workspace = self.setup.resources.workspace.clone();
         }
         self.questions.update(&self.setup);
-        let continue_queued = (continue_queued || status == "completed") && saved.is_ok();
+        let continue_queued =
+            !self.stopping && (continue_queued || status == "completed") && saved.is_ok();
         let status = if saved.is_ok() { status } else { "failed" };
         let mut view = self.view.lock().await;
         if let Some(error) = error.or_else(|| {

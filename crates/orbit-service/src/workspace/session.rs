@@ -115,6 +115,7 @@ pub enum Command {
         path: Option<String>,
     },
     Cancel,
+    StopService,
     Approve {
         id: u64,
         allow: bool,

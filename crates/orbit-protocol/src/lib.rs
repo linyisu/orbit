@@ -68,6 +68,9 @@ pub async fn read_preamble(reader: &mut (impl AsyncRead + Unpin)) -> io::Result<
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "method", rename_all = "snake_case")]
 pub enum Request {
+    RemoteHost {
+        action: remote::HostAction,
+    },
     Usage {
         session: String,
     },
@@ -477,6 +480,7 @@ pub struct Page<E, A> {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type", content = "value", rename_all = "snake_case")]
 pub enum Response<E, A> {
+    RemoteHost(remote::HostStatus),
     Usage(usage::Snapshot),
     Completions {
         input: String,
@@ -748,7 +752,7 @@ mod tests {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Session {
     pub id: String,
     pub workspace: String,

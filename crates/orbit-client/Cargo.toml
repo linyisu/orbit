@@ -10,11 +10,13 @@ path = "tests/support/session_peer.rs"
 [features]
 default = ["local"]
 local = ["dep:orbit-config", "dep:orbit-agent", "dep:orbit-model", "dep:orbit-auth", "dep:orbit-tools", "dep:orbit-runtime"]
-remote = ["dep:tokio-rustls"]
+remote = ["dep:tokio-rustls", "dep:ring", "dep:iroh"]
 test-support = ["local"]
 local-speech = ["local", "dep:qwen-asr", "dep:reqwest"]
 
 [dependencies]
+iroh = { version = "=1.4.0", default-features = false, features = ["tls-ring"], optional = true }
+ring = { version = "0.17.14", optional = true }
 similar.workspace = true
 chrono.workspace = true
 url.workspace = true

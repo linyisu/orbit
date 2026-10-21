@@ -72,6 +72,8 @@ UTF-8 跨 token 拼接后再展示，暂定尾部整体替换，稳定前缀不�
 - `remote` 功能提供固定证书 TLS、设备认证与独立控制/历史连接；使用
   `default-features = false` 时不引入 Agent、工具、模型、账号和本机部署。
   默认 `local` 功能保留现有 GUI/TUI 接口。远控不会自动重试副作用请求；断线结果未确认。
+  `remote::presentation` 投影持久事件与实时工具输出；`remote::vault` 编解码设备连接和
+  按设备、会话隔离的草稿，Android 使用禁止备份的应用私有存储，旧加密格式保留兼容接口。问答继续使用 protocol 的表单校验。
 
 - [conversation.rs](src/conversation.rs)、[activity.rs](src/activity.rs)、[execution.rs](src/execution.rs)：
   共享会话分段、进度状态、调用记录与详情页数据。分段保留思考、正文和调用的原始顺序，只合并连续工具；后台返回更新原记录，不改分组或位置。两端不自行解释工具结果。
@@ -112,3 +114,9 @@ cargo test -p orbit-client
 SSH/WSL 连接无需在用户机器上安装 Rust 或构建服务。
 本机服务缓存校验完整字节后使用 OS 租约保护，当前版本、客户端仍使用的版本及一个旧版本保留；
 其他版本在准备服务时尝试清理。无法删除的运行中 Windows 程序留待下次回收，清理失败不阻止启动。
+
+`phone` 为桌面提供本机手机连接管理，使用 `RemoteHost` 请求而不打开会话或加载模型。
+`remote` 支持 iroh 端点和旧 TCP 地址，扫码邀请与永久设备凭据分离；有效二维码一次性完成配对，
+连接仍固定主机证书。附件由共享客户端按 128 KiB 分块传输，每批最多 8 个、20 MiB。
+
+`projects` 提供 GUI 与移动端共用的项目置顶和排序规则；各端保存按主机隔离的界面偏好。

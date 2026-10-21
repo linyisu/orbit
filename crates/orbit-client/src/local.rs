@@ -5,6 +5,7 @@ mod bootstrap;
 pub mod conversation;
 pub mod execution;
 pub mod library;
+pub mod phone;
 mod local_server;
 #[cfg(feature = "test-support")]
 pub mod test_support;

@@ -291,6 +291,7 @@ async fn retire_version(
                 allow_mcp_start: args.allow_mcp_start,
                 workspace: expand_home(&args.workspace)?.canonicalize()?,
                 remote_scope: false,
+                owns_service: false,
             },
         )
         .await?;
@@ -353,6 +354,7 @@ async fn retire_version(
     protocol::write(stream, &Request::Shutdown).await?;
     match protocol::read::<Response>(stream).await? {
         Response::Ok => Ok(true),
+        Response::Error(_) if orbit_protocol::supports_version(negotiated) => Ok(false),
         Response::Error(error) => {
             bail!("工作区后台服务待更新，等待运行任务结束后自动重连：{error}")
         }

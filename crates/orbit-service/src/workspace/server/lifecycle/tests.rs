@@ -130,9 +130,7 @@ async fn service_handover_respects_busy_refusal_and_uses_orderly_shutdown() {
         )
         .await;
         if busy {
-            let message = outcome.unwrap_err().to_string();
-            assert!(message.contains("active tasks"));
-            assert!(message.contains("自动重连"));
+            assert!(!outcome.unwrap(), "compatible busy daemons remain shared");
         } else {
             assert_eq!(outcome.unwrap(), generation == 0);
         }
@@ -246,7 +244,9 @@ async fn handover_negotiates_the_running_daemon_version_without_forcing_busy_shu
         )
         .await
         .unwrap();
-        if busy {
+        if busy && orbit_protocol::supports_version(version) {
+            assert!(!result.unwrap());
+        } else if busy {
             assert!(
                 result
                     .unwrap_err()
@@ -450,6 +450,8 @@ async fn shared_server_negotiates_released_clients_and_rejects_unknown_versions(
             editor_command: "vi".into(),
         };
         let service = Service {
+            owners: std::sync::Mutex::new(Owners::default()),
+            remote_host: Mutex::new(Default::default()),
             library: Mutex::new(crate::workspace::library::Library::isolated(&options)),
             options: options.clone(),
             sessions: Mutex::new(HashMap::new()),
@@ -475,6 +477,7 @@ async fn shared_server_negotiates_released_clients_and_rejects_unknown_versions(
                 allow_mcp_start: false,
                 workspace: options.initial_directory,
                 remote_scope: false,
+                owns_service: false,
             },
         )
         .await
@@ -516,4 +519,22 @@ async fn shared_server_negotiates_released_clients_and_rejects_unknown_versions(
         }
         worker.await.unwrap();
     }
+}
+
+#[test]
+fn local_owners_keep_other_windows_alive_and_allow_a_reconnect_grace() {
+    let owners = std::sync::Mutex::new(Owners::default());
+    assert!(!owners.lock().unwrap().abandoned());
+    owners.lock().unwrap().clients = 2;
+    let first = Owner(&owners);
+    let second = Owner(&owners);
+    drop(first);
+    assert_eq!(owners.lock().unwrap().clients, 1);
+    assert!(!owners.lock().unwrap().abandoned());
+    drop(second);
+    assert!(!owners.lock().unwrap().abandoned());
+    owners.lock().unwrap().detached = Some(std::time::Instant::now() - CLIENT_EXIT_GRACE);
+    assert!(owners.lock().unwrap().abandoned());
+    owners.lock().unwrap().clients = 1;
+    assert!(!owners.lock().unwrap().abandoned());
 }

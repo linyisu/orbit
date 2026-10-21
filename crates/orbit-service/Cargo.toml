@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+iroh = { version = "=1.4.0", default-features = false, features = ["tls-ring"] }
 orbit-config.workspace = true
 orbit-protocol.workspace = true
 reqwest.workspace = true
@@ -37,7 +38,7 @@ url.workspace = true
 [dev-dependencies]
 orbit-config = { workspace = true, features = ["test-support"] }
 rusqlite.workspace = true
-orbit-client.workspace = true
+orbit-client = { workspace = true, features = ["remote"] }
 image.workspace = true
 
 [target.'cfg(windows)'.dependencies]
