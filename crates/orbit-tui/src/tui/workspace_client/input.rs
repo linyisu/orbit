@@ -611,6 +611,7 @@ impl Tab {
             "/reconnect" => self.reconnect(),
             "/restore" => return Ok(Action::Restore),
             "/connect" => return Ok(Action::Connect),
+            "/phone" => return Ok(Action::Phone),
             "/editor" => return Ok(Action::Editor),
             "/model refresh" => return Ok(Action::RefreshModels),
             "/answers" => {

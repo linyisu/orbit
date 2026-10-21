@@ -27,6 +27,7 @@ orbit-config.workspace = true
 pulldown-cmark.workspace = true
 ratatui-image.workspace = true
 ratatui.workspace = true
+qrcode = { version = "0.14", default-features = false }
 ratex-layout.workspace = true
 ratex-parser.workspace = true
 ratex-svg.workspace = true

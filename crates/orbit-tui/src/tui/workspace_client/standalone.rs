@@ -81,6 +81,20 @@ pub(super) async fn run(mut opened: Opened) -> Result<()> {
                             .restore_picker =
                             Some(tui::restore::RestorePicker::from_tabs(&previous));
                     }
+                    Action::Phone => {
+                        let result = if let Some(connection) = tabs.remote[&id].connection.clone() {
+                            tui::phone::run(&mut terminal, &mut events, connection).await
+                        } else {
+                            Err(anyhow::anyhow!("工作区尚未连接，请连接后再打开手机管理"))
+                        };
+                        if let Err(error) = result {
+                            tabs.remote
+                                .get_mut(&id)
+                                .unwrap()
+                                .state
+                                .report_local(TranscriptItem::CommandError(error.to_string()));
+                        }
+                    }
                     Action::Connect => {
                         let tab = &tabs.remote[&id];
                         if let Some(local) = tab

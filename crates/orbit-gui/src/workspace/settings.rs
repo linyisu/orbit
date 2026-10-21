@@ -2,6 +2,7 @@
 mod advanced;
 mod fonts;
 mod mcp;
+mod phone;
 mod plugins;
 mod resources;
 mod shortcuts;
@@ -19,7 +20,7 @@ use gpui_kit::component::{
 };
 
 // Keep the existing page identifiers stable for command destinations.
-const PAGES: [(&str, IconName, &str); 8] = [
+const PAGES: [(&str, IconName, &str); 9] = [
     (
         "外观与布局",
         IconName::Settings,
@@ -44,6 +45,7 @@ const PAGES: [(&str, IconName, &str); 8] = [
         IconName::Settings,
         "Agent 能力 禁用 工具 上限 预算 轮数 调用 子代理 命令 超时 自动压缩",
     ),
+    ("手机连接", IconName::Monitor, "手机 Android 扫码 远控 配对"),
 ];
 
 #[derive(Clone)]
@@ -52,7 +54,7 @@ struct GlobalLibrary {
     runtime: Arc<tokio::runtime::Runtime>,
 }
 
-const GROUPS: [(&str, &[usize]); 2] = [("全局设置", &[0, 1, 2, 3, 5, 6, 7]), ("当前会话", &[4])];
+const GROUPS: [(&str, &[usize]); 2] = [("全局设置", &[0, 1, 2, 3, 5, 6, 7, 8]), ("当前会话", &[4])];
 
 impl Workspace {
     pub(crate) fn settings(
@@ -144,6 +146,7 @@ impl Workspace {
         let shortcuts = cx.new(|cx| shortcuts::Shortcuts::new(window, cx));
         let advanced =
             cx.new(|cx| advanced::Advanced::new(&self.options, self.runtime.clone(), window, cx));
+        let phone = cx.new(|cx| phone::Phone::new(&self.options, self.runtime.clone(), cx));
         let mcp = cx.new(|cx| {
             mcp::Mcp::new(
                 &self.options,
@@ -235,6 +238,7 @@ impl Workspace {
                 shortcuts,
                 mcp,
                 advanced,
+                phone,
                 query,
                 font_size,
                 applied_font_size: Preferences::font_size(cx),
@@ -262,6 +266,7 @@ pub(crate) struct SettingsPage {
     plugins: Entity<plugins::Plugins>,
     mcp: Entity<mcp::Mcp>,
     advanced: Entity<advanced::Advanced>,
+    phone: Entity<phone::Phone>,
     fonts: Entity<fonts::Fonts>,
     shortcuts: Entity<shortcuts::Shortcuts>,
     query: Entity<InputState>,
@@ -325,6 +330,8 @@ impl SettingsPage {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.phone
+            .update(cx, |phone, cx| phone.bind_workspace(&workspace, cx));
         self.mcp.update(cx, |mcp, cx| {
             mcp.bind_context(session.clone(), workspace.clone(), cx)
         });
@@ -468,6 +475,7 @@ impl SettingsPage {
                 .clone()
                 .into_any_element(),
             7 => self.advanced.clone().into_any_element(),
+            8 => self.phone.clone().into_any_element(),
             _ => div().into_any_element(),
         }
     }
@@ -556,6 +564,10 @@ impl Render for SettingsPage {
                 ),
                 3 => ("MCP 工具", "配置工具服务器，可应用到当前会话和新建会话。"),
                 4 => ("会话记忆", "管理当前会话保存的事实与偏好。"),
+                8 => (
+                    "手机连接",
+                    "在 Android 上操作这台电脑的项目和会话，电脑需保持运行和联网。",
+                ),
                 7 => (
                     "高级 Agent",
                     "设置新建会话的运行预算、能力上限与子 Agent 参数。",
@@ -614,6 +626,8 @@ impl Render for SettingsPage {
                 self.environment,
                 orbit_client::directories::display_path(&self.contexts[self.context].workspace)
             )
+        } else if self.initial_page == 8 {
+            "本机 · 手机访问授权".to_owned()
         } else if matches!(self.initial_page, 2 | 5) {
             "全局库 · 按会话应用".to_owned()
         } else {

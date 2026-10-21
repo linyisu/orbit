@@ -100,6 +100,10 @@ pub const COMMANDS: &[Command] = &[
         description: "在新标签开始会话",
     },
     Command {
+        name: "/phone",
+        description: "管理手机连接、扫码配对和设备授权",
+    },
+    Command {
         name: "/plan",
         description: "进入只读规划；/plan view 查看方案并反馈",
     },
@@ -211,6 +215,7 @@ pub fn available_while_running(name: &str) -> bool {
     matches!(
         name,
         "/connect"
+            | "/phone"
             | "/help"
             | "/restore"
             | "/editor"
@@ -303,6 +308,7 @@ pub fn available_in_workspace(name: &str) -> bool {
         name,
         "/cd"
             | "/connect"
+            | "/phone"
             | "/restore"
             | "/editor"
             | "/tasks"

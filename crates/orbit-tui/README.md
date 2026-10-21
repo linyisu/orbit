@@ -21,6 +21,7 @@ cargo run --release -p orbit-tui --locked
 
 | 操作 | 入口 |
 | --- | --- |
+| 手机连接 | `/phone` 开启远程、扫码配对、确认授权和撤销设备 |
 | 账号与模型 | `/connect`、`/model`、`/model refresh` |
 | 会话与标签 | `/new`、`/resume`、`/close`、`/restore` |
 | 计划与审批 | `/plan`、`/plan view`、`/build`、`/permissions` |
@@ -57,3 +58,5 @@ cargo test -p orbit-tui --locked
 Git 历史继续使用弹窗：方向键选择、Enter 打开提交或文件，默认显示完整历史文件；D 切换差异，B 或 Backspace 返回列表，Ctrl+L 修改分支或提交，N 加载下一页，Esc 直接关闭。分页固定提交身份，与 GUI 共用只读服务查询和权限校验。
 
 变更审阅与历史差异显示修改前、修改后的真实源码行号，不展示 Git 区块的 `@@` 标记；复制仍保留原始补丁。
+
+`/phone` 管理本机的手机连接，复用 GUI 的手机连接服务。新扫码授权可切换电脑上的项目。方向键选择、Enter 执行；P 切换新配对权限，默认允许发送任务、附件和审批。二维码显示期间 Q 返回管理，手机扫码后自动显示确认选项；Esc 关闭弹窗，不会关闭连接。终端空间不足时提示放大窗口，不裁切二维码。

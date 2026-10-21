@@ -37,6 +37,7 @@ const CHANNEL_CAPACITY: usize = 16;
 pub(super) enum Action {
     Restore,
     Connect,
+    Phone,
     Editor,
     RefreshModels,
     None,

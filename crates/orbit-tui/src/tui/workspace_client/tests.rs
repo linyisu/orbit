@@ -715,6 +715,7 @@ fn workspace_completion_offers_shared_commands_without_local_directory_reads() {
         "/reconnect",
         "/cd",
         "/connect",
+        "/phone",
         "/undo",
     ] {
         assert!(
@@ -2174,4 +2175,15 @@ fn restored_document_drafts_use_the_shared_attachment_request_without_vision() {
     );
     assert!(tab.state.attachments.is_empty());
     assert_eq!(tab.starting_attachments.len(), 1);
+}
+
+#[test]
+fn phone_command_opens_management_without_submitting_an_agent_request() {
+    let (mut tab, mut requests) = tab("本地");
+    assert!(matches!(
+        tab.submit("/phone".into()).unwrap(),
+        super::Action::Phone
+    ));
+    assert!(requests.try_recv().is_err());
+    assert!(crate::tui::commands::available_while_running("/phone"));
 }
