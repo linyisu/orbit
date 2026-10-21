@@ -89,3 +89,6 @@ CI 只保留两个入口：
 按职责维护模块和共享接口，注释说明约束与原因。修改后运行相关回归；新增或移动模块时同步 crate README，并检查链接。配置与参数细节以示例、`--help` 和所属模块源码为准。
 
 仓库维护与编码约定见 [AGENTS.md](AGENTS.md)。
+
+Android 远控的平台验证工程见 [mobile](mobile/README.md)。当前仅验证 GPUI Kit Mobile
+界面与构建链路，尚未接入设备配对或真实工作区。

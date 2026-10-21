@@ -70,6 +70,12 @@ jobs:
       - name: Check formatting
         if: runner.os == 'Linux'
         run: cargo fmt --all -- --check
+      - name: Check Android prototype
+        if: runner.os == 'Linux'
+        run: |
+          rustup target add aarch64-linux-android
+          cargo fmt --manifest-path mobile/Cargo.toml -- --check
+          cargo clippy --manifest-path mobile/Cargo.toml --target aarch64-linux-android --lib --locked -- -D warnings
       - name: Check architecture and dependency boundaries
         if: runner.os == 'Linux'
         run: cargo xtask check

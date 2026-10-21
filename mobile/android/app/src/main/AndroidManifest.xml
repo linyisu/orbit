@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-feature android:name="android.hardware.vulkan.level" android:version="0" android:required="true" />
+    <application
+        android:label="Orbit 验证"
+        android:allowBackup="false"
+        android:hasCode="true"
+        android:theme="@android:style/Theme.Material.Light.NoActionBar"
+        android:usesCleartextTraffic="false">
+        <activity
+            android:name="dev.gpui.mobile.GpuiInputActivity"
+            android:exported="true"
+            android:configChanges="orientation|keyboardHidden|screenSize|screenLayout|uiMode|density"
+            android:windowSoftInputMode="adjustResize">
+            <meta-data android:name="android.app.lib_name" android:value="orbit_mobile_probe" />
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>
